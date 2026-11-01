@@ -20,7 +20,7 @@ Generic `question.closed` events carry insufficient attempt identity and do not 
 
 The local retry remains available during the matching chat's reconnect; it is not forwarded for another chat. Old UI controls are retired when the question object is replaced, even when its JSON contents match. The transport independently checks the current question identity before a genuine Cancel write.
 
-Host/source outcomes are still bounded and held in memory. There is no implemented authenticated durable outcome query proving every pre-restart attempt. Unknown outcomes may therefore remain quarantined indefinitely. Public activation remains blocked on the remaining contract gates; storage success is not proof that an old remote commit failed.
+Host/source outcomes are still bounded and held in memory. A separate privately gated [positive-only outcome path](paged-editor-positive-outcomes.md) now exists, but it does not prove every pre-restart attempt or provide a negative outcome. Unknown outcomes may therefore remain quarantined indefinitely. Public activation remains blocked on the remaining contract gates; storage success is not proof that an old remote commit failed.
 
 ## Local evidence on 2026-11-01
 
@@ -32,7 +32,7 @@ This process test is a storage proof. It does not exercise a Pi owner, restore r
 
 ## Remaining work
 
-The four scoped Native and RPC production-chain restart cases below use the actual journal. Further qualify unresolved attempts across a new grant and generic close, additional process-death boundaries and longer observation periods. Define a correctly scoped outcome/reconciliation contract where a conclusive proof is possible, and retain quarantine otherwise. Complete owner replacement/revocation, quota/backlog lifetime, shared settlement, malformed/boundary, real IME and adverse-timing gates before public enablement. Long-lived pending-retry retention across draft-cache expiry remains part of that resource qualification.
+The four scoped Native and RPC production-chain restart cases below use the actual journal. Further qualify unresolved attempts across a new grant and generic close, additional process-death boundaries and longer observation periods. Complete qualification of the separately gated positive-outcome contract where a conclusive proof is possible, and retain quarantine otherwise. Complete owner replacement/revocation, quota/backlog lifetime, shared settlement, malformed/boundary, real IME and adverse-timing gates before public enablement. Long-lived pending-retry retention across draft-cache expiry remains part of that resource qualification.
 
 ## Private Native/RPC process-restart evidence
 
@@ -57,7 +57,7 @@ The same draft recovery passes on the owned emulator configured to 1600×2560 at
 
 An independent audit of all six cases matches 30 source pins per case, the runner/helper snapshots and both APKs, the exact receipt/SDK hashes, fresh process identities, draft Restore counters and retained lost-ACK attempt fields. Its artifact is `paged-restart-six-case-independent-audit.json` in the evidence directory. Each case reports successful cleanup; exact process lookup finds none of the six recorded Pi owner PIDs remaining. The six-case test APK SHA-256 is `9d9201507379f246827bae213dc537c8bbb126a430c1b2ad046335ff28b3533a`; the app APK remains the hash recorded below.
 
-On this frozen source, Host TypeScript checking and scoped Biome checking pass. Four source-grant/source-daemon/upload-daemon/native-presence suites pass all 29 tests. The current Android quick-check passes in 10 seconds using up-to-date compilation and unit-test tasks; their input-matching reports contain 3,611 app and 34 Wear tests with no failures, errors or skips. No Wear emulator ran. The [positive-outcome contract](../plans/2026-11-01-paged-editor-positive-outcomes.md) is a proposed next implementation slice, not a negotiated or implemented runtime feature.
+On this frozen source, Host TypeScript checking and scoped Biome checking pass. Four source-grant/source-daemon/upload-daemon/native-presence suites pass all 29 tests. The current Android quick-check passes in 10 seconds using up-to-date compilation and unit-test tasks; their input-matching reports contain 3,611 app and 34 Wear tests with no failures, errors or skips. No Wear emulator ran. At this historical frozen checkpoint the positive-outcome contract was a proposal; the later [private implementation](paged-editor-positive-outcomes.md) has its own separate evidence and limits.
 
 ## Journal implementation frozen evidence
 

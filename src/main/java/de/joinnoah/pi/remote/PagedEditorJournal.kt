@@ -2,6 +2,9 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import java.util.Base64
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
+import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -11,6 +14,7 @@ import kotlinx.serialization.json.*
 
 data class PagedJournalKey(val routeId: String, val sessionId: String, val questionId: String)
 data class StoredPagedDraft(val text: String, val editedAt: Long)
+data class StoredPagedOutcomeBinding(val deviceId: String, val ownerIncarnationId: String, val byteLength: Int, val sha256: String)
 data class StoredPagedAttempt(
     val key: PagedJournalKey,
     val attemptId: String,
@@ -19,6 +23,7 @@ data class StoredPagedAttempt(
     val commitRequestId: String,
     val text: String,
     val createdAt: Long,
+    val outcomeBinding: StoredPagedOutcomeBinding? = null,
 )
 data class PagedJournalSnapshot(
     val drafts: Map<PagedJournalKey, StoredPagedDraft> = emptyMap(),
@@ -135,6 +140,19 @@ private fun validatePagedJournal(snapshot: PagedJournalSnapshot) {
         require(id == attempt.attemptId && validKey(attempt.key) && keys.add(attempt.key))
         require(listOf(id, attempt.grantId, attempt.uploadId, attempt.commitRequestId).all(::validPagedId))
         require(attempt.createdAt >= 0)
+        attempt.outcomeBinding?.let { binding ->
+            require(validPagedId(binding.deviceId) && validPagedId(binding.ownerIncarnationId))
+            require(binding.byteLength in 0..(1024 * 1024))
+            require(binding.sha256.matches(Regex("[0-9a-f]{64}")))
+            val encoded = Charsets.UTF_8.newEncoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .encode(CharBuffer.wrap(attempt.text))
+            require(encoded.remaining() == binding.byteLength)
+            val bytes = ByteArray(encoded.remaining()).also { encoded.get(it) }
+            val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            require(hash == binding.sha256)
+        }
         attemptBytes += attempt.text.length.toLong() * 2
     }
     require(attemptBytes <= PAGED_JOURNAL_MAX_ATTEMPT_TOTAL)
@@ -157,8 +175,11 @@ private fun encodePagedJournal(snapshot: PagedJournalSnapshot): ByteArray {
     validatePagedJournal(snapshot)
     fun key(k: PagedJournalKey) = listOf(JsonPrimitive(k.routeId), JsonPrimitive(k.sessionId), JsonPrimitive(k.questionId))
     val drafts = snapshot.drafts.map { (k, d) -> JsonArray(key(k) + listOf(JsonPrimitive(encodeText(d.text)), JsonPrimitive(d.editedAt))) }
-    val attempts = snapshot.attempts.values.map { a -> JsonArray(key(a.key) + listOf(JsonPrimitive(a.attemptId), JsonPrimitive(a.grantId), JsonPrimitive(a.uploadId), JsonPrimitive(a.commitRequestId), JsonPrimitive(encodeText(a.text)), JsonPrimitive(a.createdAt))) }
-    val bytes = JsonArray(listOf(JsonPrimitive(1), JsonArray(drafts), JsonArray(attempts))).toString().toByteArray(Charsets.UTF_8)
+    val attempts = snapshot.attempts.values.map { a ->
+        val binding = a.outcomeBinding?.let { JsonArray(listOf(JsonPrimitive(it.deviceId), JsonPrimitive(it.ownerIncarnationId), JsonPrimitive(it.byteLength), JsonPrimitive(it.sha256))) } ?: JsonNull
+        JsonArray(key(a.key) + listOf(JsonPrimitive(a.attemptId), JsonPrimitive(a.grantId), JsonPrimitive(a.uploadId), JsonPrimitive(a.commitRequestId), JsonPrimitive(encodeText(a.text)), JsonPrimitive(a.createdAt), binding))
+    }
+    val bytes = JsonArray(listOf(JsonPrimitive(2), JsonArray(drafts), JsonArray(attempts))).toString().toByteArray(Charsets.UTF_8)
     require(bytes.size <= PAGED_JOURNAL_MAX_ENCODED_BYTES)
     return bytes
 }
@@ -166,7 +187,8 @@ private fun encodePagedJournal(snapshot: PagedJournalSnapshot): ByteArray {
 private fun decodePagedJournal(bytes: ByteArray): PagedJournalSnapshot {
     require(bytes.size <= PAGED_JOURNAL_MAX_ENCODED_BYTES)
     val root = Json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true)).jsonArray
-    require(root.size == 3 && root[0] == JsonPrimitive(1))
+    require(root.size == 3 && (root[0] == JsonPrimitive(1) || root[0] == JsonPrimitive(2)))
+    val version = root[0].jsonPrimitive.content.toInt()
     fun array(element: JsonElement, size: Int): JsonArray = element.jsonArray.also { require(it.size == size) }
     fun string(element: JsonElement): String = element.jsonPrimitive.let { require(it.isString); it.content }
     fun time(element: JsonElement): Long = element.jsonPrimitive.let { require(!it.isString); it.content.toLong().also { n -> require(n >= 0 && n.toString() == it.content) } }
@@ -178,8 +200,14 @@ private fun decodePagedJournal(bytes: ByteArray): PagedJournalSnapshot {
     }
     val attempts = linkedMapOf<String, StoredPagedAttempt>()
     for (entry in root[2].jsonArray) {
-        val a = array(entry, 9)
-        val attempt = StoredPagedAttempt(key(a), string(a[3]), string(a[4]), string(a[5]), string(a[6]), decodeText(string(a[7])), time(a[8]))
+        val a = array(entry, if (version == 1) 9 else 10)
+        val binding = if (version == 1 || a[9] == JsonNull) null else {
+            val b = array(a[9], 4)
+            val length = time(b[2])
+            require(length <= Int.MAX_VALUE)
+            StoredPagedOutcomeBinding(string(b[0]), string(b[1]), length.toInt(), string(b[3]))
+        }
+        val attempt = StoredPagedAttempt(key(a), string(a[3]), string(a[4]), string(a[5]), string(a[6]), decodeText(string(a[7])), time(a[8]), binding)
         require(attempts.put(attempt.attemptId, attempt) == null)
     }
     return PagedJournalSnapshot(drafts, attempts).also(::validatePagedJournal)

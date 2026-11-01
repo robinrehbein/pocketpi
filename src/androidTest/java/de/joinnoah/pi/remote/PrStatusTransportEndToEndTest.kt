@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import android.os.Bundle
+
 import android.os.ParcelFileDescriptor
 import android.os.Handler
 import android.os.Looper
@@ -930,6 +932,12 @@ internal class PresenceObservingTransport(
     val pagedV3Accepted = AtomicBoolean(false)
     val acceptedSnapshotQuestions = AtomicReference<Set<String>?>(null)
     val questionAnswerAttempts = AtomicInteger()
+    val positiveOutcomeQueries = AtomicInteger()
+    val positiveOutcomeReleaseAttempts = AtomicInteger()
+    val positiveOutcomeApplied = AtomicReference<JsonObject?>(null)
+    val positiveOutcomeReleased = AtomicBoolean(false)
+    private val positiveOutcomeRequests = ConcurrentHashMap<String, JsonObject>()
+    private val positiveOutcomeReleaseRequests = ConcurrentHashMap.newKeySet<String>()
     private val pendingSnapshots = ConcurrentHashMap.newKeySet<String>()
     val firstChunkAccepted = AtomicBoolean(false)
     val secondChunkHeld = AtomicBoolean(false)
@@ -990,6 +998,14 @@ internal class PresenceObservingTransport(
                 override fun message(payload: JsonObject) {
                     val resultId = payload.optionalText("requestId")
                     if (payload.optionalText("type") == "result" && resultId != null) {
+                        positiveOutcomeRequests.remove(resultId)?.let { expected -> runCatching {
+                            InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply { putString("positiveOutcomeDiagnostic", "query-result ok=${payload.flag("ok")} kind=${payload.obj(if (payload.flag("ok")) "data" else "error").optionalText(if (payload.flag("ok")) "kind" else "code")}") })
+                            val data = payload.obj("data")
+                            if (payload.flag("ok") && data.keys == setOf("kind", "status", "receipt") && data.text("kind") == "editor_outcome" && data.text("status") == "applied" && data.obj("receipt") == expected) positiveOutcomeApplied.set(data)
+                        } }
+                        if (positiveOutcomeReleaseRequests.remove(resultId)) runCatching {
+                            if (payload.flag("ok") && payload.obj("data").keys == setOf("kind") && payload.obj("data").text("kind") == "editor_outcome_released") positiveOutcomeReleased.set(true)
+                        }
                         if (pendingSnapshots.remove(resultId)) runCatching {
                             if (payload.flag("ok")) {
                                 val data = payload.obj("data")
@@ -1081,6 +1097,16 @@ internal class PresenceObservingTransport(
             val dataChars = if (kind == "chunk") payload.text("data").length else 0
             val plainBytes = payload.toString().toByteArray(Charsets.UTF_8).size
             pagedDiagnostic("upload-send alias=${trace.alias} kind=$kind offset=$offset plaintextBytes=$plainBytes dataChars=$dataChars")
+        }
+        if (type == "session.question.editor.outcome.get") {
+            positiveOutcomeQueries.incrementAndGet()
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply { putString("positiveOutcomeDiagnostic", "query-send") })
+            positiveOutcomeRequests[payload.text("requestId")] = payload.obj("receipt")
+        }
+        if (type == "session.question.editor.outcome.release") {
+            positiveOutcomeReleaseAttempts.incrementAndGet()
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply { putString("positiveOutcomeDiagnostic", "release-send") })
+            positiveOutcomeReleaseRequests.add(payload.text("requestId"))
         }
         if (type == "session.snapshot" && payload.optionalText("sessionId") == sessionId) {
             acceptedSnapshotQuestions.set(null)
@@ -1209,6 +1235,10 @@ internal class PresenceObservingTransport(
         presenceAccepted.set(false)
         inactivePresenceAccepted.set(false)
         pendingPresence.clear()
+        positiveOutcomeRequests.clear()
+        positiveOutcomeReleaseRequests.clear()
+        positiveOutcomeApplied.set(null)
+        positiveOutcomeReleased.set(false)
         pendingSnapshots.clear()
         acceptedSnapshotQuestions.set(null)
         pagedV3Accepted.set(false)

@@ -302,6 +302,7 @@ class DefaultRemoteRepository(
     private val pagedEditorTestGate: Boolean = false,
     private val fileDraftStorage: FileDraftStorage? = null,
     private val pagedEditorStorage: PagedEditorStorage? = null,
+    private val positiveOutcomeTestGate: Boolean = false,
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -311,6 +312,7 @@ class DefaultRemoteRepository(
             QUESTION_EDITOR_CAPABILITY,
             NATIVE_EDITOR_CAPABILITY,
             QUESTION_PAGED_EDITOR_CAPABILITY,
+            QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY,
             // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
             COMPACT_CAPABILITY,
             SETTINGS_CAPABILITY,
@@ -628,6 +630,8 @@ class DefaultRemoteRepository(
     private var pagedStoragePending = pagedJournal != null
     private var pagedStorageFailed = false
     private val pagedCleanupProofs = mutableSetOf<String>()
+    private val pagedReleaseProofs = mutableMapOf<String, StoredPagedAttempt>()
+    private val pagedQueried = mutableSetOf<Triple<Long, Long, String>>()
     private val pagedPendingDrafts = mutableMapOf<PagedJournalKey, StoredPagedDraft>()
     private val pagedDrafts = java.util.IdentityHashMap<JsonObject, PagedDraft>()
     private val pagedReceipts = mutableListOf<PagedReceipt>()
@@ -1398,6 +1402,7 @@ class DefaultRemoteRepository(
             gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
         )
         reconcileNativePresence()
+        schedulePagedOutcomeQueries()
     }
 
     /**
@@ -2363,7 +2368,8 @@ class DefaultRemoteRepository(
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
         val optIn = if (capabilityRevision(capabilityRoute) == 3) {
-            if (pagedEditorTestGate) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN:" else QUESTION_DETAILS_OPT_IN
+            if (pagedEditorTestGate) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN" +
+                (if (positiveOutcomeTestGate && pagedJournal != null) "+$QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN" else "") + ":" else QUESTION_DETAILS_OPT_IN
         } else ""
         val id = if (type == "projects.list") "$capabilityRoute$optIn$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
@@ -2452,10 +2458,10 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEditorTestGate && revision == 3) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || pagedEditorTestGate && positiveOutcomeTestGate && pagedJournal != null && revision == 3 && QUESTION_PAGED_EDITOR_CAPABILITY in advertised) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEditorTestGate && revision == 3) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
-                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY)) }
+                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2464,10 +2470,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 // A snapshot can arrive while capability discovery is still in flight.
                 if (promptDeliveryGeneration == generation) timeline?.let { current ->
@@ -8768,6 +8774,71 @@ class DefaultRemoteRepository(
         }
     }
 
+    private fun positiveOutcomeAvailable(current: RemoteState): Boolean =
+        pagedEditorTestGate && positiveOutcomeTestGate && pagedJournal != null && !pagedStoragePending && !pagedStorageFailed &&
+            current.connected && current.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 &&
+            QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
+            QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in current.capabilities && QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY !in current.unavailableCapabilities
+
+    private fun outcomeStillCurrent(attempt: StoredPagedAttempt, connection: Long, epoch: Long): Boolean {
+        val current = state.value
+        return connection == generation && epoch == selectionEpoch && positiveOutcomeAvailable(current) &&
+            current.selection.routeId == attempt.key.routeId && current.host?.routeId == attempt.key.routeId &&
+            current.host?.deviceId == attempt.outcomeBinding?.deviceId
+    }
+
+    private fun releasePagedOutcome(attempt: StoredPagedAttempt) {
+        // The proof describes a completed durable cleanup; bind release to the current
+        // authenticated connection, which may have changed selection during storage IO.
+        val connection = generation
+        val epoch = selectionEpoch
+        if (!outcomeStillCurrent(attempt, connection, epoch)) return
+        scope.launch {
+            try {
+                request("session.question.editor.outcome.release", epoch, "receipt" to PagedEditorWire.receipt(attempt),
+                    validateBeforeSend = { check(outcomeStillCurrent(attempt, connection, epoch)) })
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { /* Retained server receipt occupies capacity until release or qualified expiry. */ }
+        }
+    }
+
+    private fun schedulePagedOutcomeQueries() {
+        if (!positiveOutcomeAvailable(state.value)) return
+        val connection = generation
+        val epoch = selectionEpoch
+        pagedQueried.removeAll { it.first != connection || it.second != epoch }
+        for (attempt in pagedJournalSnapshot.attempts.values) {
+            if (attempt.outcomeBinding == null || !outcomeStillCurrent(attempt, connection, epoch) || !pagedQueried.add(Triple(connection, epoch, attempt.attemptId))) continue
+            scope.launch {
+                try {
+                    val receipt = PagedEditorWire.receipt(attempt)
+                    val result = request("session.question.editor.outcome.get", epoch, "receipt" to receipt,
+                        validateBeforeSend = { check(outcomeStillCurrent(attempt, connection, epoch)) })
+                    check(outcomeStillCurrent(attempt, connection, epoch))
+                    if (result.keys == setOf("kind", "status") && result.text("kind") == "editor_outcome" && result.text("status") == "unknown") return@launch
+                    require(result.keys == setOf("kind", "status", "receipt") && result.text("kind") == "editor_outcome" && result.text("status") == "applied" && result.obj("receipt") == receipt)
+                    var removed = false
+                    pagedProjectionMutex.withLock {
+                        check(outcomeStillCurrent(attempt, connection, epoch))
+                        val journal = requireNotNull(pagedJournal)
+                        if (journal.snapshot().attempts[attempt.attemptId] == attempt) {
+                            pagedCleanupProofs.add(attempt.attemptId)
+                            pagedReleaseProofs[attempt.attemptId] = attempt
+                            try {
+                                journal.removeAttempt(attempt.attemptId)
+                                pagedJournalSnapshot = journal.snapshot()
+                                pagedCleanupProofs.remove(attempt.attemptId)
+                                pagedReleaseProofs.remove(attempt.attemptId)
+                                removed = true
+                            } catch (e: Exception) { pagedStorageFailed = true; throw e }
+                        }
+                    }
+                    update { it }
+                    if (removed) releasePagedOutcome(attempt)
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { update { it } }
+            }
+        }
+    }
+
     private fun pagedAvailable(question: JsonObject, current: RemoteState): Boolean =
         pagedEditorTestGate && current.connected && !current.loading && current.questions.any { it === question } &&
             current.questions.count { it.optionalText("id") == question.optionalText("id") } == 1 &&
@@ -8864,6 +8935,9 @@ class DefaultRemoteRepository(
         source.edit(draft)
         val action = source.capture() ?: return
         if (!source.allows(action, connection, selection, question)) return
+        val owner = runCatching { PagedEditorWire.ownerIncarnationId(question) }.getOrElse { return }
+        val boundOwner = if (positiveOutcomeAvailable(current)) owner else null
+        val device = if (boundOwner != null) current.host?.takeIf { it.routeId == selection.routeId }?.deviceId ?: return else null
         val bytes = draft.toByteArray(Charsets.UTF_8)
         val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
         pagedUploading = true
@@ -8872,7 +8946,7 @@ class DefaultRemoteRepository(
             var reservedId: String? = null
             fun valid(): Boolean {
                 val block = state.value.questionBlocks[id]
-                return !pagedStoragePending && !pagedStorageFailed && token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value) && source.allows(action, connection, selection, question) && block == null
+                return !pagedStoragePending && !pagedStorageFailed && token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value) && source.allows(action, connection, selection, question) && (boundOwner == null || positiveOutcomeAvailable(state.value) && state.value.host?.deviceId == device && PagedEditorWire.ownerIncarnationId(question) == boundOwner) && block == null
             }
             suspend fun send(payload: JsonObject, onSent: (() -> Unit)? = null): JsonObject {
                 check(valid())
@@ -8882,7 +8956,7 @@ class DefaultRemoteRepository(
             var commitDispatched = false
             var accepted = false
             try {
-                val begun = send(PagedEditorWire.begin(Wire.random(), session, id, action.grantId, action.source, bytes.size, hash))
+                val begun = send(PagedEditorWire.begin(Wire.random(), session, id, action.grantId, action.source, bytes.size, hash, boundOwner))
                 check(valid())
                 val uploadId = PagedEditorWire.validateBegun(begun, session, id)
                 var offset = 0
@@ -8897,13 +8971,14 @@ class DefaultRemoteRepository(
                 val commitId = Wire.random()
                 val journal = pagedJournal
                 if (journal != null) {
-                    val attempt = StoredPagedAttempt(PagedJournalKey(requireNotNull(selection.routeId), session, id), Wire.random(), action.grantId, uploadId, commitId, draft, now())
+                    val attempt = StoredPagedAttempt(PagedJournalKey(requireNotNull(selection.routeId), session, id), Wire.random(), action.grantId, uploadId, commitId, draft, now(), boundOwner?.let { StoredPagedOutcomeBinding(requireNotNull(device), it, bytes.size, hash) })
                     withContext(NonCancellable) {
                         pagedProjectionMutex.withLock {
                             check(valid())
                             try {
                                 journal.reserve(attempt)
                                 reservedId = attempt.attemptId
+                                pagedQueried.add(Triple(connection, epoch, attempt.attemptId))
                                 pagedJournalSnapshot = journal.snapshot()
                                 update { it }
                             } catch (e: Exception) {
@@ -8914,7 +8989,7 @@ class DefaultRemoteRepository(
                         }
                     }
                 }
-                val result = send(PagedEditorWire.commit(commitId, session, id, uploadId)) {
+                val result = send(PagedEditorWire.commit(commitId, session, id, uploadId, boundOwner)) {
                     commitDispatched = true
                     if (journal == null) pagedReceipts += PagedReceipt(requireNotNull(selection.routeId), session, id, question, action.grantId, connection)
                     update { it }
@@ -8931,13 +9006,17 @@ class DefaultRemoteRepository(
                 val attemptId = reservedId
                 if (attemptId != null && (!commitDispatched || accepted)) withContext(NonCancellable) {
                     pagedCleanupProofs.add(attemptId)
+                    val boundAttempt = pagedJournalSnapshot.attempts[attemptId]?.takeIf { accepted && it.outcomeBinding != null }
+                    if (boundAttempt != null) pagedReleaseProofs[attemptId] = boundAttempt
                     try {
                         pagedProjectionMutex.withLock {
                             requireNotNull(pagedJournal).removeAttempt(attemptId)
                             pagedCleanupProofs.remove(attemptId)
+                            pagedReleaseProofs.remove(attemptId)
                             pagedJournalSnapshot = pagedJournal.snapshot()
                             update { it }
                         }
+                        if (boundAttempt != null) releasePagedOutcome(boundAttempt)
                     } catch (_: Exception) {
                         pagedStorageFailed = true
                         update { it }
@@ -8957,12 +9036,17 @@ class DefaultRemoteRepository(
         pagedStoragePending = true
         update { it }
         scope.launch {
+            val releases = mutableListOf<StoredPagedAttempt>()
             pagedProjectionMutex.withLock {
                 try {
                     pagedJournalSnapshot = journal.snapshot()
                     for (id in pagedCleanupProofs.toList()) {
-                        journal.removeAttempt(id)
+                        val proof = pagedReleaseProofs[id]
+                        val matches = proof == null || journal.snapshot().attempts[id] == proof
+                        if (matches) journal.removeAttempt(id)
                         pagedCleanupProofs.remove(id)
+                        pagedReleaseProofs.remove(id)
+                        if (proof != null && matches) releases += proof
                     }
                     for ((key, draft) in pagedPendingDrafts.toMap()) {
                         journal.putDraft(key, draft)
@@ -8992,6 +9076,7 @@ class DefaultRemoteRepository(
                     }
                 }
             }
+            releases.forEach { releasePagedOutcome(it) }
         }
     }
 

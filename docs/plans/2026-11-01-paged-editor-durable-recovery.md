@@ -8,7 +8,7 @@
 
 **Binding references:** [Contract](2026-11-01-paged-editor-contract.md), [original implementation plan](2026-11-01-paged-editor-dialogs.md), [current qualification](../testing/paged-editor-qualification.md). This amendment adds restart work; it does not waive owner, lifetime, authority, quota, boundary or shared-settlement gates.
 
-**Implementation checkpoint:** The journal storage and core Android integration now exist; see [scoped qualification](../testing/paged-editor-durable-recovery.md). The six scoped Native/RPC phone/tablet-format restart cases now pass. The complete restart matrix and Host/source outcome contract remain unqualified; the [positive-only outcome design](2026-11-01-paged-editor-positive-outcomes.md) is proposed, not implemented.
+**Implementation checkpoint:** The journal storage and core Android integration now exist; see [scoped qualification](../testing/paged-editor-durable-recovery.md). The six scoped Native/RPC phone/tablet-format restart cases now pass. The complete restart matrix and Host/source outcome contract remain unqualified; a separately gated [positive-only implementation](../testing/paged-editor-positive-outcomes.md) now exists but does not complete Host-restart, crash-boundary or resource qualification.
 
 ## File and ownership boundaries
 

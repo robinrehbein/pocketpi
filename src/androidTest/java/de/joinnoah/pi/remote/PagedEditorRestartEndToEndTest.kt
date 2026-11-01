@@ -61,7 +61,7 @@ class PagedEditorRestartEndToEndTest {
             phase = requireNotNull(args.getString("pagedRestartPhase"))
             case = requireNotNull(args.getString("pagedRestartCase"))
             nonce = requireNotNull(args.getString("pagedRestartNonce"))
-            require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack") && nonce.matches(Regex("[a-f0-9]{32}")))
+            require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack", "positive") && nonce.matches(Regex("[a-f0-9]{32}")))
             val path = requireNotNull(args.getString("prStatusFixturePath"))
             fixture = JSONObject(readFixture(path).toString(Charsets.UTF_8))
             val relay = fixture.getString("relayUrl").toHttpUrl()
@@ -74,6 +74,7 @@ class PagedEditorRestartEndToEndTest {
             native = args.getString("prStatusNativeExpected") == "true"
             require(fixture.getBoolean("nativeWorker") == native && fixture.getBoolean("pagedEditorFixture"))
             require(fixture.getString("pagedEditorCase") == if (case == "draft") "max-edited" else "restart-lost-ack")
+            require(fixture.optBoolean("pagedEditorPositiveOutcomes") == (case == "positive"))
             verifyMetadata("Source", source)
             verifyMetadata("Final", finalValue)
             val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
@@ -103,7 +104,7 @@ class PagedEditorRestartEndToEndTest {
             client = OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, manager).callTimeout(3, TimeUnit.SECONDS).build()
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
             transport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), true, false)
-            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor)
+            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor, positiveOutcomeTestGate = case == "positive")
             NavigationTestActivity.contentFactory = {
                 {
                     if (showNavigation.value) MaterialTheme {
@@ -163,7 +164,7 @@ class PagedEditorRestartEndToEndTest {
             compose.onNodeWithText(compose.activity.getString(R.string.remote_send)).performScrollTo().assertIsEnabled().performClick()
             compose.waitUntil(120_000) {
                 statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") && it.optBoolean("pagedLostAckInjected") && it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
-                    transport.pagedCommitUnknown(id, grant, fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256")) && persisted().attempts.values.any { it.key == key && it.text == finalValue }
+                    (if (case == "positive") statusOrNull()?.let { it.optBoolean("pagedHostAckDropped") && it.optBoolean("pagedPositiveOutcomeVerified") } == true else transport.pagedCommitUnknown(id, grant, fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256"))) && persisted().attempts.values.any { it.key == key && it.text == finalValue }
             }
             assertEquals(1, transport.uploadCounts().third)
         }
@@ -180,6 +181,12 @@ class PagedEditorRestartEndToEndTest {
             }
         }
         val attempt = snapshot.attempts.values.singleOrNull()
+        if (case == "positive") {
+            assertNotNull(attempt?.outcomeBinding)
+            assertEquals(host.deviceId, attempt?.outcomeBinding?.deviceId)
+            assertEquals(question.text("editorOwnerIncarnationId"), attempt?.outcomeBinding?.ownerIncarnationId)
+            assertTrue(owner.getBoolean("pagedPositiveOutcomeVerified"))
+        }
         val proof = JSONObject().put("nonce", nonce).put("case", case).put("pid", Process.myPid()).put("identity", identity())
             .put("questionId", id).put("grantId", grant).put("sourceBytes", source.toByteArray().size).put("sourceSha256", digest(source))
             .put("finalBytes", finalValue.toByteArray().size).put("finalSha256", digest(finalValue))
@@ -188,6 +195,7 @@ class PagedEditorRestartEndToEndTest {
             .put("attemptUpload", attempt?.uploadId ?: "")
             .put("attemptCommit", attempt?.commitRequestId ?: "")
             .put("attemptCreatedAt", attempt?.createdAt ?: 0L)
+            .put("ownerIncarnationId", attempt?.outcomeBinding?.ownerIncarnationId ?: "")
             .put("ownerQuestion", owner.optString("pagedQuestion", ""))
             .put("sourceReadCount", owner.getInt("pagedSourceReadCount"))
             .put("sourceReadReplyCount", owner.getInt("pagedSourceReadReplyCount"))
@@ -249,6 +257,38 @@ class PagedEditorRestartEndToEndTest {
                     transport.pagedCommitAccepted(id, question.text("editorUploadGrantId"), fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256"))
             }
             phaseBProof.put("outcome", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified"))
+        } else if (case == "positive") {
+            try {
+                compose.waitUntil(60_000) { persisted().attempts.isEmpty() && transport.positiveOutcomeApplied.get() != null && transport.positiveOutcomeReleased.get() }
+            } catch (failure: Throwable) {
+                val state = repository.state.value
+                val diagnostic = JSONObject().put("queries", transport.positiveOutcomeQueries.get()).put("applied", transport.positiveOutcomeApplied.get() != null)
+                    .put("releaseAttempts", transport.positiveOutcomeReleaseAttempts.get()).put("released", transport.positiveOutcomeReleased.get())
+                    .put("attempts", persisted().attempts.size).put("connected", state.connected).put("loading", state.loading)
+                    .put("storagePending", state.pagedStoragePending).put("storageFailed", state.pagedStorageFailed)
+                    .put("positiveCapability", QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in state.capabilities)
+                File(directory, "phase-b-diagnostic.json").writeText(diagnostic.toString())
+                throw AssertionError("Positive recovery stalled: $diagnostic", failure)
+            }
+            val applied = requireNotNull(transport.positiveOutcomeApplied.get()).obj("receipt")
+            assertEquals(proof.getString("attemptCommit"), applied.text("commitRequestId"))
+            assertEquals(proof.getString("attemptUpload"), applied.text("uploadId"))
+            assertEquals(proof.getString("attemptGrant"), applied.text("grantId"))
+            assertEquals(proof.getString("ownerIncarnationId"), applied.text("ownerIncarnationId"))
+            assertEquals(id, applied.text("questionId")); assertEquals(selection.sessionId, applied.text("sessionId"))
+            assertEquals(1_048_576L, applied.long("byteLength")); assertEquals(digest(finalValue), applied.text("sha256"))
+            assertFalse(id in acceptedQuestions)
+            val before = statusCounts(status()); val deadline = SystemClock.elapsedRealtime() + 3_000
+            while (SystemClock.elapsedRealtime() < deadline) {
+                assertTrue(persisted().attempts.isEmpty())
+                assertEquals(Triple(0, 0, 0), transport.uploadCounts())
+                assertEquals(0, transport.questionAnswerAttempts.get())
+                val current = statusCounts(status())
+                for (field in listOf("beginCount", "chunkCount", "commitCount", "answerCount")) assertEquals(before.getInt(field), current.getInt(field))
+                SystemClock.sleep(200)
+            }
+            phaseBProof.put("positiveReceipt", JSONObject(applied.toString())).put("outcomeQueries", transport.positiveOutcomeQueries.get()).put("releaseAttempts", transport.positiveOutcomeReleaseAttempts.get())
+                .put("cleanupVerified", persisted().attempts.isEmpty()).put("releaseAccepted", transport.positiveOutcomeReleased.get()).put("beforeObservation", before).put("afterObservation", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified")).put("answerAttempts", transport.questionAnswerAttempts.get())
         } else {
             val attempt = snapshot.attempts.values.single()
             assertEquals(key, attempt.key)

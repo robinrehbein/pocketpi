@@ -7,6 +7,8 @@ import kotlinx.serialization.json.JsonObject
 
 internal const val QUESTION_PAGED_EDITOR_CAPABILITY = "session.question_editor_paged.v1"
 internal const val QUESTION_PAGED_EDITOR_OPT_IN = "question_editor_paged.v1"
+internal const val QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY = "session.question_editor_positive_outcome.v1"
+internal const val QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN = "question_editor_positive_outcome.v1"
 internal const val MAX_EDITOR_SOURCE_BYTES = 1_048_576
 internal const val MAX_EDITOR_UPLOAD_BYTES = 1_048_576
 internal const val EDITOR_UPLOAD_CHUNK_BYTES = 49_152
@@ -36,7 +38,7 @@ internal object PagedEditorWire {
         legacyId(requestId); legacyId(sessionId); legacyId(questionId)
     }
 
-    fun begin(requestId: String, sessionId: String, questionId: String, grantId: String, source: EditorUploadSource, totalBytes: Int, sha256: String): JsonObject {
+    fun begin(requestId: String, sessionId: String, questionId: String, grantId: String, source: EditorUploadSource, totalBytes: Int, sha256: String, ownerIncarnationId: String? = null): JsonObject {
         ids(requestId, sessionId, questionId); sourceId(grantId)
         require(totalBytes in 0..MAX_EDITOR_UPLOAD_BYTES)
         digest(sha256)
@@ -47,8 +49,10 @@ internal object PagedEditorWire {
                 Wire.objectOf("kind" to "paged", "id" to source.id)
             }
         }
-        return envelope(Wire.objectOf("type" to "session.question.editor.upload.begin", "requestId" to requestId,
-            "sessionId" to sessionId, "questionId" to questionId, "source" to binding, "totalBytes" to totalBytes, "sha256" to sha256, "grantId" to grantId))
+        ownerIncarnationId?.let(::sourceId)
+        val fields = Wire.objectOf("type" to "session.question.editor.upload.begin", "requestId" to requestId,
+            "sessionId" to sessionId, "questionId" to questionId, "source" to binding, "totalBytes" to totalBytes, "sha256" to sha256, "grantId" to grantId)
+        return envelope(if (ownerIncarnationId == null) fields else JsonObject(fields + ("ownerIncarnationId" to kotlinx.serialization.json.JsonPrimitive(ownerIncarnationId))))
     }
 
     fun chunk(requestId: String, sessionId: String, questionId: String, uploadId: String, offset: Int, bytes: ByteArray): JsonObject {
@@ -58,10 +62,29 @@ internal object PagedEditorWire {
             "sessionId" to sessionId, "questionId" to questionId, "uploadId" to uploadId, "offset" to offset, "data" to Wire.encode(bytes)))
     }
 
-    fun commit(requestId: String, sessionId: String, questionId: String, uploadId: String): JsonObject {
+    fun commit(requestId: String, sessionId: String, questionId: String, uploadId: String, ownerIncarnationId: String? = null): JsonObject {
         ids(requestId, sessionId, questionId); sourceId(uploadId)
-        return envelope(Wire.objectOf("type" to "session.question.editor.upload.commit", "requestId" to requestId,
-            "sessionId" to sessionId, "questionId" to questionId, "uploadId" to uploadId))
+        ownerIncarnationId?.let(::sourceId)
+        val fields = Wire.objectOf("type" to "session.question.editor.upload.commit", "requestId" to requestId,
+            "sessionId" to sessionId, "questionId" to questionId, "uploadId" to uploadId)
+        return envelope(if (ownerIncarnationId == null) fields else JsonObject(fields + ("ownerIncarnationId" to kotlinx.serialization.json.JsonPrimitive(ownerIncarnationId))))
+    }
+
+    fun ownerIncarnationId(question: JsonObject): String? {
+        if (!question.containsKey("editorOwnerIncarnationId")) return null
+        require(question.text("kind") == "editor")
+        return question.text("editorOwnerIncarnationId").also(::sourceId)
+    }
+
+    fun receipt(attempt: StoredPagedAttempt): JsonObject {
+        val b = requireNotNull(attempt.outcomeBinding)
+        ids(attempt.commitRequestId, attempt.key.sessionId, attempt.key.questionId)
+        sourceId(b.ownerIncarnationId); sourceId(attempt.grantId); sourceId(attempt.uploadId)
+        require(b.byteLength in 0..MAX_EDITOR_UPLOAD_BYTES); digest(b.sha256)
+        return Wire.objectOf("sessionId" to attempt.key.sessionId, "questionId" to attempt.key.questionId,
+            "ownerIncarnationId" to b.ownerIncarnationId, "grantId" to attempt.grantId,
+            "uploadId" to attempt.uploadId, "commitRequestId" to attempt.commitRequestId,
+            "byteLength" to b.byteLength, "sha256" to b.sha256)
     }
 
     fun parseSource(value: JsonObject): EditorSource {

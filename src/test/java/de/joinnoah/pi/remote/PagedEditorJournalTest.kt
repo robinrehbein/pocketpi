@@ -102,7 +102,7 @@ class PagedEditorJournalTest {
     @Test fun rejectsMalformedSchemaDuplicateRecordsAndInvalidIdentifiers() {
         val raw = EncryptedFileStore(context, "paged-editor-journal.enc", "pi-remote-paged-editor-journal-v1")
         val badInputs = listOf(
-            "[2,[],[]]",
+            "[3,[],[]]",
             "[1,[[\"r\",\"s\",\"q\",\"\",0],[\"r\",\"s\",\"q\",\"\",0]],[]]",
             "[1,[[\"r\",\"s\",\"q\",\"A\",0]],[]]",
             "[1,[[\" \",\"s\",\"q\",\"\",0]],[]]",
@@ -113,6 +113,71 @@ class PagedEditorJournalTest {
             val before = File(dir, "paged-editor-journal.enc").readBytes()
             assertThrows(Exception::class.java) { PagedEditorStore(context).load() }
             assertArrayEquals(before, File(dir, "paged-editor-journal.enc").readBytes())
+        }
+    }
+
+    @Test fun readsLiteralVersionOneEncryptedFixtureWithoutLosingLegacyFence() {
+        val raw = EncryptedFileStore(context, "paged-editor-journal.enc", "pi-remote-paged-editor-journal-v1")
+        // Literal v1 data includes an isolated UTF-16 surrogate in both draft and attempt.
+        raw.write("""[1,[["route","session","question","2AA=",7]],[["route","session","question","attempt","grant","upload","commit","2AA=",42]]]""".toByteArray())
+        val snapshot = PagedEditorStore(context).load()
+        assertEquals(StoredPagedDraft("\uD800", 7), snapshot.drafts[key])
+        assertEquals(attempt.copy(text = "\uD800"), snapshot.attempts["attempt"])
+        assertNull(snapshot.attempts.getValue("attempt").outcomeBinding)
+        PagedEditorStore(context).save(snapshot)
+        assertEquals(snapshot, PagedEditorStore(context).load())
+    }
+
+    @Test fun readsVersionTwoExplicitNullAsLegacyUnknown() {
+        val raw = EncryptedFileStore(context, "paged-editor-journal.enc", "pi-remote-paged-editor-journal-v1")
+        raw.write("""[2,[],[["route","session","question","attempt","grant","upload","commit","AGEAYgBj",42,null]]]""".toByteArray())
+        val restored = PagedEditorStore(context).load().attempts.getValue("attempt")
+        assertEquals("abc", restored.text)
+        assertNull(restored.outcomeBinding)
+    }
+
+    @Test fun boundAttemptRoundTripsAndRejectsDifferentRetry() = runBlocking {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        val bound = attempt.copy(text = "abc", outcomeBinding = binding)
+        val journal = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined)
+        journal.reserve(bound)
+        assertEquals(bound, PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot().attempts["attempt"])
+        assertTrue(runCatching { journal.reserve(bound.copy(outcomeBinding = binding.copy(deviceId = "other"))) }.isFailure)
+        assertEquals(bound, journal.snapshot().attempts["attempt"])
+    }
+
+    @Test fun invalidBindingOrStorageFailureDoesNotPublishReservation() = runBlocking {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        val storage = MemoryStorage()
+        val journal = PagedEditorJournal(storage, Dispatchers.Unconfined)
+        journal.putDraft(key, StoredPagedDraft("old", 1))
+        val before = journal.snapshot()
+        val bad = listOf(
+            attempt.copy(text = "abc", outcomeBinding = binding.copy(byteLength = 2)),
+            attempt.copy(text = "abc", outcomeBinding = binding.copy(sha256 = "0".repeat(64))),
+            attempt.copy(text = "abc", outcomeBinding = binding.copy(deviceId = " ")),
+            attempt.copy(text = "\uD800", outcomeBinding = binding),
+            attempt.copy(text = "x".repeat(1024 * 1024 + 1), outcomeBinding = binding.copy(byteLength = 1024 * 1024 + 1)),
+        )
+        bad.forEach { assertTrue(runCatching { journal.reserve(it) }.isFailure); assertEquals(before, journal.snapshot()) }
+        storage.fail = true
+        assertTrue(runCatching { journal.reserve(attempt.copy(text = "abc", outcomeBinding = binding)) }.isFailure)
+        assertEquals(before, journal.snapshot())
+        assertEquals(before, PagedEditorJournal(storage, Dispatchers.Unconfined).snapshot())
+    }
+
+    @Test fun malformedVersionTwoBindingsFailClosedAndPreserveEncryptedBytes() {
+        val raw = EncryptedFileStore(context, "paged-editor-journal.enc", "pi-remote-paged-editor-journal-v1")
+        val prefix = """[2,[],[["route","session","question","attempt","grant","upload","commit","AGEAYgBj",42,"""
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val malformed = listOf("[]", "[null,\"owner\",3,\"$hash\"]", "[\"device\",\"owner\",null,\"$hash\"]", "[\"device\",\"owner\",3,null]", "[\"device\",\"owner\",3,\"$hash\",1]")
+        for (binding in malformed) {
+            raw.write((prefix + binding + "]]]").toByteArray())
+            val file = File(dir, "paged-editor-journal.enc")
+            val before = file.readBytes()
+            assertThrows(Exception::class.java) { PagedEditorStore(context).load() }
+            assertThrows(Exception::class.java) { PagedEditorStore(context).save(PagedJournalSnapshot()) }
+            assertArrayEquals(before, file.readBytes())
         }
     }
 

@@ -45,6 +45,15 @@ class PagedEditorWireTest {
         assertNull(editorPrefill(Wire.parse("""{"prefill":"${"a".repeat(16385)}"}""")))
     }
 
+    @Test fun ownerBindingIsIncludedOnlyWhenProvidedAndRequiresOpaqueId() {
+        val begin = PagedEditorWire.begin("r", "s", "q", "g", EditorUploadSource.Inline, 0, emptyHash, "owner_1")
+        assertEquals("owner_1", begin.text("ownerIncarnationId"))
+        val commit = PagedEditorWire.commit("c", "s", "q", "u", "owner_1")
+        assertEquals("owner_1", commit.text("ownerIncarnationId"))
+        assertFalse(PagedEditorWire.commit("c", "s", "q", "u").containsKey("ownerIncarnationId"))
+        assertTrue(runCatching { PagedEditorWire.commit("c", "s", "q", "u", "../invalid") }.isFailure)
+    }
+
     @Test fun beginBindsExplicitInlineOrPagedSourceAndEmptyHash() {
         assertEquals(Wire.parse("""{"type":"session.question.editor.upload.begin","requestId":"r","sessionId":"s","questionId":"q","grantId":"grant","source":{"kind":"inline"},"totalBytes":0,"sha256":"$emptyHash"}"""),
             PagedEditorWire.begin("r", "s", "q", "grant", EditorUploadSource.Inline, 0, emptyHash))
