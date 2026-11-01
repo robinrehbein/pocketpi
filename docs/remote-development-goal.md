@@ -1,6 +1,18 @@
 <!-- Current integration qualification: testing/held-event-integration-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Actual MainActivity and live-run checkpoint on 2026-11-01
+
+The actual Application-created repository, MainActivity and Android foreground service now pass
+phone/tablet-layout emulator acceptance. A real native delta arrives while the Activity and
+process remain backgrounded and the service keeps the connection. Returning preserves the
+same Activity, session, worker and assistant message, with one marker and no repeated prompt.
+The opt-in test uses a scoped fixture CA through a debug factory; no repository or service is
+replaced. See [production-entry qualification](testing/production-entry-live-run-qualification.md).
+The final App checks pass 3,538 tests; the unchanged 34-test Wear result is up to date.
+Physical Samsung, long background/Doze behavior, production relay/provider, process death through
+MainActivity and fresh-device handoff remain separate qualification. The overall goal is active.
+
 ## Held-event and current Linux qualification checkpoint on 2026-11-01
 
 Upstream TOOLING-1110 is integrated while preserving causal epoch fencing and exact question-close
@@ -13,8 +25,9 @@ checks, plus an isolated connected native-worker/reconnect fixture. The public D
 adapter also passes with an explicitly fixture-derived image and its actual supervisor; see
 [Linux qualification](testing/linux-host-qualification.md). Native and RPC duplicate editor
 commits are qualified privately; the remaining editor gates keep public capabilities disabled.
-The next acceptance path is the actual MainActivity and background service. Physical Samsung,
-independent-host and external-provider/CI evidence remain open. The overall goal is active.
+The actual MainActivity/background path was the next acceptance item at this checkpoint and is
+qualified separately above. Physical Samsung, independent-host and external-provider/CI evidence
+remain open. The overall goal is active.
 
 ## Session epoch and replay integration checkpoint on 2026-11-01
 
