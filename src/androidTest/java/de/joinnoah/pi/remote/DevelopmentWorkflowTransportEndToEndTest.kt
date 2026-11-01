@@ -48,6 +48,11 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
+    private val lostAckWireRequests = java.util.concurrent.atomic.AtomicInteger(0)
+    private val inboundLock = Any()
+    private val inboundPayloads = mutableListOf<kotlinx.serialization.json.JsonObject>()
+    private var captureInbound = false
+    private var inboundOverflow = false
     private lateinit var host: PairedHost
     private lateinit var selection: RemoteSelection
     private lateinit var originalOwner: JSONObject
@@ -55,6 +60,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private var nativeExportExpected = false
     private var nativeLifecycleExpected = false
     private var nativeLifecycleActiveCut = false
+    private var nativeLifecycleLostAck = false
     private lateinit var remoteRef: String
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -71,6 +77,9 @@ class DevelopmentWorkflowTransportEndToEndTest {
             nativeExportExpected = args.getString("nativeExportExpected") == "true"
             nativeLifecycleExpected = args.getString("nativeLifecycleExpected") == "true"
             nativeLifecycleActiveCut = args.getString("nativeLifecycleActiveCut") == "true"
+            nativeLifecycleLostAck = args.getString("nativeLifecycleLostAck") == "true"
+            require(nativeLifecycleLostAck == (fixture.optJSONObject("nativeLifecycle")?.optBoolean("lostAck") == true)) { "nativeLifecycleLostAck must match fixture mode" }
+            require(!nativeLifecycleLostAck || nativeLifecycleActiveCut)
             require(nativeLifecycleActiveCut == (fixture.optJSONObject("nativeLifecycle")?.optBoolean("activeCut") == true)) { "nativeLifecycleActiveCut must match fixture mode" }
             require(!nativeLifecycleActiveCut || nativeLifecycleExpected)
             require(!nativeLifecycleExpected || (!ticketMode && !nativeExportExpected && fixture.has("nativeLifecycle")))
@@ -97,7 +106,35 @@ class DevelopmentWorkflowTransportEndToEndTest {
                 override fun load() = values
                 override fun save(drafts: Map<DraftKey, StoredDraft>) { values = drafts.toMap() }
             }
-            repository = DefaultRemoteRepository(pairings, drafts, SecureRemoteTransport(scope, client), scope)
+            val transport = SecureRemoteTransport(scope, client)
+            val observingTransport = object : RemoteTransport by transport {
+                override fun send(payload: kotlinx.serialization.json.JsonObject) {
+                    observePromptWrite(payload)
+                    transport.send(payload)
+                }
+                override suspend fun sendGuarded(payload: kotlinx.serialization.json.JsonObject, beforePossibleWrite: () -> Unit) {
+                    transport.sendGuarded(payload) {
+                        observePromptWrite(payload)
+                        beforePossibleWrite()
+                    }
+                }
+                override var listener: RemoteTransport.Listener
+                    get() = transport.listener
+                    set(value) {
+                        transport.listener = object : RemoteTransport.Listener by value {
+                            override fun message(payload: kotlinx.serialization.json.JsonObject) {
+                                synchronized(inboundLock) {
+                                    if (captureInbound) {
+                                        if (inboundPayloads.size < 256) inboundPayloads.add(payload)
+                                        else inboundOverflow = true
+                                    }
+                                }
+                                value.message(payload)
+                            }
+                        }
+                    }
+            }
+            repository = DefaultRemoteRepository(pairings, drafts, observingTransport, scope)
             val observingRepository = object : RemoteRepository by repository {
                 override fun runBash(command: String, excludeFromContext: Boolean): Boolean {
                     val accepted = repository.runBash(command, excludeFromContext)
@@ -115,6 +152,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             }
         }
         override fun after() {
+            synchronized(inboundLock) { captureInbound = false; inboundPayloads.clear() }
             NavigationTestActivity.contentFactory = { {} }
             if (::repository.isInitialized) InstrumentationRegistry.getInstrumentation().runOnMainSync { repository.setForeground(false); repository.disconnect() }
             if (::scope.isInitialized) scope.cancel()
@@ -315,6 +353,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             assertTrue(lifecycle.getBoolean("followupVerified"))
             assertEquals(1, lifecycle.getInt("abortRequests"))
             assertInterruptedPartial(fixture.getJSONObject("nativeLifecycle").getString("partialMarker"), checkLabel = false)
+            if (nativeLifecycleLostAck) assertEquals("No later automatic resend is allowed", 1, lostAckWireRequests.get())
         }
     }
 
@@ -407,6 +446,13 @@ class DevelopmentWorkflowTransportEndToEndTest {
         compose.waitUntil(60_000) { repository.state.value.selection == target && !repository.state.value.loading && repository.state.value.connected }
     }
 
+    private fun observePromptWrite(payload: kotlinx.serialization.json.JsonObject) {
+        if (nativeLifecycleLostAck && payload.optionalText("type") == "session.prompt" &&
+            payload.optionalText("text") == fixture.getJSONObject("nativeLifecycle").getString("prompt")) {
+            lostAckWireRequests.incrementAndGet()
+        }
+    }
+
     private fun exerciseNativeLifecycle(initialHead: String) {
         val config = fixture.getJSONObject("nativeLifecycle")
         val prompt = config.getString("prompt")
@@ -423,8 +469,110 @@ class DevelopmentWorkflowTransportEndToEndTest {
         fun partialBubbles() = conversationItems(repository.state.value.messages)
             .filterIsInstance<ConversationItem.Bubble>().filter { it.text.contains(partial) }
 
+        if (nativeLifecycleLostAck) {
+            lostAckWireRequests.set(0)
+            synchronized(inboundLock) {
+                inboundPayloads.clear()
+                inboundOverflow = false
+                captureInbound = true
+            }
+            action("arm-lifecycle-lost-ack")
+        }
         compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(prompt)
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        var lostRequestId: String? = null
+        if (nativeLifecycleLostAck) {
+            compose.waitUntil(60_000) {
+                repository.state.value.pendingSend?.let {
+                    if (it.text == prompt && it.state == PendingSendState.SENDING) {
+                        lostRequestId = it.mutationId
+                        true
+                    } else false
+                } == true
+            }
+            compose.waitUntil(60_000) {
+                runCatching {
+                    val proof = lifecycle()
+                    val lost = proof.getJSONObject("lostAck")
+                    proof.getBoolean("running") && lost.getBoolean("armed") && lost.getBoolean("accepted") && lost.getBoolean("ackAccepted") &&
+                        lost.getInt("ackQueued") == 1 && lost.getInt("echoQueued") >= 1
+                }.getOrDefault(false)
+            }
+            val lost = lifecycle().getJSONObject("lostAck")
+            assertEquals(lostRequestId, lost.getString("requestId"))
+            assertEquals(0, lost.getInt("ackSent"))
+            assertEquals(0, lost.getInt("echoSent"))
+            val echoSourceId = lost.getString("echoSourceId")
+            assertTrue(echoSourceId.isNotBlank())
+            action("cut-lifecycle")
+            compose.waitUntil(60_000) {
+                val state = repository.state.value
+                runCatching {
+                    val hostState = fullStatus()
+                    hostState.getJSONObject("nativeLifecycle").getBoolean("cut") &&
+                        !hostState.getBoolean("deviceOnline") && hostState.getBoolean("upgradesBlocked") &&
+                        !state.connected && state.selection == selection && state.uncertain &&
+                        state.pendingSend?.let { it.mutationId == lostRequestId && it.state == PendingSendState.NOT_CONFIRMED } == true
+                }.getOrDefault(false)
+            }
+            compose.onNodeWithTag("pendingSendLabel-pending-$lostRequestId")
+                .assertIsDisplayed().assertTextEquals(compose.activity.getString(R.string.remote_prompt_not_confirmed))
+            assertEquals(prompt, repository.state.value.draft)
+            assertEquals(1, lifecycle().getInt("promptRequests"))
+            assertEquals("Android must attempt the initial prompt exactly once", 1, lostAckWireRequests.get())
+            assertEquals(0, lifecycle().getJSONObject("lostAck").getInt("ackSent"))
+            assertEquals(0, lifecycle().getJSONObject("lostAck").getInt("echoSent"))
+            // The transport ordering lane has delivered every earlier decoded frame before the
+            // disconnect callback. Check the actual inbound payloads, not just the host outbox.
+            val (receivedBeforeReconnect, overflow) = synchronized(inboundLock) {
+                captureInbound = false
+                val captured = inboundPayloads.toList() to inboundOverflow
+                inboundPayloads.clear()
+                captured
+            }
+            assertFalse("Inbound capture exceeded its bound", overflow)
+            assertFalse("Android received the lost result or receipt before reconnect",
+                receivedBeforeReconnect.any { it.toString().contains(requireNotNull(lostRequestId)) })
+            assertFalse("Android received the user echo before reconnect",
+                receivedBeforeReconnect.any { it.toString().contains(echoSourceId) || it.toString().contains(prompt) })
+            screenshot("lost-ack-offline")
+            val baseline = lifecycle().getInt("baselineUpgrades")
+            action("allow-lifecycle")
+            compose.waitUntil(90_000) {
+                runCatching {
+                    val current = fullStatus()
+                    current.getBoolean("deviceOnline") && current.getBoolean("nativeWorkerVerified") &&
+                        current.getInt("upgrades") > baseline &&
+                        repository.state.value.let { it.connected && !it.loading && it.selection == selection && it.status == "running" }
+                }.getOrDefault(false)
+            }
+            // The snapshot must independently identify the accepted prompt; matching text alone
+            // cannot prove that this is the request whose acknowledgement was lost.
+            compose.waitUntil(60_000) {
+                repository.state.value.messages.any { message ->
+                    val delivery = message["remoteDelivery"] as? kotlinx.serialization.json.JsonObject
+                    message.optionalText("role") == "user" && delivery?.optionalText("requestId") == lostRequestId &&
+                        delivery?.optionalText("delivery") == "prompt"
+                }
+            }
+            val receipts = repository.state.value.messages.filter { message ->
+                val delivery = message["remoteDelivery"] as? kotlinx.serialization.json.JsonObject
+                message.optionalText("role") == "user" && delivery?.optionalText("requestId") == lostRequestId &&
+                    delivery?.optionalText("delivery") == "prompt"
+            }
+            assertEquals(1, receipts.size)
+            assertEquals(echoSourceId, receipts.single().optionalText("id"))
+            assertEquals(prompt, userMessageBody(receipts.single()))
+            assertEquals(1, repository.state.value.messages.count { it.optionalText("role") == "user" && userMessageBody(it) == prompt })
+            compose.waitUntil(60_000) { repository.state.value.pendingSend == null && !repository.state.value.uncertain }
+            assertEquals(1, lifecycle().getInt("promptRequests"))
+            assertEquals("Android must attempt the initial prompt exactly once", 1, lostAckWireRequests.get())
+            assertEquals("", repository.state.value.draft)
+            compose.onNodeWithTag("composerField").assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+            assertGuards(status(), initialHead, null, 0, 0, 0)
+            compose.waitUntil(60_000) { matches(prompt).fetchSemanticsNodes().size == 1 }
+            matches(prompt).assertCountEquals(1)
+        }
         compose.waitUntil(60_000) {
             runCatching { lifecycle().getBoolean("running") }.getOrDefault(false) &&
                 repository.state.value.status == "running" && exists("stopRun") &&
@@ -514,7 +662,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             }
         }
 
-        if (nativeLifecycleActiveCut) cutAndReconnect(running = true)
+        if (nativeLifecycleActiveCut && !nativeLifecycleLostAck) cutAndReconnect(running = true)
         compose.onNodeWithTag("stopRun").assertIsDisplayed().assertIsEnabled().performClick()
         compose.waitUntil(60_000) {
             runCatching { lifecycle().getBoolean("stopped") }.getOrDefault(false) &&

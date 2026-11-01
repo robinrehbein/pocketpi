@@ -1,6 +1,18 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Accepted initial prompt lost-ACK checkpoint on 2026-11-01
+
+Phone and tablet workflows passed actual initial prompt acceptance with acknowledgment and user
+echo withheld from Android, visible NOT_CONFIRMED state, and reconnect resolution from the exact
+source-user receipt. Android independently counted one matching write attempt through workflow
+completion; the same native worker executed the prompt once and continued through Stop, follow-up
+and the full controlled development chain. The feature uses separate source/Host/client negotiation
+and preserves edits to the restored composer. A real Pi SDK image-resize hint regression was fixed
+and tested separately; it is not Android image-upload E2E qualification. See
+[lost-ACK qualification](testing/native-prompt-lost-ack-qualification.md).
+Process death, fresh-device handoff, physical Samsung and independent Linux remain unqualified.
+
 ## Active native turn reconnect checkpoint on 2026-11-01
 
 Phone and tablet real-native-Pi workflows now pass an actual socket cut while a turn remains

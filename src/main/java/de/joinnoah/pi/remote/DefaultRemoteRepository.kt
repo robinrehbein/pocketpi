@@ -65,7 +65,8 @@ private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
-private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1:"
+private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"
 
 private fun capabilityRevision(route: String): Int = when {
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
@@ -300,6 +301,7 @@ class DefaultRemoteRepository(
     private val routeCapabilities =
         setOf(
             STEER_CAPABILITY,
+            PROMPT_DELIVERY_CAPABILITY,
             QUESTION_DETAILS_CAPABILITY,
             QUESTION_EDITOR_CAPABILITY,
             NATIVE_EDITOR_CAPABILITY,
@@ -956,6 +958,7 @@ class DefaultRemoteRepository(
         /** Needs state a replay cannot carry, so the host always answers with a snapshot. */
         FRESH,
     }
+    private var promptDeliveryGeneration: Long? = null
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
@@ -966,6 +969,7 @@ class DefaultRemoteRepository(
     private val gitDraftWrites = Mutex()
     private data class ComposerVersions(val text: Long = 0, val quote: Long = 0, val attachments: Long = 0)
     private val composerVersions = mutableMapOf<DraftKey, ComposerVersions>()
+    private val restoredPromptVersions = mutableMapOf<DraftKey, ComposerVersions>()
     private fun composerVersion(key: DraftKey) = composerVersions[key] ?: ComposerVersions()
     private fun composerEdited(key: DraftKey, field: String) {
         val version = composerVersion(key)
@@ -1042,8 +1046,11 @@ class DefaultRemoteRepository(
             }
             try {
                 val (storedDrafts, draftsReset) = loadedDrafts.await().getOrThrow()
-                drafts.putAll(storedDrafts.mapValues { (_, value) ->
-                    value.restoringSubmitted().copy(followUps = value.followUps.map { entry ->
+                drafts.putAll(storedDrafts.mapValues { (key, value) ->
+                    val restored = value.restoringSubmitted()
+                    if (restored != value && value.submittedDelivery in setOf(null, "prompt"))
+                        restoredPromptVersions[key] = composerVersion(key)
+                    restored.copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
                 })
@@ -1199,13 +1206,14 @@ class DefaultRemoteRepository(
                     // accepts and then drops connections at once does not cause a tight loop.
                     connectionReady()
                     capabilityRoute = CAPABILITIES_V3_ROUTE
+                    promptDeliveryGeneration = null
                     terminalRouteOffered = false
                     tasksCapabilityKnown = false
                     taskRefreshPending = false
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - setOf(FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY),
+                            capabilities = capabilities - setOf(PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -2358,6 +2366,7 @@ class DefaultRemoteRepository(
             if (type == "projects.list" && result.text("kind") == "projects") {
                 val revision = capabilityRevision(id)
                 if (!result.containsKey("capabilities") && revision > 1) {
+                    if (connection == generation) promptDeliveryGeneration = null
                     // Old hosts treat unknown route IDs as opaque and omit the list.
                     capabilityRoute = if (revision == 3) CAPABILITIES_V2_ROUTE else CAPABILITIES_V1_ROUTE
                     outcome = "retry.v${revision - 1}"
@@ -2378,9 +2387,12 @@ class DefaultRemoteRepository(
                     }) { "Invalid capability list" }
                     list.map { (it as JsonPrimitive).content }
                 }
+                if (connection == generation) {
+                    promptDeliveryGeneration = if (revision == 3 && PROMPT_DELIVERY_CAPABILITY in advertised) connection else null
+                }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEditorTestGate && revision == 3) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEditorTestGate && revision == 3) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
                     update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY)) }
@@ -2392,11 +2404,16 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
+                // A snapshot can arrive while capability discovery is still in flight.
+                if (promptDeliveryGeneration == generation) timeline?.let { current ->
+                    if (current.sessionId == currentDraftKey()?.sessionId)
+                        current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+                }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
                     drainTaskRefresh()
@@ -2954,8 +2971,41 @@ class DefaultRemoteRepository(
         val id = (metadata["requestId"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
         val delivery = (metadata["delivery"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
         if (id.isEmpty() || id.toByteArray().size > 256 || id.any { it.code <= 32 || it.code == 127 } ||
-            delivery !in setOf("steer", "follow_up")) return
-        applyFollowUpReceipt(sessionId, id, delivery, "delivered")
+            delivery !in setOf("steer", "follow_up", "prompt")) return
+        if (delivery == "prompt") applyPromptDeliveryReceipt(sessionId, id)
+        else applyFollowUpReceipt(sessionId, id, delivery, "delivered")
+    }
+
+    /** A consumed source user message is proof for this exact prompt journal, including on replay. */
+    private fun applyPromptDeliveryReceipt(sessionId: String, id: String) {
+        if (promptDeliveryGeneration != generation) return
+        val key = DraftKey(activeHost?.routeId ?: return, sessionId)
+        if (currentDraftKey() != key) return
+        val latest = drafts[key] ?: return
+        if (latest.mutationId != id || latest.submittedText == null ||
+            latest.submittedDelivery !in setOf(null, "prompt")) return
+        // Only a composer restored by this repository, and untouched since, belongs to the send.
+        // A later edit, including one that happens to equal the submitted value, stays with the user.
+        val restored = restoredPromptVersions[key] == composerVersion(key) &&
+            restoredPromptVersions.containsKey(key) && latest.text == latest.submittedText &&
+            latest.quote == latest.submittedQuote && latest.attachments == latest.submittedAttachments
+        val attachments = if (restored) emptyList() else latest.attachments
+        val resolved = latest.copy(
+            text = if (restored) "" else latest.text,
+            quote = if (restored) null else latest.quote,
+            attachments = attachments,
+            uploads = latest.uploads.filter { upload -> attachments.any { it.id == upload.localId } },
+            mutationId = null, submittedText = null, submittedQuote = null,
+            submittedAttachments = emptyList(), submittedDelivery = null,
+        )
+        drafts[key] = resolved
+        restoredPromptVersions.remove(key)
+        journalOwners.remove(key)
+        persist()
+        update { state -> state.copy(
+            draft = resolved.text, quote = resolved.quote, attachments = resolved.attachments,
+            uncertain = false, pendingSend = state.pendingSend?.takeIf { it.mutationId != id },
+        ) }
     }
 
     private fun mergedFollowUpStatus(previous: String, incoming: String): String = when {
@@ -2970,6 +3020,7 @@ class DefaultRemoteRepository(
         val key = DraftKey(activeHost?.routeId ?: return, sessionId)
         val latest = drafts[key] ?: return
         if (latest.followUps.none { it.requestId == id && it.delivery == delivery }) {
+            if (latest.submittedDelivery == "prompt") return
             // Only the in-flight mutation can receive a receipt before its acknowledgement.
             if (latest.mutationId != id) return
             if (status == "delivered" && latest.submittedText != null) {
@@ -6957,6 +7008,7 @@ class DefaultRemoteRepository(
         val ownership = if (restoreText) RestoredComposer(version, restoreQuote, restoreAttachments)
             else if (mergeQueued && before!!.text.isEmpty()) RestoredComposer(version, cleared!!.quote, false)
             else null
+        if (ownership != null) restoredPromptVersions[key] = version
         if (restored != null) {
             drafts[key] = restored
             persist()

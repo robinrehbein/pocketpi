@@ -456,7 +456,7 @@ class RemoteRepositoryTest {
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
             assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1:"))
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -9437,7 +9437,7 @@ class RemoteRepositoryTest {
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
         val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1:"))
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"))
         assertTrue(ids[1].startsWith("capabilities.v2:"))
         assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
     }
@@ -13429,6 +13429,214 @@ class RemoteRepositoryTest {
         advanceTimeBy(30_000)
         runCurrent()
         assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun capabilityRequestOptsInToPromptDeliveryReceiptsWithoutAddingWireFields() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val request = transport.sent.first { it.text("type") == "projects.list" }
+        assertTrue(request.text("requestId").contains("remote_prompt_delivery.v1"))
+        assertEquals(setOf("type", "requestId"), request.keys)
+    }
+
+    private fun promptReceiptTransport(): Transport = Transport().also {
+        configure(it)
+        advertising(it, JsonArray(listOf(JsonPrimitive("remote_prompt_delivery.v1"))))
+    }
+
+    @Test
+    fun promptReceiptIsIgnoredWhenHostDidNotAdvertiseOptInCapability() = runTest {
+        val key = DraftKey("host", "session")
+        for (handshake in listOf(emptySet(), setOf("remote_prompt_delivery.v1"))) {
+            val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+                text = "Original", mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+            val transport = Transport().also {
+                it.capabilities = handshake
+                configure(it)
+                advertising(it, JsonArray(emptyList()))
+            }
+            withTimeline(transport, Wire.objectOf("id" to "source", "role" to "user", "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to "lost-id", "delivery" to "prompt")))
+            val repository = repository(transport, drafts)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            repository.flush()
+            assertTrue(repository.state.value.capabilitiesKnown)
+            assertTrue("Handshake alone must not enable prompt receipts", repository.state.value.uncertain)
+            assertEquals("lost-id", drafts.values.getValue(key).mutationId)
+            assertEquals("Original", repository.state.value.draft)
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        }
+    }
+
+    @Test
+    fun promptCapabilityOmissionRevokesReceiptBeforeFallbackReturns() = runTest {
+        val transport = promptReceiptTransport()
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertTrue("remote_prompt_delivery.v1" in repository.state.value.capabilities)
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        repository.draft("Original")
+        repository.prompt()
+        runCurrent()
+        val requestId = transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+        val prior = transport.response
+        transport.response = { request ->
+            when {
+                request.text("type") != "projects.list" -> prior(request)
+                request.text("requestId").startsWith("capabilities.v3:") -> data("projects", listOf(project))
+                else -> null // Hold fallback open, leaving the previous capability unrefreshed.
+            }
+        }
+        val beforeDiscovery = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 1_000)
+        repository.setForeground(true)
+        runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "projects.list" }.drop(beforeDiscovery)
+        assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v3:") })
+        assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v2:") })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to "prompt"))))
+        runCurrent()
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Original", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun sourceUserPromptReceiptSettlesLostAcknowledgementWithoutRetry() = runTest {
+        val drafts = Drafts()
+        val transport = promptReceiptTransport()
+        val repository = inFlightPrompt(transport, drafts, "Lost prompt")
+        val request = transport.sent.single { it.text("type") == "session.prompt" }
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.uncertain)
+        transport.listener.ready(transport.capabilities)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        val beforeDiscovery = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 1_000)
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue("Reconnected transport must complete a fresh v3 capability read",
+            transport.sent.count { it.text("type") == "projects.list" } > beforeDiscovery)
+        assertTrue("remote_prompt_delivery.v1" in repository.state.value.capabilities)
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "other-session",
+            "revision" to 1, "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "other-source", "role" to "user", "text" to "Lost prompt",
+                "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"), "delivery" to "prompt"))))
+        runCurrent()
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        // A recovered source message identifies the original request, irrespective of its text.
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Lost prompt",
+                "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"), "delivery" to "prompt"))))
+        runCurrent()
+        repository.flush()
+        assertNull(repository.state.value.pendingSend)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("", repository.state.value.draft)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        repository.draft("New draft")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 2, "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Lost prompt",
+                "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"), "delivery" to "prompt"))))
+        runCurrent()
+        assertEquals("New draft", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun promptReceiptKeepsComposerEditedBackToTheSameSubmittedText() = runTest {
+        val transport = promptReceiptTransport()
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Original")
+        repository.prompt()
+        runCurrent()
+        val requestId = transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        repository.draft("Changed")
+        repository.draft("Original")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to "prompt"))))
+        runCurrent()
+        assertEquals("Original", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(repository.state.value.pendingSend)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun promptReceiptFromSnapshotPreservesNewComposerEditsAndClearsOnlyTheJournal() = runTest {
+        val quote = MessageQuote("new-quote", "assistant", "new excerpt")
+        val attachment = LocalAttachment("new-file", "new.txt", "file", "text/plain", 1, "a".repeat(64))
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+            text = "Edited after send", quote = quote, attachments = listOf(attachment),
+            mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+        val transport = promptReceiptTransport()
+        withTimeline(transport, Wire.objectOf("id" to "source", "role" to "user", "text" to "Original",
+            "remoteDelivery" to Wire.objectOf("requestId" to "lost-id", "delivery" to "prompt")))
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.flush()
+        val stored = drafts.values.getValue(key)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(stored.mutationId)
+        assertEquals("Edited after send", repository.state.value.draft)
+        assertEquals(quote, repository.state.value.quote)
+        assertEquals(listOf(attachment), repository.state.value.attachments)
+        assertEquals("Edited after send", stored.text)
+        assertEquals(quote, stored.quote)
+        assertEquals(listOf(attachment), stored.attachments)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun promptRecoveryRejectsWrongIdentityRoleDeliveryAndMatchingTextAlone() = runTest {
+        val key = DraftKey("host", "session")
+        for ((role, requestId, delivery) in listOf(
+            Triple("user", "other", "prompt"), Triple("assistant", "lost-id", "prompt"),
+            Triple("user", "lost-id", "follow_up"), Triple("user", "", "prompt"),
+        )) {
+            val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+                text = "Original", mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+            val transport = promptReceiptTransport()
+            withTimeline(transport, Wire.objectOf("id" to "source", "role" to role, "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to delivery)))
+            val repository = repository(transport, drafts)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            repository.flush()
+            assertTrue("Unexpected confirmation for $role/$requestId/$delivery", repository.state.value.uncertain)
+            assertEquals("lost-id", drafts.values.getValue(key).mutationId)
+            assertEquals("Original", repository.state.value.draft)
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        }
     }
 
     @Test
