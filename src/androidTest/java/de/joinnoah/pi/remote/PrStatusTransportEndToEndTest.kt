@@ -27,6 +27,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -112,7 +113,7 @@ class PrStatusTransportEndToEndTest {
             require(pagedArg == null || pagedArg == "true" || pagedArg == "false") { "pagedEditorExpected must be true or false" }
             pagedEditorExpected = pagedArg == "true"
             pagedEditorCase = args.getString("pagedEditorCase")
-            require(if (pagedEditorExpected) (editorExpected || nativeEditorExpected) && !nativeEditorReconnectExpected && !nativeEditorHandoffExpected && pagedEditorCase in setOf("max-unchanged", "empty-final") else pagedEditorCase == null) { "Paged editor requires a matching supported case and editor mode" }
+            require(if (pagedEditorExpected) (editorExpected || nativeEditorExpected) && !nativeEditorReconnectExpected && !nativeEditorHandoffExpected && pagedEditorCase in setOf("max-unchanged", "max-edited", "empty-expand", "empty-final", "cancel", "lost-ack") else pagedEditorCase == null) { "Paged editor requires a matching supported case and editor mode" }
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -145,7 +146,7 @@ class PrStatusTransportEndToEndTest {
             }
             if (pagedEditorExpected) {
                 require(fixture.optBoolean("pagedEditorFixture") && fixture.optString("pagedEditorCase") == pagedEditorCase) { "Wrong paged editor fixture" }
-                require(fixture.getString(if (nativeEditorExpected) "nativeEditorOutcome" else "editorOutcome") == "submit")
+                require(fixture.getString(if (nativeEditorExpected) "nativeEditorOutcome" else "editorOutcome") == if (pagedEditorCase == "cancel") "cancel" else "submit")
                 verifyPagedMetadata("Source", pagedSource())
                 verifyPagedMetadata("Final", pagedFinal())
             } else require(!fixture.optBoolean("pagedEditorFixture")) { "Paged fixture requires explicit opt-in" }
@@ -168,7 +169,7 @@ class PrStatusTransportEndToEndTest {
                 override fun load() = values
                 override fun save(drafts: Map<DraftKey, StoredDraft>) { values = drafts }
             }
-            observedTransport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), pagedEditorExpected)
+            observedTransport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), pagedEditorExpected, pagedEditorCase == "cancel")
             repository = DefaultRemoteRepository(pairings, drafts, observedTransport, scope, pagedEditorTestGate = pagedEditorExpected)
             val observingRepository = object : RemoteRepository by repository {
                 override fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit {
@@ -331,13 +332,16 @@ class PrStatusTransportEndToEndTest {
     }
 
     private fun pagedSource(): String = when (pagedEditorCase) {
-        "max-unchanged" -> "😀".repeat(262_144)
+        "max-unchanged", "max-edited", "cancel", "lost-ack" -> "😀".repeat(262_144)
+        "empty-expand" -> ""
         "empty-final" -> "draft"
         else -> error("Unsupported paged editor case")
     }
 
     private fun pagedFinal(): String = when (pagedEditorCase) {
-        "max-unchanged" -> pagedSource()
+        "max-unchanged", "cancel", "lost-ack" -> pagedSource()
+        "max-edited" -> "é\\\n".repeat(1_024) + "😀".repeat(261_120)
+        "empty-expand" -> "é\\\n".repeat(262_144)
         "empty-final" -> ""
         else -> error("Unsupported paged editor case")
     }
@@ -370,7 +374,7 @@ class PrStatusTransportEndToEndTest {
         val question = repository.state.value.questions.single { it.optionalText("kind") == "editor" }
         val id = question.text("id")
         assertTrue("Host must issue a grant", question.text("editorUploadGrantId").matches(Regex("[A-Za-z0-9_-]{1,256}")))
-        assertEquals("Source representation must match the case", pagedEditorCase == "max-unchanged", question.containsKey("editorSource"))
+        assertEquals("Source representation must match the case", pagedEditorCase in setOf("max-unchanged", "max-edited", "cancel", "lost-ack"), question.containsKey("editorSource"))
         startPagedMainProbe()
         pagedDiagnostic("load-click-before")
         compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_load)).performScrollTo().assertIsEnabled().performClick()
@@ -384,34 +388,94 @@ class PrStatusTransportEndToEndTest {
         pagedDiagnostic("field-query-before")
         compose.onNodeWithTag("questionEditorField").performScrollTo().assertIsDisplayed()
         pagedDiagnostic("field-query-after")
-        mainProbeEnabled.set(false)
         // Avoid sending a megabyte through Binder: the loaded state above is byte/digest checked.
         // The field is rendered and its actual semantics expose the beginning and end markers.
         val field = compose.onNodeWithTag("questionEditorField")
-        val marker = if (pagedEditorCase == "max-unchanged") "😀😀" else "draft"
+        val marker = when (pagedEditorCase) { "empty-expand" -> ""; "empty-final" -> "draft"; else -> "😀😀" }
         val renderedText = requireNotNull(field.fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
         assertTrue("Rendered first window must be bounded and expose its marker", renderedText.length <= EditorWindows.MAX_UNITS && renderedText.startsWith(marker))
-        if (pagedEditorCase == "max-unchanged") {
+        if (pagedEditorCase in setOf("max-unchanged", "max-edited", "cancel", "lost-ack")) {
             compose.onNodeWithTag("pagedEditorLast").performScrollTo().assertIsEnabled().performClick()
             val lastText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
             assertTrue("Rendered last window must be bounded and expose its marker", lastText.length <= EditorWindows.MAX_UNITS && lastText.endsWith(marker))
             compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
         }
         screenshot("paged-editor-before")
+        val expectedFinal = pagedFinal()
         if (pagedEditorCase == "empty-final") {
             field.performTextReplacement("")
             field.assertTextEquals("")
             compose.waitUntil(60_000) { repository.state.value.pagedEditors[id]?.text == "" }
         }
-        verifyPagedMetadata("Final", requireNotNull(repository.state.value.pagedEditors[id]?.text))
+        if (pagedEditorCase == "max-edited") field.performTextReplacement("é\\\n".repeat(1_024))
+        if (pagedEditorCase == "empty-expand") field.performTextReplacement(expectedFinal)
+        compose.waitUntil(120_000) { repository.state.value.pagedEditors[id]?.text == expectedFinal }
+        val finalDraft = requireNotNull(repository.state.value.pagedEditors[id]?.text)
+        assertEquals("Exact full editor draft", expectedFinal, finalDraft)
+        verifyPagedMetadata("Final", finalDraft)
+        if (pagedEditorCase in setOf("max-edited", "empty-expand")) {
+            compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag("pagedEditorLast").performScrollTo().assertIsEnabled().performClick()
+            val lastText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
+            val endMarker = if (pagedEditorCase == "max-edited") "😀😀" else "é\\\n"
+            assertTrue("Edited last window remains bounded and exact", lastText.length <= EditorWindows.MAX_UNITS && lastText.endsWith(endMarker))
+            compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
+            val firstText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
+            assertTrue("Edited first window remains bounded and exact", firstText.length <= EditorWindows.MAX_UNITS && firstText.startsWith("é\\\n"))
+        }
         compose.onNodeWithText(compose.activity.getString(R.string.remote_send)).performScrollTo().assertIsEnabled().performClick()
-        compose.waitUntil(120_000) {
+        if (pagedEditorCase == "cancel") {
+            exercisePagedCancel(id)
+        } else if (pagedEditorCase == "lost-ack") {
+            exercisePagedLostAck(id, question.text("editorUploadGrantId"))
+        } else compose.waitUntil(120_000) {
             statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") &&
                 it.optBoolean("pagedAckVerified") && it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
                 observedTransport.pagedCommitAccepted(id, question.text("editorUploadGrantId"), fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256")) &&
                 repository.state.value.questions.none { it.optionalText("id") == id }
         }
+        mainProbeEnabled.set(false)
         screenshot("paged-editor-after")
+    }
+
+    private fun observeNoPagedRetry() {
+        val before = observedTransport.uploadCounts()
+        val start = SystemClock.elapsedRealtime()
+        compose.waitUntil(5_000) { SystemClock.elapsedRealtime() - start >= 3_000 }
+        assertEquals("No automatic upload replay", before, observedTransport.uploadCounts())
+    }
+
+    private fun exercisePagedCancel(id: String) {
+        compose.waitUntil(60_000) { observedTransport.firstChunkAccepted.get() && observedTransport.secondChunkHeld.get() }
+        val collecting = statusWithFreshUploadStats().getJSONObject("pagedUploadStats")
+        assertEquals("One actual Host reservation must exist", 1, collecting.getInt("count"))
+        assertEquals(1_048_576, collecting.getInt("bytes"))
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_cancel)).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(5_000) {
+            val s = statusWithFreshUploadStats()
+            val stats = s.getJSONObject("pagedUploadStats")
+            s.optBoolean("pagedSdkResultVerified") && s.optInt("pagedCommitCount", -1) == 0 &&
+                stats.getInt("count") == 0 && stats.getInt("bytes") == 0 && repository.state.value.questions.none { it.optionalText("id") == id }
+        }
+        observedTransport.releaseSecondChunk.complete(Unit)
+        observeNoPagedRetry()
+        assertEquals("Only first chunk may reach the transport", Triple(1, 1, 0), observedTransport.uploadCounts())
+        assertTrue("No owner commit may occur", !status().getBoolean("pagedCommitDispatched") && status().getInt("pagedCommitCount") == 0)
+    }
+
+    private fun exercisePagedLostAck(id: String, grantId: String) {
+        compose.waitUntil(120_000) {
+            statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") &&
+                it.optBoolean("pagedAckVerified") && it.optBoolean("pagedLostAckInjected") &&
+                it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
+                observedTransport.pagedCommitUnknown(id, grantId, fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256")) &&
+                repository.state.value.questions.none { it.optionalText("id") == id }
+        }
+        observeNoPagedRetry()
+        assertEquals("One actual commit", 1, observedTransport.uploadCounts().third)
+        val after = status()
+        assertEquals("One source settlement", 1, after.getInt("pagedCommitCount"))
+        assertTrue("The source must still have exactly one matching SDK result", after.getBoolean("pagedSdkResultVerified"))
     }
 
     private fun exerciseEditor() {
@@ -698,6 +762,24 @@ class PrStatusTransportEndToEndTest {
     private fun readStatus(): JSONObject = client.newCall(Request.Builder().url(fixture.getString("statusUrl")).build()).execute().use {
         assertTrue(it.isSuccessful); JSONObject(requireNotNull(it.body).string())
     }
+    private fun statusWithFreshUploadStats(): JSONObject {
+        fun checkAge() {
+            val monotonicAge = SystemClock.elapsedRealtime() - observedTransport.beginElapsed.get()
+            val wallAge = System.currentTimeMillis() - observedTransport.beginWall.get()
+            val ackMonotonicAge = SystemClock.elapsedRealtime() - observedTransport.firstAckElapsed.get()
+            val ackWallAge = System.currentTimeMillis() - observedTransport.firstAckWall.get()
+            check(observedTransport.beginElapsed.get() >= 0 && observedTransport.beginWall.get() >= 0 &&
+                observedTransport.firstAckElapsed.get() >= observedTransport.beginElapsed.get() && observedTransport.firstAckWall.get() >= observedTransport.beginWall.get() &&
+                monotonicAge in 0 until 5_000 && wallAge in 0 until 5_000 && ackMonotonicAge in 0 until 5_000 && ackWallAge in 0 until 5_000) { "Upload stats observation exceeded the fresh-transfer window" }
+            pagedDiagnostic("stats-age beginElapsedMs=$monotonicAge beginWallMs=$wallAge ackElapsedMs=$ackMonotonicAge ackWallMs=$ackWallAge")
+        }
+        checkAge()
+        val result = client.newCall(Request.Builder().url(fixture.getString("statusUrl") + "?stats=1").build()).execute().use {
+            assertTrue(it.isSuccessful); JSONObject(requireNotNull(it.body).string())
+        }
+        checkAge()
+        return checkNativeMode(result)
+    }
     private fun checkNativeMode(status: JSONObject): JSONObject = status.apply {
         assertTrue("Status must report native worker mode", has("nativeWorker"))
         assertEquals("Wrong native worker status mode", nativeExpected, getBoolean("nativeWorker"))
@@ -729,11 +811,22 @@ private class PresenceObservingTransport(
     private val delegate: RemoteTransport,
     private val sessionId: String,
     private val pagedDiagnostics: Boolean,
+    private val holdSecondChunk: Boolean,
 ) : RemoteTransport {
     val presenceAccepted = AtomicBoolean(false)
     val inactivePresenceAccepted = AtomicBoolean(false)
     val staleAnswerResult = AtomicReference<JsonObject?>(null)
     val pagedV3Accepted = AtomicBoolean(false)
+    val firstChunkAccepted = AtomicBoolean(false)
+    val secondChunkHeld = AtomicBoolean(false)
+    val releaseSecondChunk = CompletableDeferred<Unit>()
+    val beginElapsed = AtomicLong(-1)
+    val beginWall = AtomicLong(-1)
+    val firstAckElapsed = AtomicLong(-1)
+    val firstAckWall = AtomicLong(-1)
+    private val uploadBegins = AtomicInteger()
+    private val uploadChunks = AtomicInteger()
+    private val uploadCommits = AtomicInteger()
     private val pagedV3Requests = ConcurrentHashMap.newKeySet<String>()
     private data class UploadObservation(val begin: JsonObject, val digest: MessageDigest = MessageDigest.getInstance("SHA-256"), var bytes: Int = 0, var valid: Boolean = true)
     private data class PendingCommit(val upload: UploadObservation, val request: JsonObject, val sha256: String)
@@ -783,6 +876,16 @@ private class PresenceObservingTransport(
                             val rawCode = if (!ok) runCatching { payload.obj("error").optionalText("code") }.getOrNull() else null
                             val code = rawCode?.takeIf { it in setOf("invalid_request", "forbidden", "unsupported", "outcome_unknown", "not_found", "unavailable") } ?: "other"
                             pagedDiagnostic("upload-result alias=${trace.alias} kind=${trace.kind} offset=${trace.offset} ok=$ok resultKind=$kind errorCode=$code")
+                            if (trace.kind == "chunk" && trace.offset == 0L && ok) runCatching {
+                                val data = payload.obj("data")
+                                val upload = observedUploads[data.text("uploadId")]
+                                if (upload != null && data.text("kind") == "editor_upload_ack" && data.text("sessionId") == sessionId &&
+                                    data.text("questionId") == upload.begin.text("questionId") && data.long("nextOffset") == EDITOR_UPLOAD_CHUNK_BYTES.toLong()) {
+                                    firstAckElapsed.compareAndSet(-1, SystemClock.elapsedRealtime())
+                                    firstAckWall.compareAndSet(-1, System.currentTimeMillis())
+                                    firstChunkAccepted.set(true)
+                                }
+                            }
                         }
                         pendingBegins.remove(resultId)?.let { begin ->
                             runCatching {
@@ -845,22 +948,29 @@ private class PresenceObservingTransport(
             pagedDiagnostic("upload-send alias=${trace.alias} kind=$kind offset=$offset plaintextBytes=$plainBytes dataChars=$dataChars")
         }
         when (payload.optionalText("type")) {
-            "session.question.editor.upload.begin" -> pendingBegins[payload.text("requestId")] = payload
-            "session.question.editor.upload.chunk" -> observedUploads[payload.text("uploadId")]?.let { upload ->
-                synchronized(upload) {
+            "session.question.editor.upload.begin" -> {
+                uploadBegins.incrementAndGet()
+                beginElapsed.compareAndSet(-1, SystemClock.elapsedRealtime())
+                beginWall.compareAndSet(-1, System.currentTimeMillis())
+                pendingBegins[payload.text("requestId")] = payload
+            }
+            "session.question.editor.upload.chunk" -> {
+                uploadChunks.incrementAndGet()
+                observedUploads[payload.text("uploadId")]?.let { upload -> synchronized(upload) {
                     runCatching {
                         val bytes = Wire.decode(payload.text("data"))
                         if (payload.text("sessionId") != sessionId || payload.text("questionId") != upload.begin.text("questionId") || payload.long("offset") != upload.bytes.toLong()) upload.valid = false
                         upload.digest.update(bytes)
                         upload.bytes += bytes.size
                     }.onFailure { upload.valid = false }
-                }
+                } }
             }
-            "session.question.editor.upload.commit" -> observedUploads[payload.text("uploadId")]?.let { upload ->
-                synchronized(upload) {
+            "session.question.editor.upload.commit" -> {
+                uploadCommits.incrementAndGet()
+                observedUploads[payload.text("uploadId")]?.let { upload -> synchronized(upload) {
                     val digest = upload.digest.digest().joinToString("") { "%02x".format(it) }
                     pendingCommits[payload.text("requestId")] = PendingCommit(upload, payload, digest)
-                }
+                } }
             }
         }
         if (payload.optionalText("type") == "projects.list") {
@@ -878,10 +988,17 @@ private class PresenceObservingTransport(
         observe(payload)
         delegate.send(payload)
     }
-    override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) = delegate.sendGuarded(payload) {
-        beforePossibleWrite()
-        observe(payload)
+    override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+        if (holdSecondChunk && payload.optionalText("type") == "session.question.editor.upload.chunk" && payload.long("offset") == EDITOR_UPLOAD_CHUNK_BYTES.toLong()) {
+            secondChunkHeld.set(true)
+            releaseSecondChunk.await()
+        }
+        delegate.sendGuarded(payload) {
+            beforePossibleWrite()
+            observe(payload)
+        }
     }
+    fun uploadCounts(): Triple<Int, Int, Int> = Triple(uploadBegins.get(), uploadChunks.get(), uploadCommits.get())
     fun pagedCommitAccepted(questionId: String, grantId: String, bytes: Int, sha256: String): Boolean {
         val receipt = observedCommit.get() ?: return false
         return synchronized(receipt.pending.upload) {
@@ -894,6 +1011,21 @@ private class PresenceObservingTransport(
                     begin.text("sha256") == sha256 && begin.text("sessionId") == sessionId && begin.text("questionId") == questionId && begin.text("grantId") == grantId &&
                     commit.text("sessionId") == sessionId && commit.text("questionId") == questionId &&
                     result.flag("ok") && result.obj("data").text("kind") == "accepted" && result.obj("data").text("sessionId") == sessionId
+            }.getOrDefault(false)
+        }
+    }
+    fun pagedCommitUnknown(questionId: String, grantId: String, bytes: Int, sha256: String): Boolean {
+        val receipt = observedCommit.get() ?: return false
+        return synchronized(receipt.pending.upload) {
+            runCatching {
+                val upload = receipt.pending.upload
+                val begin = upload.begin
+                val commit = receipt.pending.request
+                val result = receipt.result
+                upload.valid && upload.bytes == bytes && receipt.pending.sha256 == sha256 && begin.long("totalBytes") == bytes.toLong() &&
+                    begin.text("sha256") == sha256 && begin.text("sessionId") == sessionId && begin.text("questionId") == questionId && begin.text("grantId") == grantId &&
+                    commit.text("sessionId") == sessionId && commit.text("questionId") == questionId &&
+                    !result.flag("ok") && result.obj("error").text("code") == "internal" && result.obj("error").text("reason") == "outcome_unknown"
             }.getOrDefault(false)
         }
     }

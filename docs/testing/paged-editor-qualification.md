@@ -42,6 +42,12 @@ The final targeted run passed **87 tests**, including real encrypted rolling-win
 
 The exact rare fallback-wins/dequeued cancellation interleaving lacks a deterministic test; its fix was statically reviewed and the related regression suite passed. Local enqueue timing cannot prove relay arrival timing under arbitrary network buffering. Actual paced Native/RPC chain, device latency and the remaining mutation matrix are still separate runtime gates. The production relay limits and public paged opt-in remain unchanged. See the [outbound pacing plan](../plans/2026-11-01-relay-outbound-pacing.md).
 
+The paced **max-unchanged** production chain subsequently passed separately for Native and managed RPC on App `53aacb75a` and Host `319c27587`. Android instrumentation reported `OK (1 test)` in **25.104 seconds Native** and **24.896 seconds RPC**. Each original public Pi 1.4.0 editor returned the exact 1,048,576-byte value and SHA-256, with one commit, one actual source receipt and one SDK result. The Native original local editor was called zero times. Both runs required Android's matching accepted commit result; no relay-rate closure occurred during upload. The fixture's later intentional PR reconnect is a different phase.
+
+Evidence in the same private lab: `paced-current-inputs.json`; `native-paced-*` and `rpc-paced-*` instrumentation, final status, paged trace and Android timing records; `paced-installed-apks-proof.json`. Both installed APKs were pulled from the owned emulator and their hashes matched the recorded inputs; copies are retained under `paced-installed-apks/`. Independent evidence review passed: `/private/tmp/paged-max-production-evidence-review.md`.
+
+The Android trace measures the paced phone-to-Host collection, while the Host paged trace measures the subsequent local Host-to-original-owner transfer after phone commit. Their durations are different stages, not a measured relay arrival window. These passes qualify the recorded unchanged max-size cases only. Edited/expanded values, cancellation during collection, lost ACK, real IME, external Linux hosts, physical Samsung devices and arbitrary network behavior remain separately qualified work. Public production opt-in remains disabled.
+
 ## Public SDK feasibility
 
 The actual compiled Pi 1.4.0 executable and installed SDK 1.4.0 were used with private offline-configured homes/projects and no model/tool commands:
