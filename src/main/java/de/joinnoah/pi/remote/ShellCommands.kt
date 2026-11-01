@@ -205,12 +205,21 @@ internal fun shellDraft(state: RemoteState): ShellDraft? {
     return ShellDraft(text.substring(if (exclude) 2 else 1).trim(), exclude)
 }
 
+/**
+ * The draft starts with `!` but the session cannot run shell commands, so Send must not turn it into
+ * a prompt for pi. Drafts with a quote or attachments, which are prompts, and a child's resume text
+ * are not shell drafts, as in [shellDraft].
+ */
+internal fun shellDraftRefused(state: RemoteState): Boolean =
+    state.attachments.isEmpty() && state.quote == null && !offersChildResume(state) &&
+        state.draft.trimStart().startsWith("!") && !canRunShellCommands(state)
+
 /** The shell draft can run now: it names a command the host takes and no other one runs. */
 internal fun shellDraftSendable(shell: ShellDraft, state: RemoteState): Boolean =
     bashCommandFits(shell.command) && state.bash?.running != true
 
-/** Whether a sent draft feeds the prompt predictions; a shell command is no prompt to suggest. */
-internal fun recordsPrompt(state: RemoteState): Boolean = shellDraft(state) == null
+/** Whether a sent draft feeds the prompt predictions; a shell command is no prompt to suggest, nor is a refused one. */
+internal fun recordsPrompt(state: RemoteState): Boolean = shellDraft(state) == null && !shellDraftRefused(state)
 
 /**
  * Runs the composer's [text] as a shell command when it is one in [state], through [run], and
