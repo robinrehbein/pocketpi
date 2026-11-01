@@ -6,6 +6,9 @@ internal const val NATIVE_EDITOR_CAPABILITY = "session.question_editor_native.v1
 
 internal const val QUESTION_EDITOR_CAPABILITY = "session.question_editor.v1"
 
+data class PagedEditorView(val loading: Boolean = false, val text: String? = null, val failed: Boolean = false, val recoveryDraft: String? = null,
+    val quarantined: Boolean = false, val retentionWarning: Boolean = false, val capacityFull: Boolean = false)
+
 /** Accept only Unicode scalar values and the controls supported by the bounded editor wire. */
 internal fun validEditorText(value: String, maxBytes: Int): Boolean {
     var index = 0

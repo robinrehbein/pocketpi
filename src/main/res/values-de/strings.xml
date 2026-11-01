@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources>
+    <string name="remote_paged_editor_load">Editor laden</string>
+    <string name="remote_paged_editor_restore">Vorherigen Entwurf wiederherstellen</string>
+    <string name="remote_paged_editor_retention_warning">Dieser Entwurf geht verloren, wenn du den Editor verlässt</string>
+    <string name="remote_paged_editor_capacity_full">Zu viele Änderungen warten auf Bestätigung. Warte vor dem Senden, bis sie abgeschlossen sind.</string>
     <string name="remote_app_name">PocketPi</string>
     <string name="remote_hosts">Rechner</string>
     <string name="remote_projects">Projekte</string>

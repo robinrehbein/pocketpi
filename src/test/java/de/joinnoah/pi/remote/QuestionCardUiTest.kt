@@ -249,6 +249,103 @@ class QuestionCardUiTest {
         assertEquals(listOf(Wire.objectOf("kind" to "cancel")), answers)
     }
 
+    @Test fun pagedEditorWaitsForVerifiedSourceAndKeepsInvalidVisibleDraftWithoutSubmitting() {
+        val value = parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"${"a".repeat(64)}"}}""")
+        val view = mutableStateOf(PagedEditorView())
+        val submitted = mutableListOf<String>()
+        var loads = 0
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = view.value,
+                onLoadPagedEditor = { loads++ }, onSubmitPagedEditor = { submitted += it }) { answers += it }
+        } }
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        compose.onNodeWithText("Load editor").performClick()
+        assertEquals(1, loads)
+        compose.runOnIdle { view.value = PagedEditorView(text = "hello") }
+        val field = compose.onNode(hasSetTextAction())
+        field.assertTextContains("hello")
+        field.performTextReplacement("bad\rcontrol")
+        field.assertTextContains("bad\rcontrol")
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").performClick()
+        assertTrue(submitted.isEmpty())
+        assertEquals(listOf(Wire.objectOf("kind" to "cancel")), answers)
+    }
+
+    @Test fun pagedEditorKeepsCapturedTextVisibleAndDisablesEditingWhileUploadPending() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        val view = mutableStateOf(PagedEditorView(text = "hello"))
+        val submitted = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = view.value,
+                onSubmitPagedEditor = { submitted += it; view.value = PagedEditorView(text = "hello", loading = true) }) { answers += it }
+        } }
+        compose.onNodeWithText("Send").performClick()
+        compose.onNodeWithTag("questionEditorField").assertTextContains("hello").assertIsNotEnabled()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").assertIsEnabled()
+        assertEquals(listOf("hello"), submitted)
+    }
+
+    @Test fun pagedEditorReportsEveryVisibleEditIncludingInvalidDraft() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        val edits = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello"),
+                onEditPagedEditor = { edits += it }) { answers += it }
+        } }
+        compose.onNode(hasSetTextAction()).performTextReplacement("bad\rcontrol")
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        assertEquals(listOf("bad\rcontrol"), edits)
+    }
+
+    @Test fun pagedEditorOffersAmbiguousPreviousDraftWithoutApplyingItUntilTapped() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"new original","editorUploadGrantId":"new-grant"}""")
+        val edits = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "new original", recoveryDraft = "old draft"),
+                onEditPagedEditor = { edits += it }) { answers += it }
+        } }
+        compose.onNodeWithTag("questionEditorField").assertTextContains("new original")
+        assertTrue(edits.isEmpty())
+        compose.onNodeWithText("Restore previous draft").performClick()
+        compose.onNodeWithTag("questionEditorField").assertTextContains("old draft")
+        assertEquals(listOf("old draft"), edits)
+    }
+
+    @Test fun pagedEditorQuarantineExplainsDisabledSendButKeepsCancelAvailable() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        val submitted = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello", quarantined = true),
+                onSubmitPagedEditor = { submitted += it }) { answers += it }
+        } }
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("The answer may have been delivered; waiting for the session").assertExists()
+        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        assertTrue(submitted.isEmpty())
+        assertEquals("cancel", answers.single().text("kind"))
+    }
+
+    @Test fun pagedEditorQuarantineBeforeSourceLoadExplainsAndAllowsCancel() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(quarantined = true)) { answers += it }
+        } }
+        compose.onNodeWithText("The answer may have been delivered; waiting for the session").assertExists()
+        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        assertEquals("cancel", answers.single().text("kind"))
+    }
+
+    @Test fun pagedEditorWarnsWhenVisibleDraftCannotBeRetained() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello", retentionWarning = true)) { answers += it }
+        } }
+        compose.onNodeWithText("This draft will be lost if you leave the editor").assertExists()
+        compose.onNodeWithTag("questionEditorField").assertTextContains("hello")
+    }
+
     @Test fun questionnaireRetainsDefaultsRequiredValidationSkipAndStructuredSelections() {
         render(questionnaire)
         compose.onNodeWithText("Submit answer").performScrollTo().performClick()

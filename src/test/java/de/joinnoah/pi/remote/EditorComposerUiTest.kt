@@ -62,6 +62,27 @@ class EditorComposerUiTest {
         compose.onNodeWithText("Send").assertIsEnabled()
     }
 
+    @Test fun quarantinedPagedEditorAfterCapabilityLossAllowsCancelButNotLoad() {
+        val paged = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g")
+        state.value = state.value.copy(questions = listOf(paged), capabilities = emptySet(),
+            questionBlocks = mapOf("e" to QuestionBlock.UNCERTAIN), pagedQuarantines = setOf("e"))
+        var loads = 0
+        compose.setContent { MaterialTheme {
+            ChatComposer(state.value, onSend = {}, onStop = {}, onRemoveQuote = {},
+                onLoadPagedEditor = { loads++ }, onAnswer = { _, answer -> answers += answer })
+        } }
+        compose.onNodeWithText("Load editor").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        assertEquals(0, loads)
+        assertEquals("cancel", answers.single().text("kind"))
+    }
+
+    @Test fun legacyUncertainQuestionDoesNotGainCancelFromPagedException() {
+        state.value = state.value.copy(questionBlocks = mapOf("e" to QuestionBlock.UNCERTAIN))
+        render()
+        compose.onNodeWithText("Cancel").assertIsNotEnabled()
+    }
+
     @Test fun nativeEditorRequiresNativeCapabilityWhileCancelRemainsAvailable() {
         val native = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "native" to true)
         state.value = state.value.copy(questions = listOf(native),

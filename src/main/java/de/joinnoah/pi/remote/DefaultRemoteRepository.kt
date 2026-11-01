@@ -295,6 +295,7 @@ class DefaultRemoteRepository(
      * is the only case where a push wake leaves its socket open at the window's end.
      */
     private val liveRunKept: () -> Boolean = { false },
+    private val pagedEditorTestGate: Boolean = false,
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -302,6 +303,7 @@ class DefaultRemoteRepository(
             QUESTION_DETAILS_CAPABILITY,
             QUESTION_EDITOR_CAPABILITY,
             NATIVE_EDITOR_CAPABILITY,
+            QUESTION_PAGED_EDITOR_CAPABILITY,
             // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
             COMPACT_CAPABILITY,
             SETTINGS_CAPABILITY,
@@ -604,6 +606,55 @@ class DefaultRemoteRepository(
     private var detailsQuestion: JsonObject? = null
     private var editorAuthorityGeneration = 0L
     private var detailsLoadToken = 0L
+    private var pagedState: EditorSourceState? = null
+    private var pagedQuestion: JsonObject? = null
+    private var pagedToken = 0L
+    private var pagedUploading = false
+    private data class PagedDraft(val route: String, val session: String, val id: String, val text: String, val editedAt: Long) {
+        val bytes: Long get() = text.length.toLong() * 2
+    }
+    private data class PagedReceipt(val route: String, val session: String, val id: String, val question: JsonObject, val grant: String, val connection: Long)
+    private val pagedDrafts = java.util.IdentityHashMap<JsonObject, PagedDraft>()
+    private val pagedReceipts = mutableListOf<PagedReceipt>()
+    private val pagedDraftLimit = 32
+    private val pagedDraftBytes = 8L * 1024 * 1024
+    private val pagedDraftOneBytes = 4L * 1024 * 1024
+    private val pagedDraftHistoryMillis = 15 * 60_000L
+    private val pagedReceiptLimit = 32
+    private fun pagedDraftActive(question: JsonObject, draft: PagedDraft): Boolean =
+        state.value.selection.routeId == draft.route && state.value.selection.sessionId == draft.session && state.value.questions.any { it === question }
+    private fun prunePagedDrafts() {
+        val time = now()
+        pagedDrafts.entries.removeAll { (question, draft) ->
+            !pagedDraftActive(question, draft) && time >= draft.editedAt && time - draft.editedAt >= pagedDraftHistoryMillis
+        }
+    }
+    private fun retainPagedDraft(question: JsonObject, draft: PagedDraft): Boolean {
+        prunePagedDrafts()
+        // Never leave an older stored value masquerading as the latest visible draft.
+        pagedDrafts.remove(question)
+        if (draft.bytes > pagedDraftOneBytes) return false
+        val removable = pagedDrafts.entries.filter { (other, stored) -> !pagedDraftActive(other, stored) }.sortedBy { it.value.editedAt }
+        var bytes = pagedDrafts.values.sumOf { it.bytes }
+        for (entry in removable) {
+            if (pagedDrafts.size < pagedDraftLimit && bytes + draft.bytes <= pagedDraftBytes) break
+            bytes -= entry.value.bytes
+            pagedDrafts.remove(entry.key)
+        }
+        if (pagedDrafts.size >= pagedDraftLimit || bytes + draft.bytes > pagedDraftBytes) return false
+        pagedDrafts[question] = draft
+        return true
+    }
+    private fun pagedQuarantined(selection: RemoteSelection, id: String): Boolean = pagedReceipts.any {
+        it.route == selection.routeId && it.session == selection.sessionId && it.id == id
+    }
+    private fun closePagedReceipt(session: String, question: JsonObject) {
+        val id = question.optionalText("id") ?: return
+        val route = state.value.selection.routeId
+        pagedReceipts.removeAll { receipt -> receipt.route == route && receipt.session == session && receipt.id == id &&
+            (receipt.question === question || receipt.connection == generation && question.optionalText("editorUploadGrantId") == receipt.grant) }
+        pagedDrafts.remove(question)
+    }
     private fun clearQuestionDetails() {
         detailsLoadToken++
         detailsAuthority.clear()
@@ -1254,9 +1305,28 @@ class DefaultRemoteRepository(
         val oldEditors = previous.questions.filter { it.optionalText("kind") == "editor" }
         val newEditors = next.questions.filter { it.optionalText("kind") == "editor" }
         val editorsChanged = oldEditors.size != newEditors.size || oldEditors.zip(newEditors).any { (a, b) -> a !== b }
+        val invalidatePaged = editorAuthorityChanged || editorsChanged ||
+            (QUESTION_PAGED_EDITOR_CAPABILITY in previous.capabilities) != (QUESTION_PAGED_EDITOR_CAPABILITY in next.capabilities) ||
+            (QUESTION_PAGED_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_PAGED_EDITOR_CAPABILITY in next.unavailableCapabilities)
+        if (invalidatePaged) { pagedToken++; pagedState?.clear(); pagedState = null; pagedQuestion = null; pagedUploading = false }
+        val visiblePaged = if (invalidatePaged) emptyMap() else next.pagedEditors.mapValues { (id, view) ->
+            view.copy(quarantined = pagedQuarantined(next.selection, id), capacityFull = pagedReceipts.size >= pagedReceiptLimit)
+        }
+        val visibleBlocks = next.questionBlocks.toMutableMap()
+        val visibleQuarantines = mutableSetOf<String>()
+        for (question in next.questions) {
+            val id = question.optionalText("id") ?: continue
+            if (question.optionalText("kind") == "editor" && question.containsKey("editorUploadGrantId") && pagedQuarantined(next.selection, id)) {
+                visibleQuarantines += id
+                visibleBlocks.putIfAbsent(id, QuestionBlock.UNCERTAIN)
+            }
+        }
         mutable.value = next.copy(
             editorQuestionGeneration = previous.editorQuestionGeneration + if (editorsChanged || editorAuthorityChanged) 1 else 0,
             questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
+            pagedEditors = visiblePaged,
+            pagedQuarantines = visibleQuarantines,
+            questionBlocks = visibleBlocks,
             gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
         )
         reconcileNativePresence()
@@ -2222,7 +2292,10 @@ class DefaultRemoteRepository(
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val id = if (type == "projects.list") "$capabilityRoute${if (capabilityRevision(capabilityRoute) == 3) QUESTION_DETAILS_OPT_IN else ""}$requestId" else sessionsListRequestId(type, requestId)
+        val optIn = if (capabilityRevision(capabilityRoute) == 3) {
+            if (pagedEditorTestGate) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN:" else QUESTION_DETAILS_OPT_IN
+        } else ""
+        val id = if (type == "projects.list") "$capabilityRoute$optIn$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         recordIssuedRequest(id)
         val completion = CompletableDeferred<JsonObject>()
@@ -2300,10 +2373,10 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEditorTestGate && revision == 3) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
-                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY)) }
+                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY)) }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2312,10 +2385,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
@@ -2693,6 +2766,10 @@ class DefaultRemoteRepository(
         // Out of focus: the host leaves its upserts out, so its gaps mean nothing until the refocus
         // resumes it.
         if (current.detached) return
+        val beforeRevision = current.revision
+        val closingId = event.optionalText("questionId")
+        val closingQuestion = if (event.optionalText("kind") == "question.closed" && event.optionalText("sessionId") == current.sessionId)
+            current.questions.firstOrNull { it.optionalText("id") == closingId } else null
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
             // one would only be discarded. A gap can be filled from the host's journal;
@@ -2706,6 +2783,9 @@ class DefaultRemoteRepository(
         } catch (malformed: Exception) {
             Diagnostics.caught("repo.receive.timeline", malformed)
             current.unknownKindSeen = true
+        }
+        if (closingQuestion != null && current.revision > beforeRevision && current.questions.none { it === closingQuestion }) {
+            closePagedReceipt(current.sessionId, closingQuestion)
         }
         resyncAfterUnknownEvents(current)
         // Another session's event cannot change this chat.
@@ -3323,7 +3403,7 @@ class DefaultRemoteRepository(
     /** Settles the question blocks whose answer was uncertain: the host's reply says what is still open. */
     private fun settleUncertainQuestions() =
         update {
-            it.copy(questionBlocks = it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN })
+            it.copy(questionBlocks = it.questionBlocks.filter { (id, block) -> block != QuestionBlock.UNCERTAIN || pagedQuarantined(it.selection, id) })
         }
 
     /**
@@ -3336,8 +3416,19 @@ class DefaultRemoteRepository(
      * Returns whether the reply fit; otherwise one fresh snapshot follows.
      */
     private fun applyReplay(current: Timeline, reply: SessionEventsReply): Boolean {
+        // Replay applies its whole batch at once. Track the displayed incarnation at each
+        // accepted event, so a close cannot be attributed to a later same-ID replacement.
+        val replayQuestions = current.questions.associateBy { it.text("id") }.toMutableMap()
         val result = current.replay(reply)
         for (event in result.applied) {
+            when (event.optionalText("kind")) {
+                "question.closed" -> event.optionalText("questionId")?.let { id ->
+                    replayQuestions.remove(id)?.let { closePagedReceipt(current.sessionId, it) }
+                }
+                "question.open" -> (event["question"] as? JsonObject)?.let { question ->
+                    question.optionalText("id")?.let { replayQuestions[it] = question }
+                }
+            }
             if (event.optionalText("kind") == "session.notice") continue
             try {
                 eventEffects(event)
@@ -8202,6 +8293,127 @@ class DefaultRemoteRepository(
         }
     }
 
+    private fun pagedAvailable(question: JsonObject, current: RemoteState): Boolean =
+        pagedEditorTestGate && current.connected && !current.loading && current.questions.any { it === question } &&
+            current.questions.count { it.optionalText("id") == question.optionalText("id") } == 1 &&
+            editorCapabilityAvailable(question, current) && QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities &&
+            QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities && capabilityRevision(capabilityRoute) == 3
+
+    override fun loadPagedEditor(question: JsonObject) {
+        val current = state.value
+        if (!pagedAvailable(question, current)) return
+        val id = question.optionalText("id") ?: return
+        val selection = current.selection
+        val session = selection.sessionId ?: return
+        val route = selection.routeId ?: return
+        val epoch = selectionEpoch
+        val connection = generation
+        val source = runCatching { EditorSourceState(connection, selection, question) }.getOrNull() ?: return
+        pagedState?.clear()
+        // The new token invalidates the old attempt. Its finalizer cannot own this new editor.
+        pagedUploading = false
+        pagedState = source
+        pagedQuestion = question
+        val token = ++pagedToken
+        prunePagedDrafts()
+        fun view(text: String?, loading: Boolean = false): PagedEditorView {
+            val saved = pagedDrafts[question]?.text
+            val recovery = if (saved == null) pagedDrafts.entries.filter { (other, draft) -> other !== question && draft.route == route && draft.session == session && draft.id == id }.maxByOrNull { it.value.editedAt }?.value?.text else null
+            return PagedEditorView(loading = loading, text = if (text != null) saved ?: text else null, recoveryDraft = if (text != null) recovery else null,
+                quarantined = pagedQuarantined(selection, id), capacityFull = pagedReceipts.size >= pagedReceiptLimit)
+        }
+        update { it.copy(pagedEditors = mapOf(id to view(source.originalSource, source.originalSource == null))) }
+        if (source.originalSource != null) return
+        scope.launch {
+            fun valid() = token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value)
+            try {
+                val descriptor = PagedEditorWire.parseQuestionSource(question)
+                var offset = 0
+                while (offset < descriptor.totalBytes) {
+                    check(valid())
+                    val page = request("session.question.details.get", epoch, "sessionId" to session, "questionId" to id, "detailsId" to descriptor.id, "offset" to offset)
+                    check(valid())
+                    source.append(page)
+                    offset += minOf(EDITOR_UPLOAD_CHUNK_BYTES, descriptor.totalBytes - offset)
+                }
+                source.finish()
+                check(valid())
+                update { it.copy(pagedEditors = mapOf(id to view(source.originalSource))) }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                if (valid()) { source.clear(); pagedState = null; update { it.copy(pagedEditors = mapOf(id to PagedEditorView(failed = true))) } }
+            }
+        }
+    }
+
+    override fun editPagedEditor(question: JsonObject, draft: String) {
+        val current = state.value
+        val id = question.optionalText("id") ?: return
+        val route = current.selection.routeId ?: return
+        val session = current.selection.sessionId ?: return
+        if (pagedQuestion !== question || pagedUploading || !pagedAvailable(question, current) || pagedState?.originalSource == null) return
+        val retained = retainPagedDraft(question, PagedDraft(route, session, id, draft, now()))
+        update { state -> state.copy(pagedEditors = state.pagedEditors + (id to (state.pagedEditors[id] ?: PagedEditorView()).copy(text = draft, recoveryDraft = null, retentionWarning = !retained))) }
+    }
+
+    override fun submitPagedEditor(question: JsonObject, draft: String) {
+        val current = state.value
+        val id = question.optionalText("id") ?: return
+        val source = pagedState ?: return
+        val selection = current.selection
+        val session = selection.sessionId ?: return
+        val epoch = selectionEpoch
+        val connection = generation
+        val token = pagedToken
+        if (pagedQuestion !== question || pagedUploading || id in current.questionBlocks || pagedQuarantined(selection, id) || pagedReceipts.size >= pagedReceiptLimit || !pagedAvailable(question, current) || !PagedEditorWire.validText(draft, MAX_EDITOR_UPLOAD_BYTES)) return
+        source.edit(draft)
+        val action = source.capture() ?: return
+        if (!source.allows(action, connection, selection, question)) return
+        val bytes = draft.toByteArray(Charsets.UTF_8)
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        pagedUploading = true
+        update { it.copy(pagedEditors = it.pagedEditors + (id to (it.pagedEditors[id] ?: PagedEditorView(text = draft)).copy(loading = true, text = draft))) }
+        scope.launch {
+            fun valid() = token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value) && source.allows(action, connection, selection, question) && id !in state.value.questionBlocks
+            suspend fun send(payload: JsonObject, onSent: (() -> Unit)? = null): JsonObject {
+                check(valid())
+                val fields = payload.filterKeys { it != "type" && it != "requestId" }.map { it.key to it.value }.toTypedArray()
+                return request(payload.text("type"), epoch, *fields, requestId = payload.text("requestId"), onSent = onSent)
+            }
+            var committing = false
+            try {
+                val begun = send(PagedEditorWire.begin(Wire.random(), session, id, action.grantId, action.source, bytes.size, hash))
+                check(valid())
+                val uploadId = PagedEditorWire.validateBegun(begun, session, id)
+                var offset = 0
+                while (offset < bytes.size) {
+                    val end = minOf(offset + EDITOR_UPLOAD_CHUNK_BYTES, bytes.size)
+                    val reply = send(PagedEditorWire.chunk(Wire.random(), session, id, uploadId, offset, bytes.copyOfRange(offset, end)))
+                    check(valid())
+                    PagedEditorWire.validateAck(reply, session, id, uploadId, end)
+                    offset = end
+                }
+                check(valid())
+                committing = true
+                val result = send(PagedEditorWire.commit(Wire.random(), session, id, uploadId)) {
+                    pagedReceipts += PagedReceipt(requireNotNull(selection.routeId), session, id, question, action.grantId, connection)
+                    update { it }
+                }
+                require(result.text("kind") == "accepted" && result.text("sessionId") == session)
+                if (valid()) update { it.copy(answering = it.answering + id) }
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                if (valid()) {
+                    if (committing) update { it.copy(questionBlocks = it.questionBlocks + (id to QuestionBlock.UNCERTAIN)) }
+                    else reportError(R.string.remote_request_error)
+                }
+            } finally {
+                if (token == pagedToken) {
+                    pagedUploading = false
+                    update { state -> state.copy(pagedEditors = state.pagedEditors[id]?.let { state.pagedEditors + (id to it.copy(loading = false)) } ?: state.pagedEditors) }
+                }
+            }
+        }
+    }
+
     override fun answer(questionId: String, answer: JsonObject) {
         val sessionId = state.value.selection.sessionId ?: return
         if (
@@ -8211,7 +8423,12 @@ class DefaultRemoteRepository(
                 questionId in state.value.answering
         )
             return
-        if (questionId in state.value.questionBlocks) return
+        val blocked = state.value.questionBlocks[questionId]
+        val pagedCancel = blocked == QuestionBlock.UNCERTAIN && answer.optionalText("kind") == "cancel" &&
+            pagedQuarantined(state.value.selection, questionId) && state.value.questions.any {
+                it.optionalText("id") == questionId && it.optionalText("kind") == "editor" && it.containsKey("editorUploadGrantId")
+            }
+        if (blocked != null && !pagedCancel) return
         val positive = answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)
         val editor = answer.optionalText("kind") == "editor"
         val selection = state.value.selection

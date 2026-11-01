@@ -167,6 +167,7 @@ class RemoteRepositoryTest {
         navigationStorage: NavigationSnapshotStorage? = null,
         projectHint: suspend (String, String) -> String? = { _, _ -> null },
         liveRunKept: () -> Boolean = { false },
+        pagedEditorTestGate: Boolean = false,
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
@@ -183,6 +184,7 @@ class RemoteRepositoryTest {
             projectHint = projectHint,
             jitter = { 0.5 },
             liveRunKept = liveRunKept,
+            pagedEditorTestGate = pagedEditorTestGate,
         )
 
     private fun modelData(id: String = "model") =
@@ -8606,6 +8608,392 @@ class RemoteRepositoryTest {
     }
 
     private val openQuestion = Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Go?")
+
+    private suspend fun TestScope.pagedFixture(
+        question: JsonObject,
+        gate: Boolean = true,
+        questions: List<JsonObject> = listOf(question),
+        reply: (JsonObject) -> JsonObject? = { null },
+    ): Pair<DefaultRemoteRepository, Transport> {
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(questions))
+            "session.question.details.get", "session.question.editor.upload.begin", "session.question.editor.upload.chunk", "session.question.editor.upload.commit" -> reply(request)
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = gate)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        return repo to transport
+    }
+
+    @Test fun pagedEditorOldPageCannotAuthorizeEqualReplacement() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val (repo, transport) = pagedFixture(question)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.question.details.get" }
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.parse(question.toString())))
+        transport.result(request, Wire.objectOf("kind" to "question_details", "sessionId" to "session", "questionId" to "e", "detailsId" to "src", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8"))
+        runCurrent()
+        assertNull(repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pagedEditorDisconnectRevokesCapturedInlineAuthority() = runTest {
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g"))
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals("hello", repo.state.value.pagedEditors["e"]?.text)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertTrue(repo.state.value.pagedEditors.isEmpty())
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pagedEditorMalformedUploadAckNeverCommits() = runTest {
+        for (wrongOffset in listOf(0, 6)) {
+            val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g")) { request -> when (request.text("type")) {
+                "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+                "session.question.editor.upload.chunk" -> Wire.objectOf("kind" to "editor_upload_ack", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to wrongOffset)
+                else -> null
+            } }
+            val displayed = repo.state.value.questions.single()
+            repo.loadPagedEditor(displayed); runCurrent()
+            repo.submitPagedEditor(displayed, "hello"); runCurrent()
+            assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.chunk" })
+            assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        }
+    }
+
+    @Test fun pagedEditorUnknownCommitDoesNotAutomaticallyResend() = runTest {
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun pagedEditorPendingCommitRemainsBlockedAfterReconnectAndFreshSnapshot() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1500); runCurrent()
+        assertTrue("test must reconnect before attempting a second answer", repo.state.value.connected)
+        val redisplayed = repo.state.value.questions.single()
+        assertEquals("uncertainty must be visible before source reload", QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        repo.loadPagedEditor(redisplayed); runCurrent()
+        assertTrue("uncertainty must also be visible after reconnect", repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(redisplayed, ""); runCurrent()
+        assertEquals("an open snapshot is not proof that the old commit failed", 1,
+            transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorUncertainCommitStillAllowsProofIndependentCancel() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals("cancel alone cannot prove that the commit was rejected", 1,
+            transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorUncertainReceiptAllowsCancelAfterCapabilityRevocation() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        val previous = transport.response
+        transport.response = { request -> if (request.text("type") == "projects.list")
+            JsonObject(checkNotNull(previous(request)) + ("capabilities" to JsonArray(emptyList()))) else previous(request) }
+        repo.openNotification("host", "unknown"); runCurrent()
+        assertFalse(QUESTION_PAGED_EDITOR_CAPABILITY in repo.state.value.capabilities)
+        assertTrue("receipt quarantine survives capability loss", "e" in repo.state.value.pagedQuarantines)
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorOversizedDraftRemainsVisibleWithExplicitRetentionWarning() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g")
+        val (repo, _) = pagedFixture(question)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        val oversized = "x".repeat(2_097_153)
+        repo.editPagedEditor(displayed, oversized); runCurrent()
+        val view = requireNotNull(repo.state.value.pagedEditors["e"])
+        assertEquals(oversized, view.text)
+        assertTrue(view.retentionWarning)
+        repo.editPagedEditor(displayed, "recovered"); runCurrent()
+        assertFalse(requireNotNull(repo.state.value.pagedEditors["e"]).retentionWarning)
+    }
+
+    @Test fun pagedEditorDraftCapacityKeepsActiveDraftsAndWarnsInsteadOfEvictingThem() = runTest {
+        val first = Wire.objectOf("id" to "e0", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g0")
+        val (repo, transport) = pagedFixture(first)
+        for (i in 1..32) {
+            val next = Wire.objectOf("id" to "e$i", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g$i")
+            transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to i, "kind" to "question.open", "question" to next)); runCurrent()
+        }
+        for (i in 0..32) {
+            val displayed = repo.state.value.questions.first { it.text("id") == "e$i" }
+            repo.loadPagedEditor(displayed); runCurrent()
+            repo.editPagedEditor(displayed, "draft-$i"); runCurrent()
+        }
+        val overflow = requireNotNull(repo.state.value.pagedEditors["e32"])
+        assertEquals("draft-32", overflow.text)
+        assertTrue("the visible value has no retained slot", overflow.retentionWarning)
+        val firstDisplayed = repo.state.value.questions.first { it.text("id") == "e0" }
+        repo.loadPagedEditor(firstDisplayed); runCurrent()
+        assertEquals("draft-0", repo.state.value.pagedEditors["e0"]?.text)
+    }
+
+    @Test fun pagedEditorOldUnreachableDraftExpiresWithoutBeingAttachedToReplacement() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val (repo, transport) = pagedFixture(first)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.editPagedEditor(displayed, "old draft"); runCurrent()
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.open", "question" to replacement)); runCurrent()
+        advanceTimeBy(15 * 60_000L + 1); runCurrent()
+        val current = repo.state.value.questions.single()
+        repo.loadPagedEditor(current); runCurrent()
+        assertEquals("second", repo.state.value.pagedEditors["e"]?.text)
+        assertNull("unreachable historical draft expires", repo.state.value.pagedEditors["e"]?.recoveryDraft)
+    }
+
+    @Test fun pagedEditorReceiptCapacityDoesNotEvictUnknownReceipts() = runTest {
+        val first = Wire.objectOf("id" to "e0", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g0")
+        val (repo, transport) = pagedFixture(first) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to request.text("questionId"), "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        for (i in 0 until 32) {
+            if (i > 0) {
+                val next = Wire.objectOf("id" to "e$i", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g$i")
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to i, "kind" to "question.open", "question" to next)); runCurrent()
+            }
+            val displayed = repo.state.value.questions.first { it.text("id") == "e$i" }
+            repo.loadPagedEditor(displayed); runCurrent()
+            repo.submitPagedEditor(displayed, ""); runCurrent()
+        }
+        assertEquals(32, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        val next = Wire.objectOf("id" to "overflow", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "overflow")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 32, "kind" to "question.open", "question" to next)); runCurrent()
+        val displayed = repo.state.value.questions.first { it.text("id") == "overflow" }
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["overflow"]?.capacityFull == true)
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(32, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorUncertainCommitSurvivesSnapshotUntilCloseThenNewOpen() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        val earlier = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") Wire.objectOf(
+            "kind" to "snapshot", "sessionId" to "session", "revision" to 5, "status" to "waiting",
+            "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question))) else earlier(request) }
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 5, "kind" to "snapshot.required")); runCurrent()
+        repo.loadPagedEditor(repo.state.value.questions.single()); runCurrent()
+        repo.submitPagedEditor(repo.state.value.questions.single(), ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 6, "kind" to "question.closed", "questionId" to "e")); runCurrent()
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new-grant")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 7, "kind" to "question.open", "question" to replacement)); runCurrent()
+        val current = repo.state.value.questions.single()
+        repo.loadPagedEditor(current); runCurrent()
+        repo.submitPagedEditor(current, ""); runCurrent()
+        assertEquals("an observed replacement owns its own grant", 2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorReplayedTerminalCloseReleasesOnlyOldReceipt() = runTest {
+        val (transport, host) = journalTransport(capabilities = listOf(QUESTION_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY))
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> normal(request)
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi")
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g1")
+        host.live("question.open", "question" to first); runCurrent()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        host.record("question.closed", "questionId" to "e")
+        val second = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g2")
+        host.record("question.open", "question" to second)
+        host.live("session.status", "status" to "waiting"); runCurrent()
+        assertTrue("the missed terminal must be delivered via session.events", "session.events" in host.answers)
+        val replacement = repo.state.value.questions.single()
+        assertEquals("g2", replacement.text("editorUploadGrantId"))
+        repo.loadPagedEditor(replacement); runCurrent()
+        repo.submitPagedEditor(replacement, ""); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorDraftSurvivesLoadingAnotherQuestionWithoutTransferringToReplacement() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val second = Wire.objectOf("id" to "f", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        val (repo, transport) = pagedFixture(first, questions = listOf(first, second))
+        val displayedFirst = repo.state.value.questions.first { it.text("id") == "e" }
+        val displayedSecond = repo.state.value.questions.first { it.text("id") == "f" }
+        repo.loadPagedEditor(displayedFirst); runCurrent()
+        repo.editPagedEditor(displayedFirst, "bad\rbut visible")
+        repo.loadPagedEditor(displayedSecond); runCurrent()
+        repo.loadPagedEditor(displayedFirst); runCurrent()
+        assertEquals("bad\rbut visible", repo.state.value.pagedEditors["e"]?.text)
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g3")))
+        runCurrent()
+        val replacement = repo.state.value.questions.first { it.text("id") == "e" }
+        repo.loadPagedEditor(replacement); runCurrent()
+        assertEquals("first", repo.state.value.pagedEditors["e"]?.text)
+    }
+
+    @Test fun pagedEditorStaleUploadCannotLeaveAnotherQuestionPermanentlyBusy() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val second = Wire.objectOf("id" to "f", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        val (repo, transport) = pagedFixture(first, questions = listOf(first, second))
+        val displayedFirst = repo.state.value.questions.first { it.text("id") == "e" }
+        val displayedSecond = repo.state.value.questions.first { it.text("id") == "f" }
+        repo.loadPagedEditor(displayedFirst); runCurrent()
+        repo.submitPagedEditor(displayedFirst, "first"); runCurrent()
+        val begin = transport.sent.last { it.text("type") == "session.question.editor.upload.begin" }
+        repo.loadPagedEditor(displayedSecond); runCurrent()
+        transport.result(begin, Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)); runCurrent()
+        repo.submitPagedEditor(displayedSecond, "second"); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        assertEquals("f", transport.sent.last { it.text("type") == "session.question.editor.upload.begin" }.text("questionId"))
+    }
+
+    @Test fun pagedEditorOldFinalizerCannotReleaseNewQuestionsUpload() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val second = Wire.objectOf("id" to "f", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        val (repo, transport) = pagedFixture(first, questions = listOf(first, second))
+        val a = repo.state.value.questions.first { it.text("id") == "e" }
+        val b = repo.state.value.questions.first { it.text("id") == "f" }
+        repo.loadPagedEditor(a); runCurrent()
+        repo.submitPagedEditor(a, "first"); runCurrent()
+        val beginA = transport.sent.last { it.text("type") == "session.question.editor.upload.begin" }
+        repo.loadPagedEditor(b); runCurrent()
+        repo.submitPagedEditor(b, "second"); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        transport.result(beginA, Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)); runCurrent()
+        repo.submitPagedEditor(b, "second"); runCurrent()
+        assertEquals("A's finalizer must not permit a second concurrent B upload", 2,
+            transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun defaultGateDoesNotAdvertiseOrLoadPagedEditor() = runTest {
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g"), gate = false)
+        val discovery = transport.sent.first { it.text("type") == "projects.list" }
+        assertFalse(discovery.text("requestId").contains(QUESTION_PAGED_EDITOR_OPT_IN))
+        assertFalse(QUESTION_PAGED_EDITOR_CAPABILITY in repo.state.value.capabilities)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertTrue(repo.state.value.pagedEditors.isEmpty())
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pagedEditorReadsAndVerifiesSourceBeforeSequentialUpload() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"grant-1","editorSource":{"purpose":"editor_prefill","id":"src-1","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(
+                JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> Wire.objectOf("kind" to "question_details", "sessionId" to "session",
+                "questionId" to "e", "detailsId" to "src-1", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "upload-1", "nextOffset" to 0)
+            "session.question.editor.upload.chunk" -> Wire.objectOf("kind" to "editor_upload_ack", "sessionId" to "session", "questionId" to "e", "uploadId" to "upload-1", "nextOffset" to 5)
+            "session.question.editor.upload.commit" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals("hello", repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        val commands = transport.sent.filter { it.text("type").startsWith("session.question.") }
+        assertEquals(listOf("session.question.details.get", "session.question.editor.upload.begin",
+            "session.question.editor.upload.chunk", "session.question.editor.upload.commit"), commands.map { it.text("type") })
+        assertEquals("grant-1", commands[1].text("grantId"))
+        assertEquals(Wire.objectOf("kind" to "paged", "id" to "src-1"), commands[1].obj("source"))
+        assertEquals("aGVsbG8", commands[2].text("data"))
+        assertEquals("upload-1", commands[3].text("uploadId"))
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun pagedEditorBadSourceNeverBecomesEditableOrUploadsAndCancelStillWorks() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"${"a".repeat(64)}"}}""")
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> Wire.objectOf("kind" to "question_details", "sessionId" to "session", "questionId" to "e", "detailsId" to "src", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertNull(repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+    }
 
     private suspend fun TestScope.editorRepository(transport: Transport, question: JsonObject, capability: Boolean = true): DefaultRemoteRepository {
         configure(transport)

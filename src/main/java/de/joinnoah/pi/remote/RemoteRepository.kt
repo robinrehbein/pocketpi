@@ -204,6 +204,8 @@ data class RemoteState(
     val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
     val answering: Set<String> = emptySet(),
     internal val questionDetails: Map<String, QuestionDetailsView> = emptyMap(),
+    internal val pagedEditors: Map<String, PagedEditorView> = emptyMap(),
+    internal val pagedQuarantines: Set<String> = emptySet(),
     /** Questions the user cannot answer from here right now, by question ID. */
     val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
@@ -543,6 +545,9 @@ interface RemoteRepository {
     fun closeBash() {}
 
     fun loadQuestionDetails(questionId: String) {}
+    fun loadPagedEditor(question: JsonObject) {}
+    fun editPagedEditor(question: JsonObject, draft: String) {}
+    fun submitPagedEditor(question: JsonObject, draft: String) {}
     fun answer(questionId: String, answer: JsonObject)
 
     /**

@@ -27,13 +27,18 @@ internal fun QuestionCard(
     onLoadDetails: () -> Unit = {},
     editorScope: Any? = null,
     editorAvailable: Boolean = true,
+    pagedEditor: PagedEditorView? = null,
+    onLoadPagedEditor: () -> Unit = {},
+    onEditPagedEditor: (String) -> Unit = {},
+    onSubmitPagedEditor: (String) -> Unit = {},
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
     val kind = question.text("kind")
-    val controlsEnabled = enabled && !pending && block == null
+    val controlsEnabled = enabled && !pending && (block == null || pagedEditor?.quarantined == true && block == QuestionBlock.UNCERTAIN)
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
     val currentEditorAvailable by rememberUpdatedState(editorAvailable)
+    val currentPagedSendAvailable by rememberUpdatedState(pagedEditor?.let { !it.quarantined && !it.capacityFull && !it.loading } == true)
     fun submit(answer: JsonObject) {
         if (currentControlsEnabled) onAnswer(answer)
     }
@@ -190,7 +195,32 @@ internal fun QuestionCard(
             }
             "editor" -> {
                 val prefill = editorPrefill(question)
-                if (prefill == null) {
+                if (pagedEditor != null && question.containsKey("editorUploadGrantId")) {
+                    val verified = pagedEditor.text
+                    if (pagedEditor.quarantined && block != QuestionBlock.UNCERTAIN) Text(stringResource(R.string.remote_question_answer_uncertain))
+                    if (verified == null) {
+                        OutlinedButton(onClick = { if (currentControlsEnabled && currentEditorAvailable) onLoadPagedEditor() }, enabled = controlsEnabled && editorAvailable && !pagedEditor.loading) {
+                            Text(stringResource(if (pagedEditor.loading) R.string.remote_question_details_loading else R.string.remote_paged_editor_load))
+                        }
+                        if (pagedEditor.failed) Text(stringResource(R.string.remote_question_details_failed))
+                    } else {
+                        var text by remember(EditorQuestionKey(question), editorScope) { mutableStateOf(verified) }
+                        val editEnabled = controlsEnabled && !pagedEditor.loading
+                        OutlinedTextField(value = text, onValueChange = { if (editEnabled) { text = it; onEditPagedEditor(it) } }, enabled = editEnabled,
+                            modifier = Modifier.fillMaxWidth().testTag("questionEditorField").then(rememberQuestionFieldKeys(text)), minLines = 4)
+                        if (pagedEditor.retentionWarning) Text(stringResource(R.string.remote_paged_editor_retention_warning))
+                        if (pagedEditor.capacityFull && !pagedEditor.quarantined) Text(stringResource(R.string.remote_paged_editor_capacity_full))
+                        pagedEditor.recoveryDraft?.let { recovery ->
+                            TextButton(onClick = { if (editEnabled) { text = recovery; onEditPagedEditor(recovery) } }, enabled = editEnabled) {
+                                Text(stringResource(R.string.remote_paged_editor_restore))
+                            }
+                        }
+                        Button(enabled = editEnabled && editorAvailable && !pagedEditor.quarantined && !pagedEditor.capacityFull && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES),
+                            onClick = { if (currentControlsEnabled && currentPagedSendAvailable && currentEditorAvailable && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES)) onSubmitPagedEditor(text) }) {
+                            Text(stringResource(R.string.remote_send))
+                        }
+                    }
+                } else if (prefill == null) {
                     Text(stringResource(R.string.remote_local_required))
                 } else {
                     var text by remember(EditorQuestionKey(question), editorScope) { mutableStateOf(prefill) }

@@ -193,6 +193,9 @@ internal open class DestinationViewModel(
     fun abort() = active(repository::abort)
 
     fun loadQuestionDetails(questionId: String) = active { repository.loadQuestionDetails(questionId) }
+    fun loadPagedEditor(question: kotlinx.serialization.json.JsonObject) = active { repository.loadPagedEditor(question) }
+    fun editPagedEditor(question: kotlinx.serialization.json.JsonObject, draft: String) = active { repository.editPagedEditor(question, draft) }
+    fun submitPagedEditor(question: kotlinx.serialization.json.JsonObject, draft: String) = active { repository.submitPagedEditor(question, draft) }
 
     fun answer(questionId: String, answer: JsonObject) = active {
         repository.answer(questionId, answer)
