@@ -58,7 +58,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
             require(fixture.optBoolean("developmentWorkflowFixture") && fixture.optBoolean("nativeWorker") && fixture.optString("sessionKind") == "actual-pi")
             workflow = fixture.getJSONObject("workflow")
-            listOf("fileName", "originalText", "editedText", "shellCommand", "shellMarker", "commitMessage", "prTitle", "prBody", "initialRemoteRef", "initialMainHead").forEach { require(workflow.has(it)) }
+            listOf("fileName", "originalText", "editedText", "agentPrompt", "agentMarker", "agentToolSha256", "shellCommand", "shellMarker", "commitMessage", "prTitle", "prBody", "initialRemoteRef", "initialMainHead").forEach { require(workflow.has(it)) }
             require(workflow.getString("fileName").isNotBlank() && workflow.getString("shellCommand").isNotBlank())
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
@@ -140,6 +140,24 @@ class DevelopmentWorkflowTransportEndToEndTest {
         assertGuards(status(), initialHead, null, 0, 0, 0)
         // Phone overlays the chat; back navigates the real Files UI until the composer is visible.
         backToComposer()
+        // The fixture's deterministic local provider exercises a real Pi agent turn; it does not
+        // qualify the output quality of an external model.
+        val agentPrompt = workflow.getString("agentPrompt")
+        val agentMarker = workflow.getString("agentMarker")
+        require(agentPrompt.isNotBlank() && agentMarker.isNotBlank() && !agentPrompt.contains(agentMarker))
+        require(!agentPrompt.startsWith("!"))
+        assertFalse(status().optBoolean("agentVerified"))
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(agentPrompt)
+        compose.onNodeWithTag("composerField").assertTextEquals(agentPrompt)
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        val agentResult = awaitStatus { it.optBoolean("agentVerified") }
+        compose.waitUntil(60_000) {
+            compose.onAllNodes(hasText(agentMarker, substring = true), useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNode(hasText(agentMarker, substring = true), useUnmergedTree = true).assertIsDisplayed()
+        assertAgentTrace(agentResult)
+        assertGuards(agentResult, initialHead, null, 0, 0, 0)
         val shell = workflow.getString("shellCommand")
         require(!shell.contains('\n') && !shell.contains('\r') && workflow.getString("shellMarker").isNotBlank())
         compose.onNodeWithTag("composerField").performTextInput("!$shell")
@@ -258,7 +276,9 @@ class DevelopmentWorkflowTransportEndToEndTest {
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(number.toString(), substring = true)
             .assertTextContains(compose.activity.getString(R.string.remote_pr_checks_passed), substring = true)
         screenshot("success")
-        assertGuards(status(), head, head, 1, 1, 1)
+        val finalStatus = status()
+        assertGuards(finalStatus, head, head, 1, 1, 1)
+        assertAgentTrace(finalStatus)
     }
 
     private fun activate(target: RemoteSelection) {
@@ -307,6 +327,46 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private fun awaitStatus(predicate: (JSONObject) -> Boolean): JSONObject {
         compose.waitUntil(60_000) { runCatching { predicate(status()) }.getOrDefault(false) }
         return status().also { assertTrue("Fixture owner changed", it.getBoolean("ownerStable")) }
+    }
+    private fun assertAgentTrace(value: JSONObject) {
+        val events = value.getJSONArray("agentEvents")
+        val kinds = listOf("provider_ready", "prompt", "model_call", "tool_execution_end", "model_call", "tool_execution_end", "model_call", "agent_end")
+        assertEquals(kinds.size, events.length())
+        for ((index, kind) in kinds.withIndex()) {
+            val event = events.getJSONObject(index)
+            assertEquals(kind, event.getString("event"))
+            assertEquals(originalOwner.getLong("pid"), event.getLong("pid"))
+            assertEquals(originalOwner.getString("sessionId"), event.getString("sessionId"))
+        }
+        assertTrue(events.getJSONObject(1).getBoolean("matched"))
+        for ((index, count) in listOf(2 to 1, 4 to 2, 6 to 3)) {
+            assertEquals(count, events.getJSONObject(index).getInt("callCount"))
+        }
+        val firstCall = events.getJSONObject(2)
+        for (key in listOf("contextMatched", "contextToolCallId", "contextResultSha256")) {
+            assertTrue(firstCall.has(key) && firstCall.isNull(key))
+        }
+        for ((index, toolCallId, expectedHash) in listOf(
+            Triple(4, "workflow-read", sha256(workflow.getString("editedText"))),
+            Triple(6, "workflow-bash", workflow.getString("agentToolSha256")),
+        )) {
+            val call = events.getJSONObject(index)
+            assertTrue(call.getBoolean("contextMatched"))
+            assertEquals(toolCallId, call.getString("contextToolCallId"))
+            assertEquals(expectedHash, call.getString("contextResultSha256"))
+        }
+        for ((index, tool) in listOf(3 to "read", 5 to "bash")) {
+            val event = events.getJSONObject(index)
+            assertEquals(tool, event.getString("tool"))
+            assertFalse(event.getBoolean("isError"))
+            assertTrue(event.getBoolean("resultMatched"))
+            assertTrue(event.getString("resultSha256").matches(Regex("[0-9a-f]{64}")))
+        }
+        assertEquals(sha256(workflow.getString("editedText")), events.getJSONObject(3).getString("resultSha256"))
+        assertEquals(0, events.getJSONObject(5).getInt("exitCode"))
+        assertEquals(workflow.getString("agentToolSha256"), events.getJSONObject(5).getString("resultSha256"))
+        assertTrue(events.getJSONObject(7).getBoolean("markerEmitted"))
+        assertTrue(events.getJSONObject(7).getBoolean("success"))
     }
     private fun assertGuards(value: JSONObject, head: String, remoteHead: String?, commits: Int, pushes: Int, creates: Int) {
         assertTrue("Fixture owner changed", value.getBoolean("ownerStable"))

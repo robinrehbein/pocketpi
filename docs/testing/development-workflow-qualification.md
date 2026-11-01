@@ -59,3 +59,47 @@ blocking issue for either bounded run. Prefix: `native-development-tablet-pinned
 same private lab. Display metadata `display-native-development-tablet-pinned-v2.json` records
 setup and restoration to 1080×2400 at 420 dpi. The fixture and copied credentials were cleaned
 up; the exclusively owned emulator and private ADB remain available for later work.
+
+## Native agent turn in the joined workflow: phone, 2026-11-01
+
+A subsequent phone-emulator run (`native-agent-first`) passed the joined workflow with a real
+agent turn inserted after the file save and before the manual shell command. Android sent the
+fixture prompt through the composer and displayed the assistant marker. The same Host-managed
+native Pi 1.4.0 worker executed the public Pi agent loop: its ordered trace records the prompt,
+three provider calls, completed `read` and `bash` tool executions, and `agent_end`. The second
+and third provider calls received the respective tool results with matching digests; the bash
+result had exit code zero. The trace retained the same worker PID and session, and the final
+status preserved the same owner. The workflow then completed the manual shell, confirmed commit,
+local push, PR creation and controlled pending-to-passed checks, with one commit, push and PR.
+The final trace was checked again after those steps. Android instrumentation reported **OK (1
+test)** in **82.97 seconds**; fixture cleanup also passed.
+
+This used a deterministic offline provider in the actual public Pi agent loop, not an external
+model. It establishes the bounded local tool and UI path, not external model quality, ticket
+startup, real GitHub or CI, or physical-device qualification. The previous phone/tablet results
+above did not include this agent turn; a tablet run of the extended flow was still in progress
+when this phone result was recorded.
+
+Evidence is in the private lab `/private/tmp/pocketpi-paged-production.oge2ybh1` under the
+`native-agent-first` prefix: instrumentation log, final status, ordered agent trace, result and
+screenshots. The result records app HEAD `bca918c217a82617a48330761cefbfe0303043be` and Host
+HEAD `bdd730dd785aabe074c1bf7b1e52ee8cdcb3247b`, both with local fixture/test changes. It also
+records pre-launch snapshots and SHA-256 digests of the Android test and three Host fixture
+sources. The installed app and test APK digests match their build artifacts:
+`9449710f0187b1a274470ba952ea1216d98f7eefee057c10b32463a75d1e5d67` and
+`becf5ae7f1c3e439303033c66c5f8907fa625ce65cf5bda6b9de365899d6015c`, respectively.
+
+### Tablet follow-up with the native agent loop
+
+The same extended flow passed on the 1600×2560, 240-dpi emulator viewport in **83.499 seconds**
+(`native-agent-tablet`). Pre-launch source snapshots and both installed APK hashes match the
+phone inputs. Final status retains exactly eight agent events and matching identity/context
+proofs after one confirmed commit, local push and controlled PR creation, followed by passed
+checks. Screenshots show the separate user prompt, read/bash cards, assistant reply, shell
+output and PR chip in the wide layout. The independent review found no blocking issue in
+either recorded run. This remains a deterministic local provider test on an emulator.
+
+The runner reports fixture cleanup passed. `display-native-agent-tablet.json` records restoration
+to 1080×2400 at 420 dpi. The owned emulator and private ADB remain available; no personal Host
+or external model/PR service was changed. The extended tablet run supersedes the earlier
+"in progress" checkpoint without broadening its qualification limits.

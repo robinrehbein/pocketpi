@@ -1,6 +1,15 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Native agent turn in the Android workflow checkpoint on 2026-11-01
+
+Phone and tablet-sized emulator runs completed the joined file edit, real native Pi agent/tool turn, manual shell,
+confirmed commit, local push, PR and controlled CI workflow. The agent used a deterministic
+offline provider; its ordered tool results and the unchanged worker owner were verified through
+the end of the workflow. This does not qualify external model quality, ticket startup, real
+GitHub/CI or physical devices. Both runs passed independent evidence review. See
+[development workflow qualification](testing/development-workflow-qualification.md).
+
 ## Actual native Android development workflow checkpoint on 2026-11-01
 
 Phone and tablet-sized Android emulator runs completed one production-navigation workflow with a Host-managed
