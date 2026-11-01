@@ -131,3 +131,38 @@ process restart is covered here, but abrupt power loss, persistence crash window
 production credential restoration, owner reattachment, physical Samsung devices,
 independent Linux and the remaining full contract gates are still unqualified.
 Public paged-editor and outcome capabilities remain OFF.
+
+
+## Ledger process-crash boundaries
+
+A separate subprocess matrix exercises the unchanged production
+`EditorOutcomeLedger` at 24 checkpoints: before and after temporary-file write,
+temporary-file sync, rename and directory sync, for reservation, applied marking
+and release. The test-only child installs filesystem wrappers before importing
+the production module. Each selected checkpoint occurs around the actual awaited
+filesystem call and pauses the operation before its promise can report success.
+The parent observes that checkpoint, sends SIGKILL only to its own child, waits
+for the recorded exit and opens the remaining ledger with a fresh production
+instance. No production fault-injection hook is added.
+
+Before rename, the previous file remains authoritative: reservation has not
+appeared, an applied transition remains pending/unknown, or an unreleased applied
+record remains positive. After rename, the newly visible file is read. Pending
+records remain unknown and continue to reserve their identities. Released records
+are absent and remain unknown; the tests never infer a negative editor outcome
+or dispatch an owner action. Every case also preserves an exact applied receipt
+and an unresolved reservation belonging to two other devices. A 25th process
+crash after provisioning-marker sync leaves marker-only storage that refuses to
+open, rather than silently initializing an empty ledger.
+
+The final focused run passes all 25 subprocess cases and the 11 existing ledger
+tests: 36 passed, zero failed or skipped. Machine-readable evidence is
+`/private/tmp/pi-editor-outcomes-crash-final.json`. Host TypeScript, scoped
+formatting and independent review pass. No production source behavior changes.
+These tests establish process-death behavior and filesystem visibility on the
+local test machine. They do not establish power-loss durability, the owner-ACK
+barrier, daemon locking, full encrypted Android recovery at these individual
+checkpoints or automatic resend safety of an unrelated protocol. The previously
+recorded end-to-end cases remain separate evidence. Actual Android death after
+Host release deletion before ACK, and after ACK before durable local queue
+removal, remain open production-chain qualification cases.
