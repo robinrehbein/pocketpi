@@ -1,6 +1,15 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Actual native Android development workflow checkpoint on 2026-11-01
+
+One Android emulator run completed a single production-navigation workflow with a Host-managed
+native Pi worker: file edit and save, shell execution, explicitly confirmed commit and local push,
+controlled PR creation, and rendered running and passed PR checks. This is a bounded local
+fixture result, not ticket-to-session, real model/GitHub/CI or physical-device qualification.
+The saved file and committed blob were checked as exact bytes. See
+[development workflow qualification](testing/development-workflow-qualification.md).
+
 ## Current derived Linux package and Dev Containers checkpoint on 2026-11-01
 
 The freshly packed current Host archive passes the Linux consumer and native PTY verifier in an
