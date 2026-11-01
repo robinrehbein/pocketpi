@@ -41,3 +41,10 @@ internal fun browserHardwareInput(event: KeyEvent, enabled: Boolean, pressedCode
     return BrowserInput.Key(if (event.action == KeyEvent.ACTION_DOWN) "down" else "up", pair.first, pair.second,
         event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
 }
+
+/** Keys whose Android hardware repeats can be represented by discrete host key presses. */
+internal fun browserRepeatableKey(event: KeyEvent): Boolean = event.keyCode in setOf(
+    KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL,
+    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+    KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
+)

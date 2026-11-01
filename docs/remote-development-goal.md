@@ -1,6 +1,10 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Android browser keyboard checkpoint, 2026-11-01
+
+Viewport focus loss now releases held browser keys, and repeated navigation/deletion keys use bounded Host-valid release/press pairs with modifier changes preserved. The focused 30 tests, app/test APK builds and repository quick-check pass; the original two regression tests were observed failing before the fix. Independent code review found no remaining actionable issue. See [keyboard qualification](testing/android-browser-keyboard.md) for scope and limits. Physical Galaxy/DeX behavior remains untested. The next Android design checkpoint covers [durable file drafts](plans/2026-11-01-android-file-draft-recovery.md); it is not implemented yet. iOS remains deferred and the overall goal remains active.
+
 ## Current delivery priority: Samsung Android, 2026-11-01
 
 The owner explicitly prioritized the Android app on Galaxy S25 and Galaxy Tab S11 first. iPhone/iOS work is deferred and is not a gate for the current Samsung delivery. Continue mobile remote-development functionality, phone touch usability and tablet/DeX keyboard/mouse/adaptive work views. Wear stays a useful reduced companion; no Wear emulator is required.

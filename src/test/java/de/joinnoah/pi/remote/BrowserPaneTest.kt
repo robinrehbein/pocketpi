@@ -1,6 +1,9 @@
 package de.joinnoah.pi.remote
 
 import android.graphics.Bitmap
+import android.view.KeyEvent as NativeKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
@@ -333,6 +336,91 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
         compose.runOnIdle { view = view.copy(moving = false) }
         compose.onNodeWithTag("browserSendText").assertIsEnabled()
+    }
+
+    @Test fun losingViewportFocusReleasesHeldKeyAndUnblocksNavigation() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        val sent = mutableListOf<BrowserInput>()
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            sent.add(it); view = view.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted")); true
+        }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserViewport").performTouchInput { click(center) }
+        compose.onNodeWithTag("browserViewport").performKeyInput { keyDown(Key.DirectionDown) }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.any { it == BrowserInput.Key("down", "ArrowDown", "ArrowDown") } } }
+        compose.onNodeWithText("New tab").assertIsNotEnabled()
+        compose.onNodeWithTag("browserText").performClick()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.any { it == BrowserInput.Key("up", "ArrowDown", "ArrowDown") } } }
+        compose.onNodeWithText("New tab").assertIsEnabled()
+        compose.runOnIdle { assertEquals(listOf("down", "up"), sent.filterIsInstance<BrowserInput.Key>().map { it.action }) }
+    }
+
+    @Test fun hardwareRepeatUsesValidTransitionsAndFinalRelease() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        val sent = mutableListOf<BrowserInput>()
+        lateinit var hostView: android.view.View
+        compose.setContent { hostView = LocalView.current; MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            sent.add(it); view = view.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted")); true
+        }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserViewport").performTouchInput { click(center) }
+        compose.runOnIdle {
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_DPAD_DOWN, 0, NativeKeyEvent.META_SHIFT_ON))
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_DPAD_DOWN, 1))
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_UP, NativeKeyEvent.KEYCODE_DPAD_DOWN, 0))
+        }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.filterIsInstance<BrowserInput.Key>().size == 4 } }
+        compose.runOnIdle {
+            assertEquals(listOf(
+                BrowserInput.Key("down", "ArrowDown", "ArrowDown", shift = true),
+                BrowserInput.Key("up", "ArrowDown", "ArrowDown", shift = true),
+                BrowserInput.Key("down", "ArrowDown", "ArrowDown"),
+                BrowserInput.Key("up", "ArrowDown", "ArrowDown"),
+            ), sent.filterIsInstance<BrowserInput.Key>())
+        }
+    }
+
+    @Test fun repeatBurstKeepsQueueBoundedAndReservesFinalRelease() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        val sent = mutableListOf<BrowserInput>()
+        lateinit var hostView: android.view.View
+        compose.setContent { hostView = LocalView.current; MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            sent.add(it); view = view.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted")); true
+        }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserViewport").performTouchInput { click(center) }
+        compose.runOnIdle {
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_DEL, 0))
+            repeat(40) { hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_DEL, it + 1)) }
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_UP, NativeKeyEvent.KEYCODE_DEL, 0))
+        }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.filterIsInstance<BrowserInput.Key>().size == 32 } }
+        compose.runOnIdle {
+            val keys = sent.filterIsInstance<BrowserInput.Key>()
+            assertEquals(List(32) { if (it % 2 == 0) "down" else "up" }, keys.map { it.action })
+        }
+        compose.onNodeWithText("New tab").assertIsEnabled()
+    }
+
+    @Test fun losingControlDiscardsQueuedRepeatsAndRelease() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        val sent = mutableListOf<BrowserInput>()
+        lateinit var hostView: android.view.View
+        compose.setContent { hostView = LocalView.current; MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            sent.add(it)
+            view = if (it is BrowserInput.Key) view.copy(inputPending = true) else view.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted"))
+            true
+        }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserViewport").performTouchInput { click(center) }
+        compose.runOnIdle { hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_DPAD_DOWN, 0)) }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.any { it is BrowserInput.Key } } }
+        compose.runOnIdle {
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_DPAD_DOWN, 1))
+            hostView.dispatchKeyEvent(NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_UP, NativeKeyEvent.KEYCODE_DPAD_DOWN, 0))
+            view = view.copy(ownsControl = false, inputPending = false)
+        }
+        compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "ArrowDown", "ArrowDown")), sent.filterIsInstance<BrowserInput.Key>()) }
     }
 
 }

@@ -40,7 +40,7 @@ internal data class BrowserPaneActions(
     val input: (BrowserInput) -> Boolean = { false }, val visible: (Boolean) -> Unit = {},
 )
 
-private data class PendingBrowserInput(val input: BrowserInput, val submittedText: String? = null)
+private data class PendingBrowserInput(val input: BrowserInput, val submittedText: String? = null, val repeatRelease: Boolean = false)
 private data class BrowserFlight(val item: PendingBrowserInput, val baseline: BrowserInputReceipt?)
 private class BrowserFrameKey(private val image: BrowserImage?) {
     override fun equals(other: Any?): Boolean = other is BrowserFrameKey && image === other.image
@@ -55,6 +55,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val focusToken = remember { Any() }
     val focusRequester = remember { FocusRequester() }
     val held = remember { mutableStateListOf<String>() }
+    val heldKeys = remember { mutableMapOf<String, BrowserInput.Key>() }
     val releasing = remember { mutableSetOf<String>() }
     var pointerPosition by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var pointerButton by remember { mutableStateOf("left") }
@@ -78,7 +79,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val selected = view?.tabs?.firstOrNull { it.id == view.selectedTabId }
     LaunchedEffect(selected?.id, selected?.url) { if (!urlDirty) url = selected?.url.orEmpty() }
     LaunchedEffect(view?.generation, view?.ownsControl, active, view?.sessionId, view?.documentEpoch) {
-        queue.clear(); flight = null; held.clear(); releasing.clear(); pointerPosition = null; heldRevision = null
+        queue.clear(); flight = null; held.clear(); heldKeys.clear(); releasing.clear(); pointerPosition = null; heldRevision = null
     }
     LaunchedEffect(view?.receipt, view?.inputPending, view?.ownsControl, flight, queue.size) {
         val f = flight
@@ -86,13 +87,13 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             if (view.receipt.status == "accepted" && view.ownsControl) {
                 if (f.item.submittedText != null && draft == f.item.submittedText) draft = ""
                 val released = when (val input = f.item.input) {
-                    is BrowserInput.Key -> if (input.action == "up") "key:${input.code}" else null
+                    is BrowserInput.Key -> if (input.action == "up" && !f.item.repeatRelease) "key:${input.code}" else null
                     is BrowserInput.Pointer -> if (input.action == "up") "pointer:${input.button}" else null
                     else -> null
                 }
-                if (released != null) { held.remove(released); releasing.remove(released); if (held.isEmpty()) heldRevision = null }
+                if (released != null) { held.remove(released); heldKeys.remove(released); releasing.remove(released); if (held.isEmpty()) heldRevision = null }
                 flight = null
-            } else { queue.clear(); flight = null; held.clear(); releasing.clear(); pointerPosition = null; heldRevision = null }
+            } else { queue.clear(); flight = null; held.clear(); heldKeys.clear(); releasing.clear(); pointerPosition = null; heldRevision = null }
         }
         if (flight == null && view?.ownsControl == true && !view.inputPending && active && queue.isNotEmpty()) {
             val next = queue.removeAt(0)
@@ -176,11 +177,30 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
         val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
         if (!up && occupied + (if (down) 2 else 1) > 32) return false
-        if (down && id != null) { if (held.isEmpty()) heldRevision = latestView?.viewportRevision; held.add(id) }
+        if (down && id != null) {
+            if (held.isEmpty()) heldRevision = latestView?.viewportRevision
+            held.add(id)
+            if (input is BrowserInput.Key) heldKeys[id] = input
+        }
         if (up && id != null) releasing.add(id)
         queue.add(item); return true
     }
     val latestEnqueue by rememberUpdatedState<(PendingBrowserInput) -> Boolean>({ enqueue(it) })
+    fun repeatKey(input: BrowserInput.Key): Boolean {
+        val id = "key:${input.code}"
+        val original = heldKeys[id] ?: return false
+        if (!latestCanTextKeys || !latestCanRelease || id in releasing) return false
+        // The host rejects duplicate key-down transitions. Admit the entire pair
+        // atomically while retaining the reserved slot for the final release.
+        val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
+        if (occupied + 2 > 32) return false
+        queue.add(PendingBrowserInput(original.copy(action = "up"), repeatRelease = true))
+        val repeated = input.copy(key = original.key)
+        queue.add(PendingBrowserInput(repeated))
+        heldKeys[id] = repeated
+        return true
+    }
+    val latestRepeatKey by rememberUpdatedState<(BrowserInput.Key) -> Boolean>({ repeatKey(it) })
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -224,11 +244,28 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             TextButton(onClick = { if (latestActions.navigate(url)) urlDirty = false }, enabled = view.ownsControl && held.isEmpty() && url.isNotBlank()) { Text(stringResource(R.string.browser_go)) }
         }
         Box(Modifier.weight(1f).fillMaxWidth().testTag("browserViewport").background(Color.Black).onSizeChanged { size = it }
-            .onFocusChanged { focusOwner?.update(focusToken, active && it.hasFocus) }
+            .onFocusChanged {
+                focusOwner?.update(focusToken, active && it.hasFocus)
+                if (!it.hasFocus) {
+                    heldKeys.values.toList().forEach { key -> latestEnqueue(PendingBrowserInput(key.copy(action = "up"))) }
+                }
+            }
             .onPreviewKeyEvent { event ->
                 val pressedCodes = held.filter { it.startsWith("key:") }.map { it.removePrefix("key:") }.toSet()
-                val input = browserHardwareInput(event.nativeKeyEvent, latestCanTextKeys || latestCanRelease && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP, pressedCodes)
-                input != null && latestEnqueue(PendingBrowserInput(input))
+                val input = browserHardwareInput(event.nativeKeyEvent, latestCanTextKeys || latestCanRelease && (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP || event.nativeKeyEvent.repeatCount > 0), pressedCodes)
+                when {
+                    input is BrowserInput.Key && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && event.nativeKeyEvent.repeatCount > 0 ->
+                        if (browserRepeatableKey(event.nativeKeyEvent) && "key:${input.code}" in held) {
+                            latestRepeatKey(input)
+                            true // A full queue drops repeats without moving Android focus.
+                        } else false
+                    input is BrowserInput.Key && input.action == "up" -> {
+                        val original = heldKeys["key:${input.code}"]
+                        latestEnqueue(PendingBrowserInput(if (original == null) input else input.copy(key = original.key)))
+                    }
+                    input != null -> latestEnqueue(PendingBrowserInput(input))
+                    else -> false
+                }
             }.focusRequester(focusRequester).focusable(enabled = canRelease)
             .pointerInteropFilter { event ->
                 val frame = latestImage; val current = latestView
