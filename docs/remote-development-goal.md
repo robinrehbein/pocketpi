@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Native MainActivity file recovery checkpoint, 2026-11-01
+
+The real application now passes the manual file-editor recovery workflow against an isolated local Mac Host and registered native Pi worker on phone and tablet emulator layouts. UI edits reach the encrypted journal, the first actual Host write loses its acknowledgement, and cold MainActivity after force-stop offers the newer local draft. Restore sends no write; explicit Save meets the expected version conflict and rebases once. Independent Host audits prove three distinct attempts, two content changes and a stable native worker. The unanswered original request remains protected. See [native recovery qualification](testing/native-file-draft-recovery.md).
+
+Both final runs pass and clean up; 26 frozen source pins, runner/APKs and actual screenshots were checked. The repository quick-check passes 3575 app and 34 Wear tests, and 49 targeted Host tests pass. Physical Samsung/DeX, independent Linux, long background and broader navigation/parking qualification remain open. iPhone stays deferred, Wear remains watch-appropriate and reduced, and the full goal stays active.
+
 ## Android durable file drafts checkpoint, 2026-11-01
 
 Manual file edits now have a separate encrypted, bounded journal with a persistence barrier before each write/rebase request. Explicit recovery compares the stored draft with the development-computer file; unanswered receipts survive text discard. Per-file in-flight ownership and durable acknowledgement reconciliation prevent late replies from replacing newer draft state. See [file draft qualification](testing/android-file-draft-recovery.md).

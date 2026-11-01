@@ -138,7 +138,8 @@ internal object ProductionEntryBootstrap {
         }
         val mode = args.getString("productionEntryMode") ?: "seed"
         require(mode in setOf("seed", "restore", "unpaired"))
-        val recovery = args.getString("productionEntryProcessRecovery") == "true"
+        val fileRecovery = args.getString("productionEntryFileDraftRecovery") == "true"
+        val recovery = args.getString("productionEntryProcessRecovery") == "true" || fileRecovery
         if (recovery) check(requireNotNull(args.getString("productionEntryIdentity")) == fixtureIdentity(args)) {
             "Fixture identity does not match bootstrap arguments"
         }
@@ -150,7 +151,7 @@ internal object ProductionEntryBootstrap {
             require(identity.matches(Regex("[0-9a-f]{64}")) && pairingHash.matches(Regex("[0-9a-f]{64}")))
             val preflight = File(application.noBackupFilesDir, "production-entry-restore-preflight-$label.marker")
             val consumed = File(application.noBackupFilesDir, "production-entry-restore-$label.marker")
-            val proof = File(application.filesDir, "production-entry-recovery-$label-a.json")
+            val proof = File(application.filesDir, if (fileRecovery) "production-entry-file-recovery-$label-a.json" else "production-entry-recovery-$label-a.json")
             check(preflight.isFile && !consumed.exists() && proof.isFile && pairing.isFile)
             check(listOf("paired-hosts.enc.bak", "paired-hosts.enc.new").none { File(application.noBackupFilesDir, it).exists() }) {
                 "Pairing atomic-file siblings must be absent"

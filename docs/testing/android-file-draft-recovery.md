@@ -18,7 +18,7 @@ Unit/Compose coverage exercises encrypted round trips, key/ciphertext preservati
 
 `FileDraftProcessRecoveryTest` runs in two instrumentation invocations separated by an external force-stop. It uses a nonce-scoped `noBackupFilesDir`, the actual `AppStores` encrypted store, a fresh process and the production file loader. The synthetic remote file is changed before recovery; the test checks the retained draft/request and proves no recovery-triggered write. It removes only its own nonce directory. This proves the storage/loader subset across Android processes, not the full MainActivity-to-Pi workflow, physical Samsung hardware or DeX.
 
-Final command results and frozen APK/source identities are recorded in the goal checkpoint. MainActivity recovery against a real Pi Host, visual device review, hardware keyboards and last-keystroke/background lifecycle qualification remain open. No Wear emulator is required.
+Final command results and frozen APK/source identities are recorded in the goal checkpoint. The separate [native MainActivity qualification](native-file-draft-recovery.md) now covers a real local Host with phone/tablet emulator layouts. Physical device review, hardware keyboards, last-keystroke/background lifecycle and broader navigation/parking qualification remain open. No Wear emulator is required.
 
 ## Local evidence on 2026-11-01
 
