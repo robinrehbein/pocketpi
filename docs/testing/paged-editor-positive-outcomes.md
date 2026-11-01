@@ -274,3 +274,5 @@ resource exhaustion/recovery and the remaining production-chain matrix stay open
 ## Later production-chain gates, 2026-11-02
 
 [Quota recovery](paged-editor-quota-recovery.md) records actual Native/RPC byte and slot exhaustion, explicit retry and terminal cleanup. [Shared settlement](paged-editor-shared-settlement.md) records separately paired competing cancellation at two explicitly ordered Android/Host commit boundaries. These later cases narrow the earlier open resource and settlement items; they do not establish full owner replacement, arbitrary simultaneous decoding, all authority/lifetime paths or public enablement.
+
+[Owner process loss](paged-editor-owner-loss.md) additionally records actual Native/RPC abrupt process loss and graceful RPC shutdown after the last real Source chunk ACK but before Source commit. The original binding becomes invalid; Android retains its exact uncertain attempt and draft, without replay. This is a pre-Source-write loss gate, not live same-ID owner replacement or post-write outcome proof.
