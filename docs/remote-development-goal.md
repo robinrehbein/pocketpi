@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Real Android image delivery checkpoint on 2026-11-01
+
+Four scoped phone/tablet emulator cases passed with cleanup: unchanged attachment clearing and offline replacement retention after an exact recovered image-prompt receipt. The actual system picker, importer, encrypted stores, attachment upload and native Pi SDK model path are exercised. Source JPEG integrity and SDK-normalized PNG integrity are checked separately. The observer records exactly one matching Android write attempt, and the host records one prompt request despite the withheld acknowledgement and echo.
+
+See [image qualification](testing/native-android-image-delivery-qualification.md) for exact labels, historical failures and limits. The held image turn remains running at the checkpoint. No physical Samsung device qualification is implied. Earlier intermittent picker/menu failures remain recorded without a proven common cause; only test readiness and diagnostics changed. The overall goal remains active.
+
 ## Actual process recovery and fresh Android pairing checkpoint on 2026-11-01
 
 Four phone/tablet-layout cases now recover the real Application-created repository and encrypted

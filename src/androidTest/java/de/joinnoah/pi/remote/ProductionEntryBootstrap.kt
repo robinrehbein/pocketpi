@@ -175,7 +175,7 @@ internal object ProductionEntryBootstrap {
         }
         this.application = application
         application.registerActivityLifecycleCallbacks(callbacks)
-        DebugTransportFixture.install(factory, if (recovery) ::observe else null)
+        DebugTransportFixture.install(factory, if (recovery || args.getString("productionEntryObserve") == "true") ::observe else null)
         installed = true
     }
 
