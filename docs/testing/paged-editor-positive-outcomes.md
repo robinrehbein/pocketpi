@@ -165,4 +165,69 @@ barrier, daemon locking, full encrypted Android recovery at these individual
 checkpoints or automatic resend safety of an unrelated protocol. The previously
 recorded end-to-end cases remain separate evidence. Actual Android death after
 Host release deletion before ACK, and after ACK before durable local queue
-removal, remain open production-chain qualification cases.
+removal, are qualified separately below; interrupted writes inside Android storage
+and the wider contract gates remain separate.
+
+
+## Android death after Host release and before local cleanup
+
+The private `--paged-editor-release-crash-proof` fixture adds two separately
+observed boundaries to the real Native/RPC editor chain. In `host-deleted`, the
+Host sees the exact authenticated release request for the original applied tuple,
+checks the actual ledger is empty and suppresses its real successful response.
+It does not suppress the request or fabricate a result. Only after the external
+runner force-stops the observed live Android process does a fixture action allow
+subsequent release ACKs. In `ack-before-local`, the Host passes the real response
+and the Android observer validates its correlation and strict success shape. A
+test-only delegate around the real encrypted store blocks immediately before the
+queue-removal save; the external runner then force-stops that live process. No
+production fault-injection hook is added.
+
+Both phases use `NavigationTestActivity` with the actual repository, encrypted
+transport and AppStores. Before repository creation or connection in phase B,
+the test reads and checks the complete surviving encrypted release record,
+including the original route, device, owner incarnation, commit/upload/grant,
+size and hash. The original attempt is absent. Phase B sends an idempotent
+release for that exact record, receives its correlated success and durably removes
+it. Observed release request IDs from B are nonempty and disjoint from A; the
+accepted ACK ID belongs to the observed B set. Neither an outcome query nor an
+editor upload or generic answer is needed.
+
+All four cases pass, including cleanup:
+
+| Case | Android PID A → B | Duration |
+| --- | --- | --- |
+| `paged-release-crash-native-deleted-01` | 17112 → 17496 | 36.786 s |
+| `paged-release-crash-native-local-01` | 17740 → 18125 | 37.187 s |
+| `paged-release-crash-rpc-deleted-01` | 18351 → 18729 | 36.501 s |
+| `paged-release-crash-rpc-local-01` | 18961 → 19344 | 37.201 s |
+
+The original real 1 MiB SDK commit, 22 chunks and source acknowledgement remain
+unchanged across recovery; the actual Host and SDK owner remain alive until
+fixture cleanup. Host ledger snapshots before force-stop and after recovery are
+empty with valid provisioning markers. The new App process observes zero outcome
+queries, uploads or generic answers, and three seconds of further observation
+show no replay. All eight recorded fixture Host and SDK PIDs are absent after
+cleanup. These cases do not combine the boundary with a Host process restart;
+that is covered by the separate matrix above.
+
+Independent evidence `paged-release-crash-independent-audit.json` passes four
+cases, checking 31 source/snapshot pins per case, runner/helper and installed APK
+hashes, the genuine SDK/source trace, exact stored receipt, boundary-specific ACK
+and local-write barriers, fresh request IDs and final cleanup. The pinned runtime
+runner compares route/device and SDK probe nonce with actual fixture metadata;
+the offline audit cannot independently repeat that comparison after metadata
+cleanup. Queue/attempt state and zero-upload assertions are established by the
+successful pinned Android test, not by an independent capture of every Host
+command. The auditor's initial missing-parenthesis syntax error was corrected
+before it ran successfully; it did not change or rerun the runtime cases.
+
+Both APK builds, Host TypeScript, scoped Host formatting and independent scoped
+review pass. App APK is unchanged:
+`0c274fbad7b170b91ceb64e6a6b27760e27564fa67ebe3c0700fc001e6fec4c0`;
+instrumentation APK is
+`281c652fdedb7675ba65c52b3bbb8f5187350518484854d0dc611cc5f9b7606a`.
+This slice changes test fixtures only. Interrupted Android writes, power loss,
+full owner replacement/shared-settlement and resource qualification, physical
+Galaxy devices and independent Linux acceptance remain separate open gates.
+Public paged-editor and outcome capabilities remain OFF.

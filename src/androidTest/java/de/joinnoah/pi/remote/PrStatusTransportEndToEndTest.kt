@@ -935,6 +935,8 @@ internal class PresenceObservingTransport(
     val questionAnswerAttempts = AtomicInteger()
     val positiveOutcomeQueries = AtomicInteger()
     val positiveOutcomeReleaseAttempts = AtomicInteger()
+    val positiveReleaseObservedRequestIds = ConcurrentHashMap.newKeySet<String>()
+    val positiveReleaseAcceptedRequestId = AtomicReference<String?>(null)
     val positiveOutcomeApplied = AtomicReference<JsonObject?>(null)
     val positiveOutcomeReleased = AtomicBoolean(false)
     val positiveReleaseHeld = AtomicBoolean(false)
@@ -1008,7 +1010,10 @@ internal class PresenceObservingTransport(
                             if (payload.flag("ok") && data.keys == setOf("kind", "status", "receipt") && data.text("kind") == "editor_outcome" && data.text("status") == "applied" && data.obj("receipt") == expected) positiveOutcomeApplied.set(data)
                         } }
                         if (positiveOutcomeReleaseRequests.remove(resultId)) runCatching {
-                            if (payload.flag("ok") && payload.obj("data").keys == setOf("kind") && payload.obj("data").text("kind") == "editor_outcome_released") positiveOutcomeReleased.set(true)
+                            if (payload.flag("ok") && payload.obj("data").keys == setOf("kind") && payload.obj("data").text("kind") == "editor_outcome_released") {
+                                positiveReleaseAcceptedRequestId.set(resultId)
+                                positiveOutcomeReleased.set(true)
+                            }
                         }
                         if (pendingSnapshots.remove(resultId)) runCatching {
                             if (payload.flag("ok")) {
@@ -1110,6 +1115,7 @@ internal class PresenceObservingTransport(
         if (type == "session.question.editor.outcome.release") {
             positiveOutcomeReleaseAttempts.incrementAndGet()
             InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply { putString("positiveOutcomeDiagnostic", "release-send") })
+            positiveReleaseObservedRequestIds.add(payload.text("requestId"))
             positiveOutcomeReleaseRequests.add(payload.text("requestId"))
             positiveOutcomeReleaseReceipt.set(payload.obj("receipt"))
         }

@@ -18,6 +18,8 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -26,6 +28,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -49,6 +52,9 @@ class PagedEditorRestartEndToEndTest {
     private lateinit var client: OkHttpClient
     private lateinit var transport: PresenceObservingTransport
     private lateinit var repository: DefaultRemoteRepository
+    private var releaseCrashBoundary = ""
+    private val localRemovalBlocked = AtomicBoolean(false)
+    private val removalLatch = CountDownLatch(1)
     private var native = false
     private var hostRestartExpected = false
     private val source = "😀".repeat(262_144)
@@ -63,7 +69,11 @@ class PagedEditorRestartEndToEndTest {
             case = requireNotNull(args.getString("pagedRestartCase"))
             nonce = requireNotNull(args.getString("pagedRestartNonce"))
             require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack", "positive", "release") && nonce.matches(Regex("[a-f0-9]{32}")))
+            releaseCrashBoundary = args.getString("pagedReleaseCrashBoundary") ?: ""
+            require(releaseCrashBoundary in setOf("", "host-deleted", "ack-before-local"))
+            require(releaseCrashBoundary.isEmpty() || case == "release")
             hostRestartExpected = args.getString("hostRestartExpected") == "true"
+            require(releaseCrashBoundary.isEmpty() || !hostRestartExpected)
             require(!hostRestartExpected || (phase == "B" && case in setOf("positive", "release")))
             val path = requireNotNull(args.getString("prStatusFixturePath"))
             fixture = JSONObject(readFixture(path).toString(Charsets.UTF_8))
@@ -78,6 +88,7 @@ class PagedEditorRestartEndToEndTest {
             require(fixture.getBoolean("nativeWorker") == native && fixture.getBoolean("pagedEditorFixture"))
             require(fixture.getString("pagedEditorCase") == if (case == "draft") "max-edited" else "restart-lost-ack")
             require(fixture.optBoolean("pagedEditorPositiveOutcomes") == (case in setOf("positive", "release")))
+            require(fixture.optString("pagedReleaseCrashBoundary", "") == releaseCrashBoundary)
             verifyMetadata("Source", source)
             verifyMetadata("Final", finalValue)
             val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
@@ -99,7 +110,7 @@ class PagedEditorRestartEndToEndTest {
                 assertEquals(case, proof.getString("case"))
                 assertEquals(identity(), proof.getString("identity"))
                 assertEquals(listOf(host), stores.pairings.load())
-                if (hostRestartExpected) verifyRestartStoredProof(proof)
+                if (hostRestartExpected || releaseCrashBoundary.isNotEmpty()) verifyRestartStoredProof(proof)
             }
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixture(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
@@ -107,8 +118,20 @@ class PagedEditorRestartEndToEndTest {
             val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), null) }
             client = OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, manager).callTimeout(3, TimeUnit.SECONDS).build()
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-            transport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), true, false, holdPositiveRelease = phase == "A" && case == "release")
-            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor, positiveOutcomeTestGate = case in setOf("positive", "release"))
+            transport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), true, false, holdPositiveRelease = phase == "A" && case == "release" && releaseCrashBoundary.isEmpty())
+            val storage = if (phase == "A" && releaseCrashBoundary == "ack-before-local") object : PagedEditorStorage {
+                override fun load() = stores.pagedEditor.load()
+                override fun save(snapshot: PagedJournalSnapshot) {
+                    val disk = stores.pagedEditor.load()
+                    if (disk.pendingReleases.isNotEmpty() && snapshot.pendingReleases.isEmpty()) {
+                        check(transport.positiveOutcomeReleased.get()) { "Removal must follow a correlated real release ACK" }
+                        localRemovalBlocked.set(true)
+                        removalLatch.await()
+                    }
+                    stores.pagedEditor.save(snapshot)
+                }
+            } else stores.pagedEditor
+            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = case in setOf("positive", "release"))
             NavigationTestActivity.contentFactory = {
                 {
                     if (showNavigation.value) MaterialTheme {
@@ -165,7 +188,8 @@ class PagedEditorRestartEndToEndTest {
             assertEquals(finalValue, attempt.text)
             assertEquals(expectedBinding, attempt.outcomeBinding)
         } else {
-            assertTrue(proof.getBoolean("releaseHeld"))
+            if (releaseCrashBoundary.isEmpty()) assertTrue(proof.getBoolean("releaseHeld"))
+            else assertEquals(releaseCrashBoundary, proof.getString("releaseCrashBoundary"))
             assertEquals(proof.getString("attemptId"), proof.getString("queuedReleaseId"))
             assertTrue(snapshot.attempts.isEmpty())
             val release = snapshot.pendingReleases.values.single()
@@ -281,15 +305,42 @@ class PagedEditorRestartEndToEndTest {
                 activate(RemoteSelection(host.routeId))
                 activate(RemoteSelection(host.routeId, selection.projectId))
                 activate(selection)
-                compose.waitUntil(60_000) { transport.positiveReleaseHeld.get() && persisted().attempts.isEmpty() && persisted().pendingReleases.size == 1 }
+                compose.waitUntil(60_000) {
+                    val disk = persisted()
+                    val boundaryReached = when (releaseCrashBoundary) {
+                        "host-deleted" -> statusOrNull()?.let { it.optInt("pagedReleaseDeletedCount") >= 1 && it.optInt("pagedReleaseAckDroppedCount") >= 1 && it.optBoolean("pagedReleaseLedgerEmpty") } == true
+                        "ack-before-local" -> localRemovalBlocked.get() && transport.positiveOutcomeReleased.get() && statusOrNull()?.let { it.optInt("pagedReleaseDeletedCount") >= 1 && it.optInt("pagedReleaseAckPassedCount") >= 1 && it.optBoolean("pagedReleaseLedgerEmpty") } == true
+                        else -> transport.positiveReleaseHeld.get()
+                    }
+                    boundaryReached && disk.attempts.isEmpty() && disk.pendingReleases.size == 1
+                }
                 val queued = persisted().pendingReleases.values.single()
                 assertEquals(capturedAttempt.attemptId, queued.releaseId)
                 assertEquals(capturedAttempt.commitRequestId, queued.commitRequestId)
-                assertFalse(transport.positiveOutcomeReleased.get())
-                assertEquals(0, transport.positiveOutcomeReleaseAttempts.get())
+                if (releaseCrashBoundary.isEmpty()) {
+                    assertFalse(transport.positiveOutcomeReleased.get())
+                    assertEquals(0, transport.positiveOutcomeReleaseAttempts.get())
+                } else {
+                    assertTrue(transport.positiveOutcomeReleaseAttempts.get() >= 1)
+                    assertNotNull(transport.positiveOutcomeApplied.get())
+                    assertEquals(releaseCrashBoundary == "ack-before-local", transport.positiveOutcomeReleased.get())
+                    assertEquals(releaseCrashBoundary == "ack-before-local", localRemovalBlocked.get())
+                    assertEquals(capturedAttempt.grantId, queued.grantId)
+                    assertEquals(capturedAttempt.uploadId, queued.uploadId)
+                    assertEquals(capturedAttempt.outcomeBinding?.deviceId, queued.deviceId)
+                    assertEquals(capturedAttempt.outcomeBinding?.ownerIncarnationId, queued.ownerIncarnationId)
+                    assertEquals(capturedAttempt.outcomeBinding?.byteLength, queued.byteLength)
+                    assertEquals(capturedAttempt.outcomeBinding?.sha256, queued.sha256)
+                }
             }
         }
         val snapshot = persisted()
+        if (releaseCrashBoundary.isNotEmpty()) {
+            val acceptedId = transport.positiveReleaseAcceptedRequestId.get()
+            assertTrue(transport.positiveReleaseObservedRequestIds.isNotEmpty())
+            if (releaseCrashBoundary == "ack-before-local") assertTrue(acceptedId != null && acceptedId in transport.positiveReleaseObservedRequestIds)
+            else assertNull(acceptedId)
+        }
         val owner = status()
         assertTrue("Owner must have replied to a real source read", owner.getInt("pagedSourceReadReplyCount") > 0)
         if (case == "draft") {
@@ -318,7 +369,24 @@ class PagedEditorRestartEndToEndTest {
             .put("attemptCreatedAt", attempt?.createdAt ?: 0L)
             .put("ownerIncarnationId", attempt?.outcomeBinding?.ownerIncarnationId ?: "")
             .put("releaseHeld", case == "release" && transport.positiveReleaseHeld.get())
+            .put("releaseCrashBoundary", releaseCrashBoundary)
+            .put("localRemovalBlocked", localRemovalBlocked.get())
+            .put("actualReleaseAckSeen", transport.positiveOutcomeReleased.get())
+            .put("releaseRequestIds", JSONArray(transport.positiveReleaseObservedRequestIds.sorted()))
+            .put("acceptedReleaseRequestId", transport.positiveReleaseAcceptedRequestId.get() ?: "")
+            .put("releaseReceipt", transport.positiveOutcomeReleaseReceipt.get()?.let { JSONObject(it.toString()) } ?: JSONObject())
+            .put("releaseDeletedCount", owner.optInt("pagedReleaseDeletedCount"))
+            .put("releaseAckDroppedCount", owner.optInt("pagedReleaseAckDroppedCount"))
+            .put("releaseAckPassedCount", owner.optInt("pagedReleaseAckPassedCount"))
+            .put("releaseLedgerEmpty", owner.optBoolean("pagedReleaseLedgerEmpty"))
             .put("queuedReleaseId", snapshot.pendingReleases.values.singleOrNull()?.releaseId ?: "")
+            .put("queuedReleaseTuple", snapshot.pendingReleases.values.singleOrNull()?.let { release ->
+                JSONObject().put("routeId", release.key.routeId).put("sessionId", release.key.sessionId)
+                    .put("questionId", release.key.questionId).put("deviceId", release.deviceId)
+                    .put("ownerIncarnationId", release.ownerIncarnationId).put("grantId", release.grantId)
+                    .put("uploadId", release.uploadId).put("commitRequestId", release.commitRequestId)
+                    .put("byteLength", release.byteLength).put("sha256", release.sha256)
+            } ?: JSONObject())
             .put("ownerQuestion", owner.optString("pagedQuestion", ""))
             .put("sourceReadCount", owner.getInt("pagedSourceReadCount"))
             .put("sourceReadReplyCount", owner.getInt("pagedSourceReadReplyCount"))
@@ -394,7 +462,8 @@ class PagedEditorRestartEndToEndTest {
                 throw AssertionError("Positive recovery stalled: $diagnostic", failure)
             }
             if (case == "release") {
-                assertTrue(proof.getBoolean("releaseHeld"))
+                if (releaseCrashBoundary.isEmpty()) assertTrue(proof.getBoolean("releaseHeld"))
+                else assertEquals(releaseCrashBoundary, proof.getString("releaseCrashBoundary"))
                 assertEquals(proof.getString("attemptId"), proof.getString("queuedReleaseId"))
                 assertEquals(0, transport.positiveOutcomeQueries.get())
             }
@@ -416,7 +485,21 @@ class PagedEditorRestartEndToEndTest {
                 for (field in listOf("beginCount", "chunkCount", "commitCount", "answerCount")) assertEquals(before.getInt(field), current.getInt(field))
                 SystemClock.sleep(200)
             }
-            phaseBProof.put("positiveReceipt", JSONObject(applied.toString())).put("outcomeQueries", transport.positiveOutcomeQueries.get()).put("releaseAttempts", transport.positiveOutcomeReleaseAttempts.get())
+            if (releaseCrashBoundary.isNotEmpty()) {
+                val aIdsJson = proof.getJSONArray("releaseRequestIds")
+                val aIds = (0 until aIdsJson.length()).map { aIdsJson.getString(it) }.toSet()
+                val bIds = transport.positiveReleaseObservedRequestIds.toSet()
+                val acceptedId = transport.positiveReleaseAcceptedRequestId.get()
+                assertTrue(aIds.isNotEmpty() && bIds.isNotEmpty())
+                assertTrue("Release request IDs must be fresh across processes", aIds.intersect(bIds).isEmpty())
+                assertTrue("ACK must match a release actually sent in phase B", acceptedId != null && acceptedId in bIds)
+            }
+            phaseBProof.put("releaseRequestIds", JSONArray(transport.positiveReleaseObservedRequestIds.sorted()))
+                .put("acceptedReleaseRequestId", transport.positiveReleaseAcceptedRequestId.get() ?: "")
+                .put("releaseCrashBoundary", releaseCrashBoundary)
+                .put("preConnectQueueVerified", releaseCrashBoundary.isNotEmpty())
+                .put("queuedReleaseId", proof.optString("queuedReleaseId"))
+                .put("positiveReceipt", JSONObject(applied.toString())).put("outcomeQueries", transport.positiveOutcomeQueries.get()).put("releaseAttempts", transport.positiveOutcomeReleaseAttempts.get())
                 .put("cleanupVerified", persisted().attempts.isEmpty() && persisted().pendingReleases.isEmpty()).put("releaseAccepted", transport.positiveOutcomeReleased.get()).put("beforeObservation", before).put("afterObservation", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified")).put("answerAttempts", transport.questionAnswerAttempts.get())
         } else {
             val attempt = snapshot.attempts.values.single()
