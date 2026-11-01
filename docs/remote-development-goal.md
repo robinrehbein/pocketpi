@@ -1,6 +1,14 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Current delivery priority: Samsung Android, 2026-11-01
+
+The owner explicitly prioritized the Android app on Galaxy S25 and Galaxy Tab S11 first. iPhone/iOS work is deferred and is not a gate for the current Samsung delivery. Continue mobile remote-development functionality, phone touch usability and tablet/DeX keyboard/mouse/adaptive work views. Wear stays a useful reduced companion; no Wear emulator is required.
+
+The unfinished iOS backend integration is preserved separately on local `codex/deferred-ios-backend-nov01` branches: PocketPi `0e3ef61`, NOAH `2474c1668`. It is excluded from the active `codex/android-samsung-focus-nov01` branches. The earlier bounded iOS prototype is historical evidence only. Both newly allocated failed iOS setup devices were removed and verified absent. No further iOS runtime work is scheduled for this delivery.
+
+Physical Galaxy devices and an independent authorized SSH host remain unavailable. Emulator and local Docker evidence must stay distinct from real Samsung/remote-host acceptance. The overall remote-development goal remains active; this checkpoint changes delivery priority, not the trust or uncertain-write rules.
+
 ## Public iOS Simulator feasibility checkpoint on 2026-11-01
 
 A bounded public-XCTest command bridge passed on one owned iPhone 17 Pro / iOS 26.5 simulator: screenshot capture, coordinate tap, exact text entry, Home/background, Activate preserving state, three drags to the final item, invalid-coordinate rejection, two idle replies and a later successful input. Root visually inspected actual XCTest and same-UDID simctl captures; the portrait scale is 3:1 in both axes. Build/test and cleanup passed; the owned simulator was deleted, original device IDs restored and the xcodebuild process ended.
