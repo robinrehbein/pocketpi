@@ -1,5 +1,22 @@
-<!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
+<!-- Current integration qualification: testing/session-epoch-replay-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
+
+## Session epoch and replay integration checkpoint on 2026-11-01
+
+The App now integrates upstream list epochs and compaction deduplication while protecting the
+selected timeline, titles and editor-close receipts. Only an authoritative read confirms an epoch
+replacement; a previously unseen late event cannot permanently retire the actual current epoch.
+Rejected pages cannot settle questions/receipts/tasks or release an offline queued prompt.
+Exact question instances are tracked when closes apply, including replay and failed waits.
+Cross-project title candidates preserve cache identity without inventing a missing title.
+
+The final 3,527 App + 34 Wear tests pass. Four actual phone/tablet process-recovery cases and both
+complete native development workflows pass on the same final APKs and runtime sources, with
+independent artifact/hash review and cleanup. Root inspected the tablet's adaptive workflow result.
+See [epoch/replay qualification](testing/session-epoch-replay-qualification.md) for evidence and limits.
+The runtime proofs use the local Mac Host, emulator, fixture provider and controlled local Git/PR/CI;
+physical Samsung, independent Linux, external provider/CI and production MainActivity/service
+restoration remain separate qualification. The overall goal is active.
 
 ## Android process recovery checkpoint on 2026-11-01
 

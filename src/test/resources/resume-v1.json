@@ -3987,6 +3987,65 @@
           ]
         }
       }
+    },
+    {
+      "name": "status-with-epoch",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 41,
+        "kind": "session.status",
+        "status": "running",
+        "epoch": "Q2xhdWRlUmVzdW1lRXBvY2"
+      }
+    },
+    {
+      "name": "title-with-epoch",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 42,
+        "kind": "session.title",
+        "title": "Fix the login flow",
+        "epoch": "Q2xhdWRlUmVzdW1lRXBvY2"
+      }
+    },
+    {
+      "name": "status-with-epoch-and-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 45,
+        "after": 43,
+        "kind": "session.status",
+        "status": "idle",
+        "epoch": "Q2xhdWRlUmVzdW1lRXBvY2"
+      }
+    },
+    {
+      "name": "events-status-with-epoch",
+      "payload": {
+        "type": "result",
+        "requestId": "resume.v1:Q2xhdWRlUmVzdW1lRXBvY2:40:resume-1",
+        "ok": true,
+        "data": {
+          "kind": "session.events",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "Q2xhdWRlUmVzdW1lRXBvY2",
+          "from": 40,
+          "revision": 41,
+          "events": [
+            {
+              "type": "event",
+              "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "revision": 41,
+              "kind": "session.status",
+              "status": "idle",
+              "epoch": "Q2xhdWRlUmVzdW1lRXBvY2"
+            }
+          ]
+        }
+      }
     }
   ],
   "wireInvalid": [
@@ -8085,6 +8144,56 @@
           "revision": 40,
           "events": []
         }
+      }
+    },
+    {
+      "name": "status-epoch-21-characters",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 41,
+        "kind": "session.status",
+        "status": "running",
+        "epoch": "Q2xhdWRlUmVzdW1lRXBvY"
+      }
+    },
+    {
+      "name": "title-epoch-number",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 42,
+        "kind": "session.title",
+        "title": "Fix the login flow",
+        "epoch": 42
+      }
+    },
+    {
+      "name": "upsert-with-epoch",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 43,
+        "kind": "message.upsert",
+        "message": {
+          "id": "assistant-1",
+          "role": "assistant",
+          "text": "Done.",
+          "state": "complete"
+        },
+        "epoch": "Q2xhdWRlUmVzdW1lRXBvY2"
+      }
+    },
+    {
+      "name": "notice-with-epoch",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 44,
+        "kind": "session.notice",
+        "level": "info",
+        "message": "Saved.",
+        "epoch": "Q2xhdWRlUmVzdW1lRXBvY2"
       }
     }
   ]
