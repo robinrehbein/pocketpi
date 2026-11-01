@@ -225,7 +225,22 @@ class ShellCommandTest {
     fun aShellDraftFeedsNoPromptPrediction() {
         assertFalse(recordsPrompt(shellState().copy(draft = "!ls")))
         assertTrue(recordsPrompt(shellState().copy(draft = "list the files")))
-        // Without the gate `!ls` is a prompt like any other.
-        assertTrue(recordsPrompt(shellState(capable = false).copy(draft = "!ls")))
+        // Without the gate `!ls` is refused, so it is not recorded as a prompt either.
+        assertFalse(recordsPrompt(shellState(capable = false).copy(draft = "!ls")))
+    }
+
+    @Test
+    fun aBangDraftIsRefusedWhenTheSessionCannotRunShellCommands() {
+        val noGate = shellState(capable = false)
+        assertTrue(shellDraftRefused(noGate.copy(draft = "!ls")))
+        assertTrue(shellDraftRefused(noGate.copy(draft = "  !!ls")))
+        // The Mac's switch going off takes the capability back, and so the label.
+        val off = shellState().copy(unavailableCapabilities = setOf(SESSION_BASH_CAPABILITY), draft = "!ls")
+        assertTrue(shellDraftRefused(off))
+        assertNull(shellDraft(off))
+        // Prompts, a draft with a quote or attachment, and a capable session are not refused.
+        assertFalse(shellDraftRefused(noGate.copy(draft = "list the files")))
+        assertFalse(shellDraftRefused(noGate.copy(draft = "hello !ls")))
+        assertFalse(shellDraftRefused(shellState().copy(draft = "!ls")))
     }
 }
