@@ -84,6 +84,7 @@ enum class FilesFailure {
     /** The edited text is over [MAX_FILES_CONTENT_JSON_BYTES], so a save would not fit one frame. */
     TOO_LARGE,
     FAILED,
+    STORAGE,
 }
 
 /** One `files.written` result: the saved file's new [version] and [size] in bytes. */
@@ -166,6 +167,8 @@ data class FileEditor(
     val superseded: List<PendingWrite> = emptyList(),
     /** What waits for the user to discard the unsaved edit; the editor asks first. */
     val leaveRequest: EditorLeave? = null,
+    val recovery: StoredFileDraft? = null,
+    val recoveryLoading: Boolean = false,
     val buffer: EditorBuffer = EditorBuffer(),
 ) {
     /** The field's text when the UI has one, else [text]. Not observable; read it on demand. */

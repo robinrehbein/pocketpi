@@ -829,6 +829,10 @@ interface RemoteRepository {
     /** Saves the editor's text over the version it was read or last saved as. */
     fun saveFileEditor() {}
 
+    fun restoreFileEditorDraft() {}
+
+    fun discardFileEditorDraft() {}
+
     /** Leaves the editor and drops its text; a save still on its way is ignored. */
     fun discardFileEditor() {}
 

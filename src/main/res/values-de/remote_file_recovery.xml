@@ -1,0 +1,14 @@
+<resources>
+    <string name="remote_files_editor_recovery_title">Datei-Entwurf wiederherstellen</string>
+    <string name="remote_files_editor_recovery_loading">Verschlüsselten Entwurf prüfen…</string>
+    <string name="remote_files_editor_recovery_same">Ein gespeicherter Entwurf ist vorhanden. Die Datei auf dem Entwicklungsrechner entspricht noch seiner ursprünglichen Version.</string>
+    <string name="remote_files_editor_recovery_changed">Ein gespeicherter Entwurf ist vorhanden, aber die Datei auf dem Entwicklungsrechner wurde geändert. Beim Wiederherstellen bleibt die ursprüngliche Basis erhalten, damit ein späteres Speichern einen Konflikt erkennen kann.</string>
+    <string name="remote_files_editor_recovery_pending">Frühere Speichervorgänge haben unbestätigte Ergebnisse. Ihre Belege bleiben auf diesem Gerät. Das Wiederherstellen sendet nichts.</string>
+    <string name="remote_files_editor_recovery_restore">Entwurf wiederherstellen</string>
+    <string name="remote_files_editor_recovery_use_host">Version auf dem Entwicklungsrechner verwenden</string>
+    <string name="remote_files_editor_storage_failure">Der lokale Entwurf konnte nicht aktualisiert werden. Lass den Editor geöffnet. Ein bereits gestarteter Speichervorgang kann auf dem Entwicklungsrechner erfolgreich gewesen sein.</string>
+    <string name="remote_files_editor_recovery_preview">Vorschau: jeweils bis zu den ersten 2.000 Zeichen.</string>
+    <string name="remote_files_editor_recovery_host_label">Version auf dem Entwicklungsrechner</string>
+    <string name="remote_files_editor_recovery_draft_label">Dein Entwurf</string>
+    <string name="remote_files_editor_recovery_pending_label">Letzter unbestätigter Speichervorgang</string>
+</resources>

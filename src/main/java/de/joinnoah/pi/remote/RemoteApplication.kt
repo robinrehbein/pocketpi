@@ -86,6 +86,7 @@ class RemoteApplication : Application() {
                 remoteTransport(this, scope),
                 scope,
                 navigationStorage = stores.navigation,
+                fileDraftStorage = stores.fileDrafts,
                 attachmentStorage = attachments,
                 attachmentImporter = { uri, photo ->
                     importer.import(android.net.Uri.parse(uri), photo)
@@ -350,6 +351,8 @@ internal class AppStores(
     }
 
     val drafts by lazy { DraftStore(app) }
+
+    val fileDrafts by lazy { FileDraftStore(app) }
 
     val navigation by lazy { NavigationSnapshotStore(app) }
 

@@ -273,6 +273,8 @@ internal fun filesActions(
         onStartEditing = model::startFileEditing,
         onEditorText = model::updateFileEditorText,
         onSaveEditor = model::saveFileEditor,
+        onRestoreEditorDraft = model::restoreFileEditorDraft,
+        onDiscardEditorDraft = model::discardFileEditorDraft,
         onDiscardEditor = model::discardFileEditor,
         onReloadAfterConflict = model::reloadFileAfterConflict,
         onEditorPrompt = model::fileEditorPrompt,

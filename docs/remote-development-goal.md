@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Android durable file drafts checkpoint, 2026-11-01
+
+Manual file edits now have a separate encrypted, bounded journal with a persistence barrier before each write/rebase request. Explicit recovery compares the stored draft with the development-computer file; unanswered receipts survive text discard. Per-file in-flight ownership and durable acknowledgement reconciliation prevent late replies from replacing newer draft state. See [file draft qualification](testing/android-file-draft-recovery.md).
+
+All 113 targeted tests and APK builds pass. The final quick-check passes 3573 app and 34 Wear tests; a frozen two-process Android emulator run restores the actual encrypted store and production loader after force-stop without replaying a write. The remote file is synthetic in that run: MainActivity-to-Pi recovery, physical Galaxy/DeX and last-keystroke/background qualification remain open. iPhone remains deferred. Wear remains a reduced companion whose functions are selected for usefulness and usability on the watch display. The overall goal is active.
+
 ## Android browser keyboard checkpoint, 2026-11-01
 
 Viewport focus loss now releases held browser keys, and repeated navigation/deletion keys use bounded Host-valid release/press pairs with modifier changes preserved. The focused 30 tests, app/test APK builds and repository quick-check pass; the original two regression tests were observed failing before the fix. Independent code review found no remaining actionable issue. See [keyboard qualification](testing/android-browser-keyboard.md) for scope and limits. Physical Galaxy/DeX behavior remains untested. The next Android design checkpoint covers [durable file drafts](plans/2026-11-01-android-file-draft-recovery.md); it is not implemented yet. iOS remains deferred and the overall goal remains active.
@@ -510,7 +516,8 @@ Mac and independent remote Linux hosts, including Linux devcontainers, are equal
 
 The qualifying workflow includes an interactive Android emulator and an iOS simulator on a Mac.
 The Wear companion includes any feature that provides meaningful value on a watch, following
-the owner clarification on 2026-10-31. Messages and questions are examples, not a feature ceiling.
+the owner clarifications on 2026-10-31 and 2026-11-01. Its reduced feature set is chosen per
+feature for the watch display and interaction, rather than by copying the phone interface. Messages and questions are examples, not a feature ceiling.
 For each new feature, assess its watch-specific usefulness, readable context, interaction cost,
 accidental-action consequences and appropriate input method. Use concise views, voice or simple
 actions where suitable, and offer phone/tablet continuation when more context is needed. Full

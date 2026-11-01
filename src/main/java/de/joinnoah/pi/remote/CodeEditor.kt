@@ -97,9 +97,6 @@ import kotlinx.coroutines.withContext
 /** How long typing must pause before the colours are computed again. */
 private const val HIGHLIGHT_DELAY_MS = 150L
 
-/** How long typing must pause before the text goes to the view model; a save or leave sends it at once. */
-private const val PUSH_DELAY_MS = 500L
-
 /** How long "Saved" stays in the footer. */
 private const val SAVED_NOTICE_MS = 2_000L
 
@@ -134,12 +131,44 @@ class EditorBuffer {
 /**
  * The open file as editable text. It replaces the file view in [FilesPane], in the phone overlay
  * and the tablet inspector alike. The text lives in [FileEditor.buffer] and reaches
- * [FilesActions.onEditorText] after a pause in typing and before every save, prompt or leave; a
+ * [FilesActions.onEditorText] independently of highlighting and before every save, prompt or leave; a
  * save that sets a new original never resets what is typed. Back closes find first, then asks
  * before it drops unsaved changes, as does anything else that would ([FileEditor.leaveRequest]).
  */
 @Composable
 internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Modifier = Modifier, onProjectSearch: (() -> Unit)? = null) {
+    if (editor.recoveryLoading || editor.recovery != null) {
+        Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.remote_files_editor_recovery_title))
+            if (editor.saveFailure == FilesFailure.STORAGE) Text(
+                stringResource(R.string.remote_files_editor_storage_failure),
+                modifier = Modifier.testTag("filesEditorRecoveryFailure"), color = MaterialTheme.colorScheme.error,
+            )
+            if (editor.recoveryLoading) Text(stringResource(R.string.remote_files_editor_recovery_loading))
+            else {
+                val draft = checkNotNull(editor.recovery)
+                Text(stringResource(if (draft.baseVersion == editor.baseVersion && draft.original == editor.original)
+                    R.string.remote_files_editor_recovery_same else R.string.remote_files_editor_recovery_changed))
+                Text(stringResource(R.string.remote_files_editor_recovery_preview))
+                Text(stringResource(R.string.remote_files_editor_recovery_host_label), style = MaterialTheme.typography.titleSmall)
+                Text(editor.original.take(2_000), modifier = Modifier.testTag("filesEditorRecoveryHost"))
+                Text(stringResource(R.string.remote_files_editor_recovery_draft_label), style = MaterialTheme.typography.titleSmall)
+                Text(draft.text.take(2_000), modifier = Modifier.testTag("filesEditorRecoveryDraft"))
+                if (draft.pending.isNotEmpty()) {
+                    Text(stringResource(R.string.remote_files_editor_recovery_pending))
+                    Text(stringResource(R.string.remote_files_editor_recovery_pending_label), style = MaterialTheme.typography.titleSmall)
+                    Text(draft.pending.last().content.take(2_000), modifier = Modifier.testTag("filesEditorRecoveryPending"))
+                }
+                Button(onClick = actions.onRestoreEditorDraft, modifier = Modifier.testTag("filesEditorRestoreDraft")) {
+                    Text(stringResource(R.string.remote_files_editor_recovery_restore))
+                }
+                TextButton(onClick = actions.onDiscardEditorDraft, modifier = Modifier.testTag("filesEditorUseHost")) {
+                    Text(stringResource(R.string.remote_files_editor_recovery_use_host))
+                }
+            }
+        }
+        return
+    }
     val textState = editor.buffer.state(editor.text, editor.cursor)
     val current by rememberUpdatedState(editor)
     val intro by rememberUpdatedState(stringResource(R.string.remote_files_editor_intro, editor.path))
@@ -169,8 +198,14 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
 
     fun flush() = currentActions.onEditorText(textState.text.toString())
 
-    // One watcher of the text: the change mark and the gutter at once, the colours after a short
-    // pause and the view model's copy after a longer one. Nothing here scans the text on the main
+    // Hand text to the journal independently of highlighting. Abrupt process death can still
+    // precede the asynchronous atomic write; no zero-loss typing guarantee is implied.
+    LaunchedEffect(textState) {
+        snapshotFlow { textState.text.toString() }.collect { currentActions.onEditorText(it) }
+    }
+
+    // A separate watcher updates the change mark and gutter, then computes colours after a short
+    // pause. Nothing here scans the text on the main
     // thread, and a newer text cancels the work for an older one.
     LaunchedEffect(textState, language, colors) {
         var first = true
@@ -192,10 +227,6 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
                 val shown = text.toString()
                 highlight = TextHighlight(shown, withContext(Dispatchers.Default) { highlightSpans(shown, language, colors) })
             } else highlight = null
-            if (typed) {
-                delay(PUSH_DELAY_MS)
-                currentActions.onEditorText(text.toString())
-            }
         }
     }
     // No hand-over when the field goes away: its buffer stays with its editor, which
@@ -741,5 +772,6 @@ private fun saveFailureText(failure: FilesFailure): Int =
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
         FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
         FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
+        FilesFailure.STORAGE -> R.string.remote_files_editor_storage_failure
         FilesFailure.FAILED -> R.string.remote_files_save_failed
     }

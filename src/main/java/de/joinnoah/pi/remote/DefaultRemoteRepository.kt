@@ -300,6 +300,7 @@ class DefaultRemoteRepository(
      */
     private val liveRunKept: () -> Boolean = { false },
     private val pagedEditorTestGate: Boolean = false,
+    private val fileDraftStorage: FileDraftStorage? = null,
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -10605,7 +10606,8 @@ class DefaultRemoteRepository(
             },
             { state.value },
             { selectionEpoch },
-            ::update,
+            journal = fileDraftStorage?.let { FileDraftJournal(it, io) },
+            update = ::update,
         )
 
     override fun openFiles() = openFiles(exclusive = true)
@@ -10654,6 +10656,10 @@ class DefaultRemoteRepository(
 
     override fun saveFileEditor() = filesLoader.saveEditor()
 
+    override fun restoreFileEditorDraft() = filesLoader.restoreEditorDraft()
+
+    override fun discardFileEditorDraft() = filesLoader.discardEditorDraft()
+
     override fun discardFileEditor() = filesLoader.discardEditor()
 
     override fun reloadFileAfterConflict() = filesLoader.reloadAfterConflict()
@@ -10662,10 +10668,12 @@ class DefaultRemoteRepository(
 
     override fun confirmFileEditorLeave() {
         if (state.value.files?.editor?.leaveRequest == EditorLeave.SEARCH && !filesLoader.canConfirmSearchHit()) return
-        when (filesLoader.confirmLeave()) {
-            EditorLeave.CHANGES -> openChanges()
-            EditorLeave.SEARCH -> filesLoader.confirmSearchHit()
-            null -> {}
+        filesLoader.confirmLeave { leave ->
+            when (leave) {
+                EditorLeave.CHANGES -> openChanges()
+                EditorLeave.SEARCH -> filesLoader.confirmSearchHit()
+                null -> {}
+            }
         }
     }
 

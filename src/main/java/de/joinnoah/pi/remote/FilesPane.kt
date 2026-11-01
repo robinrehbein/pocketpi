@@ -132,6 +132,8 @@ internal class FilesActions(
     val onStartEditing: () -> Unit = {},
     val onEditorText: (String) -> Unit = {},
     val onSaveEditor: () -> Unit = {},
+    val onRestoreEditorDraft: () -> Unit = {},
+    val onDiscardEditorDraft: () -> Unit = {},
     val onDiscardEditor: () -> Unit = {},
     val onReloadAfterConflict: () -> Unit = {},
     /**
@@ -333,6 +335,7 @@ private fun failureText(failure: FilesFailure): Int =
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
         FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
         FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
+        FilesFailure.STORAGE -> R.string.remote_files_editor_storage_failure
         FilesFailure.FAILED -> R.string.remote_files_failure_failed
     }
 

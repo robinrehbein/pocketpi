@@ -28,6 +28,8 @@ import javax.crypto.spec.GCMParameterSpec
  * [UnrecoverableKeyException]). Only the last two also delete the key: one bad file says nothing
  * about the key, and several files may share an alias (every attachment does). Any other failure,
  * an IOException above all, is thrown and leaves the file and the key alone.
+ * With [preserveUnreadable], these irrecoverable reads throw instead and leave both file and key
+ * untouched, allowing callers that hold unresolved evidence to fail closed across restarts.
  *
  * [onReset] runs before a quarantined file is deleted, while this store's lock is held, so caches
  * derived from the file go first.
@@ -37,6 +39,7 @@ class EncryptedFileStore(
     name: String,
     private val alias: String,
     private val onReset: () -> Unit = {},
+    private val preserveUnreadable: Boolean = false,
 ) {
     private val file = AtomicFile(File(context.noBackupFilesDir, name))
 
@@ -53,6 +56,7 @@ class EncryptedFileStore(
             if (!file.baseFile.exists()) return null
             val bytes = file.readFully()
             if (bytes.size < IV_BYTES + TAG_BYTES) {
+                if (preserveUnreadable) throw java.io.IOException("Encrypted file is truncated")
                 Diagnostics.record(Diagnostics.Kind.CAUGHT, "store.quarantine", outcome = "truncated")
                 quarantine(dropKey = false)
                 return null
@@ -62,6 +66,7 @@ class EncryptedFileStore(
                 withKey { unseal(alias, bytes) }
             } catch (e: Exception) {
                 val unreadable = unreadable(e) ?: throw e.also { forgetKeyOn(alias, it) }
+                if (preserveUnreadable) throw e
                 Diagnostics.caught("store.quarantine", e)
                 quarantine(dropKey = unreadable == Unreadable.KEY)
                 null
@@ -76,6 +81,7 @@ class EncryptedFileStore(
                     withKey { seal(alias, value) }
                 } catch (e: Exception) {
                     if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(alias, it) }
+                    if (preserveUnreadable) throw e
                     // The file is replaced anyway, so a new key lets the write go through.
                     Diagnostics.caught("store.write.key", e)
                     dropKey(alias)
