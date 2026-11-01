@@ -171,7 +171,7 @@ class StreamProtocolTest {
     @Test
     fun theSessionEventsResultsPassAndEveryInvalidOneIsRefused() {
         val results = entries(resume, "wireValid").filter { isResult(it.second, "session.events") }
-        assertEquals(setOf("events-empty", "events-compacted-and-merged", "events-first-after-from", "events-from-zero", "events-512"), results.map { it.first }.toSet())
+        assertEquals(setOf("events-empty", "events-compacted-and-merged", "events-first-after-from", "events-from-zero", "events-512", "events-status-with-epoch"), results.map { it.first }.toSet())
         for ((name, payload) in results) {
             val reply = sessionEventsReply(data(payload))
             assertEquals(name, data(payload).long("from"), reply.from)
@@ -183,6 +183,9 @@ class StreamProtocolTest {
         val compacted = sessionEventsReply(data(valid(resume, "events-compacted-and-merged")))
         assertEquals(listOf(41L, 42L, 43L), compacted.events.take(3).map { it.long("revision") })
         assertEquals(40L, sessionEventsReply(data(valid(resume, "events-first-after-from"))).events.single().long("after"))
+        // A status replayed by a newer host carries its journal epoch; the reply keeps it for the list.
+        val withEpoch = sessionEventsReply(data(valid(resume, "events-status-with-epoch")))
+        assertTrue(withEpoch.events.any { it.text("kind") == "session.status" && it.text("epoch") == withEpoch.epoch })
 
         val invalid = entries(resume, "wireInvalid").filter { isResult(it.second, "session.events") }
         assertEquals(18, invalid.size)

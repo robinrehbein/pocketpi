@@ -291,9 +291,10 @@ A built APK does not establish Samsung device, TalkBack, mobile-network or real 
 delivery acceptance; those require the configured host, relay and device.
 `stream-v1.json` (the `remote.stream.v1` capability: `session.focus`, `remote.ping` and `pong`,
 `remote.ack`, and the `after` field of session events) and `resume-v1.json` (the `resume.v1:`
-request IDs, the snapshot `epoch` and the `session.events` result) are byte-for-byte copies from
-`packages/pi-atlas/extensions/remote/protocol/fixtures/` from noah-monorepo commit
-`59a1232f8e101d4170891b00db47828405de2784`, the merge of pull request 1314 into `dev`.
+request IDs, the snapshot `epoch`, the `session.events` result and the `epoch` on status and title
+events) are byte-for-byte copies from `packages/pi-atlas/extensions/remote/protocol/fixtures/` from
+noah-monorepo commit `b6ebb559ff51413148b56d7468df39fdf3572a47`, the merge of pull request 1336
+into `dev`.
 
 ## Appearance
 

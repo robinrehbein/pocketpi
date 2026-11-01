@@ -1156,14 +1156,106 @@ class TimelineResumeTest {
         val result = timeline.replay(reply)
 
         assertFalse(timeline.awaitingReply)
-        // Only the reply's event counts as replayed; the held ones ran their effects on arrival.
-        assertEquals(reply.events, result.applied)
+        // Nothing counts as replayed: 11 is in the reply too, but it and the other held ones ran
+        // their effects on arrival.
+        assertTrue(result.applied.isEmpty())
         assertEquals(12L, timeline.revision)
         assertEquals(listOf("a", "b replayed"), texts(timeline))
         assertEquals("running", timeline.status)
         // 14 still waits behind 13: the reply does not fit, and a fresh snapshot follows.
         assertFalse(result.fits)
         assertTrue(timeline.needsSnapshot)
+    }
+
+    @Test
+    fun aReplayLeavesOutWhatArrivedLiveDuringTheWaitOrWhileDetachedButStillAppliesIt() {
+        fun compaction(revision: Long, state: String) = event(revision, "session.compaction", null, "state" to state)
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        timeline.awaitReply()
+        // 12 overtakes the reply, which carries it as well.
+        val running = compaction(12, "running")
+        assertFalse(timeline.event(running))
+        val replayOnly = upsert(11, "b")
+        var result = timeline.replay(events(10, 12, replayOnly, running))
+        assertTrue(result.fits)
+        assertEquals(listOf(replayOnly), result.applied)
+        assertEquals(12L, timeline.revision)
+        assertNotNull(timeline.compaction)
+
+        // Received while the chat was detached, then replayed by the refocus resume.
+        timeline.detached = true
+        val done = compaction(13, "done")
+        assertFalse(timeline.event(done))
+        timeline.heardWhileDetached(done)
+        timeline.detached = false
+        timeline.awaitReply()
+        result = timeline.replay(events(12, 13, done))
+        assertTrue(result.fits)
+        assertTrue(result.applied.isEmpty())
+        assertEquals(13L, timeline.revision)
+        assertNull(timeline.compaction)
+
+        // A wait ends with what it heard: a later replay reports its events again.
+        timeline.awaitReply()
+        val later = status(14, "running")
+        result = timeline.replay(events(13, 14, later))
+        assertEquals(listOf(later), result.applied)
+    }
+
+    @Test
+    fun continueFromTakesOverWhatThePreviousTimelineHeardLive() {
+        val previous = Timeline("session")
+        previous.snapshot(snapshot(10, message("a")))
+        previous.detached = true
+        val done = event(11, "session.compaction", null, "state" to "done")
+        previous.heardWhileDetached(done)
+
+        val continued = Timeline("session")
+        continued.continueFrom(previous)
+        continued.awaitReply()
+        val result = continued.replay(events(10, 11, done))
+        assertTrue(result.fits)
+        assertTrue(result.applied.isEmpty())
+    }
+
+    @Test
+    fun aGapHeldEventIsLeftOutOfASecondResumeAfterTheFirstFailed() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        val done = event(12, "session.compaction", null, "state" to "done")
+        assertTrue(timeline.event(done))
+        timeline.awaitReply()
+        assertTrue(timeline.endAwaiting())
+        timeline.awaitReply()
+        val missed = upsert(11, "b")
+        val result = timeline.replay(events(10, 12, missed, done))
+        assertTrue(result.fits)
+        assertEquals(listOf(missed), result.applied)
+    }
+
+    @Test
+    fun anEventNotHeardInFullComesBackFromTheReplay() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        timeline.awaitReply()
+        val done = event(11, "session.compaction", null, "state" to "done")
+        assertEquals(SnapshotNeed.NONE, timeline.eventNeed(done, heard = false))
+        val result = timeline.replay(events(10, 11, done))
+        assertEquals(listOf(done), result.applied)
+    }
+
+    @Test
+    fun aGapHeldLiveEventIsLeftOutOfTheReplayThatFillsTheGap() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        val done = event(12, "session.compaction", null, "state" to "done")
+        assertTrue(timeline.event(done))
+        timeline.awaitReply()
+        val missed = upsert(11, "b")
+        val result = timeline.replay(events(10, 12, missed, done))
+        assertTrue(result.fits)
+        assertEquals(listOf(missed), result.applied)
     }
 
     @Test

@@ -71,6 +71,9 @@ private const val MAX_ROUTE_CAPABILITIES = 32
 private const val MAX_PARKED_EDITORS = 4
 /** Events kept for a held snapshot's chat, as many as a Timeline buffers; older ones need a resync. */
 private const val MAX_HELD_EVENTS = 128
+
+/** How many journal epochs a session left behind the lists remember, to ignore their late pages and events. */
+private const val RETIRED_LIST_EPOCHS = 3
 private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
@@ -644,8 +647,14 @@ class DefaultRemoteRepository(
      */
     private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean, val base: ResumeBase?) {
         lateinit var reply: Deferred<Result<JsonObject>>
-        val events = ArrayDeque<JsonObject>()
+        val events = ArrayDeque<HeldEvent>()
     }
+
+    /**
+     * An event kept for a [HeldSnapshot]; [selected]: its session was the selected one when it
+     * arrived, so its side effects ([eventEffects]) ran in full then.
+     */
+    private class HeldEvent(val event: JsonObject, val selected: Boolean)
 
     private var heldSnapshot: HeldSnapshot? = null
 
@@ -715,6 +724,12 @@ class DefaultRemoteRepository(
     private val sessionStatusOverrides = mutableMapOf<String, String>()
     private val sessionTitleRevisions = linkedMapOf<String, Long>()
     private val sessionTitleOverrides = mutableMapOf<String, String>()
+    /**
+     * The journal epoch each session's list status and title revisions count in ([ListEpochs.current]:
+     * the last new one a first page or a `session.status` or `session.title` event named), and the
+     * last few it left behind.
+     */
+    private val sessionListEpochs = linkedMapOf<String, ListEpochs>()
     private val renamingIds = mutableSetOf<String>()
 
     private data class Write(
@@ -1864,6 +1879,7 @@ class DefaultRemoteRepository(
         sessionStatusOverrides.clear()
         sessionTitleRevisions.clear()
         sessionTitleOverrides.clear()
+        sessionListEpochs.clear()
         ready?.cancel()
         // A reconnect to the Mac on screen keeps its last-known state; another Mac starts empty.
         val keep = state.value.stale && showsRoute(host.routeId)
@@ -2353,22 +2369,26 @@ class DefaultRemoteRepository(
         val held = heldSnapshot
         if (held != null && (payload["sessionId"] as? JsonPrimitive)?.content == held.sessionId) {
             // Kept for the Timeline the held snapshot is for, which select() has not made yet.
-            held.events.addLast(forTimeline)
+            held.events.addLast(HeldEvent(forTimeline, held.sessionId == state.value.selection.sessionId))
             while (held.events.size > MAX_HELD_EVENTS) held.events.removeFirst()
         } else timeline?.let { current -> timelineEvent(current, forTimeline) }
         // A live run that ends in the background lets the focus narrow.
         if (inBackground && payload.optionalText("kind") == "session.status" && !state.value.loading) syncFocus()
     }
 
-    private fun timelineEvent(current: Timeline, event: JsonObject) {
+    /** [heard]: the event's side effects ran in full on arrival; see [Timeline.eventNeed]. */
+    private fun timelineEvent(current: Timeline, event: JsonObject, heard: Boolean = true) {
         // Out of focus: the host leaves its upserts out, so its gaps mean nothing until the refocus
-        // resumes it.
-        if (current.detached) return
+        // resumes it. Its side effects ran on arrival, so the resume does not run them again.
+        if (current.detached) {
+            if (heard) current.heardWhileDetached(event)
+            return
+        }
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
             // one would only be discarded. A gap can be filled from the host's journal;
             // snapshot.required needs the fresh state.
-            val need = current.eventNeed(event)
+            val need = current.eventNeed(event, heard)
             if (need != SnapshotNeed.NONE) {
                 update { it.copy(tasks = staleTasks(it.tasks)) }
                 if (!resynchronizing && snapshotPending !== current)
@@ -2417,8 +2437,10 @@ class DefaultRemoteRepository(
         heldSnapshot = null
         val current = timeline?.takeIf { it.sessionId == held.sessionId }
         while (held.events.isNotEmpty()) {
-            val event = held.events.removeFirst()
-            if (current != null && current === timeline) timelineEvent(current, event)
+            val kept = held.events.removeFirst()
+            // One that arrived before its chat was selected skipped the chat's own effects (a
+            // finished compaction's context refresh): a replay that carries it runs them.
+            if (current != null && current === timeline) timelineEvent(current, kept.event, heard = kept.selected)
         }
     }
 
@@ -2485,7 +2507,7 @@ class DefaultRemoteRepository(
             val id = payload.text("sessionId")
             val revision = payload.long("revision")
             require(revision >= 0 && title.encodeToByteArray().size <= 4096)
-            if (revision > (sessionTitleRevisions[id] ?: -1L)) {
+            if (eventEpochApplies(payload) && revision > (sessionTitleRevisions[id] ?: -1L)) {
                 sessionTitleRevisions[id] = revision
                 sessionTitleOverrides[id] = title
                 if (sessionTitleRevisions.size > 4096) {
@@ -2660,17 +2682,119 @@ class DefaultRemoteRepository(
         sessionTitleRevisions.remove(sessionId)
     }
 
+    /** How [seeListEpoch] placed an epoch against what the lists knew of the session. */
+    private enum class EpochSeen {
+        /** The lists knew no epoch of the session. */
+        FIRST,
+        SAME,
+        /** A new epoch: the one before is retired. */
+        CHANGED,
+        /** An epoch the session already left: a late page or event of an older incarnation. */
+        RETIRED,
+    }
+
+    private class ListEpochs(var current: String) {
+        val retired = ArrayDeque<String>()
+    }
+
+    /** Places [epoch] for [sessionId]'s lists and records it when it is new. */
+    private fun seeListEpoch(sessionId: String, epoch: String): EpochSeen {
+        val known = sessionListEpochs.remove(sessionId)
+        val seen =
+            when {
+                known == null -> EpochSeen.FIRST
+                known.current == epoch -> EpochSeen.SAME
+                epoch in known.retired -> EpochSeen.RETIRED
+                else -> {
+                    known.retired.addLast(known.current)
+                    while (known.retired.size > RETIRED_LIST_EPOCHS) known.retired.removeFirst()
+                    known.current = epoch
+                    EpochSeen.CHANGED
+                }
+            }
+        sessionListEpochs[sessionId] = known ?: ListEpochs(epoch)
+        if (sessionListEpochs.size > 4096) sessionListEpochs.remove(sessionListEpochs.keys.first())
+        return seen
+    }
+
+    /**
+     * Whether a well-formed `session.status` or `session.title` [event] reaches the lists, after
+     * what it says about its journal epoch (`epoch`, from newer hosts). A new epoch, also for a
+     * session only a list shows, starts the session's revisions over first; unknown counts as new,
+     * since the revisions seen so far came without an epoch. An epoch the session already left
+     * changes nothing. An event without a well-formed epoch keeps the newer-revision-wins guard as
+     * it is.
+     */
+    private fun eventEpochApplies(event: JsonObject): Boolean {
+        val epoch = (event["epoch"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(::isJournalEpoch) ?: return true
+        val id = event.text("sessionId")
+        return when (seeListEpoch(id, epoch)) {
+            EpochSeen.FIRST, EpochSeen.CHANGED -> {
+                forgetListRevisions(id)
+                true
+            }
+            EpochSeen.SAME -> true
+            EpochSeen.RETIRED -> false
+        }
+    }
+
+    /**
+     * An accepted first page of [sessionId] in journal [epoch], at [revision] with [status]. When
+     * the list knew the session in an older epoch, the status and title events it saw count in that
+     * epoch's revisions: they are forgotten, and the page's status, which may come from new-epoch
+     * events the old guard dropped, shows in the lists from its revision on. The page brings no
+     * title, so a new-epoch title event of any revision shows. A page in an epoch the session
+     * already left changes nothing.
+     *
+     * A page in an epoch the list did not know yet only records it: a page read before live events
+     * that applied may be older than they are. So on a host whose events name no epoch, the guards
+     * of a session the lists followed before it was reopened in place stay until the next
+     * reconnect; only an epoch on the events can tell.
+     */
+    private fun pageEpoch(sessionId: String, epoch: String, revision: Long, status: String) {
+        if (seeListEpoch(sessionId, epoch) != EpochSeen.CHANGED) return
+        forgetListRevisions(sessionId)
+        val known =
+            sessionStatusOverrides[sessionId]
+                ?: state.value.sessions.firstOrNull { it.optionalText("id") == sessionId }?.optionalText("status")
+        sessionStatusRevisions[sessionId] = revision
+        sessionStatusOverrides[sessionId] = status
+        if (status != known) sessionStatusEffects(sessionId, status, known)
+        trimListRevisions()
+        publishSessionStatus(sessionId, status, known)
+    }
+
+    private fun trimListRevisions() {
+        if (sessionStatusRevisions.size > 4096) {
+            val oldest = sessionStatusRevisions.keys.first()
+            sessionStatusRevisions.remove(oldest)
+            sessionStatusOverrides.remove(oldest)
+        }
+        if (sessionTitleRevisions.size > 4096) {
+            val oldest = sessionTitleRevisions.keys.first()
+            sessionTitleRevisions.remove(oldest)
+            sessionTitleOverrides.remove(oldest)
+        }
+    }
+
     private fun updateSessionStatus(event: JsonObject) {
         val id = event.text("sessionId")
         val revision = event.long("revision")
         val status = event.text("status")
         require(revision >= 0 && status in SESSION_STATUSES)
-        if (revision <= (sessionStatusRevisions[id] ?: -1L)) return
+        if (!eventEpochApplies(event) || revision <= (sessionStatusRevisions[id] ?: -1L)) return
         val known =
             sessionStatusOverrides[id]
                 ?: state.value.sessions.firstOrNull { it.optionalText("id") == id }?.optionalText("status")
         sessionStatusRevisions[id] = revision
         sessionStatusOverrides[id] = status
+        sessionStatusEffects(id, status, known)
+        trimListRevisions()
+        publishSessionStatus(id, status, known)
+    }
+
+    /** What a new status of [id] (after [known]) changes besides the lists. */
+    private fun sessionStatusEffects(id: String, status: String, known: String?) {
         if (status != known) dropStaleChildControl(id)
         // A finished run may have changed files the open Changes view shows.
         if (id == state.value.selection.sessionId && (known ?: state.value.status) == "running" && status == "idle")
@@ -2678,11 +2802,10 @@ class DefaultRemoteRepository(
         // Job events need a watch lease; a status change is the list's hint that jobs changed.
         // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
         if (id == state.value.selection.sessionId && !canLeaseJobsList(state.value)) jobsController.refreshSoon()
-        if (sessionStatusRevisions.size > 4096) {
-            val oldest = sessionStatusRevisions.keys.first()
-            sessionStatusRevisions.remove(oldest)
-            sessionStatusOverrides.remove(oldest)
-        }
+    }
+
+    /** Shows [status], [id]'s status override, in every list and cache that holds the session. */
+    private fun publishSessionStatus(id: String, status: String, known: String?) {
         if (state.value.host?.routeId == activeHost?.routeId) {
             update { it.copy(sessions = it.sessions.map(::withSessionStatus)) }
             val routeId = activeHost?.routeId
@@ -2891,12 +3014,9 @@ class DefaultRemoteRepository(
             } else {
                 // A resume the host could not serve from its journal comes back as a snapshot.
                 if (!older && base != null) Diagnostics.count(Diagnostics.Counter.RESUMES_SNAPSHOT)
-                val hadSnapshot = current.hasSnapshot
-                val previousEpoch = current.journalEpoch
                 val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
-                // A first page of another journal epoch: the session's revisions count from the
-                // start again, so the list's newer-revision-wins guards start over too.
-                if (accepted && hadSnapshot && current.journalEpoch != previousEpoch) forgetListRevisions(current.sessionId)
+                // The Timeline's revision and status include the events it held for this page.
+                if (accepted) current.journalEpoch?.let { pageEpoch(current.sessionId, it, current.revision, current.status) }
                 replaced = accepted
                 val sameSession = data.optionalText("sessionId") == current.sessionId
                 // The same epoch's snapshot at a lower revision: one from another epoch starts over.
