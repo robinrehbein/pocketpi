@@ -20,5 +20,5 @@
     <string name="remote_shell_running">Läuft</string>
     <string name="remote_shell_stop">Shell-Befehl stoppen</string>
     <string name="remote_shell_stop_sent">Stopp gesendet.</string>
-    <string name="remote_shell_draft_not_sent">Nicht gesendet: Diese Sitzung kann keine Shell-Befehle ausführen, und der Text ginge als Prompt an pi. Dein Entwurf bleibt erhalten.</string>
+    <string name="remote_shell_draft_not_sent">Nicht gesendet: Diese Sitzung kann keine Shell-Befehle ausführen. Um den Text als Prompt zu senden, beginne ihn mit einem anderen Zeichen.</string>
 </resources>

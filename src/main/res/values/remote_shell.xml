@@ -20,5 +20,5 @@
     <string name="remote_shell_running">Running</string>
     <string name="remote_shell_stop">Stop shell command</string>
     <string name="remote_shell_stop_sent">Stop sent.</string>
-    <string name="remote_shell_draft_not_sent">Not sent: this session cannot run shell commands, and the text would go to pi as a prompt. Your draft is kept.</string>
+    <string name="remote_shell_draft_not_sent">Not sent: this session cannot run shell commands. To send this as a prompt, start it with another character.</string>
 </resources>

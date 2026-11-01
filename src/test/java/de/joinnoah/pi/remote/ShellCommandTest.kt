@@ -234,7 +234,7 @@ class ShellCommandTest {
         val noGate = shellState(capable = false)
         assertTrue(shellDraftRefused(noGate.copy(draft = "!ls")))
         assertTrue(shellDraftRefused(noGate.copy(draft = "  !!ls")))
-        // The Mac's switch going off takes the capability back, and so the label.
+        // A capability marked unavailable counts as missing.
         val off = shellState().copy(unavailableCapabilities = setOf(SESSION_BASH_CAPABILITY), draft = "!ls")
         assertTrue(shellDraftRefused(off))
         assertNull(shellDraft(off))
