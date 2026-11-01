@@ -21,7 +21,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.*
 
-private class PagedEditorCallbackFence { var active = false }
+private class QuestionCallbackFence { var active = false }
 
 @Composable
 internal fun QuestionCard(
@@ -34,21 +34,45 @@ internal fun QuestionCard(
     editorScope: Any? = null,
     editorAvailable: Boolean = true,
     pagedEditor: PagedEditorView? = null,
+    answerQuarantined: Boolean = false,
+    journalState: PagedEditorView? = null,
     onLoadPagedEditor: () -> Unit = {},
     onEditPagedEditor: (String) -> Unit = {},
     onSubmitPagedEditor: (String) -> Unit = {},
+    onRetryPagedEditorStorage: () -> Unit = {},
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
     val kind = question.text("kind")
-    val controlsEnabled = enabled && !pending && (block == null || pagedEditor?.quarantined == true && block == QuestionBlock.UNCERTAIN)
+    val callbackFence = remember(EditorQuestionKey(question), editorScope) { QuestionCallbackFence() }
+    SideEffect { callbackFence.active = true }
+    DisposableEffect(callbackFence) { onDispose { callbackFence.active = false } }
+    val storage = journalState ?: pagedEditor
+    val paged = kind == "editor" && pagedEditor != null && question.containsKey("editorUploadGrantId")
+    val baseControlsEnabled = enabled && !pending && (block == null || pagedEditor?.quarantined == true && block == QuestionBlock.UNCERTAIN)
+    val controlsEnabled = baseControlsEnabled && (paged || !answerQuarantined) && storage?.storagePending != true && storage?.storageFailed != true
+    val cancelEnabled = enabled && !pending && (block == null || block == QuestionBlock.UNCERTAIN && pagedEditor?.quarantined == true)
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
+    val currentCancelEnabled by rememberUpdatedState(cancelEnabled)
+    val currentAnswerBlocked by rememberUpdatedState(answerQuarantined || pagedEditor?.quarantined == true || storage?.storagePending == true || storage?.storageFailed == true)
+    val currentStorageRetry by rememberUpdatedState(storage?.storageRetryAvailable == true && !storage.storagePending)
     val currentEditorAvailable by rememberUpdatedState(editorAvailable)
-    val currentPagedSendAvailable by rememberUpdatedState(pagedEditor?.let { !it.quarantined && !it.capacityFull && !it.loading } == true)
+    val currentPagedSendAvailable by rememberUpdatedState(pagedEditor?.let { !it.quarantined && !it.capacityFull && !it.loading && !it.storagePending && !it.storageFailed } == true)
     fun submit(answer: JsonObject) {
-        if (currentControlsEnabled) onAnswer(answer)
+        if (!callbackFence.active) return
+        val cancel = answer.optionalText("kind") == "cancel" || kind == "plan" && answer.optionalText("kind") == "plan" && answer.optionalText("action") == "cancel"
+        if (if (cancel) currentCancelEnabled else currentControlsEnabled && !currentAnswerBlocked) onAnswer(answer)
     }
+    key(EditorQuestionKey(question)) {
     Section(if (kind == "plan") stringResource(R.string.remote_plan_title) else question.optionalText("title") ?: stringResource(R.string.remote_questions)) {
+        if (storage?.storagePending == true) Text(stringResource(R.string.remote_paged_editor_storage_pending), Modifier.testTag("pagedEditorStoragePending"))
+        if (storage?.storageFailed == true) Text(stringResource(R.string.remote_paged_editor_storage_failed), Modifier.testTag("pagedEditorStorageFailure"), color = MaterialTheme.colorScheme.error)
+        if (storage?.storageRetryAvailable == true) TextButton(
+            onClick = { if (callbackFence.active && currentStorageRetry) onRetryPagedEditorStorage() },
+            enabled = !storage.storagePending, modifier = Modifier.testTag("pagedEditorStorageRetry"),
+        ) { Text(stringResource(R.string.remote_paged_editor_storage_retry)) }
+        if (answerQuarantined && !paged && block != QuestionBlock.UNCERTAIN)
+            Text(stringResource(R.string.remote_question_answer_uncertain), Modifier.testTag("questionJournalQuarantine"))
         when (kind) {
             "plan" -> {
                 var editing by remember(id) { mutableStateOf(false) }
@@ -99,7 +123,7 @@ internal fun QuestionCard(
                 }
                 TextButton(
                     onClick = { submit(Wire.objectOf("kind" to "plan", "action" to "cancel")) },
-                    enabled = controlsEnabled,
+                    enabled = cancelEnabled,
                 ) { Text(stringResource(R.string.remote_cancel)) }
             }
             "confirm" -> {
@@ -203,15 +227,15 @@ internal fun QuestionCard(
                 val prefill = editorPrefill(question)
                 if (pagedEditor != null && question.containsKey("editorUploadGrantId")) {
                   key(EditorQuestionKey(question), editorScope) {
-                    val pagedCallbackFence = remember { PagedEditorCallbackFence() }
+                    val pagedCallbackFence = remember { QuestionCallbackFence() }
                     SideEffect { pagedCallbackFence.active = true }
                     DisposableEffect(pagedCallbackFence) { onDispose { pagedCallbackFence.active = false } }
                     fun active() = pagedCallbackFence.active
                     val verified = pagedEditor.text
-                    val currentLoadAvailable by rememberUpdatedState(verified == null && !pagedEditor.loading && controlsEnabled && editorAvailable)
+                    val currentLoadAvailable by rememberUpdatedState(verified == null && !pagedEditor.loading && !pagedEditor.storagePending && controlsEnabled && editorAvailable)
                     if (pagedEditor.quarantined && block != QuestionBlock.UNCERTAIN) Text(stringResource(R.string.remote_question_answer_uncertain))
                     if (verified == null) {
-                        OutlinedButton(onClick = { if (active() && currentLoadAvailable) onLoadPagedEditor() }, enabled = controlsEnabled && editorAvailable && !pagedEditor.loading) {
+                        OutlinedButton(onClick = { if (active() && currentLoadAvailable) onLoadPagedEditor() }, enabled = controlsEnabled && editorAvailable && !pagedEditor.loading && !pagedEditor.storagePending) {
                             Text(stringResource(if (pagedEditor.loading) R.string.remote_question_details_loading else R.string.remote_paged_editor_load))
                         }
                         if (pagedEditor.failed) Text(stringResource(R.string.remote_question_details_failed))
@@ -221,7 +245,7 @@ internal fun QuestionCard(
                         var window by remember(editorKey, editorScope) { mutableStateOf(EditorWindows.atOffset(verified, 0)) }
                         var field by remember(editorKey, editorScope) { mutableStateOf(TextFieldValue(verified.substring(window.start, window.end))) }
                         var section by remember(editorKey, editorScope) { mutableStateOf("1") }
-                        val editEnabled = controlsEnabled && !pagedEditor.loading
+                        val editEnabled = controlsEnabled && !pagedEditor.loading && !pagedEditor.storagePending
                         val currentEditEnabled by rememberUpdatedState(editEnabled)
                         fun canEdit() = active() && currentEditEnabled
                         val validDraft = remember(text) { validEditorText(text, MAX_EDITOR_UPLOAD_BYTES) }
@@ -276,12 +300,12 @@ internal fun QuestionCard(
                                 Text(stringResource(R.string.remote_paged_editor_restore))
                             }
                         }
-                        Button(enabled = editEnabled && editorAvailable && !pagedEditor.quarantined && !pagedEditor.capacityFull && validDraft,
+                        Button(enabled = editEnabled && editorAvailable && !pagedEditor.quarantined && !pagedEditor.capacityFull && !pagedEditor.storagePending && !pagedEditor.storageFailed && validDraft,
                             onClick = { if (active() && currentControlsEnabled && currentPagedSendAvailable && currentEditorAvailable && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES)) onSubmitPagedEditor(text) }) {
                             Text(stringResource(R.string.remote_send))
                         }
                     }
-                    TextButton(onClick = { if (active()) submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
+                    TextButton(onClick = { if (active()) submit(Wire.objectOf("kind" to "cancel")) }, enabled = cancelEnabled) {
                         Text(stringResource(R.string.remote_cancel))
                     }
                   }
@@ -309,12 +333,13 @@ internal fun QuestionCard(
                     question = question,
                     enabled = controlsEnabled,
                     pending = pending,
+                    cancelEnabled = cancelEnabled,
                     onAnswer = ::submit,
                 )
             else -> Text(stringResource(R.string.remote_local_required))
         }
         if (kind in setOf("confirm", "select", "input", "editor") && !(kind == "editor" && pagedEditor != null && question.containsKey("editorUploadGrantId")))
-            TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
+            TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = cancelEnabled) {
                 Text(stringResource(R.string.remote_cancel))
             }
         when (block) {
@@ -331,6 +356,7 @@ internal fun QuestionCard(
             null -> Unit
         }
     }
+    }
 }
 
 @Composable
@@ -339,10 +365,12 @@ internal fun QuestionnaireForm(
     enabled: Boolean,
     pending: Boolean = false,
     compactHeader: Boolean = false,
+    cancelEnabled: Boolean = enabled,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val controlsEnabled = enabled && !pending
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
+    val currentCancelEnabled by rememberUpdatedState(cancelEnabled && !pending)
     val questions = question.array("questions")
     val initial = remember(question.text("id")) { QuestionnaireAnswers.defaults(questions) }
     var selected by remember(question.text("id")) { mutableStateOf(initial.selected) }
@@ -525,8 +553,8 @@ internal fun QuestionnaireForm(
         )
     }
     TextButton(
-        onClick = { if (currentControlsEnabled) onAnswer(Wire.objectOf("kind" to "cancel")) },
-        enabled = controlsEnabled,
+        onClick = { if (currentCancelEnabled) onAnswer(Wire.objectOf("kind" to "cancel")) },
+        enabled = cancelEnabled && !pending,
     ) {
         Text(stringResource(R.string.remote_cancel))
     }

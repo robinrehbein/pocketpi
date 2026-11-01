@@ -206,6 +206,9 @@ data class RemoteState(
     internal val questionDetails: Map<String, QuestionDetailsView> = emptyMap(),
     internal val pagedEditors: Map<String, PagedEditorView> = emptyMap(),
     internal val pagedQuarantines: Set<String> = emptySet(),
+    internal val pagedStoragePending: Boolean = false,
+    internal val pagedStorageFailed: Boolean = false,
+    internal val pagedStorageRetryAvailable: Boolean = false,
     /** Questions the user cannot answer from here right now, by question ID. */
     val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
@@ -548,6 +551,7 @@ interface RemoteRepository {
     fun loadPagedEditor(question: JsonObject) {}
     fun editPagedEditor(question: JsonObject, draft: String) {}
     fun submitPagedEditor(question: JsonObject, draft: String) {}
+    fun retryPagedEditorStorage() {}
     fun answer(questionId: String, answer: JsonObject)
 
     /**

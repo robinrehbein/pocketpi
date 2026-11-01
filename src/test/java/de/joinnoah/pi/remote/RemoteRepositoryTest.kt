@@ -176,6 +176,7 @@ class RemoteRepositoryTest {
         projectHint: suspend (String, String) -> String? = { _, _ -> null },
         liveRunKept: () -> Boolean = { false },
         pagedEditorTestGate: Boolean = false,
+        pagedEditorStorage: PagedEditorStorage? = null,
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
@@ -193,6 +194,7 @@ class RemoteRepositoryTest {
             jitter = { 0.5 },
             liveRunKept = liveRunKept,
             pagedEditorTestGate = pagedEditorTestGate,
+            pagedEditorStorage = pagedEditorStorage,
         )
 
     private fun modelData(id: String = "model") =
@@ -8662,6 +8664,7 @@ class RemoteRepositoryTest {
         question: JsonObject,
         gate: Boolean = true,
         questions: List<JsonObject> = listOf(question),
+        storage: PagedEditorStorage? = null,
         reply: (JsonObject) -> JsonObject? = { null },
     ): Pair<DefaultRemoteRepository, Transport> {
         val transport = Transport().also(::configure)
@@ -8672,9 +8675,246 @@ class RemoteRepositoryTest {
             "session.question.details.get", "session.question.editor.upload.begin", "session.question.editor.upload.chunk", "session.question.editor.upload.commit" -> reply(request)
             else -> normal(request)
         } }
-        val repo = repository(transport, pagedEditorTestGate = gate)
+        val repo = repository(transport, pagedEditorTestGate = gate, pagedEditorStorage = storage)
         repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
         return repo to transport
+    }
+
+    private class PagedMemoryStorage : PagedEditorStorage {
+        var saved = PagedJournalSnapshot()
+        var failLoad = false
+        var failSave = false
+        override fun load(): PagedJournalSnapshot {
+            check(!failLoad)
+            return saved
+        }
+        override fun save(snapshot: PagedJournalSnapshot) {
+            check(!failSave)
+            saved = snapshot
+        }
+    }
+
+    @Test fun pagedJournalLoadFailurePreventsCommit() = runTest {
+        val storage = PagedMemoryStorage().apply { failLoad = true }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request ->
+            if (request.text("type") == "session.question.editor.upload.begin") Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u") else null
+        }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun recoveredPagedAttemptBlocksReplacementGrant() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun recoveredPagedAttemptBlocksBoundedEditorFallback() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+        }
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh")
+        val (repo, transport) = pagedFixture(replacement, storage = storage)
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "new")); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+        assertTrue("fallback must visibly retain quarantine", "e" in repo.state.value.pagedQuarantines)
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel stays available", 1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun recoveredPagedAttemptBlocksOtherQuestionAnswerKinds() = runTest {
+        val answers = listOf(
+            Wire.objectOf("kind" to "select", "value" to "choice"),
+            Wire.objectOf("kind" to "input", "value" to "text"),
+            Wire.objectOf("kind" to "confirm", "value" to false),
+        )
+        for (answer in answers) {
+            val storage = PagedMemoryStorage().apply {
+                val key = PagedJournalKey("host", "session", "e")
+                saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+            }
+            val question = Wire.objectOf("id" to "e", "kind" to answer.text("kind"), "message" to "replacement")
+            val (repo, transport) = pagedFixture(question, storage = storage)
+            repo.answer("e", answer); runCurrent()
+            assertTrue("answer ${answer.text("kind")} must be fenced", transport.sent.none { it.text("type") == "question.answer" })
+            assertTrue("e" in repo.state.value.pagedQuarantines)
+        }
+    }
+
+    @Test fun pagedJournalLoadFailureBlocksGenericAnswerButAllowsCancel() = runTest {
+        val storage = PagedMemoryStorage().apply { failLoad = true }
+        val question = Wire.objectOf("id" to "e", "kind" to "input", "message" to "replacement")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        assertTrue(repo.state.value.pagedStorageFailed)
+        repo.answer("e", Wire.objectOf("kind" to "input", "value" to "text")); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun recoveredPagedFenceAllowsOnlyGenuinePlanCancel() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+        }
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "plan"), storage = storage)
+        repo.answer("e", Wire.objectOf("kind" to "plan", "action" to "approve")); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "plan", "action" to "cancel")); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+        val (other, otherTransport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "input"), storage = storage)
+        other.answer("e", Wire.objectOf("kind" to "plan", "action" to "cancel")); runCurrent()
+        assertTrue(otherTransport.sent.none { it.text("type") == "question.answer" })
+    }
+
+    @Test fun queuedCancelCannotCancelSameIdReplacement() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh")
+        val (repo, transport) = pagedFixture(question, storage = PagedMemoryStorage())
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "question.answer") gate.await() }
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.open", "question" to Wire.parse(question.toString()))); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+    }
+
+    @Test fun pagedReservationWriteFailurePreventsCommit() = runTest {
+        val storage = PagedMemoryStorage().apply { failSave = true }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.question.editor.upload.begin" })
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+        assertTrue(repo.state.value.pagedEditors["e"]?.storageFailed == true)
+    }
+
+    @Test fun pagedCommitIsReservedBeforePossibleWriteAndLostAckSurvivesRestart() = runTest {
+        val storage = PagedMemoryStorage()
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        var reservedAtSend = false
+        transport.beforeGuardedSend = { request ->
+            if (request.text("type") == "session.question.editor.upload.commit") reservedAtSend = storage.saved.attempts.values.singleOrNull()?.text == ""
+        }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(reservedAtSend)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        val (restarted, secondTransport) = pagedFixture(replacement, storage = storage)
+        val fresh = restarted.state.value.questions.single()
+        restarted.loadPagedEditor(fresh); runCurrent()
+        assertTrue(restarted.state.value.pagedEditors["e"]?.quarantined == true)
+        restarted.submitPagedEditor(fresh, ""); runCurrent()
+        assertTrue(secondTransport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun acceptedPagedCommitCleanupCanRetryLocallyWithoutResending() = runTest {
+        val storage = PagedMemoryStorage()
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            "session.question.editor.upload.commit" -> { storage.failSave = true; Wire.objectOf("kind" to "accepted", "sessionId" to "session") }
+            else -> null
+        } }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        assertTrue(repo.state.value.pagedEditors["e"]?.storageRetryAvailable == true)
+        val sent = transport.sent.size
+        storage.failSave = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertFalse(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        assertEquals(sent, transport.sent.size)
+    }
+
+    @Test fun recoveredPagedFenceSurvivesGenericCloseAndReplacement() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "", 1)))
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.closed", "questionId" to "e")); runCurrent()
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 2, "kind" to "question.open", "question" to replacement)); runCurrent()
+        val fresh = repo.state.value.questions.single()
+        repo.loadPagedEditor(fresh); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(fresh, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+        assertTrue(storage.saved.attempts.containsKey("a"))
+    }
+
+    @Test fun retryAfterLoadFailureKeepsRecoveredUnknownAttempt() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "", 1)))
+            failLoad = true
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        val fresh = repo.state.value.questions.single()
+        repo.loadPagedEditor(fresh); runCurrent()
+        storage.failLoad = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(fresh, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+        assertTrue(storage.saved.attempts.containsKey("a"))
+    }
+
+    @Test fun retryAfterLoadFailureOffersDraftOnlyAfterFreshSourceVerification() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            saved = PagedJournalSnapshot(drafts = mapOf(PagedJournalKey("host", "session", "e") to StoredPagedDraft("saved", 1)))
+            failLoad = true
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh", "editorUploadGrantId" to "g")
+        val (repo, _) = pagedFixture(question, storage = storage)
+        val fresh = repo.state.value.questions.single()
+        repo.loadPagedEditor(fresh); runCurrent()
+        assertNull(repo.state.value.pagedEditors["e"]?.recoveryDraft)
+        storage.failLoad = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertEquals("fresh", repo.state.value.pagedEditors["e"]?.text)
+        assertEquals("saved", repo.state.value.pagedEditors["e"]?.recoveryDraft)
+    }
+
+    @Test fun recoveredDraftRequiresExplicitRestoreAfterFreshSource() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            saved = PagedJournalSnapshot(drafts = mapOf(PagedJournalKey("host", "session", "e") to StoredPagedDraft("old\uD800", 1)))
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh", "editorUploadGrantId" to "new")
+        val (repo, _) = pagedFixture(question, storage = storage)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals("fresh", repo.state.value.pagedEditors["e"]?.text)
+        assertEquals("old\uD800", repo.state.value.pagedEditors["e"]?.recoveryDraft)
+        repo.editPagedEditor(displayed, "old\uD800"); runCurrent()
+        assertEquals("old\uD800", repo.state.value.pagedEditors["e"]?.text)
     }
 
     @Test fun pagedEditorOldPageCannotAuthorizeEqualReplacement() = runTest {

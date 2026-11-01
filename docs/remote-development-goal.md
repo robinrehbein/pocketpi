@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Durable paged-editor Android checkpoint, 2026-11-01
+
+A separate encrypted journal now preserves exact large-editor text (including non-submittable UTF-16 code units) and reserves the exact submitted value/uncertain attempt before possible commit dispatch. Reconstructed fences survive new grants, snapshots and bounded/other question-type fallback; storage uncertainty blocks non-Cancel answers without granting cancellation authority. Locally proved outcomes can be cleaned up through a storage-only retry, including during reconnect. Draft recovery still requires a freshly verified source and explicit action. See [durable paged qualification](testing/paged-editor-durable-recovery.md).
+
+The focused core run passes 660 tests; the final quick-check passes 3,611 app and 34 Wear tests. A real Android two-process encrypted-store test preserves the 1-MiB submission, invalid visible draft and unresolved attempt after force-stop, with source/APK pins independently checked. This is not the complete Native/RPC original-owner restart chain. The Host/source durable-outcome contract, broader restart/resource/authority/IME matrices and public enablement remain open. Public paged capability remains **OFF**, iPhone stays deferred, and the overall remote-development goal remains active.
+
 ## Parked editor completion checkpoint, 2026-11-01
 
 A reproduced session-switch race could show discarded file text again after its encrypted journal had already completed the discard. Completion now settles only the original active or parked editor buffer; newer edits/replacement editors survive, and storage failure stays visible on return. Seven added delayed-IO repository cases and the existing file-journal suite pass (76 targeted tests). See [file draft qualification](testing/android-file-draft-recovery.md).

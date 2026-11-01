@@ -196,6 +196,7 @@ internal open class DestinationViewModel(
     fun loadPagedEditor(question: kotlinx.serialization.json.JsonObject) = active { repository.loadPagedEditor(question) }
     fun editPagedEditor(question: kotlinx.serialization.json.JsonObject, draft: String) = active { repository.editPagedEditor(question, draft) }
     fun submitPagedEditor(question: kotlinx.serialization.json.JsonObject, draft: String) = active { repository.submitPagedEditor(question, draft) }
+    fun retryPagedEditorStorage() = editing(repository::retryPagedEditorStorage)
 
     fun answer(questionId: String, answer: JsonObject) = active {
         repository.answer(questionId, answer)

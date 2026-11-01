@@ -370,6 +370,7 @@ internal fun ChatComposer(
     onLoadPagedEditor: (kotlinx.serialization.json.JsonObject) -> Unit = {},
     onEditPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
     onSubmitPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
+    onRetryPagedEditorStorage: () -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
     suggestions: @Composable ColumnScope.() -> Unit = {},
     onRemoveAttachment: (String) -> Unit = {},
@@ -525,7 +526,7 @@ internal fun ChatComposer(
             }
         QuestionComposer(
             state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true, onLoadQuestionDetails = onLoadQuestionDetails,
-            onLoadPagedEditor = onLoadPagedEditor, onSubmitPagedEditor = onSubmitPagedEditor,
+            onLoadPagedEditor = onLoadPagedEditor, onSubmitPagedEditor = onSubmitPagedEditor, onRetryPagedEditorStorage = onRetryPagedEditorStorage,
             onEditPagedEditor = onEditPagedEditor,
         ) { questionId, answer ->
             val route = state.selection.routeId
@@ -1274,6 +1275,7 @@ private fun QuestionComposer(
     onLoadPagedEditor: (kotlinx.serialization.json.JsonObject) -> Unit = {},
     onEditPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
     onSubmitPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
+    onRetryPagedEditorStorage: () -> Unit = {},
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
     val abortEnabled = !abortBlocked && questionAbortEnabled(state)
@@ -1299,9 +1301,12 @@ private fun QuestionComposer(
                         details = state.questionDetails[questionId],
                         pagedEditor = if (question.containsKey("editorUploadGrantId") && (QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities || questionId in state.pagedQuarantines))
                             state.pagedEditors[questionId] ?: PagedEditorView(quarantined = questionId in state.pagedQuarantines) else null,
+                        answerQuarantined = questionId in state.pagedQuarantines,
+                        journalState = PagedEditorView(storagePending = state.pagedStoragePending, storageFailed = state.pagedStorageFailed, storageRetryAvailable = state.pagedStorageRetryAvailable),
                         onLoadPagedEditor = { onLoadPagedEditor(question) },
                         onEditPagedEditor = { onEditPagedEditor(question, it) },
                         onSubmitPagedEditor = { onSubmitPagedEditor(question, it) },
+                        onRetryPagedEditorStorage = onRetryPagedEditorStorage,
                         onLoadDetails = { onLoadQuestionDetails(questionId) },
                         onAnswer = { answer -> onAnswer(questionId, answer) },
                     )

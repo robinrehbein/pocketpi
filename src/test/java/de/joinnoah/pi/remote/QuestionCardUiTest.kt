@@ -387,4 +387,85 @@ class QuestionCardUiTest {
     }
 
     private val questionnaire = """{"id":"form","kind":"questionnaire","questions":[{"id":"required","prompt":"Required","multiSelect":false,"required":true,"allowOther":false,"defaults":["a"],"options":[{"value":"a","label":"Alpha"}]},{"id":"optional","prompt":"Optional","multiSelect":false,"required":false,"allowOther":true,"defaults":["custom default"],"options":[]}]}"""
+    @Test fun pagedJournalFailureDisablesSendAndExplainsWhileCancelRemainsAvailable() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        val submitted = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello", storageFailed = true),
+                    onSubmitPagedEditor = { submitted += it }) { answers += it }
+            }
+        } }
+        compose.onNodeWithTag("pagedEditorStorageFailure").assertExists()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").performScrollTo().assertIsEnabled().performClick()
+        assertTrue(submitted.isEmpty())
+        assertEquals("cancel", answers.single().text("kind"))
+    }
+
+    @Test fun pagedJournalStartupDisablesEditingAndSendingWithoutBlockingCancel() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        compose.setContent { MaterialTheme {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello", storagePending = true)) { answers += it }
+            }
+        } }
+        compose.onNodeWithTag("pagedEditorStoragePending").assertExists()
+        compose.onNodeWithTag("questionEditorField").assertIsNotEnabled()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").performScrollTo().assertIsEnabled()
+    }
+
+    @Test fun pagedJournalRetryWorksOfflineAndDoesNotAnswerTheQuestion() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
+        var retries = 0
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = false, pagedEditor = PagedEditorView(text = "hello", storageFailed = true, storageRetryAvailable = true),
+                onRetryPagedEditorStorage = { retries++ }) { answers += it }
+        } }
+        compose.onNodeWithTag("pagedEditorStorageRetry").assertIsEnabled().performClick()
+        assertEquals(1, retries)
+        assertTrue(answers.isEmpty())
+    }
+
+    @Test fun recoveredFenceBlocksBoundedFallbackButAllowsCurrentCancel() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello"}""")
+        compose.setContent { MaterialTheme { QuestionCard(value, enabled = true, answerQuarantined = true) { answers += it } } }
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithTag("questionJournalQuarantine").assertExists()
+        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        assertEquals("cancel", answers.single().text("kind"))
+    }
+
+    @Test fun unknownJournalStateBlocksOrdinaryAnswersAndShowsLocalRetry() {
+        val value = parse("""{"id":"e","kind":"editor","prefill":"hello"}""")
+        var retries = 0
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, journalState = PagedEditorView(storageFailed = true, storageRetryAvailable = true),
+                onRetryPagedEditorStorage = { retries++ }) { answers += it }
+        } }
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithTag("pagedEditorStorageFailure").assertExists()
+        compose.onNodeWithTag("pagedEditorStorageRetry").performClick()
+        assertEquals(1, retries)
+        assertTrue(answers.isEmpty())
+        compose.onNodeWithText("Cancel").assertIsEnabled()
+    }
+
+    @Test fun capturedCancelCannotAnswerAReplacementQuestion() {
+        val value = mutableStateOf(parse("""{"id":"e","kind":"editor","prefill":"hello"}"""), referentialEqualityPolicy())
+        compose.setContent { MaterialTheme { QuestionCard(value.value, enabled = true) { answers += it } } }
+        val oldNode = compose.onNodeWithText("Cancel").fetchSemanticsNode()
+        val oldCancel = requireNotNull(oldNode.config[SemanticsActions.OnClick].action)
+        compose.runOnIdle { value.value = parse("""{"id":"e","kind":"editor","prefill":"hello"}""") }
+        assertNotEquals(oldNode.id, compose.onNodeWithText("Cancel").fetchSemanticsNode().id)
+        compose.runOnIdle {
+            try { oldCancel() }
+            catch (detached: IllegalStateException) {
+                assertTrue(detached.message.orEmpty().contains("not currently attached"))
+            }
+        }
+        assertTrue(answers.isEmpty())
+    }
+
 }

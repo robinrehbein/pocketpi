@@ -2,6 +2,15 @@
 
 Status: **gated source, Host transaction and Android integration; the public paged capability and production opt-in remain disabled**. A limited set of private production-chain Pi/Host/Android cases has passed as described below; the full qualification remains open. See the [binding contract](../plans/2026-11-01-paged-editor-contract.md) and [implementation plan](../plans/2026-11-01-paged-editor-dialogs.md).
 
+## Android durable journal checkpoint, 2026-11-01
+
+A separate encrypted journal now preserves exact draft code units and uncertain commit fences.
+Repository/UI integration refuses replay and fallback bypass, revalidates current authority and
+offers local cleanup retry only for locally proved outcomes. See the [durable recovery qualification](paged-editor-durable-recovery.md).
+The actual two-process Android test qualifies the store; complete Native/RPC owner-chain restart
+and outcome reconciliation remain open. The public paged capability stays **OFF**. The matrix
+below retains its original source/APK scope and does not qualify the new journal path.
+
 ## Current-source private matrix, 2026-11-01
 
 All fourteen current-source private emulator runs pass, including fixture/process cleanup and

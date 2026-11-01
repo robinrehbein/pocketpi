@@ -301,6 +301,7 @@ class DefaultRemoteRepository(
     private val liveRunKept: () -> Boolean = { false },
     private val pagedEditorTestGate: Boolean = false,
     private val fileDraftStorage: FileDraftStorage? = null,
+    private val pagedEditorStorage: PagedEditorStorage? = null,
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -620,7 +621,14 @@ class DefaultRemoteRepository(
     private data class PagedDraft(val route: String, val session: String, val id: String, val text: String, val editedAt: Long) {
         val bytes: Long get() = text.length.toLong() * 2
     }
-    private data class PagedReceipt(val route: String, val session: String, val id: String, val question: JsonObject, val grant: String, val connection: Long)
+    private data class PagedReceipt(val route: String, val session: String, val id: String, val question: JsonObject, val grant: String, val connection: Long, val attemptId: String? = null)
+    private val pagedJournal = pagedEditorStorage?.let { PagedEditorJournal(it, io) }
+    private val pagedProjectionMutex = Mutex()
+    private var pagedJournalSnapshot = PagedJournalSnapshot()
+    private var pagedStoragePending = pagedJournal != null
+    private var pagedStorageFailed = false
+    private val pagedCleanupProofs = mutableSetOf<String>()
+    private val pagedPendingDrafts = mutableMapOf<PagedJournalKey, StoredPagedDraft>()
     private val pagedDrafts = java.util.IdentityHashMap<JsonObject, PagedDraft>()
     private val pagedReceipts = mutableListOf<PagedReceipt>()
     private val pagedDraftLimit = 32
@@ -652,13 +660,15 @@ class DefaultRemoteRepository(
         pagedDrafts[question] = draft
         return true
     }
-    private fun pagedQuarantined(selection: RemoteSelection, id: String): Boolean = pagedReceipts.any {
+    private fun pagedQuarantined(selection: RemoteSelection, id: String): Boolean = pagedJournalSnapshot.attempts.values.any {
+        it.key.routeId == selection.routeId && it.key.sessionId == selection.sessionId && it.key.questionId == id
+    } || pagedReceipts.any {
         it.route == selection.routeId && it.session == selection.sessionId && it.id == id
     }
     private fun closePagedReceipt(session: String, question: JsonObject) {
         val id = question.optionalText("id") ?: return
         val route = state.value.selection.routeId
-        pagedReceipts.removeAll { receipt -> receipt.route == route && receipt.session == session && receipt.id == id &&
+        pagedReceipts.removeAll { receipt -> receipt.attemptId == null && receipt.route == route && receipt.session == session && receipt.id == id &&
             (receipt.question === question || receipt.connection == generation && question.optionalText("editorUploadGrantId") == receipt.grant) }
         pagedDrafts.remove(question)
     }
@@ -1041,6 +1051,22 @@ class DefaultRemoteRepository(
     private val pairingWrites = Mutex()
 
     init {
+        if (pagedJournal != null) scope.launch {
+            try {
+                pagedProjectionMutex.withLock { pagedJournalSnapshot = pagedJournal.snapshot() }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                pagedStorageFailed = true
+            } finally {
+                pagedStoragePending = false
+                update { state -> state.copy(pagedEditors = state.pagedEditors.mapValues { (id, view) ->
+                    val route = state.selection.routeId
+                    val session = state.selection.sessionId
+                    val recovery = if (route != null && session != null && view.text != null && pagedQuestion != null && pagedDrafts[pagedQuestion] == null)
+                        pagedJournalSnapshot.drafts[PagedJournalKey(route, session, id)]?.text else view.recoveryDraft
+                    view.copy(storagePending = false, storageFailed = pagedStorageFailed, storageRetryAvailable = pagedStorageFailed, recoveryDraft = recovery)
+                }) }
+            }
+        }
         scope.launch {
             // Independent disk reads overlap. Capture failures so one corrupt store does not
             // cancel initialization or prevent another store from being recovered.
@@ -1347,15 +1373,17 @@ class DefaultRemoteRepository(
             (QUESTION_PAGED_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_PAGED_EDITOR_CAPABILITY in next.unavailableCapabilities)
         if (invalidatePaged) { pagedToken++; pagedState?.clear(); pagedState = null; pagedQuestion = null; pagedUploading = false }
         val visiblePaged = if (invalidatePaged) emptyMap() else next.pagedEditors.mapValues { (id, view) ->
-            view.copy(quarantined = pagedQuarantined(next.selection, id), capacityFull = pagedReceipts.size >= pagedReceiptLimit)
+            view.copy(quarantined = pagedQuarantined(next.selection, id), capacityFull = maxOf(pagedReceipts.size, pagedJournalSnapshot.attempts.size) >= pagedReceiptLimit,
+                storagePending = pagedStoragePending, storageFailed = pagedStorageFailed, storageRetryAvailable = pagedStorageFailed && !pagedStoragePending)
         }
         val visibleBlocks = next.questionBlocks.toMutableMap()
         val visibleQuarantines = mutableSetOf<String>()
         for (question in next.questions) {
             val id = question.optionalText("id") ?: continue
-            if (question.optionalText("kind") == "editor" && question.containsKey("editorUploadGrantId") && pagedQuarantined(next.selection, id)) {
+            if (pagedQuarantined(next.selection, id)) {
                 visibleQuarantines += id
-                visibleBlocks.putIfAbsent(id, QuestionBlock.UNCERTAIN)
+                if (pagedReceipts.any { it.route == next.selection.routeId && it.session == next.selection.sessionId && it.id == id })
+                    visibleBlocks.putIfAbsent(id, QuestionBlock.UNCERTAIN)
             }
         }
         mutable.value = next.copy(
@@ -1363,6 +1391,9 @@ class DefaultRemoteRepository(
             questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
             pagedEditors = visiblePaged,
             pagedQuarantines = visibleQuarantines,
+            pagedStoragePending = pagedStoragePending,
+            pagedStorageFailed = pagedStorageFailed,
+            pagedStorageRetryAvailable = pagedStorageFailed && !pagedStoragePending,
             questionBlocks = visibleBlocks,
             gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
         )
@@ -8762,9 +8793,11 @@ class DefaultRemoteRepository(
         prunePagedDrafts()
         fun view(text: String?, loading: Boolean = false): PagedEditorView {
             val saved = pagedDrafts[question]?.text
-            val recovery = if (saved == null) pagedDrafts.entries.filter { (other, draft) -> other !== question && draft.route == route && draft.session == session && draft.id == id }.maxByOrNull { it.value.editedAt }?.value?.text else null
+            val recovery = if (saved == null) pagedDrafts.entries.filter { (other, draft) -> other !== question && draft.route == route && draft.session == session && draft.id == id }.maxByOrNull { it.value.editedAt }?.value?.text
+                ?: pagedJournalSnapshot.drafts[PagedJournalKey(route, session, id)]?.text else null
             return PagedEditorView(loading = loading, text = if (text != null) saved ?: text else null, recoveryDraft = if (text != null) recovery else null,
-                quarantined = pagedQuarantined(selection, id), capacityFull = pagedReceipts.size >= pagedReceiptLimit)
+                quarantined = pagedQuarantined(selection, id), capacityFull = maxOf(pagedReceipts.size, pagedJournalSnapshot.attempts.size) >= pagedReceiptLimit,
+                storagePending = pagedStoragePending, storageFailed = pagedStorageFailed, storageRetryAvailable = pagedStorageFailed && !pagedStoragePending)
         }
         update { it.copy(pagedEditors = mapOf(id to view(source.originalSource, source.originalSource == null))) }
         if (source.originalSource != null) return
@@ -8794,9 +8827,28 @@ class DefaultRemoteRepository(
         val id = question.optionalText("id") ?: return
         val route = current.selection.routeId ?: return
         val session = current.selection.sessionId ?: return
-        if (pagedQuestion !== question || pagedUploading || !pagedAvailable(question, current) || pagedState?.originalSource == null) return
+        if (pagedQuestion !== question || pagedUploading || pagedStoragePending || !pagedAvailable(question, current) || pagedState?.originalSource == null) return
         val retained = retainPagedDraft(question, PagedDraft(route, session, id, draft, now()))
         update { state -> state.copy(pagedEditors = state.pagedEditors + (id to (state.pagedEditors[id] ?: PagedEditorView()).copy(text = draft, recoveryDraft = null, retentionWarning = !retained))) }
+        val journal = pagedJournal
+        if (journal != null && retained) {
+            val key = PagedJournalKey(route, session, id)
+            val stored = StoredPagedDraft(draft, now())
+            pagedPendingDrafts[key] = stored
+            if (pagedStorageFailed) return
+            scope.launch {
+                pagedProjectionMutex.withLock {
+                    try {
+                        journal.putDraft(key, stored)
+                        if (pagedPendingDrafts[key] == stored) pagedPendingDrafts.remove(key)
+                        pagedJournalSnapshot = journal.snapshot()
+                    } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                        pagedStorageFailed = true
+                        update { it }
+                    }
+                }
+            }
+        }
     }
 
     override fun submitPagedEditor(question: JsonObject, draft: String) {
@@ -8808,7 +8860,7 @@ class DefaultRemoteRepository(
         val epoch = selectionEpoch
         val connection = generation
         val token = pagedToken
-        if (pagedQuestion !== question || pagedUploading || id in current.questionBlocks || pagedQuarantined(selection, id) || pagedReceipts.size >= pagedReceiptLimit || !pagedAvailable(question, current) || !PagedEditorWire.validText(draft, MAX_EDITOR_UPLOAD_BYTES)) return
+        if (pagedQuestion !== question || pagedUploading || pagedStoragePending || pagedStorageFailed || id in current.questionBlocks || pagedQuarantined(selection, id) || maxOf(pagedReceipts.size, pagedJournalSnapshot.attempts.size) >= pagedReceiptLimit || !pagedAvailable(question, current) || !PagedEditorWire.validText(draft, MAX_EDITOR_UPLOAD_BYTES)) return
         source.edit(draft)
         val action = source.capture() ?: return
         if (!source.allows(action, connection, selection, question)) return
@@ -8817,13 +8869,18 @@ class DefaultRemoteRepository(
         pagedUploading = true
         update { it.copy(pagedEditors = it.pagedEditors + (id to (it.pagedEditors[id] ?: PagedEditorView(text = draft)).copy(loading = true, text = draft))) }
         scope.launch {
-            fun valid() = token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value) && source.allows(action, connection, selection, question) && id !in state.value.questionBlocks
+            var reservedId: String? = null
+            fun valid(): Boolean {
+                val block = state.value.questionBlocks[id]
+                return !pagedStoragePending && !pagedStorageFailed && token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value) && source.allows(action, connection, selection, question) && block == null
+            }
             suspend fun send(payload: JsonObject, onSent: (() -> Unit)? = null): JsonObject {
                 check(valid())
                 val fields = payload.filterKeys { it != "type" && it != "requestId" }.map { it.key to it.value }.toTypedArray()
                 return request(payload.text("type"), epoch, *fields, requestId = payload.text("requestId"), onSent = onSent, validateBeforeSend = { check(valid()) })
             }
             var commitDispatched = false
+            var accepted = false
             try {
                 val begun = send(PagedEditorWire.begin(Wire.random(), session, id, action.grantId, action.source, bytes.size, hash))
                 check(valid())
@@ -8837,22 +8894,102 @@ class DefaultRemoteRepository(
                     offset = end
                 }
                 check(valid())
-                val result = send(PagedEditorWire.commit(Wire.random(), session, id, uploadId)) {
+                val commitId = Wire.random()
+                val journal = pagedJournal
+                if (journal != null) {
+                    val attempt = StoredPagedAttempt(PagedJournalKey(requireNotNull(selection.routeId), session, id), Wire.random(), action.grantId, uploadId, commitId, draft, now())
+                    withContext(NonCancellable) {
+                        pagedProjectionMutex.withLock {
+                            check(valid())
+                            try {
+                                journal.reserve(attempt)
+                                reservedId = attempt.attemptId
+                                pagedJournalSnapshot = journal.snapshot()
+                                update { it }
+                            } catch (e: Exception) {
+                                pagedStorageFailed = true
+                                update { it }
+                                throw e
+                            }
+                        }
+                    }
+                }
+                val result = send(PagedEditorWire.commit(commitId, session, id, uploadId)) {
                     commitDispatched = true
-                    pagedReceipts += PagedReceipt(requireNotNull(selection.routeId), session, id, question, action.grantId, connection)
+                    if (journal == null) pagedReceipts += PagedReceipt(requireNotNull(selection.routeId), session, id, question, action.grantId, connection)
                     update { it }
                 }
                 require(result.text("kind") == "accepted" && result.text("sessionId") == session)
+                accepted = true
                 if (valid()) update { it.copy(answering = it.answering + id) }
             } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 if (valid()) {
-                    if (commitDispatched) update { it.copy(questionBlocks = it.questionBlocks + (id to QuestionBlock.UNCERTAIN)) }
+                    if (commitDispatched && pagedJournal == null) update { it.copy(questionBlocks = it.questionBlocks + (id to QuestionBlock.UNCERTAIN)) }
                     else reportError(R.string.remote_request_error)
                 }
             } finally {
+                val attemptId = reservedId
+                if (attemptId != null && (!commitDispatched || accepted)) withContext(NonCancellable) {
+                    pagedCleanupProofs.add(attemptId)
+                    try {
+                        pagedProjectionMutex.withLock {
+                            requireNotNull(pagedJournal).removeAttempt(attemptId)
+                            pagedCleanupProofs.remove(attemptId)
+                            pagedJournalSnapshot = pagedJournal.snapshot()
+                            update { it }
+                        }
+                    } catch (_: Exception) {
+                        pagedStorageFailed = true
+                        update { it }
+                    }
+                }
                 if (token == pagedToken) {
                     pagedUploading = false
                     update { state -> state.copy(pagedEditors = state.pagedEditors[id]?.let { state.pagedEditors + (id to it.copy(loading = false)) } ?: state.pagedEditors) }
+                }
+            }
+        }
+    }
+
+    override fun retryPagedEditorStorage() {
+        val journal = pagedJournal ?: return
+        if (!pagedStorageFailed || pagedStoragePending) return
+        pagedStoragePending = true
+        update { it }
+        scope.launch {
+            pagedProjectionMutex.withLock {
+                try {
+                    pagedJournalSnapshot = journal.snapshot()
+                    for (id in pagedCleanupProofs.toList()) {
+                        journal.removeAttempt(id)
+                        pagedCleanupProofs.remove(id)
+                    }
+                    for ((key, draft) in pagedPendingDrafts.toMap()) {
+                        journal.putDraft(key, draft)
+                        if (pagedPendingDrafts[key] == draft) pagedPendingDrafts.remove(key)
+                    }
+                    pagedJournalSnapshot = journal.snapshot()
+                    pagedStorageFailed = false
+                } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                    pagedStorageFailed = true
+                    // Preserve any successful removals in the projection even if a later write failed.
+                    pagedJournalSnapshot = runCatching { journal.snapshot() }.getOrDefault(pagedJournalSnapshot)
+                } finally {
+                    pagedStoragePending = false
+                    update { state ->
+                        val question = pagedQuestion
+                        val route = state.selection.routeId
+                        val session = state.selection.sessionId
+                        val verified = question != null && state.questions.any { it === question } &&
+                            pagedState?.originalSource != null && pagedDrafts[question] == null
+                        state.copy(pagedEditors = state.pagedEditors.mapValues { (id, view) ->
+                            val recovery = if (!pagedStorageFailed && verified && route != null && session != null &&
+                                question?.optionalText("id") == id && view.text != null)
+                                pagedJournalSnapshot.drafts[PagedJournalKey(route, session, id)]?.text ?: view.recoveryDraft
+                            else view.recoveryDraft
+                            view.copy(recoveryDraft = recovery)
+                        })
+                    }
                 }
             }
         }
@@ -8875,13 +9012,25 @@ class DefaultRemoteRepository(
         if (blocked != null && !pagedCancel) return
         val positive = answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)
         val editor = answer.optionalText("kind") == "editor"
+        val cancel = answer.optionalText("kind") == "cancel" ||
+            (answer.optionalText("kind") == "plan" && answer.optionalText("action") == "cancel" &&
+                state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull()?.optionalText("kind") == "plan")
         val selection = state.value.selection
         val connection = generation
         val editorAuthority = editorAuthorityGeneration
-        val question = if (positive || editor) state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull() ?: return else null
+        val question = if (positive || editor || cancel) state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull() ?: return else null
         fun positiveStillAllowed(): Boolean {
-            if (!positive && !editor) return true
             val current = state.value
+            if (cancel) {
+                val pending = current.questions.filter { it.optionalText("id") == questionId }.singleOrNull()
+                val currentBlock = current.questionBlocks[questionId]
+                val canCancelUncertain = currentBlock == QuestionBlock.UNCERTAIN &&
+                    pagedQuarantined(current.selection, questionId) && pending?.optionalText("kind") == "editor" && pending.containsKey("editorUploadGrantId")
+                return current.connected && !current.loading && generation == connection && current.selection == selection &&
+                    activeHost?.routeId == selection.routeId && pending === question && (currentBlock == null || canCancelUncertain)
+            }
+            if (pagedStoragePending || pagedStorageFailed || pagedQuarantined(current.selection, questionId)) return false
+            if (!positive && !editor) return true
             if (!current.connected || current.loading || generation != connection || current.selection != selection ||
                 activeHost?.routeId != selection.routeId || questionId in current.questionBlocks) return false
             val pending = current.questions.filter { it.optionalText("id") == questionId }.singleOrNull()
@@ -8911,6 +9060,7 @@ class DefaultRemoteRepository(
                     "sessionId" to sessionId,
                     "questionId" to questionId,
                     "answer" to answer,
+                    validateBeforeSend = { check(positiveStillAllowed()) },
                 )
             } catch (_: CancellationException) {} catch (e: Exception) {
                 if (epoch == selectionEpoch) {

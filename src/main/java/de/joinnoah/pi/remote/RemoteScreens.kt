@@ -3767,6 +3767,7 @@ internal fun RemoteScreen(
                         onLoadPagedEditor = model::loadPagedEditor,
                         onEditPagedEditor = model::editPagedEditor,
                         onSubmitPagedEditor = model::submitPagedEditor,
+                        onRetryPagedEditorStorage = model::retryPagedEditorStorage,
                         suggestions = {
                             val typed = composer.text
                             SessionControls(
