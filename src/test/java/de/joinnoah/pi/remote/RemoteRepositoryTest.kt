@@ -12692,6 +12692,108 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aHeldAdvisorStatusDoesNotOverwriteTheNewerAdvisorTheActivationRead() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(ADVISOR_CAPABILITY)
+        fun advisorOf(sessionId: String, enabled: Boolean) =
+            JsonObject(advisorData(enabled) + ("sessionId" to JsonPrimitive(sessionId)))
+        val journal = transport.response
+        val advisorReads = mutableListOf<JsonObject>()
+        var holdAdvisor = false
+        transport.response = { request ->
+            if (request.text("type") == "session.advisor.get")
+                if (holdAdvisor && request.text("sessionId") == "session") null.also { advisorReads += request }
+                else advisorOf(request.text("sessionId"), enabled = false)
+            else journal(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        holdAdvisor = true
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                else -> answer(request)
+            }
+        }
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val resume = transport.firstPages().last()
+        val reply = host.answer(resume)
+        // An older advisor status arrives before the open selects the chat, past the reply.
+        val stale = advisorOf("session", enabled = true).filterKeys { it != "kind" && it != "choices" }
+        host.live("advisor.status", "advisor" to JsonObject(stale))
+        runCurrent()
+
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        // The activation's own read is newer than that event.
+        transport.result(advisorReads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+
+        transport.result(resume, reply)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aHeldCompactionIsRefreshedOnceAcrossASameSessionReactivation() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                request.text("type") == "session.context.get" -> null
+                else -> answer(request)
+            }
+        }
+        val before = transport.contextReads().size
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val first = transport.firstPages().last()
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        assertEquals("session", repository.state.value.selection.sessionId)
+        val pages = transport.firstPages().size
+
+        // The chat is activated again before the first resume answers: its Timeline is continued.
+        val again = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+        val second = transport.firstPages().drop(pages).single()
+        assertEquals(ResumeBase(host.epoch, 1), second.resumeBase())
+        transport.result(second, host.answer(second))
+        runCurrent()
+        assertTrue(again.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertNull(repository.state.value.compaction)
+        assertEquals(before + 1, transport.contextReads().size)
+        // The first resume's late reply changes nothing.
+        transport.result(first, host.answer(first))
+        runCurrent()
+        assertEquals(before + 1, transport.contextReads().size)
+        opening.cancel()
+    }
+
+    @Test
     fun aHeldCompactionPastTheFirstPageRefreshesTheContextUsageOnce() = runTest {
         val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
         transport.capabilities = setOf(CONTEXT_CAPABILITY)

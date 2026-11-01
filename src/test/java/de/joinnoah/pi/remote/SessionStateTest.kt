@@ -1235,6 +1235,46 @@ class TimelineResumeTest {
     }
 
     @Test
+    fun aHeardEventThatStillWaitsBehindAGapAfterAFailedWaitStaysOutOfTheNextReplay() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        timeline.awaitReply()
+        val heard = status(12, "running")
+        timeline.eventNeed(heard)
+        assertTrue(timeline.endAwaiting())
+        // 11 is missing, so 12 waits again.
+        assertEquals(10L, timeline.revision)
+        assertTrue(timeline.needsSnapshot)
+        assertTrue(timeline.takeDrained().isEmpty())
+
+        timeline.awaitReply()
+        val missed = upsert(11, "b")
+        val result = timeline.replay(events(10, 12, missed, heard))
+        assertTrue(result.fits)
+        assertEquals(listOf(missed), result.applied)
+        assertTrue(timeline.takeDrained().isEmpty())
+    }
+
+    @Test
+    fun anEpochRestartDropsTheHeldUnheardEventsAndWhatWasHeard() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        timeline.awaitReply()
+        timeline.eventNeed(event(12, "session.compaction", null, "state" to "done"), heard = false)
+        // Heard at a revision the new epoch reuses.
+        timeline.eventNeed(status(4, "running"))
+        assertTrue(timeline.snapshot(snapshot(3, message("a"), epoch = restarted)))
+        assertEquals(3L, timeline.revision)
+        assertTrue(timeline.takeDrained().isEmpty())
+
+        timeline.awaitReply()
+        val reused = upsert(4, "b")
+        val result = timeline.replay(events(3, 4, reused, epoch = restarted))
+        assertTrue(result.fits)
+        assertEquals(listOf(reused), result.applied)
+    }
+
+    @Test
     fun continueFromTakesOverWhatThePreviousTimelineHeardLive() {
         val previous = Timeline("session")
         previous.snapshot(snapshot(10, message("a")))
