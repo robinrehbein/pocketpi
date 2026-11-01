@@ -54,6 +54,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private var ticketMode = false
     private var nativeExportExpected = false
     private var nativeLifecycleExpected = false
+    private var nativeLifecycleActiveCut = false
     private lateinit var remoteRef: String
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -69,6 +70,9 @@ class DevelopmentWorkflowTransportEndToEndTest {
             ticketMode = fixture.optBoolean("ticketWorkflowFixture")
             nativeExportExpected = args.getString("nativeExportExpected") == "true"
             nativeLifecycleExpected = args.getString("nativeLifecycleExpected") == "true"
+            nativeLifecycleActiveCut = args.getString("nativeLifecycleActiveCut") == "true"
+            require(nativeLifecycleActiveCut == (fixture.optJSONObject("nativeLifecycle")?.optBoolean("activeCut") == true)) { "nativeLifecycleActiveCut must match fixture mode" }
+            require(!nativeLifecycleActiveCut || nativeLifecycleExpected)
             require(!nativeLifecycleExpected || (!ticketMode && !nativeExportExpected && fixture.has("nativeLifecycle")))
             require(nativeLifecycleExpected == fixture.has("nativeLifecycle")) { "nativeLifecycleExpected must match fixture mode" }
             if (ticketMode) require(!fixture.has("sessionId") || fixture.isNull("sessionId"))
@@ -416,6 +420,8 @@ class DevelopmentWorkflowTransportEndToEndTest {
         fun matches(marker: String) = compose.onAllNodes(hasText(marker, substring = true), useUnmergedTree = true)
         fun lifecycle() = fullStatus().getJSONObject("nativeLifecycle")
         fun noWithheld() = matches(withheld).assertCountEquals(0)
+        fun partialBubbles() = conversationItems(repository.state.value.messages)
+            .filterIsInstance<ConversationItem.Bubble>().filter { it.text.contains(partial) }
 
         compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(prompt)
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
@@ -427,7 +433,88 @@ class DevelopmentWorkflowTransportEndToEndTest {
         matches(partial).assertCountEquals(1)
         compose.onNode(hasText(partial, substring = true), useUnmergedTree = true).assertIsDisplayed()
         noWithheld()
-        screenshot("lifecycle-running")
+        compose.waitUntil(60_000) { partialBubbles().size == 1 }
+        val partialSourceId = partialBubbles().single().sourceId
+        assertTrue("The held partial must have a message identity", partialSourceId.isNotBlank())
+        compose.onNodeWithTag("stopRun").assertIsDisplayed().assertIsEnabled()
+        fun assertHeld(proof: JSONObject) {
+            assertTrue(proof.getBoolean("workerVerified"))
+            assertTrue(proof.getBoolean("running"))
+            assertEquals("running", proof.getString("sessionStatus"))
+            assertEquals(3, proof.getInt("eventCount"))
+            assertEquals(1, proof.getInt("promptRequests"))
+            assertEquals(0, proof.getInt("followupRequests"))
+            assertEquals(0, proof.getInt("abortRequests"))
+        }
+        if (nativeLifecycleActiveCut) {
+            val proof = lifecycle()
+            assertHeld(proof)
+            println("ACTIVE_CUT running=$proof")
+        }
+        screenshot(if (nativeLifecycleActiveCut) "active-cut-running" else "lifecycle-running")
+
+        fun cutAndReconnect(running: Boolean) {
+            action("cut-lifecycle")
+            compose.waitUntil(60_000) {
+                runCatching {
+                    val current = fullStatus()
+                    current.getJSONObject("nativeLifecycle").getBoolean("cut") &&
+                        !current.getBoolean("deviceOnline") && current.getBoolean("upgradesBlocked") &&
+                        !repository.state.value.connected
+                }.getOrDefault(false)
+            }
+            if (running) {
+                val proof = lifecycle()
+                assertHeld(proof)
+                val heldAtCut = proof.getJSONObject("heldAtCut")
+                assertHeld(heldAtCut)
+                assertFalse(heldAtCut.getBoolean("deviceOnline"))
+                assertTrue(heldAtCut.getBoolean("upgradesBlocked"))
+                println("ACTIVE_CUT offline=$proof")
+                screenshot("active-cut-offline")
+            }
+            val baseline = lifecycle().getInt("baselineUpgrades")
+            action("allow-lifecycle")
+            compose.waitUntil(90_000) {
+                runCatching {
+                    val current = fullStatus()
+                    val proof = current.getJSONObject("nativeLifecycle")
+                    proof.getBoolean("allowed") && proof.getBoolean("valid") &&
+                        (!running || proof.optJSONObject("heldReconnected") != null) &&
+                        current.getBoolean("deviceOnline") && current.getBoolean("nativeWorkerVerified") &&
+                        current.getInt("upgrades") > baseline &&
+                        repository.state.value.let { it.connected && !it.loading && it.selection == selection && it.status == (if (running) "running" else "idle") }
+                }.getOrDefault(false)
+            }
+            assertGuards(status(), initialHead, null, 0, 0, 0)
+            compose.waitUntil(60_000) { matches(partial).fetchSemanticsNodes().isNotEmpty() }
+            matches(partial).assertCountEquals(1)
+            compose.onNode(hasText(partial, substring = true), useUnmergedTree = true).assertIsDisplayed()
+            noWithheld()
+            if (running) {
+                assertEquals("The recovered partial must be the same message", partialSourceId, partialBubbles().single().sourceId)
+                val proof = lifecycle()
+                assertHeld(proof)
+                val heldOffline = proof.getJSONObject("heldOffline")
+                val heldReconnected = proof.getJSONObject("heldReconnected")
+                assertHeld(heldOffline)
+                assertFalse(heldOffline.getBoolean("deviceOnline"))
+                assertTrue(heldOffline.getBoolean("upgradesBlocked"))
+                assertHeld(heldReconnected)
+                assertTrue(heldReconnected.getBoolean("deviceOnline"))
+                assertFalse(heldReconnected.getBoolean("upgradesBlocked"))
+                assertTrue(heldReconnected.getInt("upgrades") > baseline)
+                println("ACTIVE_CUT reconnected=$proof")
+                compose.onNodeWithTag("stopRun").assertIsDisplayed().assertIsEnabled()
+                screenshot("active-cut-reconnected")
+            } else {
+                assertEquals(1, lifecycle().getInt("abortRequests"))
+                assertInterruptedPartial(partial, checkLabel = true)
+                screenshot("lifecycle-reconnected")
+            }
+        }
+
+        if (nativeLifecycleActiveCut) cutAndReconnect(running = true)
         compose.onNodeWithTag("stopRun").assertIsDisplayed().assertIsEnabled().performClick()
         compose.waitUntil(60_000) {
             runCatching { lifecycle().getBoolean("stopped") }.getOrDefault(false) &&
@@ -435,41 +522,14 @@ class DevelopmentWorkflowTransportEndToEndTest {
         }
         assertInterruptedPartial(partial, checkLabel = true)
         val stopped = lifecycle()
+        if (nativeLifecycleActiveCut) println("ACTIVE_CUT stopped=$stopped")
         assertTrue(stopped.getBoolean("valid"))
         assertEquals(1, stopped.getInt("abortRequests"))
         assertGuards(status(), initialHead, null, 0, 0, 0)
         noWithheld()
-        screenshot("lifecycle-stopped")
+        screenshot(if (nativeLifecycleActiveCut) "active-cut-stopped" else "lifecycle-stopped")
 
-        action("cut-lifecycle")
-        compose.waitUntil(60_000) {
-            runCatching {
-                val current = fullStatus()
-                current.getJSONObject("nativeLifecycle").getBoolean("cut") &&
-                    !current.getBoolean("deviceOnline") && current.getBoolean("upgradesBlocked") &&
-                    !repository.state.value.connected
-            }.getOrDefault(false)
-        }
-        val baseline = lifecycle().getInt("baselineUpgrades")
-        action("allow-lifecycle")
-        compose.waitUntil(90_000) {
-            runCatching {
-                val current = fullStatus()
-                val proof = current.getJSONObject("nativeLifecycle")
-                proof.getBoolean("allowed") && proof.getBoolean("valid") &&
-                    current.getBoolean("deviceOnline") && current.getBoolean("nativeWorkerVerified") &&
-                    current.getInt("upgrades") > baseline &&
-                    repository.state.value.let { it.connected && !it.loading && it.selection == selection && it.status == "idle" }
-            }.getOrDefault(false)
-        }
-        assertGuards(status(), initialHead, null, 0, 0, 0)
-        compose.waitUntil(60_000) { matches(partial).fetchSemanticsNodes().isNotEmpty() }
-        matches(partial).assertCountEquals(1)
-        compose.onNode(hasText(partial, substring = true), useUnmergedTree = true).assertIsDisplayed()
-        noWithheld()
-        assertEquals(1, lifecycle().getInt("abortRequests"))
-        assertInterruptedPartial(partial, checkLabel = true)
-        screenshot("lifecycle-reconnected")
+        if (!nativeLifecycleActiveCut) cutAndReconnect(running = false)
 
         compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(followup)
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()

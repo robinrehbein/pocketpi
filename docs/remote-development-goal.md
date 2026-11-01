@@ -1,6 +1,16 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Active native turn reconnect checkpoint on 2026-11-01
+
+Phone and tablet real-native-Pi workflows now pass an actual socket cut while a turn remains
+active, reconnect to the same worker with exactly one visible partial of the same identity, then
+Stop and continue development. A reproduced bug dropped the held prefix in full snapshots;
+the Host now retains only the currently observed native assistant stream with source/epoch/turn
+validation and terminal precedence. Recovery evidence includes a full snapshot containing the
+held streaming prefix, not merely an empty replay. See [active-turn qualification](testing/active-turn-reconnect-qualification.md).
+Lost acknowledgments, process death, physical Samsung and independent Linux remain unqualified.
+
 ## Interrupted assistant outcome checkpoint on 2026-11-01
 
 Interrupted partial replies now carry a negotiated sanitized outcome and display a neutral
