@@ -889,6 +889,32 @@ class TwoPaneNavigationTest {
     }
 
     @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun ticketsOpenBesideProjectsWithoutASessionsList() {
+        linkTicket("s1")
+        repository.state.value = repository.state.value.copy(hosts = listOf(requireNotNull(repository.state.value.host)))
+        render()
+        back()
+        back()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macTickets").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        compose.onNodeWithTag("projectsPlaceholder").assertDoesNotExist()
+        compose.onNodeWithTag("ticketsList").assertIsDisplayed()
+        compose.onNodeWithText("Fix it", substring = true).assertIsDisplayed()
+
+        back()
+        compose.onNodeWithTag("projectsPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("ticketsList").assertDoesNotExist()
+    }
+
+    @Test
     @Config(qualifiers = "w1205dp-h753dp")
     fun theStripSwitchesTheProjectAndClosesTheChat() {
         render()

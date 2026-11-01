@@ -1030,9 +1030,7 @@ private data class ProjectColumnsScene(
                             .testTag("chatPane")
                     ) {
                         when {
-                            list == null -> DetailPlaceholder(R.string.remote_projects_column_empty, "projectsPlaceholder")
-                            detail == null -> DetailPlaceholder(R.string.remote_two_pane_empty, "chatPlaceholder")
-                            else ->
+                            detail != null ->
                                 key(detail.contentKey) {
                                     Box(Modifier.fillMaxSize().column(detailEnter, top = true)) {
                                         CompositionLocalProvider(LocalDetailPane provides true, LocalPaneLayout provides placed) {
@@ -1040,6 +1038,8 @@ private data class ProjectColumnsScene(
                                         }
                                     }
                                 }
+                            list == null -> DetailPlaceholder(R.string.remote_projects_column_empty, "projectsPlaceholder")
+                            else -> DetailPlaceholder(R.string.remote_two_pane_empty, "chatPlaceholder")
                         }
                     }
                 }
