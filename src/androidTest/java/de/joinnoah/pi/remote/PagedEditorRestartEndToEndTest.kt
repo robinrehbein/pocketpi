@@ -50,6 +50,7 @@ class PagedEditorRestartEndToEndTest {
     private lateinit var transport: PresenceObservingTransport
     private lateinit var repository: DefaultRemoteRepository
     private var native = false
+    private var hostRestartExpected = false
     private val source = "😀".repeat(262_144)
     private val edited = "é\\\n".repeat(1_024) + "😀".repeat(261_120)
     private val finalValue get() = edited
@@ -62,6 +63,8 @@ class PagedEditorRestartEndToEndTest {
             case = requireNotNull(args.getString("pagedRestartCase"))
             nonce = requireNotNull(args.getString("pagedRestartNonce"))
             require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack", "positive", "release") && nonce.matches(Regex("[a-f0-9]{32}")))
+            hostRestartExpected = args.getString("hostRestartExpected") == "true"
+            require(!hostRestartExpected || (phase == "B" && case in setOf("positive", "release")))
             val path = requireNotNull(args.getString("prStatusFixturePath"))
             fixture = JSONObject(readFixture(path).toString(Charsets.UTF_8))
             val relay = fixture.getString("relayUrl").toHttpUrl()
@@ -96,6 +99,7 @@ class PagedEditorRestartEndToEndTest {
                 assertEquals(case, proof.getString("case"))
                 assertEquals(identity(), proof.getString("identity"))
                 assertEquals(listOf(host), stores.pairings.load())
+                if (hostRestartExpected) verifyRestartStoredProof(proof)
             }
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixture(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
@@ -122,6 +126,10 @@ class PagedEditorRestartEndToEndTest {
     }).around(compose)
 
     @Test fun actualOwnerRecoveryAcrossForceStop() {
+        if (hostRestartExpected) {
+            phaseBHostRestart()
+            return
+        }
         val initial = status()
         assertTrue(initial.getBoolean("ownerPidVerified"))
         if (native) assertTrue(initial.getBoolean("nativeWorkerVerified"))
@@ -137,6 +145,105 @@ class PagedEditorRestartEndToEndTest {
             s.selection == selection && s.connected && !s.loading && QUESTION_PAGED_EDITOR_CAPABILITY in s.capabilities && transport.pagedV3Accepted.get() && (!native || transport.presenceAccepted.get())
         }
         if (phase == "A") phaseA() else phaseB()
+    }
+
+    private fun verifyRestartStoredProof(proof: JSONObject) {
+        val snapshot = persisted()
+        val key = PagedJournalKey(host.routeId, requireNotNull(selection.sessionId), proof.getString("questionId"))
+        val expectedBinding = StoredPagedOutcomeBinding(host.deviceId, proof.getString("ownerIncarnationId"),
+            proof.getInt("finalBytes"), proof.getString("finalSha256"))
+        assertEquals(finalValue, snapshot.drafts[key]?.text)
+        if (case == "positive") {
+            assertTrue(snapshot.pendingReleases.isEmpty())
+            val attempt = snapshot.attempts.values.single()
+            assertEquals(key, attempt.key)
+            assertEquals(proof.getString("attemptId"), attempt.attemptId)
+            assertEquals(proof.getString("attemptGrant"), attempt.grantId)
+            assertEquals(proof.getString("attemptUpload"), attempt.uploadId)
+            assertEquals(proof.getString("attemptCommit"), attempt.commitRequestId)
+            assertEquals(proof.getLong("attemptCreatedAt"), attempt.createdAt)
+            assertEquals(finalValue, attempt.text)
+            assertEquals(expectedBinding, attempt.outcomeBinding)
+        } else {
+            assertTrue(proof.getBoolean("releaseHeld"))
+            assertEquals(proof.getString("attemptId"), proof.getString("queuedReleaseId"))
+            assertTrue(snapshot.attempts.isEmpty())
+            val release = snapshot.pendingReleases.values.single()
+            assertEquals(proof.getString("attemptId"), release.releaseId)
+            assertEquals(key, release.key)
+            assertEquals(host.deviceId, release.deviceId)
+            assertEquals(expectedBinding.ownerIncarnationId, release.ownerIncarnationId)
+            assertEquals(proof.getString("attemptGrant"), release.grantId)
+            assertEquals(proof.getString("attemptUpload"), release.uploadId)
+            assertEquals(proof.getString("attemptCommit"), release.commitRequestId)
+            assertEquals(expectedBinding.byteLength, release.byteLength)
+            assertEquals(expectedBinding.sha256, release.sha256)
+        }
+    }
+
+    private fun phaseBHostRestart() {
+        val proof = JSONObject(File(directory, "phase-a.json").readText())
+        val id = proof.getString("questionId")
+        val initial = status()
+        assertTrue(initial.getBoolean("actualHostRestart"))
+        assertTrue(initial.getBoolean("originalHostStopped"))
+        assertTrue(initial.getBoolean("originalOwnerStopped"))
+        assertTrue(initial.getBoolean("ledgerReadable"))
+        val oldPid = initial.getInt("originalHostPid")
+        val newPid = initial.getInt("newHostPid")
+        assertTrue(oldPid > 0 && newPid > 0 && oldPid != newPid)
+        assertTrue(initial.getInt("originalOwnerPid") > 0)
+        assertEquals(1, initial.getInt("initialAppliedCount"))
+        assertEquals(1, initial.getInt("appliedCount"))
+        assertEquals(0, initial.getInt("ownerDispatchCalls"))
+        compose.runOnIdle { repository.setForeground(true); repository.setValidatedNetwork("paged-restart-fixture") }
+        compose.waitUntil(60_000) { repository.state.value.hostsLoaded && repository.state.value.hosts.any { it.routeId == host.routeId } }
+        activate(RemoteSelection(host.routeId))
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.connected && state.selection == RemoteSelection(host.routeId) && state.capabilitiesKnown &&
+                QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities && QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in state.capabilities &&
+                transport.pagedV3Accepted.get()
+        }
+        compose.waitUntil(60_000) {
+            persisted().attempts.isEmpty() && persisted().pendingReleases.isEmpty() &&
+                (case == "release" || transport.positiveOutcomeApplied.get() != null) && transport.positiveOutcomeReleased.get() &&
+                statusOrNull()?.let { it.optBoolean("ledgerReadable") && it.optInt("appliedCount", -1) == 0 } == true
+        }
+        if (case == "release") assertEquals(0, transport.positiveOutcomeQueries.get())
+        val receipt = if (case == "release") requireNotNull(transport.positiveOutcomeReleaseReceipt.get()) else requireNotNull(transport.positiveOutcomeApplied.get()).obj("receipt")
+        assertEquals(receipt, requireNotNull(transport.positiveOutcomeReleaseReceipt.get()))
+        assertEquals(proof.getString("attemptCommit"), receipt.text("commitRequestId"))
+        assertEquals(proof.getString("attemptUpload"), receipt.text("uploadId"))
+        assertEquals(proof.getString("attemptGrant"), receipt.text("grantId"))
+        assertEquals(proof.getString("ownerIncarnationId"), receipt.text("ownerIncarnationId"))
+        assertEquals(id, receipt.text("questionId"))
+        assertEquals(selection.sessionId, receipt.text("sessionId"))
+        assertEquals(proof.getLong("finalBytes"), receipt.long("byteLength"))
+        assertEquals(proof.getString("finalSha256"), receipt.text("sha256"))
+        assertTrue(transport.positiveOutcomeReleaseAttempts.get() >= 1)
+        val deadline = SystemClock.elapsedRealtime() + 3_000
+        while (SystemClock.elapsedRealtime() < deadline) {
+            assertTrue(persisted().attempts.isEmpty() && persisted().pendingReleases.isEmpty())
+            assertEquals(Triple(0, 0, 0), transport.uploadCounts())
+            assertEquals(0, transport.questionAnswerAttempts.get())
+            val current = status()
+            assertTrue(current.getBoolean("ledgerReadable"))
+            assertEquals(0, current.getInt("appliedCount"))
+            assertEquals(0, current.getInt("ownerDispatchCalls"))
+            SystemClock.sleep(200)
+        }
+        val final = status()
+        val result = JSONObject().put("nonce", nonce).put("case", case).put("pid", Process.myPid()).put("identity", identity())
+            .put("questionId", id).put("hostRestart", true).put("oldHostPid", oldPid).put("newHostPid", newPid)
+            .put("ownerStopped", initial.getBoolean("originalOwnerStopped")).put("initialAppliedCount", initial.getInt("initialAppliedCount"))
+            .put("finalAppliedCount", final.getInt("appliedCount")).put("positiveReceipt", JSONObject(receipt.toString()))
+            .put("cleanupVerified", persisted().attempts.isEmpty() && persisted().pendingReleases.isEmpty())
+            .put("releaseAccepted", transport.positiveOutcomeReleased.get()).put("outcomeQueries", transport.positiveOutcomeQueries.get())
+            .put("releaseAttempts", transport.positiveOutcomeReleaseAttempts.get()).put("answerAttempts", transport.questionAnswerAttempts.get())
+            .put("ownerDispatchCalls", final.getInt("ownerDispatchCalls"))
+        File(directory, "phase-b.json").outputStream().use { it.write(result.toString().toByteArray()); it.fd.sync() }
+        report("B", id)
     }
 
     private fun phaseA() {

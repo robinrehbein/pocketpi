@@ -58,4 +58,76 @@ Two actual production-chain runs pass: `paged-restart-native-release-01` (Androi
 
 Independent evidence `paged-release-queue-independent-audit.json` matches 31 current source/snapshot pins per case, runner/helper and APK hashes, original SDK/source receipts, the held release barrier, new process identity, exact restored receipt, no-replay counts and empty final ledger with provisioning marker. App SHA-256 is `0c274fbad7b170b91ceb64e6a6b27760e27564fa67ebe3c0700fc001e6fec4c0`; instrumentation APK is `cc1d767a43c85847724f2b703b35e95dd800427ea98d7918a1315339cf48c09b`. Cleanup succeeds.
 
-The complete App quick-check passes in 93 seconds: 3,636 app and 34 Wear tests, zero failures/errors/skips, resource parity and affected source-set compilation; both APK builds pass. The Host is unchanged from its complete 4,131-pass run above. Scoped independent review confirmed the capacity fix. These tests cover Android death before release dispatch; actual Host-process restart, disk-crash boundaries, hardware IME, physical Galaxy devices and the remaining full contract gates still require separate qualification. Public gates remain OFF.
+The complete App quick-check passes in 93 seconds: 3,636 app and 34 Wear tests, zero failures/errors/skips, resource parity and affected source-set compilation; both APK builds pass. The Host is unchanged from its complete 4,131-pass run above. Scoped independent review confirmed the capacity fix. These tests cover Android death before release dispatch. Actual Host-process restart is qualified separately below; disk-crash boundaries, hardware IME, physical Galaxy devices and the remaining full contract gates still require separate qualification. Public gates remain OFF.
+
+
+## Actual Host-process restart fixture
+
+The opt-in private fixture can persist its actual Host configuration before restart.
+The external controller first checks a genuine original-source SDK result against
+its session, probe nonce, final size and hash. It binds the still-live SDK PID to
+the started Host through its complete parent chain and process start fingerprints.
+Pi may replace its command line with the title `pi`; the current controller also
+checks the owner's OS-reported canonical working directory against the private
+project before signaling. It rechecks the source result, live ownership, process
+identity and ancestry immediately before stopping the SDK. The original Host
+reaps that child before the controller sends SIGKILL to the Host and reaps it.
+
+A separate Node Host then opens the original socket-scoped ledger and actual
+configuration, with the same TLS key/certificate, HTTPS port and paired device
+identity. It does not start a Source owner or manufacture a receipt. Android
+phase B verifies its encrypted attempt or release queue before connecting, then
+authenticates at Host scope without requiring the old session, question or
+snapshot to survive. The private fixture restores the paired secret from its
+retained private metadata; this does not qualify production Keychain persistence,
+automatic Source reattachment or all session restoration.
+
+The initial Native attempt `paged-host-restart-native-positive-01` failed the new
+worker's strict private-key mode check. The system LibreSSL command reproduced
+mode 0644; explicit mode 0600 on both generated fixture keys fixes creation while
+retaining the worker check. RPC attempts `-positive-01` and `-02` stopped before
+any process signal because the process title omitted the private path. They are
+failed qualification attempts, not passing restart evidence.
+
+
+Four frozen-source restart cases pass, including cleanup:
+
+| Case | Android PID A → B | Host PID A → B | Duration |
+| --- | --- | --- | --- |
+| `paged-host-restart-native-positive-02` | 13585 → 13957 | 86880 → 87365 | 36.991 s |
+| `paged-host-restart-rpc-positive-03` | 15185 → 15551 | 88343 → 88584 | 35.714 s |
+| `paged-host-restart-native-release-01` | 15780 → 16185 | 88628 → 88864 | 36.629 s |
+| `paged-host-restart-rpc-release-01` | 16433 → 16837 | 88924 → 89157 | 38.012 s |
+
+Each positive case performs one exact authenticated outcome query and one release.
+Each queued-release case performs zero outcome queries and one release. All four
+retain the same encrypted Android paired identity across force-stop, observe one
+original 1 MiB SDK commit, recover one persisted applied record and finish with
+an empty ledger and local attempt/release queue. The new Host dispatches no editor
+upload to an owner. The pinned Android test observes zero new upload or generic
+answer attempts throughout its final three-second observation period. Configuration,
+TLS files and provisioning marker remain byte-identical across the boundary.
+All twelve recorded old/new Host and original SDK PIDs are absent after cleanup.
+
+The independent offline auditor passes all four cases in
+`paged-host-restart-independent-audit.json`, checking 32 source snapshots per
+case, runner/helper snapshots, installed APK hashes, original process evidence,
+exact receipts, persisted ledger bytes and instrumentation results. Historical
+snapshots remain valid when later runner diagnostics change; current source
+matches are reported separately. The original fixture metadata is removed during
+cleanup, so its probe nonce is checked by the pinned runtime runner, while the
+offline audit can compare only the retained SDK trace. Zero-upload evidence is
+from the successful pinned Android instrumentation, rather than a separate Host
+counter for every possible phone command.
+
+The unchanged app APK SHA-256 is
+`0c274fbad7b170b91ceb64e6a6b27760e27564fa67ebe3c0700fc001e6fec4c0`;
+the rebuilt instrumentation APK is
+`85f67ddb450217e296bf8272df30f0cdfa49edcfcea2ad5690a0cb41d8d1dee6`.
+Both APK builds, Host TypeScript and scoped formatting checks pass. This slice
+changes private qualification fixtures, not production App or Host behavior;
+the earlier full-suite evidence remains scoped to its recorded commits. Actual
+process restart is covered here, but abrupt power loss, persistence crash windows,
+production credential restoration, owner reattachment, physical Samsung devices,
+independent Linux and the remaining full contract gates are still unqualified.
+Public paged-editor and outcome capabilities remain OFF.
