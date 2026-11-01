@@ -3,7 +3,7 @@
 
 ## Actual native Android development workflow checkpoint on 2026-11-01
 
-One Android emulator run completed a single production-navigation workflow with a Host-managed
+Phone and tablet-sized Android emulator runs completed one production-navigation workflow with a Host-managed
 native Pi worker: file edit and save, shell execution, explicitly confirmed commit and local push,
 controlled PR creation, and rendered running and passed PR checks. This is a bounded local
 fixture result, not ticket-to-session, real model/GitHub/CI or physical-device qualification.

@@ -41,3 +41,21 @@ was corrected to close the foreground pane explicitly before sending. Those fail
 themselves establish a product bug. The successful run is one emulator scenario: it does not
 prove a model turn, ticket-to-session start, real GitHub or CI, physical phone/tablet, arbitrary
 projects, interactive terminal behavior, or universal remote-development support.
+
+## Pinned tablet-viewport follow-up
+
+The same chain passed again in 81.408 seconds on the owned API-36 emulator with a
+1600×2560, 240-dpi override (approximately 1067 dp wide). This is a tablet-sized viewport,
+not Galaxy Tab hardware. The pre-launch record reports clean App
+`d3dbf7951808bc25af574df4f36f1f82fbcdfeec` and Host
+`bdd730dd785aabe074c1bf7b1e52ee8cdcb3247b`, with the same app/test APK hashes as above.
+The binaries were reused without source changes; this is a local build/run record, not an
+independently attested CI build. Final status again records matching owner identities, exact
+file/commit hashes, matching local/remote/PR HEAD and one commit, push and PR creation.
+
+The saved screenshot shows the session list beside the chat, the passed PR chip and the shell
+marker/exit-code panel. Root inspected it; the independent runtime-evidence review found no
+blocking issue for either bounded run. Prefix: `native-development-tablet-pinned-v2` in the
+same private lab. Display metadata `display-native-development-tablet-pinned-v2.json` records
+setup and restoration to 1080×2400 at 420 dpi. The fixture and copied credentials were cleaned
+up; the exclusively owned emulator and private ADB remain available for later work.
