@@ -1,0 +1,402 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "inline-empty-begin",
+      "direction": "command",
+      "valid": true,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "inline"
+        },
+        "totalBytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "grantId": "grant-1"
+      }
+    },
+    {
+      "name": "paged-begin",
+      "direction": "command",
+      "valid": true,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "paged",
+          "id": "doc"
+        },
+        "totalBytes": 4,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "grantId": "grant-1"
+      }
+    },
+    {
+      "name": "chunk-multibyte",
+      "direction": "command",
+      "valid": true,
+      "payload": {
+        "type": "session.question.editor.upload.chunk",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "uploadId": "u",
+        "offset": 0,
+        "data": "8J-YgA"
+      }
+    },
+    {
+      "name": "commit",
+      "direction": "command",
+      "valid": true,
+      "payload": {
+        "type": "session.question.editor.upload.commit",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "uploadId": "u"
+      }
+    },
+    {
+      "name": "begun",
+      "direction": "result",
+      "valid": true,
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "editor_upload_begun",
+          "sessionId": "s",
+          "questionId": "q",
+          "uploadId": "u",
+          "nextOffset": 0
+        }
+      }
+    },
+    {
+      "name": "ack",
+      "direction": "result",
+      "valid": true,
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "editor_upload_ack",
+          "sessionId": "s",
+          "questionId": "q",
+          "uploadId": "u",
+          "nextOffset": 4
+        }
+      }
+    },
+    {
+      "name": "editor-source",
+      "direction": "question",
+      "valid": true,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "editor",
+          "title": "Edit",
+          "editorSource": {
+            "purpose": "editor_prefill",
+            "id": "doc",
+            "totalBytes": 4,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      }
+    },
+    {
+      "name": "begin-unknown-source-field",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "inline",
+          "id": "doc"
+        },
+        "totalBytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "grantId": "grant-1"
+      }
+    },
+    {
+      "name": "begin-paged-missing-id",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "paged"
+        },
+        "totalBytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "grantId": "grant-1"
+      }
+    },
+    {
+      "name": "begin-bad-hash",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "inline"
+        },
+        "totalBytes": 0,
+        "sha256": "ABC",
+        "grantId": "grant-1"
+      }
+    },
+    {
+      "name": "chunk-padded",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.chunk",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "uploadId": "u",
+        "offset": 0,
+        "data": "8J-YgA=="
+      }
+    },
+    {
+      "name": "chunk-noncanonical",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.chunk",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "uploadId": "u",
+        "offset": 0,
+        "data": "AB"
+      }
+    },
+    {
+      "name": "commit-extra",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.commit",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "uploadId": "u",
+        "extra": true
+      }
+    },
+    {
+      "name": "begun-offset-nonzero",
+      "direction": "result",
+      "valid": false,
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "editor_upload_begun",
+          "sessionId": "s",
+          "questionId": "q",
+          "uploadId": "u",
+          "nextOffset": 1
+        }
+      }
+    },
+    {
+      "name": "ack-extra",
+      "direction": "result",
+      "valid": false,
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "editor_upload_ack",
+          "sessionId": "s",
+          "questionId": "q",
+          "uploadId": "u",
+          "nextOffset": 4,
+          "extra": true
+        }
+      }
+    },
+    {
+      "name": "source-and-prefill",
+      "direction": "question",
+      "valid": false,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "editor",
+          "title": "Edit",
+          "editorSource": {
+            "purpose": "editor_prefill",
+            "id": "doc",
+            "totalBytes": 4,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "prefill": ""
+        }
+      }
+    },
+    {
+      "name": "source-bad-purpose",
+      "direction": "question",
+      "valid": false,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "editor",
+          "title": "Edit",
+          "editorSource": {
+            "purpose": "confirm",
+            "id": "doc",
+            "totalBytes": 4,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      }
+    },
+    {
+      "name": "source-path-id",
+      "direction": "question",
+      "valid": false,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "editor",
+          "title": "Edit",
+          "editorSource": {
+            "purpose": "editor_prefill",
+            "id": "/etc/passwd",
+            "totalBytes": 4,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      }
+    },
+    {
+      "name": "editor-with-upload-grant",
+      "direction": "question",
+      "valid": true,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "editor",
+          "title": "Edit",
+          "prefill": "text",
+          "editorUploadGrantId": "grant-1"
+        }
+      }
+    },
+    {
+      "name": "begin-missing-grant",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "inline"
+        },
+        "totalBytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "name": "begin-malformed-grant",
+      "direction": "command",
+      "valid": false,
+      "payload": {
+        "type": "session.question.editor.upload.begin",
+        "requestId": "r",
+        "sessionId": "s",
+        "questionId": "q",
+        "source": {
+          "kind": "inline"
+        },
+        "totalBytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "grantId": "bad/path"
+      }
+    },
+    {
+      "name": "grant-on-non-editor",
+      "direction": "question",
+      "valid": false,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "input",
+          "title": "Input",
+          "editorUploadGrantId": "grant-1"
+        }
+      }
+    },
+    {
+      "name": "editor-malformed-grant",
+      "direction": "question",
+      "valid": false,
+      "payload": {
+        "type": "event",
+        "sessionId": "s",
+        "revision": 1,
+        "kind": "question.open",
+        "question": {
+          "id": "q",
+          "kind": "editor",
+          "title": "Edit",
+          "editorUploadGrantId": "bad/path"
+        }
+      }
+    }
+  ]
+}

@@ -22,7 +22,7 @@ internal fun validEditorText(value: String, maxBytes: Int): Boolean {
 }
 
 internal fun editorPrefill(question: kotlinx.serialization.json.JsonObject): String? {
-    if (question.containsKey("details")) return null
+    if (question.containsKey("details") || question.containsKey("editorSource") || question.containsKey("editorUploadGrantId")) return null
     val prefill = question["prefill"] ?: return ""
     if (prefill !is JsonPrimitive || !prefill.isString) return null
     return prefill.content.takeIf { validEditorText(it, 16384) }
