@@ -233,3 +233,40 @@ Power loss,
 full owner replacement/shared-settlement and resource qualification, physical
 Galaxy devices and independent Linux acceptance remain separate open gates.
 Public paged-editor and outcome capabilities remain OFF.
+
+
+## Native lease callbacks and upload reservations
+
+Host `bf9202587` adds focused daemon/LocalPeer integration evidence for two
+previously separate paths. The fixture negotiates base, native and paged v3
+capabilities over the actual encrypted phone channel and checks the source
+registration's upload-bridge acknowledgement rather than manually granting it.
+Public capability defaults remain OFF.
+
+The collecting case opens an actual native lease, sends and acknowledges a valid
+one-byte phone upload chunk, then withdraws the rendered reader's presence. The
+actual reader-revocation callback immediately frees the collecting slot and byte
+reservation; old chunks and commit are refused and no owner transfer occurs.
+A new question gets a fresh grant and can begin another upload. This is not a
+same-question replacement/regrant qualification.
+
+The finalizing case sends the byte through the controlled LocalPeer source and
+holds its commit response. A second phone has already negotiated capabilities,
+reported active presence and received the native question. Its cancellation during
+the in-flight commit is rejected specifically as `outcome_unknown`, with no
+second source write. The owner independently releases its actual lease over IPC;
+the finalizing slot and one-byte quota remain reserved. Only the matching original
+source receipt ends that transaction and frees both reservations.
+
+Both tests pass, together with 29 existing upload/presence/negotiation tests:
+31 passed, zero failed or skipped. JSON evidence is
+`/private/tmp/pi-native-lease-upload-final.json`; Host TypeScript and scoped
+formatting pass. Independent scoped review confirmed the strengthened registration
+and competing-reader assertions. The first finalizing attempt timed out because
+it sent presence withdrawal through the same phone command queue as the held
+commit; the corrected test uses the independent owner IPC release.
+
+These are actual daemon, relay and encrypted phone-channel tests with a controlled
+LocalPeer owner. They do not establish a real Pi SDK result or Android workflow
+at these exact revocation timings. Full original-owner replacement/revocation,
+resource exhaustion/recovery and the remaining production-chain matrix stay open.

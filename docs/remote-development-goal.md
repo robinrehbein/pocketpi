@@ -1,6 +1,29 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Current implementation and qualification map, 2026-11-01
+
+Android on Galaxy S25 and Galaxy Tab S11 remains the delivery priority. Wear uses
+watch-appropriate interactions; iPhone is deferred. The full goal remains active.
+The chronological checkpoints below retain their historical source/test scope;
+this map links the newer recovery evidence that supersedes their open items.
+
+| Area | Latest recorded evidence | Remaining boundary |
+| --- | --- | --- |
+| Terminal in constrained windows | [Compact terminal](testing/android-terminal-compact.md): five UI cases and repeated actual native Pi/MainActivity phone/tablet workflows | Physical Samsung/DeX, wider IME/hardware input and arbitrary TUIs |
+| Shared encrypted Android storage | [Atomic recovery](testing/encrypted-journal-atomic-recovery.md): six reproduced unit regressions corrected, 3,642 app + 34 Wear tests, nine actual process-crash cases and 12 Android store tests pass | Power loss, maximum-size physical-device memory qualification |
+| Large editor recovery | [Positive outcomes](testing/paged-editor-positive-outcomes.md): exact original-owner receipts, durable release queue, Native/RPC App death, actual Host restart and release-ACK/local-cleanup death cases | Remaining owner/lease/settlement/resource/IME gates; public paged/outcome capabilities stay OFF |
+| Phone/tablet application lifecycle | [MainActivity recovery](testing/mainactivity-process-recovery-qualification.md) and [fresh client](testing/fresh-client-handoff-qualification.md) record local emulator workflows | Real Samsung, prolonged background/Doze and network transitions |
+| Development workflow | [Native ticket workflow](testing/ticket-workflow-qualification.md) and [development workflow](testing/development-workflow-qualification.md) record isolated local Pi/tool/Git/PR/CI chains | Physical devices, live external provider/GitHub/CI qualification |
+| Linux and devcontainers | [Packaged Linux evidence](testing/linux-host-qualification.md) records local container/worker/supervisor checks | Independent authorized remote Linux host remains unavailable |
+
+The compact-terminal increment is locally qualified in the linked scope. The
+[native editor lease/upload callback integration](testing/paged-editor-positive-outcomes.md#native-lease-callbacks-and-upload-reservations)
+passes its scoped daemon/LocalPeer checks; actual original-owner/resource gates
+remain open and public paged/outcome capabilities stay OFF. Physical Samsung
+devices and an independent SSH host remain unavailable; do not substitute emulator
+or local container evidence for those acceptance gates.
+
 ## Durable paged-editor Android checkpoint, 2026-11-01
 
 A separate encrypted journal now preserves exact large-editor text (including non-submittable UTF-16 code units) and reserves the exact submitted value/uncertain attempt before possible commit dispatch. Reconstructed fences survive new grants, snapshots and bounded/other question-type fallback; storage uncertainty blocks non-Cancel answers without granting cancellation authority. Locally proved outcomes can be cleaned up through a storage-only retry, including during reconnect. Draft recovery still requires a freshly verified source and explicit action. See [durable paged qualification](testing/paged-editor-durable-recovery.md).

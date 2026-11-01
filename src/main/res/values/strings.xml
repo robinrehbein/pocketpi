@@ -707,6 +707,8 @@
     <string name="remote_files_search_incomplete">Results may be incomplete</string>
     <string name="remote_files_search_empty">No matches</string>
     <string name="remote_files_search_close">Close</string>
+    <string name="remote_terminal_shortcuts">Shortcuts</string>
+    <string name="remote_terminal_hide_shortcuts">Hide shortcuts</string>
     <string name="remote_terminal_character">Character</string>
     <string name="remote_terminal_character_hint">One printable ASCII character</string>
     <string name="remote_terminal_shifted_character">Shifted character (optional)</string>

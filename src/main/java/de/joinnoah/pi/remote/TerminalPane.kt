@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -26,6 +27,7 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
     var alt by remember { mutableStateOf(false) }
     var shift by remember { mutableStateOf(false) }
     var chooseCharacter by remember { mutableStateOf(false) }
+    var showShortcuts by remember { mutableStateOf(false) }
     var allowCtrlAlt by remember(view?.sessionId, view?.generation) { mutableStateOf(false) }
     var character by remember { mutableStateOf("") }
     var shiftedCharacter by remember { mutableStateOf("") }
@@ -112,9 +114,16 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
         if (chord != null) enqueueChord(chord) else enqueueKey(name)
     }
     Surface(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+        val inputMaxLines = if (maxHeight < 400.dp) 1 else 3
         Column(Modifier.fillMaxSize().padding(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.remote_terminal_title), style = MaterialTheme.typography.titleMedium)
+                val activeModifiers = if (view?.keysEnabled == true) listOfNotNull("Ctrl".takeIf { ctrl }, "Alt".takeIf { alt }, "Shift".takeIf { shift }) else emptyList()
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.remote_terminal_title), style = MaterialTheme.typography.titleMedium)
+                    if (activeModifiers.isNotEmpty()) Text(activeModifiers.joinToString("+"), style = MaterialTheme.typography.labelSmall)
+                }
+                if (view?.keysEnabled == true) TextButton(onClick = { showShortcuts = true }) { Text(stringResource(R.string.remote_terminal_shortcuts)) }
                 TextButton(onClick = onClose) { Text(stringResource(R.string.remote_terminal_close)) }
             }
             when {
@@ -129,17 +138,39 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
             }
             notice?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
             AndroidView(factory = { renderer.view }, modifier = Modifier.weight(1f).fillMaxWidth())
-            if (view?.keysEnabled == true) Row(Modifier.horizontalScroll(rememberScrollState())) {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                listOf("escape" to "Esc", "tab" to "Tab", "up" to "↑", "down" to "↓", "left" to "←", "right" to "→", "backspace" to "⌫", "enter" to "Enter").forEach { (name, label) ->
+                    TextButton(onClick = { sendTouchKey(name) }) { Text(label) }
+                }
+            }
+            OutlinedTextField(
+                minLines = 1, maxLines = inputMaxLines,
+                value = draft, onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) }, modifier = Modifier.fillMaxWidth().then(rememberTerminalInputKeys(draft.isEmpty(), view?.keysEnabled == true, allowCtrlAlt, ::enqueueKey, ::enqueueChord)), label = { Text(stringResource(R.string.remote_terminal_input)) },
+                trailingIcon = { TextButton(onClick = {
+                    val value = terminalInputForDraft(draft)
+                    if (value == null) notice = R.string.remote_terminal_rejected
+                    else if (enqueueAll(listOf(value), consumesDraft = true)) notice = null
+                }) { Text(stringResource(R.string.remote_terminal_send)) } },
+            )
+        }
+        }
+    }
+    if (showShortcuts && view?.keysEnabled == true) AlertDialog(
+        onDismissRequest = { showShortcuts = false },
+        title = { Text(stringResource(R.string.remote_terminal_shortcuts)) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
                 FilterChip(selected = ctrl, onClick = { ctrl = !ctrl }, label = { Text("Ctrl") })
                 Spacer(Modifier.width(8.dp))
                 FilterChip(selected = alt, onClick = { alt = !alt }, label = { Text("Alt") })
                 Spacer(Modifier.width(8.dp))
                 FilterChip(selected = shift, onClick = { shift = !shift }, label = { Text("Shift") })
-                Spacer(Modifier.width(8.dp))
-                FilterChip(selected = allowCtrlAlt, onClick = { allowCtrlAlt = !allowCtrlAlt }, label = { Text(stringResource(R.string.remote_terminal_ctrl_alt_shortcuts)) })
-                TextButton(onClick = { chooseCharacter = true }) { Text(stringResource(R.string.remote_terminal_character)) }
             }
-            if (view?.keysEnabled == true) Row(Modifier.horizontalScroll(rememberScrollState())) {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                FilterChip(selected = allowCtrlAlt, onClick = { allowCtrlAlt = !allowCtrlAlt }, label = { Text(stringResource(R.string.remote_terminal_ctrl_alt_shortcuts)) })
+                TextButton(onClick = { showShortcuts = false; chooseCharacter = true }) { Text(stringResource(R.string.remote_terminal_character)) }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
                 listOf(
                     "Ctrl+C" to TerminalInput.Chord("c", ctrl = true),
                     "Ctrl+O" to TerminalInput.Chord("o", ctrl = true),
@@ -149,21 +180,13 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
                 ).forEach { (label, chord) -> TextButton(onClick = { enqueueChord(chord) }) { Text(label) } }
             }
             Row(Modifier.horizontalScroll(rememberScrollState())) {
-                (listOf("escape" to "Esc", "tab" to "Tab", "up" to "↑", "down" to "↓", "left" to "←", "right" to "→", "backspace" to "⌫", "enter" to "Enter") + if (view?.keysEnabled == true)
-                    listOf("shift_tab" to "Shift Tab", "home" to "Home", "end" to "End", "page_up" to "PgUp", "page_down" to "PgDn", "delete" to "Del") + (1..12).map { "f$it" to "F$it" } else emptyList()).forEach { (name, label) ->
+                (listOf("shift_tab" to "Shift Tab", "home" to "Home", "end" to "End", "page_up" to "PgUp", "page_down" to "PgDn", "delete" to "Del") + (1..12).map { "f$it" to "F$it" }).forEach { (name, label) ->
                     TextButton(onClick = { sendTouchKey(name) }) { Text(label) }
                 }
             }
-            OutlinedTextField(
-                value = draft, onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) }, modifier = Modifier.fillMaxWidth().then(rememberTerminalInputKeys(draft.isEmpty(), view?.keysEnabled == true, allowCtrlAlt, ::enqueueKey, ::enqueueChord)), label = { Text(stringResource(R.string.remote_terminal_input)) },
-                trailingIcon = { TextButton(onClick = {
-                    val value = terminalInputForDraft(draft)
-                    if (value == null) notice = R.string.remote_terminal_rejected
-                    else if (enqueueAll(listOf(value), consumesDraft = true)) notice = null
-                }) { Text(stringResource(R.string.remote_terminal_send)) } },
-            )
-        }
-    }
+        } },
+        confirmButton = { TextButton(onClick = { showShortcuts = false }) { Text(stringResource(R.string.remote_terminal_hide_shortcuts)) } },
+    )
     if (chooseCharacter && view?.keysEnabled == true) AlertDialog(
         onDismissRequest = { chooseCharacter = false },
         title = { Text(stringResource(R.string.remote_terminal_character)) },

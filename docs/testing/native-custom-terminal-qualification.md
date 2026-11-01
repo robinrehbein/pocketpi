@@ -35,3 +35,12 @@ This is an owned emulator on the current Mac with Pi 1.4.0 and one deterministic
 ## Build and repository checks
 
 The final selector/source APK build passed (`/private/tmp/pocketpi-custom-terminal-selector-build.log`), and the Host TypeScript check passed after the holder gate (`/private/tmp/pocketpi-custom-terminal-takeover-types.log`). Exact changed-file Host formatting/whitespace checks passed. The final `scripts/quick-check.sh` passed in 7 seconds with all 98 Gradle tasks up-to-date; existing App/Wear unit results were reused, not newly executed for these test-only additions. Both final runtime cases used the same built/installed APKs and current pinned sources.
+
+
+## Compact-controls compatibility rerun
+
+After the compact terminal UI change, the exact native workflow passes again on
+phone and tablet emulators with final APK/source pins, independent audit and root
+visual inspection. See [compact terminal qualification](android-terminal-compact.md)
+for `custom-terminal-compact-phone-01` and `custom-terminal-compact-tablet-01`.
+The original historical inputs and limits above remain unchanged.

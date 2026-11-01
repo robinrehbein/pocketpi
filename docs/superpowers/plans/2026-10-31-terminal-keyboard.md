@@ -64,3 +64,26 @@ An isolated public Pi 1.4.0 CLI/PTY smoke observed Kitty flags 7 and bracketed p
 identify the expected settings/shortcut screen effects. Its result is inconclusive, not passed.
 Public key-matcher, normal-PTY SIGINT, encrypted daemon and local UI/state tests do not substitute
 for that complete runtime workflow or the physical Samsung and Linux qualification above.
+
+
+## Compact Samsung window follow-up, 2026-11-01
+
+The original three stacked touch-control rows left only 48 dp for the real renderer
+inside a 320-dp pane. A first compact layout still left only 72 dp when a multiline
+draft, modifiers and pending-input status were combined. Both were observed on
+the owned emulator before their respective fixes.
+
+Keep the established explicit draft/queue/key protocol. Basic navigation keys stay
+in one horizontal strip; advanced modifiers, Pi chords and function keys move to
+a scrollable Shortcuts dialog. Show active modifiers in the header only while the
+current attachment supports them. Under 400 dp, render one input line; at larger
+heights render up to three, retaining the entire draft and its existing send rules.
+No immediate IME-to-PTY streaming mode is introduced.
+
+Acceptance for this local layout increment: real renderer height at least 96 dp
+at 320 dp with multiline text, active modifiers and pending input; the same minimum
+at 280 dp with multiline text and modifiers without pending status; visible input,
+Send and Esc, retained full draft through resize/dialog changes, F12 reachable by
+scrolling, and older-host/capability-loss behavior. Physical Samsung/DeX and live
+terminal ownership/network qualification remain separate. See the
+[compact terminal record](../../testing/android-terminal-compact.md).
