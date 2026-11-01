@@ -375,6 +375,34 @@ class PrStatusTransportEndToEndTest {
         assertEquals("$label SHA-256", digest, fixture.getString("pagedEditor${label}Sha256"))
     }
 
+    // Diagnostics only: position is read from the rendered range label, never the editor text.
+    private fun pagedEditorObservation(stage: String, question: JsonObject, id: String, expected: String? = null) {
+        if (pagedEditorCase != "max-edited") return
+        val state = repository.state.value
+        val current = state.questions.firstOrNull { it.optionalText("id") == id }
+        val draft = state.pagedEditors[id]?.text
+        val firstDifference = if (draft == null || expected == null) null else {
+            val common = minOf(draft.length, expected.length)
+            (0 until common).firstOrNull { draft[it] != expected[it] }
+                ?: if (draft.length != expected.length) common else -1
+        }
+        val window = runCatching {
+            val ranges = compose.onAllNodes(hasText("–", substring = true)).fetchSemanticsNodes()
+                .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }
+                .mapNotNull { Regex("([0-9]+)–([0-9]+)").find(it.text)?.value }
+            ranges.singleOrNull() ?: "unavailable"
+        }.getOrElse { "unavailable" }
+        val field = runCatching {
+            compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config
+                .getOrNull(SemanticsProperties.EditableText)?.text
+        }.getOrNull()
+        pagedDiagnostic("editor-observation stage=$stage sameQuestion=${current === question} " +
+            "questionPresent=${current != null} sameGrant=${current?.optionalText("editorUploadGrantId") == question.optionalText("editorUploadGrantId")} " +
+            "sameSource=${current?.get("editorSource") == question["editorSource"]} generation=${state.editorQuestionGeneration} " +
+            "window=$window field=${pagedTextSummary(field)} draft=${pagedTextSummary(draft)} " +
+            "expected=${pagedTextSummary(expected)} firstDifferenceUtf16=$firstDifference calls=${pagedEditCalls.get()}")
+    }
+
     private fun exercisePagedEditor() {
         val command = fixture.getString("editorProbeCommand")
         val nonce = fixture.getString("editorProbeNonce")
@@ -417,12 +445,16 @@ class PrStatusTransportEndToEndTest {
         val renderedText = requireNotNull(field.fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
         assertTrue("Rendered first window must be bounded and expose its marker", renderedText.length <= EditorWindows.MAX_UNITS && renderedText.startsWith(marker))
         if (pagedEditorCase in setOf("max-unchanged", "max-edited", "cancel", "lost-ack")) {
+            pagedEditorObservation("before-last", question, id)
             compose.onNodeWithTag("pagedEditorLast").performScrollTo().assertIsEnabled().performClick()
             compose.onNodeWithTag("pagedEditorLast").assertIsNotEnabled()
+            pagedEditorObservation("after-last", question, id)
             val lastText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
             assertTrue("Rendered last window must be bounded and expose its marker", lastText.length <= EditorWindows.MAX_UNITS && lastText.endsWith(marker))
+            pagedEditorObservation("before-first", question, id)
             compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
             compose.onNodeWithTag("pagedEditorFirst").assertIsNotEnabled()
+            pagedEditorObservation("after-first", question, id)
         }
         screenshot("paged-editor-before")
         val expectedFinal = pagedFinal()
@@ -430,6 +462,7 @@ class PrStatusTransportEndToEndTest {
         val stateBeforeInput = repository.state.value
         pagedDiagnostic("editor-action-before calls=$editCallsBefore connected=${stateBeforeInput.connected} loading=${stateBeforeInput.loading} " +
             "sameQuestion=${stateBeforeInput.questions.any { it === question }} generation=${stateBeforeInput.editorQuestionGeneration}")
+        pagedEditorObservation("before-replacement", question, id, expectedFinal)
         if (pagedEditorCase == "empty-final") {
             field.performTextReplacement("")
             field.assertTextEquals("")
@@ -444,6 +477,7 @@ class PrStatusTransportEndToEndTest {
         pagedDiagnostic("editor-after-input callsBefore=$editCallsBefore callsAfter=${pagedEditCalls.get()} connected=${stateAfterInput.connected} loading=${stateAfterInput.loading} " +
             "sameQuestion=${stateAfterInput.questions.any { it === question }} generation=${stateAfterInput.editorQuestionGeneration} " +
             "field=${pagedTextSummary(renderedAfter)} draft=${pagedTextSummary(draftAfter)} expected=${pagedTextSummary(expectedFinal)}")
+        pagedEditorObservation("after-replacement", question, id, expectedFinal)
         check(draftAfter == expectedFinal) { "Editor draft did not match expected value after UI input; see anonymous PAGED_DIAG summaries" }
         val finalDraft = requireNotNull(repository.state.value.pagedEditors[id]?.text)
         assertEquals("Exact full editor draft", expectedFinal, finalDraft)

@@ -2,6 +2,60 @@
 
 Status: **gated source, Host transaction and Android integration; the public paged capability and production opt-in remain disabled**. A limited set of private production-chain Pi/Host/Android cases has passed as described below; the full qualification remains open. See the [binding contract](../plans/2026-11-01-paged-editor-contract.md) and [implementation plan](../plans/2026-11-01-paged-editor-dialogs.md).
 
+## Current-source private matrix, 2026-11-01
+
+All fourteen current-source private emulator runs pass, including fixture/process cleanup and
+independent artifact review. Native and managed RPC each cover max-unchanged, max-edited,
+empty-to-1-MiB expansion, empty-final, cancellation and lost acknowledgment; two additional
+Native/RPC max-edited cases use the tablet layout. Public paged capability and production opt-in
+remain **OFF**. This does not complete the broader owner-replacement/authority/quota/race gates.
+
+Inputs: App `32ce8a5e3b1dcf004c65872f0606646db11b4581` with the diagnostic-only Android fixture
+change, Host `d66f848d892eb4a0dc4d16ccf035ad89b83196d5` with only unrelated pending Linux deployment
+locks/documentation. The runtime source is unchanged. The same 26 pinned runtime/test files and
+the same installed/build APKs were independently checked against all fourteen saved snapshots.
+App APK SHA-256: `73c52d7eb77459766f1f2eee5f548db6b49b98e0948b96353ca02eabe4a02a4f`; test APK SHA-256: `e0c6d57ce6489322960aa6da0feba3b1c907a1a27cb1e7fbf9d25eafde3f5afd`.
+The fresh test build passes in `/private/tmp/pocketpi-native-editor-current-build.log`; no new
+production feature, gate or relay limit was changed.
+
+| Evidence label | Owner / case | Recorded runner duration |
+| --- | --- | --- |
+| `editor-current-native-cancel-01` | native / cancel | 27.946 s |
+| `editor-current-native-edited-01` | native / max-edited | 30.501 s |
+| `editor-current-native-empty-expand-01` | native / empty-expand | 18.763 s |
+| `editor-current-native-empty-final-01` | native / empty-final | 13.662 s |
+| `editor-current-native-lost-ack-01` | native / lost-ack | 29.955 s |
+| `editor-current-native-max-unchanged-01` | native / max-unchanged | 27.581 s |
+| `editor-current-rpc-cancel-01` | rpc / cancel | 28.412 s |
+| `editor-current-rpc-empty-expand-01` | rpc / empty-expand | 18.802 s |
+| `editor-current-rpc-empty-final-01` | rpc / empty-final | 14.773 s |
+| `editor-current-rpc-lost-ack-01` | rpc / lost-ack | 30.300 s |
+| `editor-current-rpc-max-edited-01` | rpc / max-edited | 30.305 s |
+| `editor-current-rpc-max-unchanged-01` | rpc / max-unchanged | 26.923 s |
+| `editor-current-tablet-native-edited-01` | native / max-edited | 30.040 s |
+| `editor-current-tablet-rpc-edited-01` | rpc / max-edited | 30.223 s |
+
+Each 1-MiB source transfer has 22 contiguous owner chunks/ACKs totaling 1,048,576 bytes, one
+matching commit receipt and one exact SDK result. Empty-final has zero bytes/chunks and one
+settlement. Cancellation has zero owner commits and one undefined SDK result; the pinned test
+checks the fresh 1-MiB Host reservation, its release, and a three-second no-replay interval.
+Lost-ACK traces show the real valid owner receipt before intentional drop; the test checks the
+matching `outcome_unknown` and no replay over three seconds. These timings are bounded cases,
+not indefinite no-replay or every-race guarantees. All seven Native runs record zero original
+local-editor calls. Both tablet display overrides restore 1080 × 2400 at 420 dpi afterward.
+
+The original ~139-second failure is now localized to the former wait for edited draft equality,
+before upload; its logs lack the actual draft/callback state required to identify a cause. The
+current max-edited diagnostics observe a matching draft/expected/source result hash and one
+edit callback with firstDifference=-1. The attempted numeric window observation reports
+`window=unavailable`; the existing navigation-button and bounded-marker assertions still pass.
+Do not claim a numerical range observation or a fix for the historical timeout from these passes.
+
+Evidence: `/private/tmp/pocketpi-paged-production.oge2ybh1/editor-current-*` results, source/APK
+snapshots, source traces and logs. These are emulator/fixture proofs, not physical Samsung,
+external Linux, actual IME, adverse-network, restart or full mutation-matrix qualification.
+Historical results below retain their own exact inputs and original bounds.
+
 ## Current private production-chain results
 
 The paced max-unchanged case passed on both Native and managed RPC with actual Pi 1.4.0, private Host/relay and Android emulator instrumentation. The clean inputs record App `53aacb75ac533a8a089d210e44592ecd9309bff7` and Host `319c27587508f0a8ac7d256992af4ebc7ce8c5f1`. Each source returned the exact 1,048,576 bytes and matching SHA-256, with 22 sequential owner chunk acknowledgements, one owner commit and Android's matching accepted commit result. Native used the remote owner without calling the original local editor. Instrumentation passed in 25.104 seconds Native and 24.896 seconds RPC. The app and test APK hashes were `9449710f0187b1a274470ba952ea1216d98f7eefee057c10b32463a75d1e5d67` and `bf296d5ceb5ac315fc1baa266804bf1ed9dd3b4fc3206ea680ba8efecd04d6a7`; the installed APKs were pulled and matched the recorded inputs.
