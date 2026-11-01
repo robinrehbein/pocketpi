@@ -12744,6 +12744,110 @@ class RemoteRepositoryTest {
         assertEquals(false, repository.state.value.advisor?.enabled)
     }
 
+    private fun advisorOf(sessionId: String, enabled: Boolean) =
+        JsonObject(advisorData(enabled) + ("sessionId" to JsonPrimitive(sessionId)))
+
+    /** An advisor status event's `advisor` object: the advisor without its kind and choices. */
+    private fun advisorStatus(enabled: Boolean) =
+        JsonObject(advisorOf("session", enabled).filterKeys { it != "kind" && it != "choices" })
+
+    /**
+     * Opens "session" again after the phone missed an advisor status of it ([replayedEnabled]),
+     * with the activation's advisor read answered ([readEnabled]) before the resume reply that
+     * replays the status, or after it with [readFirst] false. Returns the repository and the
+     * advisor reads of "session" that are still to be answered.
+     */
+    private suspend fun TestScope.advisorReplayedAfterARead(
+        replayedEnabled: Boolean,
+        readEnabled: Boolean,
+        readFirst: Boolean = true,
+    ): Triple<Transport, DefaultRemoteRepository, MutableList<JsonObject>> {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(ADVISOR_CAPABILITY)
+        val journal = transport.response
+        val advisorReads = mutableListOf<JsonObject>()
+        var holdAdvisor = false
+        transport.response = { request ->
+            if (request.text("type") == "session.advisor.get")
+                if (holdAdvisor && request.text("sessionId") == "session") null.also { advisorReads += request }
+                else advisorOf(request.text("sessionId"), enabled = false)
+            else journal(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        // Missed while the chat was left.
+        host.record("advisor.status", "advisor" to advisorStatus(replayedEnabled))
+        val answer = transport.response
+        holdAdvisor = true
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session") null else answer(request)
+        }
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        assertEquals(1, advisorReads.size)
+        if (readFirst) {
+            transport.result(advisorReads.removeAt(0), advisorOf("session", readEnabled))
+            runCurrent()
+            assertEquals(readEnabled, repository.state.value.advisor?.enabled)
+        }
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        return Triple(transport, repository, advisorReads)
+    }
+
+    @Test
+    fun aReplayedAdvisorStatusOlderThanTheActivationsReadDoesNotOverwriteIt() = runTest {
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
+        // Read again instead of merged; the host still reports what the first read did.
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        transport.result(reads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aReplayedAdvisorStatusNewerThanTheReadShowsThroughTheReadAgain() = runTest {
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
+        // The host turned it on after the activation's read: the read after the reply shows it.
+        transport.result(reads.single(), advisorOf("session", enabled = true))
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aReplayWhileTheActivationsAdvisorReadIsUnansweredSendsNoSecondRead() = runTest {
+        val (transport, repository, reads) =
+            advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false, readFirst = false)
+        // The replayed status is not merged, and the read in flight covers it: no second read.
+        assertEquals(1, reads.size)
+        assertNotEquals(true, repository.state.value.advisor?.enabled)
+        transport.result(reads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aLiveAdvisorStatusAfterTheReadStillAppliesWithoutAnotherRead() = runTest {
+        // The replay leaves the live merge that follows intact.
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
+        reads.forEach { transport.result(it, advisorOf("session", enabled = false)) }
+        runCurrent()
+        val before = transport.sent.count { it.text("type") == "session.advisor.get" }
+
+        transport.deliver(listEvent("session", 3, "advisor.status", "advisor" to advisorStatus(enabled = true)))
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+        assertEquals(before, transport.sent.count { it.text("type") == "session.advisor.get" })
+    }
+
     @Test
     fun aHeldCompactionIsRefreshedOnceAcrossASameSessionReactivation() = runTest {
         val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
