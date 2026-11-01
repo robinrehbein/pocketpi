@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 
 /** Rendering a session as one HTML file and reading it back (`session.export`, `session.export.get`). */
 internal const val EXPORT_CAPABILITY = "session.export.v1"
+internal const val NATIVE_EXPORT_CAPABILITY = "session.export.native.v1"
 
 internal const val MAX_EXPORT_BYTES = 20L * 1024 * 1024
 internal const val EXPORT_CHUNK_BYTES = 49_152
@@ -16,7 +17,7 @@ private val SHA256_HEX = Regex("[a-f0-9]{64}")
 
 /** Why an export did not produce a file. */
 enum class ExportFailure {
-    /** The host lacks [EXPORT_CAPABILITY], or the session cannot be exported (not host-owned). */
+    /** The host or selected session does not support export. */
     UNSUPPORTED,
     /** The host holds another export of this session or reached a cap; asking again shortly may work. */
     BUSY,

@@ -243,15 +243,23 @@ internal fun canRenameSession(state: RemoteState): Boolean =
         state.session?.text("origin") in setOf("tui", "rpc") &&
         state.status != "offline"
 
-/**
- * The selected session can be exported: the host advertises [EXPORT_CAPABILITY] and the session
- * was started from the phone (`rpc`); a terminal pi session answers `unsupported`.
- */
+/** The host supports export for this session, including qualified native workers. */
+internal fun exportSupported(state: RemoteState): Boolean {
+    if (EXPORT_CAPABILITY !in state.capabilities || EXPORT_CAPABILITY in state.unavailableCapabilities) return false
+    val session = state.session ?: return false
+    return when (session.optionalText("origin")) {
+        "rpc" -> true
+        "worker", "tui" ->
+            NATIVE_EXPORT_CAPABILITY in state.capabilities && NATIVE_EXPORT_CAPABILITY !in state.unavailableCapabilities &&
+                (session["nativeExport"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true
+        else -> false
+    }
+}
+
+/** The selected session is reachable and supports export. */
 internal fun canExportSession(state: RemoteState): Boolean =
     state.connected && !state.loading && state.selection.sessionId != null &&
-        EXPORT_CAPABILITY in state.capabilities && EXPORT_CAPABILITY !in state.unavailableCapabilities &&
-        state.session?.optionalText("origin") == "rpc" &&
-        state.status != "offline"
+        exportSupported(state) && state.status != "offline"
 
 /** How `/reload` stands for the selected session. */
 internal enum class ReloadAvailability {

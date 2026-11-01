@@ -1,6 +1,10 @@
 package de.joinnoah.pi.remote
 
 import android.os.ParcelFileDescriptor
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
@@ -13,6 +17,7 @@ import java.security.MessageDigest
 import java.security.cert.CertificateFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -47,6 +52,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private lateinit var selection: RemoteSelection
     private lateinit var originalOwner: JSONObject
     private var ticketMode = false
+    private var nativeExportExpected = false
     private lateinit var remoteRef: String
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -60,6 +66,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
             require(fixture.optBoolean("developmentWorkflowFixture") && fixture.optBoolean("nativeWorker") && fixture.optString("sessionKind") == "actual-pi")
             ticketMode = fixture.optBoolean("ticketWorkflowFixture")
+            nativeExportExpected = args.getString("nativeExportExpected") == "true"
             if (ticketMode) require(!fixture.has("sessionId") || fixture.isNull("sessionId"))
             require((args.getString("ticketWorkflowExpected") == "true") == ticketMode) { "ticketWorkflowExpected must match fixture mode" }
             workflow = fixture.getJSONObject("workflow")
@@ -170,6 +177,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
         }
         compose.onNode(hasText(agentMarker, substring = true), useUnmergedTree = true).assertIsDisplayed()
         assertAgentTrace(agentResult)
+        if (nativeExportExpected) verifyNativeExport()
         assertGuards(agentResult, initialHead, null, 0, 0, 0)
         val shell = workflow.getString("shellCommand")
         require(!shell.contains('\n') && !shell.contains('\r') && workflow.getString("shellMarker").isNotBlank())
@@ -403,6 +411,104 @@ class DevelopmentWorkflowTransportEndToEndTest {
         else {
             compose.onNodeWithTag("chatActionsMore").performClick()
             compose.onNodeWithTag("chatActionMenu_$action").performClick()
+        }
+    }
+    @Suppress("DEPRECATION")
+    private fun verifyNativeExport() {
+        require(fixture.optBoolean("nativeExportFixture"))
+        val command = fixture.getString("exportBranchCommand")
+        require(command.startsWith("/") && command.isNotBlank() && fixture.getString("exportNonce").isNotBlank())
+        compose.waitUntil(60_000) { repository.state.value.status == "idle" }
+        compose.onNodeWithTag("composerField").performTextInput(command)
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        compose.waitUntil(60_000) { runCatching { fullStatus().optJSONObject("nativeExport")?.has("largeEntryId") == true }.getOrDefault(false) }
+        val expected = fullStatus().getJSONObject("nativeExport")
+        val active = expected.getString("activeLeafId")
+        val tail = expected.getString("tailEntryId")
+        val largeId = expected.getString("largeEntryId")
+        assertNotEquals(active, tail)
+        assertEquals(selection.sessionId, expected.getString("sessionId"))
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.status == "idle" && canExportSession(state) &&
+                state.session?.get("nativeExport") == kotlinx.serialization.json.JsonPrimitive(true) &&
+                EXPORT_CAPABILITY in state.capabilities && NATIVE_EXPORT_CAPABILITY in state.capabilities
+        }
+        val captured = AtomicReference<Intent>()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val monitor = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.action != Intent.ACTION_CHOOSER) return null
+                captured.set(intent)
+                return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        try {
+            chatAction("export")
+            compose.waitUntil(60_000) { captured.get() != null }
+            val chooser = requireNotNull(captured.get())
+            val send = requireNotNull(chooser.getParcelableExtra<Intent>(Intent.EXTRA_INTENT))
+            assertEquals(Intent.ACTION_SEND, send.action)
+            assertEquals("text/html", send.type)
+            assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+            val uri = requireNotNull(send.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            assertEquals("content", uri.scheme)
+            val bytes = requireNotNull(compose.activity.contentResolver.openInputStream(uri)).use { it.readBytes() }
+            assertTrue("Expected a multi-chunk export", bytes.size > EXPORT_CHUNK_BYTES)
+            val html = bytes.toString(Charsets.UTF_8)
+            val json = requireNotNull(Regex("<script id=\"session-data\" type=\"application/json\">(.*?)</script>", RegexOption.DOT_MATCHES_ALL).find(html)).groupValues[1]
+            val snapshot = JSONObject(json)
+            assertEquals("pocketpi.native.snapshot.v1", snapshot.getString("format"))
+            assertEquals(expected.getString("sessionId"), snapshot.getString("sessionId"))
+            assertEquals(active, snapshot.getString("leafId"))
+            val entries = snapshot.getJSONArray("entries")
+            assertEquals(expected.getInt("entryCount"), entries.length())
+            assertJsonEquivalent(expected.getJSONArray("entries"), entries, "entries")
+            val byId = (0 until entries.length()).map { entries.getJSONObject(it) }.associateBy { it.getString("id") }
+            assertTrue(byId.containsKey(active))
+            assertTrue(byId.containsKey(tail))
+            val activeBranch = mutableSetOf<String>()
+            var cursor: String? = active
+            while (cursor != null && activeBranch.add(cursor)) {
+                val entry = byId[cursor] ?: error("Active branch entry missing")
+                cursor = if (entry.isNull("parentId")) null else entry.getString("parentId")
+            }
+            assertFalse("Large entry must be on an inactive branch", largeId in activeBranch)
+            val large = byId.getValue(largeId)
+            assertEquals("custom", large.getString("type"))
+            assertEquals("pocketpi-native-export-fixture", large.getString("customType"))
+            val marker = large.getJSONObject("data").getString("marker")
+            assertEquals(expected.getInt("largeMarkerBytes"), marker.toByteArray(Charsets.UTF_8).size)
+            assertEquals(expected.getString("largeMarkerSha256"), sha256(marker))
+        } finally {
+            instrumentation.removeMonitor(monitor)
+        }
+    }
+    /** Compare captured source data semantically; object order and JSON number spelling may differ. */
+    private fun assertJsonEquivalent(expected: Any?, actual: Any?, path: String) {
+        when {
+            expected == null || expected === JSONObject.NULL ->
+                assertTrue("Expected JSON null at $path", actual == null || actual === JSONObject.NULL)
+            expected is JSONObject -> {
+                assertTrue("Expected object at $path", actual is JSONObject)
+                actual as JSONObject
+                val expectedKeys = expected.keys().asSequence().toSet()
+                val actualKeys = actual.keys().asSequence().toSet()
+                assertEquals("Object keys differ at $path", expectedKeys, actualKeys)
+                expectedKeys.forEach { key -> assertJsonEquivalent(expected.get(key), actual.get(key), "$path.$key") }
+            }
+            expected is org.json.JSONArray -> {
+                assertTrue("Expected array at $path", actual is org.json.JSONArray)
+                actual as org.json.JSONArray
+                assertEquals("Array length differs at $path", expected.length(), actual.length())
+                for (index in 0 until expected.length()) assertJsonEquivalent(expected.get(index), actual.get(index), "$path[$index]")
+            }
+            expected is Number -> {
+                assertTrue("Expected number at $path", actual is Number)
+                assertTrue("Number differs at $path", expected.toDouble() == (actual as Number).toDouble())
+            }
+            else -> assertTrue("Value differs at $path", expected == actual)
         }
     }
     private fun changesAction(tag: String) {

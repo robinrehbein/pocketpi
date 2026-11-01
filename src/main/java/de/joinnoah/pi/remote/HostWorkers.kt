@@ -10,6 +10,7 @@ import kotlinx.serialization.json.booleanOrNull
  * of an opaque request ID, so every such request may carry it.
  */
 internal const val HOST_WORKER_REQUEST_PREFIX = "host_worker.v1:"
+internal const val NATIVE_EXPORT_REQUEST_PREFIX = "native_export.v1:"
 
 /**
  * Sessions that run the pi Remote extension take follow-up, steer and reload from the phone, and a
@@ -32,7 +33,7 @@ internal const val HOST_WORKER_KEY = "hostWorker"
 
 /** [requestId] as sent for a request of [type]: lists, creates and opens opt in to host workers. */
 internal fun sessionsListRequestId(type: String, requestId: String): String =
-    if (type == "sessions.list" || type == "sessions.create" || type == "sessions.open") "$HOST_WORKER_REQUEST_PREFIX$requestId" else requestId
+    if (type == "sessions.list" || type == "sessions.create" || type == "sessions.open") "$HOST_WORKER_REQUEST_PREFIX$NATIVE_EXPORT_REQUEST_PREFIX$requestId" else requestId
 
 /**
  * A `worker` row as the `tui` session that opening it returns, marked with [HOST_WORKER_KEY]. The

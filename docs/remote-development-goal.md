@@ -1,6 +1,16 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Native session export checkpoint on 2026-11-01
+
+Host-owned native workers now support capability-gated PocketPi HTML snapshot export using public
+Pi session APIs. Phone and tablet emulator workflows passed complete-tree and active-leaf checks
+through the actual export/share URI, including a large inactive branch and multi-chunk transfer.
+The snapshot preserves public entries and raw JSON; it does not reproduce Pi custom renderers.
+See [native export qualification](testing/native-export-qualification.md) for exact inputs, review
+regressions and limits. Independent Linux and physical Samsung qualification remain open; neither
+a device nor an authorized SSH test host is currently available.
+
 ## Ticket-started native Android workflow checkpoint on 2026-11-01
 
 Phone- and tablet-sized Android emulator runs passed ticket selection and start through production
@@ -598,9 +608,10 @@ the top restores readable layout with and without IME. No production layout chan
 The current local code includes worker shell commands with output and stop, queued follow-up and
 steer, queue clearing on stop, close, tree and reload, worker-first reopen and fork with RPC
 fallback, and the relayed worker terminal. These are implementation findings; combined end-to-end
-and physical-device qualification remain open. Native worker export is still unavailable: the host
+and physical-device qualification remain open. At that audit snapshot, native worker export was unavailable: the host
 accepts export only for RPC sessions and the app gates it accordingly. Pi exposes a public
 `AgentSession.exportToHtml` method, but this audit did not establish public extension access to the
 already running worker's `AgentSession`. The public standalone CLI export is a possible separate
 approach, not an implemented native export; session-file authority, races and its differences from
-live-session export need resolution before adoption.
+live-session export needed resolution before adoption. This historical gap is superseded by the
+2026-11-01 native snapshot export checkpoint and qualification above.

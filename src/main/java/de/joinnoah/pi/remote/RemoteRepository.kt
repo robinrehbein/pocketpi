@@ -755,7 +755,7 @@ interface RemoteRepository {
 
     /**
      * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
-     * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
+     * `session.export.get`, for sessions qualified by the host's export capabilities).
      */
     suspend fun exportSession(sessionId: String): ExportResult =
         ExportResult.Failed(ExportFailure.UNSUPPORTED)

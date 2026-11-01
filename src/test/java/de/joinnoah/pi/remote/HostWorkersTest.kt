@@ -14,9 +14,9 @@ class HostWorkersTest {
 
     @Test
     fun onlySessionListsCreatesAndOpensCarryThePrefix() {
-        assertEquals("host_worker.v1:abc", sessionsListRequestId("sessions.list", "abc"))
-        assertEquals("host_worker.v1:abc", sessionsListRequestId("sessions.open", "abc"))
-        assertEquals("host_worker.v1:abc", sessionsListRequestId("sessions.create", "abc"))
+        assertEquals("host_worker.v1:native_export.v1:abc", sessionsListRequestId("sessions.list", "abc"))
+        assertEquals("host_worker.v1:native_export.v1:abc", sessionsListRequestId("sessions.open", "abc"))
+        assertEquals("host_worker.v1:native_export.v1:abc", sessionsListRequestId("sessions.create", "abc"))
         assertEquals("abc", sessionsListRequestId("session.snapshot", "abc"))
         assertTrue(listed.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX))
     }
