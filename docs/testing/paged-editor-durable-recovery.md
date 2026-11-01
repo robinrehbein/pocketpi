@@ -32,9 +32,34 @@ This process test is a storage proof. It does not exercise a Pi owner, restore r
 
 ## Remaining work
 
-The Native and RPC production-chain restart fixtures must use the actual journal rather than the constructor's legacy null-storage fallback. Qualify both a draft interrupted before commit and an uncertain commit after possible dispatch; require exact original-owner/SDK evidence and no replay. Define a correctly scoped outcome/reconciliation contract where a conclusive proof is possible, and retain quarantine otherwise. Complete owner replacement/revocation, quota/backlog lifetime, shared settlement, malformed/boundary, real IME and adverse-timing gates before public enablement. Long-lived pending-retry retention across draft-cache expiry remains part of that resource qualification.
+The four scoped Native and RPC production-chain restart cases below use the actual journal. Further qualify unresolved attempts across a new grant and generic close, additional process-death boundaries and longer observation periods. Define a correctly scoped outcome/reconciliation contract where a conclusive proof is possible, and retain quarantine otherwise. Complete owner replacement/revocation, quota/backlog lifetime, shared settlement, malformed/boundary, real IME and adverse-timing gates before public enablement. Long-lived pending-retry retention across draft-cache expiry remains part of that resource qualification.
 
-## Final frozen evidence
+## Private Native/RPC process-restart evidence
+
+Four isolated emulator runs passed with cleanup and post-run source-pin verification. The evidence directory is `/private/tmp/pocketpi-paged-production.oge2ybh1`; each label identifies its result, phase proofs and preserved Host traces. Durations below are runner-recorded seconds.
+
+| Run label (`paged-restart-` prefix) | Android PID A → B | Duration |
+| --- | --- | ---: |
+| `native-draft-02` | 3087 → 3619 | 45.646 s |
+| `native-lost-ack-01` | 3886 → 4301 | 36.940 s |
+| `rpc-draft-01` | 4537 → 4874 | 44.710 s |
+| `rpc-lost-ack-01` | 5130 → 5515 | 34.806 s |
+
+The private `NavigationTestActivity` fixture constructs the real repository with the encrypted `AppStores.pagedEditor` in a nonce-scoped directory and connects to actual Native or RPC Pi owners. It edits a window of a 1,048,576-byte source through the UI. The runner observes phase A alive, force-stops it and verifies a fresh phase B process. Native recovery operates within the existing 15-second owner grace. This is not a MainActivity or physical-device/IME qualification.
+
+In both draft cases, the new process accepts a current snapshot, obtains a different grant and reads the source again from the owner. Before and after explicit Restore, Host answer and upload counts remain zero; a subsequent explicit Send delivers the exact 1,048,576-byte edited value to the original owner and SDK. Source SHA-256 is `84ec34b605d28aeb6752c0f3753cefad3378cd459b6e6a060f04d93df8a52019`; edited value SHA-256 is `900dce5cc5d1bc1b5f209c09f600c445e85149e116e2b87542913b07d06f1763`.
+
+In both lost-ACK cases, the fixture verifies the actual owner receipt, drops it, and separately verifies the exact SDK result. Phase B accepts a current snapshot with the settled question absent, retains the exact persisted attempt, and observes no answer or upload replay for three seconds. The external fixture's SDK evidence does not authorize the app to clear the attempt. This does not exercise a new grant or generic close while an attempt remains unresolved, nor establish an authenticated outcome query. The earlier `native-draft-01` JUnit run passed but its runner failed on a `sha(str)` type error; the fresh `native-draft-02` run passed in full.
+
+## Additional tablet-format evidence and checks
+
+The same draft recovery passes on the owned emulator configured to 1600×2560 at density 240: `paged-restart-native-tablet-draft-01` (PIDs 5825 → 6195, 43.736 s) and `paged-restart-rpc-tablet-draft-01` (6568 → 6926, 47.793 s). Both retain the same exact source/final hashes and one 22-chunk commit. The wrapper records the display settings and restores 1080×2400 at density 420 in its `finally` cleanup. The captured phase-A images were inspected for both phone and tablet layouts; they show the bounded editor after the Compose edit, not a hardware-IME proof or post-restart screen.
+
+An independent audit of all six cases matches 30 source pins per case, the runner/helper snapshots and both APKs, the exact receipt/SDK hashes, fresh process identities, draft Restore counters and retained lost-ACK attempt fields. Its artifact is `paged-restart-six-case-independent-audit.json` in the evidence directory. Each case reports successful cleanup; exact process lookup finds none of the six recorded Pi owner PIDs remaining. The six-case test APK SHA-256 is `9d9201507379f246827bae213dc537c8bbb126a430c1b2ad046335ff28b3533a`; the app APK remains the hash recorded below.
+
+On this frozen source, Host TypeScript checking and scoped Biome checking pass. Four source-grant/source-daemon/upload-daemon/native-presence suites pass all 29 tests. The current Android quick-check passes in 10 seconds using up-to-date compilation and unit-test tasks; their input-matching reports contain 3,611 app and 34 Wear tests with no failures, errors or skips. No Wear emulator ran. The [positive-outcome contract](../plans/2026-11-01-paged-editor-positive-outcomes.md) is a proposed next implementation slice, not a negotiated or implemented runtime feature.
+
+## Journal implementation frozen evidence
 
 The final repository quick-check passes in 94 seconds: 3,611 app and 34 Wear tests with zero failures, errors or skips, resource parity and affected source-set compilation. App and instrumentation APK builds pass. Independent scoped reviews found no further material issue in the reviewed storage, authority, UI and retry paths; they do not replace the remaining public-enablement matrix.
 

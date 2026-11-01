@@ -1,0 +1,329 @@
+package de.joinnoah.pi.remote
+
+import android.content.ContextWrapper
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.os.Process
+import android.os.SystemClock
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.cert.CertificateFactory
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
+import kotlinx.coroutines.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.ExternalResource
+import org.junit.rules.RuleChain
+
+/** Private, opt-in production transport and AppStores proof using NavigationTestActivity. */
+class PagedEditorRestartEndToEndTest {
+    private val compose = createAndroidComposeRule<NavigationTestActivity>()
+    private val showNavigation = mutableStateOf(false)
+    private lateinit var fixture: JSONObject
+    private lateinit var phase: String
+    private lateinit var case: String
+    private lateinit var nonce: String
+    private lateinit var directory: File
+    private lateinit var stores: AppStores
+    private lateinit var host: PairedHost
+    private lateinit var selection: RemoteSelection
+    private lateinit var scope: CoroutineScope
+    private lateinit var client: OkHttpClient
+    private lateinit var transport: PresenceObservingTransport
+    private lateinit var repository: DefaultRemoteRepository
+    private var native = false
+    private val source = "😀".repeat(262_144)
+    private val edited = "é\\\n".repeat(1_024) + "😀".repeat(261_120)
+    private val finalValue get() = edited
+
+    @get:Rule val rules = RuleChain.outerRule(object : ExternalResource() {
+        override fun before() {
+            val args = InstrumentationRegistry.getArguments()
+            assumeTrue("Explicit private restart fixture required", args.getString("pagedRestartExpected") == "true")
+            phase = requireNotNull(args.getString("pagedRestartPhase"))
+            case = requireNotNull(args.getString("pagedRestartCase"))
+            nonce = requireNotNull(args.getString("pagedRestartNonce"))
+            require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack") && nonce.matches(Regex("[a-f0-9]{32}")))
+            val path = requireNotNull(args.getString("prStatusFixturePath"))
+            fixture = JSONObject(readFixture(path).toString(Charsets.UTF_8))
+            val relay = fixture.getString("relayUrl").toHttpUrl()
+            require(relay.scheme == "https" && relay.host == "10.0.2.2" && relay.encodedPath == "/")
+            for ((field, expectedPath) in listOf("statusUrl" to "/fixture-status", "actionUrl" to "/fixture-action")) {
+                val url = fixture.getString(field).toHttpUrl()
+                require(url.scheme == "https" && url.host == "10.0.2.2" && url.port == relay.port && url.encodedPath == expectedPath && url.query == null && url.fragment == null)
+            }
+            require(args.getString("prStatusFixtureExpected") == "true" && fixture.getBoolean("prStatusFixture") && fixture.getString("sessionKind") == "actual-pi")
+            native = args.getString("prStatusNativeExpected") == "true"
+            require(fixture.getBoolean("nativeWorker") == native && fixture.getBoolean("pagedEditorFixture"))
+            require(fixture.getString("pagedEditorCase") == if (case == "draft") "max-edited" else "restart-lost-ack")
+            verifyMetadata("Source", source)
+            verifyMetadata("Final", finalValue)
+            val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+            directory = File(app.noBackupFilesDir, "paged-restart-$nonce")
+            check(directory.mkdirs() || directory.isDirectory)
+            val isolated = object : ContextWrapper(app) { override fun getNoBackupFilesDir() = directory }
+            stores = AppStores(isolated)
+            host = PairedHost(fixture.getString("routeId"), fixture.getString("relayUrl"), fixture.getString("deviceId"), fixture.getString("deviceSecret"), "Restart fixture")
+            selection = RemoteSelection(host.routeId, fixture.getString("projectId"), fixture.getString("sessionId"))
+            val proofFile = File(directory, "phase-a.json")
+            if (phase == "A") {
+                check(!proofFile.exists() && stores.pairings.load().isEmpty())
+                stores.pairings.save(listOf(host))
+                assertEquals(listOf(host), stores.pairings.load())
+            } else {
+                val proof = JSONObject(proofFile.readText())
+                assertNotEquals(proof.getInt("pid"), Process.myPid())
+                assertEquals(nonce, proof.getString("nonce"))
+                assertEquals(case, proof.getString("case"))
+                assertEquals(identity(), proof.getString("identity"))
+                assertEquals(listOf(host), stores.pairings.load())
+            }
+            val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixture(fixture.getString("caCertPath")).inputStream())
+            val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
+            val manager = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(keys) }.trustManagers.filterIsInstance<X509TrustManager>().single()
+            val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), null) }
+            client = OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, manager).callTimeout(3, TimeUnit.SECONDS).build()
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+            transport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), true, false)
+            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor)
+            NavigationTestActivity.contentFactory = {
+                {
+                    if (showNavigation.value) MaterialTheme {
+                        RemoteNavigation(repository, PrStatusSettings(), false, {}, RemoteNotification(host.routeId, requireNotNull(selection.sessionId), 1))
+                    }
+                }
+            }
+        }
+        override fun after() {
+            NavigationTestActivity.contentFactory = { {} }
+            if (::repository.isInitialized) InstrumentationRegistry.getInstrumentation().runOnMainSync { repository.setForeground(false); repository.disconnect() }
+            if (::scope.isInitialized) scope.cancel()
+            if (::client.isInitialized) { client.dispatcher.cancelAll(); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdown() }
+        }
+    }).around(compose)
+
+    @Test fun actualOwnerRecoveryAcrossForceStop() {
+        val initial = status()
+        assertTrue(initial.getBoolean("ownerPidVerified"))
+        if (native) assertTrue(initial.getBoolean("nativeWorkerVerified"))
+        compose.runOnIdle { repository.setForeground(true); repository.setValidatedNetwork("paged-restart-fixture") }
+        compose.waitUntil(60_000) { repository.state.value.hostsLoaded && repository.state.value.hosts.any { it.routeId == host.routeId } }
+        activate(RemoteSelection(host.routeId))
+        compose.waitUntil(60_000) { repository.state.value.projects.any { it.optionalText("id") == selection.projectId } }
+        activate(RemoteSelection(host.routeId, selection.projectId))
+        compose.waitUntil(60_000) { repository.state.value.sessions.any { it.optionalText("id") == selection.sessionId } }
+        compose.runOnIdle { showNavigation.value = true }
+        compose.waitUntil(60_000) {
+            val s = repository.state.value
+            s.selection == selection && s.connected && !s.loading && QUESTION_PAGED_EDITOR_CAPABILITY in s.capabilities && transport.pagedV3Accepted.get() && (!native || transport.presenceAccepted.get())
+        }
+        if (phase == "A") phaseA() else phaseB()
+    }
+
+    private fun phaseA() {
+        val command = fixture.getString("editorProbeCommand")
+        val probeNonce = fixture.getString("editorProbeNonce")
+        val probeName = requireNotNull(commandName(command))
+        compose.waitUntil(60_000) { repository.state.value.commands.any { it.name == probeName } && !repository.state.value.commandsLoading }
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput("$command $probeNonce")
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        compose.runOnIdle { WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView).hide(WindowInsetsCompat.Type.ime()) }
+        compose.waitUntil(60_000) { ViewCompat.getRootWindowInsets(compose.activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == false }
+        compose.waitUntil(60_000) { repository.state.value.questions.any { it.optionalText("kind") == "editor" && it.containsKey("editorUploadGrantId") } }
+        val question = repository.state.value.questions.single { it.optionalText("kind") == "editor" }
+        val id = question.text("id")
+        val grant = question.text("editorUploadGrantId")
+        loadSource(id)
+        compose.onNodeWithTag("questionEditorField").performScrollTo().performTextReplacement("é\\\n".repeat(1_024))
+        compose.waitUntil(60_000) { repository.state.value.pagedEditors[id]?.text == edited }
+        val key = PagedJournalKey(host.routeId, requireNotNull(selection.sessionId), id)
+        if (case == "draft") {
+            compose.waitUntil(60_000) { persisted().drafts[key]?.text == finalValue }
+            assertTrue(persisted().attempts.isEmpty())
+            assertEquals(0, transport.uploadCounts().first)
+        } else {
+            compose.onNodeWithText(compose.activity.getString(R.string.remote_send)).performScrollTo().assertIsEnabled().performClick()
+            compose.waitUntil(120_000) {
+                statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") && it.optBoolean("pagedLostAckInjected") && it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
+                    transport.pagedCommitUnknown(id, grant, fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256")) && persisted().attempts.values.any { it.key == key && it.text == finalValue }
+            }
+            assertEquals(1, transport.uploadCounts().third)
+        }
+        val snapshot = persisted()
+        val owner = status()
+        assertTrue("Owner must have replied to a real source read", owner.getInt("pagedSourceReadReplyCount") > 0)
+        if (case == "draft") {
+            assertEquals(0, owner.getInt("pagedCommitCount"))
+            assertFalse(owner.getBoolean("pagedSdkResultVerified"))
+            if (native) {
+                assertTrue(owner.getBoolean("nativeEditorVerified"))
+                assertTrue(owner.getBoolean("nativeEditorPending"))
+                assertEquals(0, owner.getInt("nativeEditorOriginalCalls"))
+            }
+        }
+        val attempt = snapshot.attempts.values.singleOrNull()
+        val proof = JSONObject().put("nonce", nonce).put("case", case).put("pid", Process.myPid()).put("identity", identity())
+            .put("questionId", id).put("grantId", grant).put("sourceBytes", source.toByteArray().size).put("sourceSha256", digest(source))
+            .put("finalBytes", finalValue.toByteArray().size).put("finalSha256", digest(finalValue))
+            .put("attemptId", attempt?.attemptId ?: "")
+            .put("attemptGrant", attempt?.grantId ?: "")
+            .put("attemptUpload", attempt?.uploadId ?: "")
+            .put("attemptCommit", attempt?.commitRequestId ?: "")
+            .put("attemptCreatedAt", attempt?.createdAt ?: 0L)
+            .put("ownerQuestion", owner.optString("pagedQuestion", ""))
+            .put("sourceReadCount", owner.getInt("pagedSourceReadCount"))
+            .put("sourceReadReplyCount", owner.getInt("pagedSourceReadReplyCount"))
+            .put("readerCount", owner.getInt("pagedReaderCount"))
+            .put("beginCount", owner.getInt("pagedBeginCount"))
+            .put("chunkCount", owner.getInt("pagedChunkCount"))
+            .put("answerCount", owner.getInt("pagedQuestionAnswerCount"))
+            .put("commitCount", owner.getInt("pagedCommitCount"))
+        File(directory, "phase-a.json").outputStream().use { it.write(proof.toString().toByteArray()); it.fd.sync() }
+        report("A", id)
+        // The orchestrator must observe this live PID, then force-stop it; no normal teardown.
+        while (true) SystemClock.sleep(1_000)
+    }
+
+    private fun phaseB() {
+        val proof = JSONObject(File(directory, "phase-a.json").readText())
+        val id = proof.getString("questionId")
+        val key = PagedJournalKey(host.routeId, requireNotNull(selection.sessionId), id)
+        val snapshot = persisted()
+        assertEquals(finalValue, snapshot.drafts[key]?.text)
+        compose.waitUntil(60_000) { transport.acceptedSnapshotQuestions.get() != null && repository.state.value.connected && !repository.state.value.loading }
+        val acceptedQuestions = requireNotNull(transport.acceptedSnapshotQuestions.get())
+        val phaseBProof = JSONObject().put("nonce", nonce).put("case", case).put("pid", Process.myPid()).put("identity", identity())
+            .put("questionId", id).put("snapshotAccepted", true).put("snapshotContainsQuestion", id in acceptedQuestions)
+        if (case == "draft") {
+            assertTrue(snapshot.attempts.isEmpty())
+            compose.waitUntil(15_000) { repository.state.value.questions.any { it.optionalText("id") == id && it.containsKey("editorSource") && it.containsKey("editorUploadGrantId") } }
+            assertEquals("Same live owner question required", proof.getString("ownerQuestion"), status().getString("pagedQuestion"))
+            val resumedQuestion = repository.state.value.questions.single { it.optionalText("id") == id }
+            assertNotEquals("Reconnected reader must have a fresh grant", proof.getString("grantId"), resumedQuestion.text("editorUploadGrantId"))
+            phaseBProof.put("resumedGrantId", resumedQuestion.text("editorUploadGrantId"))
+            loadSource(id)
+            val owner = status()
+            assertEquals(proof.getString("ownerQuestion"), owner.getString("pagedQuestion"))
+            assertTrue("Fresh source must be read from the owner", owner.getInt("pagedSourceReadCount") > proof.getInt("sourceReadCount"))
+            assertTrue("Fresh source replies must come from the owner", owner.getInt("pagedSourceReadReplyCount") > proof.getInt("sourceReadReplyCount"))
+            assertEquals(0, owner.getInt("pagedCommitCount"))
+            assertFalse(owner.getBoolean("pagedSdkResultVerified"))
+            if (native) {
+                assertTrue(owner.getBoolean("nativeEditorVerified"))
+                assertTrue(owner.getBoolean("nativeEditorPending"))
+                assertEquals(0, owner.getInt("nativeEditorOriginalCalls"))
+                assertTrue("New Android reader must be authorized", owner.getInt("pagedReaderCount") > proof.getInt("readerCount"))
+            }
+            compose.waitUntil(60_000) { repository.state.value.pagedEditors[id]?.recoveryDraft == finalValue }
+            assertEquals(source, repository.state.value.pagedEditors[id]?.text)
+            assertEquals(0, transport.uploadCounts().first)
+            phaseBProof.put("beforeRestore", statusCounts(status()))
+            compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_restore)).performScrollTo().assertIsEnabled().performClick()
+            compose.waitUntil(60_000) { repository.state.value.pagedEditors[id]?.text == finalValue }
+            assertEquals(0, transport.uploadCounts().first)
+            assertEquals(proof.getInt("beginCount"), status().getInt("pagedBeginCount"))
+            assertEquals(0, status().getInt("pagedCommitCount"))
+            phaseBProof.put("afterRestoreBeforeSend", statusCounts(status()))
+            val question = repository.state.value.questions.single { it.optionalText("id") == id }
+            compose.onNodeWithText(compose.activity.getString(R.string.remote_send)).performScrollTo().assertIsEnabled().performClick()
+            compose.waitUntil(120_000) {
+                statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") && it.optBoolean("pagedAckVerified") && it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
+                    transport.pagedCommitAccepted(id, question.text("editorUploadGrantId"), fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256"))
+            }
+            phaseBProof.put("outcome", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified"))
+        } else {
+            val attempt = snapshot.attempts.values.single()
+            assertEquals(key, attempt.key)
+            assertEquals(proof.getString("attemptId"), attempt.attemptId)
+            assertEquals(proof.getString("attemptGrant"), attempt.grantId)
+            assertEquals(proof.getString("attemptUpload"), attempt.uploadId)
+            assertEquals(proof.getString("attemptCommit"), attempt.commitRequestId)
+            assertEquals(proof.getLong("attemptCreatedAt"), attempt.createdAt)
+            assertEquals(finalValue, attempt.text)
+            assertFalse("Accepted current snapshot must omit the question", id in acceptedQuestions)
+            phaseBProof.put("attemptId", attempt.attemptId).put("attemptGrant", attempt.grantId)
+                .put("attemptUpload", attempt.uploadId).put("attemptCommit", attempt.commitRequestId)
+                .put("attemptCreatedAt", attempt.createdAt).put("attemptBytes", attempt.text.toByteArray().size).put("attemptSha256", digest(attempt.text))
+                .put("beforeObservation", statusCounts(status()))
+            assertEquals(1, status().getInt("pagedCommitCount"))
+            assertEquals(0, transport.uploadCounts().first)
+            // The settled owner's absent question is not evidence available to the app
+            // for clearing the persisted uncertain attempt.
+            val deadline = SystemClock.elapsedRealtime() + 3_000
+            while (SystemClock.elapsedRealtime() < deadline) {
+                assertTrue(repository.state.value.connected && !repository.state.value.loading)
+                assertTrue(transport.acceptedSnapshotQuestions.get()?.let { id !in it } == true)
+                assertTrue(repository.state.value.questions.none { it.optionalText("id") == id })
+                assertEquals(0, transport.questionAnswerAttempts.get())
+                assertEquals(attempt, persisted().attempts[attempt.attemptId])
+                assertEquals(0, transport.uploadCounts().first)
+                assertEquals(0, transport.uploadCounts().second)
+                assertEquals(0, transport.uploadCounts().third)
+                val owner = status()
+                assertEquals(proof.getInt("beginCount"), owner.getInt("pagedBeginCount"))
+                assertEquals(proof.getInt("chunkCount"), owner.getInt("pagedChunkCount"))
+                assertEquals(proof.getInt("answerCount"), owner.getInt("pagedQuestionAnswerCount"))
+                assertEquals(1, owner.getInt("pagedCommitCount"))
+                SystemClock.sleep(200)
+            }
+            phaseBProof.put("afterObservation", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified"))
+                .put("answerAttempts", transport.questionAnswerAttempts.get())
+        }
+        File(directory, "phase-b.json").outputStream().use { it.write(phaseBProof.toString().toByteArray()); it.fd.sync() }
+        report("B", id)
+    }
+
+    private fun loadSource(id: String) {
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_load)).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(120_000) { repository.state.value.pagedEditors[id]?.text != null }
+        assertEquals(source, repository.state.value.pagedEditors[id]?.text)
+        verifyMetadata("Source", requireNotNull(repository.state.value.pagedEditors[id]?.text))
+    }
+    private fun activate(target: RemoteSelection) {
+        compose.runOnIdle { scope.launch { repository.activate(target, ActivationMode.USER_OPEN) } }
+        compose.waitUntil(60_000) { repository.state.value.selection == target && !repository.state.value.loading && repository.state.value.connected }
+    }
+    private fun persisted() = PagedEditorStore(object : ContextWrapper(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext) { override fun getNoBackupFilesDir() = directory }).load()
+    private fun statusCounts(owner: JSONObject) = JSONObject()
+        .put("sourceReadCount", owner.getInt("pagedSourceReadCount"))
+        .put("sourceReadReplyCount", owner.getInt("pagedSourceReadReplyCount"))
+        .put("readerCount", owner.getInt("pagedReaderCount"))
+        .put("beginCount", owner.getInt("pagedBeginCount"))
+        .put("chunkCount", owner.getInt("pagedChunkCount"))
+        .put("commitCount", owner.getInt("pagedCommitCount"))
+        .put("answerCount", owner.getInt("pagedQuestionAnswerCount"))
+    private fun status(): JSONObject = client.newCall(Request.Builder().url(fixture.getString("statusUrl")).build()).execute().use { check(it.isSuccessful); JSONObject(requireNotNull(it.body).string()) }
+    private fun statusOrNull() = runCatching { status() }.getOrNull()
+    private fun identity() = digest(listOf(fixture.getString("routeId"), fixture.getString("deviceId"), fixture.getString("projectId"), fixture.getString("sessionId"), fixture.getString("editorProbeNonce"), native.toString()).joinToString("\u0000"))
+    private fun digest(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    private fun verifyMetadata(label: String, value: String) {
+        assertEquals(fixture.getInt("pagedEditor${label}Bytes"), value.toByteArray(Charsets.UTF_8).size)
+        assertEquals(fixture.getString("pagedEditor${label}Sha256"), digest(value))
+    }
+    private fun report(phase: String, id: String) = InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+        putString("pagedRestartProof", "phase=$phase case=$case nonce=$nonce pid=${Process.myPid()} identity=${identity()} question=$id sourceBytes=${source.toByteArray().size} sourceSha256=${digest(source)} finalBytes=${finalValue.toByteArray().size} finalSha256=${digest(finalValue)}")
+    })
+    private fun readFixture(path: String): ByteArray {
+        require(path.matches(Regex("/data/local/tmp/[A-Za-z0-9._/-]+")) && !path.contains(".."))
+        val fd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")
+        return ParcelFileDescriptor.AutoCloseInputStream(fd).use { it.readBytes() }.also { require(it.isNotEmpty()) }
+    }
+}

@@ -34,6 +34,7 @@ import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
@@ -917,7 +918,7 @@ class PrStatusTransportEndToEndTest {
 }
 
 /** Observes the real encrypted transport's decoded messages without changing either direction. */
-private class PresenceObservingTransport(
+internal class PresenceObservingTransport(
     private val delegate: RemoteTransport,
     private val sessionId: String,
     private val pagedDiagnostics: Boolean,
@@ -927,6 +928,9 @@ private class PresenceObservingTransport(
     val inactivePresenceAccepted = AtomicBoolean(false)
     val staleAnswerResult = AtomicReference<JsonObject?>(null)
     val pagedV3Accepted = AtomicBoolean(false)
+    val acceptedSnapshotQuestions = AtomicReference<Set<String>?>(null)
+    val questionAnswerAttempts = AtomicInteger()
+    private val pendingSnapshots = ConcurrentHashMap.newKeySet<String>()
     val firstChunkAccepted = AtomicBoolean(false)
     val secondChunkHeld = AtomicBoolean(false)
     val releaseSecondChunk = CompletableDeferred<Unit>()
@@ -986,6 +990,14 @@ private class PresenceObservingTransport(
                 override fun message(payload: JsonObject) {
                     val resultId = payload.optionalText("requestId")
                     if (payload.optionalText("type") == "result" && resultId != null) {
+                        if (pendingSnapshots.remove(resultId)) runCatching {
+                            if (payload.flag("ok")) {
+                                val data = payload.obj("data")
+                                check(data.text("kind") == "snapshot" && data.text("sessionId") == sessionId)
+                                val questions = data["pendingQuestions"] as JsonArray
+                                acceptedSnapshotQuestions.set(questions.map { (it as JsonObject).text("id") }.toSet())
+                            }
+                        }
                         uploadRequests.remove(resultId)?.let { trace ->
                             val ok = runCatching { payload.flag("ok") }.getOrDefault(false)
                             val rawKind = if (ok) runCatching { payload.obj("data").optionalText("kind") }.getOrNull() else null
@@ -1070,6 +1082,10 @@ private class PresenceObservingTransport(
             val plainBytes = payload.toString().toByteArray(Charsets.UTF_8).size
             pagedDiagnostic("upload-send alias=${trace.alias} kind=$kind offset=$offset plaintextBytes=$plainBytes dataChars=$dataChars")
         }
+        if (type == "session.snapshot" && payload.optionalText("sessionId") == sessionId) {
+            acceptedSnapshotQuestions.set(null)
+            pendingSnapshots.add(payload.text("requestId"))
+        }
         when (payload.optionalText("type")) {
             "session.question.editor.upload.begin" -> {
                 uploadBegins.incrementAndGet()
@@ -1115,10 +1131,12 @@ private class PresenceObservingTransport(
         }
     }
     override fun send(payload: JsonObject) {
+        if (payload.optionalText("type") == "question.answer") questionAnswerAttempts.incrementAndGet()
         observe(payload)
         delegate.send(payload)
     }
     override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+        if (payload.optionalText("type") == "question.answer") questionAnswerAttempts.incrementAndGet()
         if (holdSecondChunk && payload.optionalText("type") == "session.question.editor.upload.chunk" && payload.long("offset") == EDITOR_UPLOAD_CHUNK_BYTES.toLong()) {
             secondChunkHeld.set(true)
             releaseSecondChunk.await()
@@ -1191,6 +1209,8 @@ private class PresenceObservingTransport(
         presenceAccepted.set(false)
         inactivePresenceAccepted.set(false)
         pendingPresence.clear()
+        pendingSnapshots.clear()
+        acceptedSnapshotQuestions.set(null)
         pagedV3Accepted.set(false)
         pagedV3Requests.clear()
         if (pagedDiagnostics && uploadRequests.isNotEmpty()) {
@@ -1200,7 +1220,7 @@ private class PresenceObservingTransport(
     }
 }
 
-private class PrStatusSettings : SettingsRepository {
+internal class PrStatusSettings : SettingsRepository {
     override val state = MutableStateFlow(RemoteSettings())
     override fun setTheme(theme: ThemePalette) { state.value = state.value.copy(theme = theme) }
     override fun setThemeMode(mode: ThemeMode) { state.value = state.value.copy(themeMode = mode) }

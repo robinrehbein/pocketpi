@@ -8,7 +8,7 @@
 
 **Binding references:** [Contract](2026-11-01-paged-editor-contract.md), [original implementation plan](2026-11-01-paged-editor-dialogs.md), [current qualification](../testing/paged-editor-qualification.md). This amendment adds restart work; it does not waive owner, lifetime, authority, quota, boundary or shared-settlement gates.
 
-**Implementation checkpoint:** The journal storage and core Android integration now exist; see [scoped qualification](../testing/paged-editor-durable-recovery.md). The remaining complete restart matrix and Host/source outcome contract are not implemented or qualified.
+**Implementation checkpoint:** The journal storage and core Android integration now exist; see [scoped qualification](../testing/paged-editor-durable-recovery.md). The six scoped Native/RPC phone/tablet-format restart cases now pass. The complete restart matrix and Host/source outcome contract remain unqualified; the [positive-only outcome design](2026-11-01-paged-editor-positive-outcomes.md) is proposed, not implemented.
 
 ## File and ownership boundaries
 
@@ -44,7 +44,7 @@
 
 ## Task 4: production-chain qualification
 
-- [ ] Run actual encrypted Native and RPC paths with 1 MiB draft text and real original-owner final-value/SDK receipts, covering force-stop and fresh-process recovery.
+- [x] Qualify the scoped private `NavigationTestActivity` Native and RPC draft and lost-ACK cases with the actual encrypted journal, 1 MiB text, original-owner/SDK evidence, live-process force-stop and fresh-process recovery. See [evidence and limits](../testing/paged-editor-durable-recovery.md#private-nativerpc-process-restart-evidence); this does not qualify MainActivity or the complete restart matrix.
 - [ ] Verify no commit replay from restart, snapshot, new grant or Restore; verify explicit source-authorized cancellation and exact terminal reconciliation where qualifying proof exists, otherwise persistent visible quarantine.
 - [ ] Keep IME, malformed multi-page/boundary, owner replacement/revocation, resource quota, two-client/shared-settlement and owner rejection/legacy fallback gates visible. Existing duplicate tests prove their recorded overlap, not simultaneous Host decoding.
 - [ ] Independently review lifetime/settlement/bounds; run repository checks. Enable each owner only after every applicable contract gate is proven. Physical Galaxy/DeX and independent Linux qualification remain separate full-goal requirements.
