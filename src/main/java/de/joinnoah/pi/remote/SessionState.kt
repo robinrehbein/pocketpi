@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
 import java.util.IdentityHashMap
 
 /** A compaction the host reported as running for the selected session. */
@@ -17,6 +18,9 @@ fun compactionVisible(c: SessionCompaction?, nowMillis: Long): Boolean =
     c != null && nowMillis - c.startedAtMillis < COMPACTION_VISIBLE_MILLIS
 
 private val compactionReasons = setOf("manual", "threshold", "overflow")
+
+/** How many live revisions a [Timeline] remembers while it waits for a resume; the oldest go first. */
+private const val MAX_HEARD_LIVE = 1024
 
 /** The session statuses this app knows; snapshots and `session.status` events carry one. */
 internal val SESSION_STATUSES = setOf("idle", "running", "waiting", "offline")
@@ -223,6 +227,15 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     val heldArrivals: Boolean
         get() = awaitingReply && heldThrough >= 0
 
+    /**
+     * The revisions of this session's events that reached the owner live while this Timeline held
+     * them for a reply ([awaitingReply]) or behind a gap, or skipped them ([detached], see
+     * [heardWhileDetached]). The
+     * owner ran their side effects on arrival, so [replay] leaves them out of what it returns as
+     * applied when the reply carries them again. Cleared as each wait ends.
+     */
+    private val heardLive = LinkedHashSet<Long>()
+
     /** See [takeOwedResume]. */
     private var resumeOwed = false
 
@@ -277,6 +290,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         retainedCursorRevision = -1L
         pendingEvents.clear()
         heldThrough = -1L
+        heardLive.clear()
         resumeOwed = false
         awaitingReply = false
         detached = false
@@ -295,6 +309,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     fun endAwaiting(): Boolean {
         if (!awaitingReply) return false
         awaitingReply = false
+        heardLive.clear()
         drainPending()
         return true
     }
@@ -322,6 +337,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         cursorRevision = -1L
         pendingEvents.clear()
         heldThrough = -1L
+        heardLive.clear()
         resumeOwed = false
         compaction = null
         suggestion = null
@@ -365,6 +381,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         if (restart) require(data.text("status") in SESSION_STATUSES)
         val held = awaitingReply
         awaitingReply = false
+        heardLive.clear()
         if (restart) {
             // Events that arrived for the resume past the new page are fetched with a resume; see
             // [takeOwedResume].
@@ -489,8 +506,26 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         } finally {
             applying = null
         }
-        // Held live events also apply above; their side effects ran when they arrived.
-        return Replay(applied.mapNotNull { wire[it] }, usable && revision >= reply.revision && pendingEvents.isEmpty())
+        // Held live events also apply above, and the reply may carry them again; their side effects
+        // ran when they arrived.
+        val fresh = applied.mapNotNull { wire[it] }.filterNot { it.long("revision") in heardLive }
+        heardLive.clear()
+        return Replay(fresh, usable && revision >= reply.revision && pendingEvents.isEmpty())
+    }
+
+    /**
+     * The owner received [event] live while this Timeline is [detached], so it applies nothing, and
+     * ran its side effects; a resume that replays it does not run them again.
+     */
+    fun heardWhileDetached(event: JsonObject) {
+        if (!detached || event.optionalText("sessionId") != sessionId) return
+        // A malformed revision is left out; the replay applies such an event as any other.
+        (event["revision"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.let(::hear)
+    }
+
+    private fun hear(revision: Long) {
+        heardLive.add(revision)
+        while (heardLive.size > MAX_HEARD_LIVE) heardLive.remove(heardLive.first())
     }
 
     /** The index of the message with [id] in [messages], or -1. */
@@ -522,7 +557,10 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         if (detached || event.optionalText("sessionId") != sessionId) return SnapshotNeed.NONE
         // Counted before the revision check: a reply of another epoch may restart the numbering
         // below an event that is already behind this Timeline.
-        if (awaitingReply) heldThrough = maxOf(heldThrough, event.long("revision"))
+        if (awaitingReply) {
+            heldThrough = maxOf(heldThrough, event.long("revision"))
+            hear(event.long("revision"))
+        }
         if (event.long("revision") <= revision) return SnapshotNeed.NONE
         if (awaitingReply) {
             buffer(event)
@@ -536,6 +574,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             // What changed is unknown until the snapshot, tasks included.
             if (required) tasksKnown = false
             buffer(event)
+            // A live event the gap holds back: the resume that fills the gap carries it again.
+            if (applying == null) hear(event.long("revision"))
             return if (required) SnapshotNeed.REQUIRED else SnapshotNeed.GAP
         }
         revision = event.long("revision")

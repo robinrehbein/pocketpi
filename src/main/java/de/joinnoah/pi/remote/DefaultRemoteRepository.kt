@@ -2362,8 +2362,11 @@ class DefaultRemoteRepository(
 
     private fun timelineEvent(current: Timeline, event: JsonObject) {
         // Out of focus: the host leaves its upserts out, so its gaps mean nothing until the refocus
-        // resumes it.
-        if (current.detached) return
+        // resumes it. Its side effects ran on arrival, so the resume does not run them again.
+        if (current.detached) {
+            current.heardWhileDetached(event)
+            return
+        }
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
             // one would only be discarded. A gap can be filled from the host's journal;
