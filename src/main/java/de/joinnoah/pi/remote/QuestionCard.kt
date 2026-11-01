@@ -12,6 +12,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -245,6 +248,13 @@ internal fun QuestionCard(
                         var window by remember(editorKey, editorScope) { mutableStateOf(EditorWindows.atOffset(verified, 0)) }
                         var field by remember(editorKey, editorScope) { mutableStateOf(TextFieldValue(verified.substring(window.start, window.end))) }
                         var section by remember(editorKey, editorScope) { mutableStateOf("1") }
+                        var fieldSession by remember(editorKey, editorScope) { mutableIntStateOf(0) }
+                        var fieldFocused by remember(editorKey, editorScope) { mutableStateOf(false) }
+                        var restoreFieldFocus by remember(editorKey, editorScope) { mutableStateOf(false) }
+                        fun restartField() {
+                            restoreFieldFocus = fieldFocused
+                            fieldSession++
+                        }
                         val editEnabled = controlsEnabled && !pagedEditor.loading && !pagedEditor.storagePending
                         val currentEditEnabled by rememberUpdatedState(editEnabled)
                         fun canEdit() = active() && currentEditEnabled
@@ -264,6 +274,9 @@ internal fun QuestionCard(
                             val updated = EditorWindows.replace(text, old, value.text)
                             val absoluteSelection = TextRange(old.start + value.selection.start, old.start + value.selection.end)
                             val absoluteComposition = value.composition?.let { TextRange(old.start + it.start, old.start + it.end) }
+                            // A large replacement changes the input connection's entire text basis.
+                            // Fence callbacks from that connection before installing the new window.
+                            if (value.text.length > EditorWindows.MAX_UNITS) restartField()
                             text = updated
                             onEditPagedEditor(updated)
                             val anchor = if (value.text.length > EditorWindows.MAX_UNITS) maxOf(0, absoluteSelection.end - EditorWindows.MAX_UNITS / 2) else old.start.coerceAtMost(updated.length)
@@ -273,10 +286,23 @@ internal fun QuestionCard(
                             if (!canEdit()) return
                             val selection = TextRange(window.start + field.selection.start, window.start + field.selection.end)
                             val composition = field.composition?.let { TextRange(window.start + it.start, window.start + it.end) }
+                            restartField()
                             showWindow(next, selection, composition, requestedSection)
                         }
-                        OutlinedTextField(value = field, onValueChange = { if (editEnabled) replaceWindow(it) }, enabled = editEnabled,
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("questionEditorField").then(rememberQuestionFieldKeys(text)), minLines = 4)
+                        key(fieldSession) {
+                            val session = fieldSession
+                            val focusRequester = remember { FocusRequester() }
+                            LaunchedEffect(session) {
+                                if (restoreFieldFocus) {
+                                    restoreFieldFocus = false
+                                    focusRequester.requestFocus()
+                                }
+                            }
+                            OutlinedTextField(value = field, onValueChange = { if (editEnabled && session == fieldSession) replaceWindow(it) }, enabled = editEnabled,
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("questionEditorField")
+                                    .focusRequester(focusRequester).onFocusChanged { fieldFocused = it.hasFocus }
+                                    .then(rememberQuestionFieldKeys(text)), minLines = 4)
+                        }
                         Text(stringResource(R.string.remote_paged_editor_position, window.start, window.end, text.length))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             TextButton(onClick = { if (canEdit()) navigate(EditorWindows.atOffset(text, 0)) }, enabled = editEnabled && window.start > 0, modifier = Modifier.testTag("pagedEditorFirst")) { Text(stringResource(R.string.remote_paged_editor_first)) }
@@ -296,7 +322,7 @@ internal fun QuestionCard(
                         if (pagedEditor.retentionWarning) Text(stringResource(R.string.remote_paged_editor_retention_warning))
                         if (pagedEditor.capacityFull && !pagedEditor.quarantined) Text(stringResource(R.string.remote_paged_editor_capacity_full))
                         pagedEditor.recoveryDraft?.let { recovery ->
-                            TextButton(onClick = { if (canEdit()) { text = recovery; onEditPagedEditor(recovery); showWindow(EditorWindows.atOffset(recovery, 0)) } }, enabled = editEnabled) {
+                            TextButton(onClick = { if (canEdit()) { restartField(); text = recovery; onEditPagedEditor(recovery); showWindow(EditorWindows.atOffset(recovery, 0)) } }, enabled = editEnabled) {
                                 Text(stringResource(R.string.remote_paged_editor_restore))
                             }
                         }

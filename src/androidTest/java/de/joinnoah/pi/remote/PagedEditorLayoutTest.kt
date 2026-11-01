@@ -22,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -92,6 +93,58 @@ class PagedEditorLayoutTest {
         val send = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.remote_send)
         compose.onNodeWithText(send).performScrollTo().performClick()
         compose.runOnIdle { assertEquals(pasted, submitted) }
+    }
+
+    @Test fun repeatedLargeInputIsNotDiscardedAfterRewindowing() {
+        val chunk = "abc".repeat(1_000)
+        val question = Wire.objectOf("id" to "editor", "kind" to "editor", "editorUploadGrantId" to "grant")
+        var edited: String? = null
+        compose.setContent { MaterialTheme {
+            QuestionCard(question, enabled = true, pagedEditor = PagedEditorView(text = ""), onEditPagedEditor = { edited = it }) { }
+        } }
+        compose.onNodeWithTag("questionEditorField").performClick().performTextInput(chunk)
+        compose.onNodeWithTag("questionEditorField").performTextInput(chunk)
+        compose.runOnIdle { assertEquals(chunk + chunk, edited) }
+    }
+
+    @Test fun obsoleteFieldCallbackCannotReplaceTheNewWindow() {
+        val pasted = "abc".repeat(1_000)
+        val question = Wire.objectOf("id" to "editor", "kind" to "editor", "editorUploadGrantId" to "grant")
+        var edited: String? = null
+        compose.setContent { MaterialTheme {
+            QuestionCard(question, enabled = true, pagedEditor = PagedEditorView(text = "draft"), onEditPagedEditor = { edited = it }) { }
+        } }
+        val field = compose.onNodeWithTag("questionEditorField").performClick()
+        val oldSet = requireNotNull(field.fetchSemanticsNode().config.getOrNull(SemanticsActions.SetText)?.action)
+        field.performTextReplacement(pasted)
+        compose.waitForIdle()
+        compose.runOnIdle { oldSet(AnnotatedString("obsolete")) }
+        compose.runOnIdle { assertEquals(pasted, edited) }
+        compose.onNodeWithTag("questionEditorField").performTextInput("!")
+        compose.runOnIdle { assertEquals(pasted + "!", edited) }
+    }
+
+    @Test fun focusedMegabyteReplacementRemainsExactAfterDelayedImeUpdates() {
+        val pasted = "é\\\n".repeat(262_144) // Exactly 1 MiB in UTF-8.
+        val question = Wire.objectOf("id" to "editor", "kind" to "editor", "editorUploadGrantId" to "grant")
+        var edited: String? = null
+        var submitted: String? = null
+        compose.setContent { MaterialTheme {
+            Column(Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(question, enabled = true, pagedEditor = PagedEditorView(text = "draft"),
+                    onEditPagedEditor = { edited = it }, onSubmitPagedEditor = { submitted = it }) { }
+            }
+        } }
+        val field = compose.onNodeWithTag("questionEditorField").performScrollTo().performClick()
+        field.performTextReplacement(pasted)
+        // The IME can deliver its previous value after the replacement has been rewindowed.
+        android.os.SystemClock.sleep(5_000)
+        compose.runOnIdle { assertTrue("Delayed IME updates must preserve the exact draft", pasted == edited) }
+        val displayed = requireNotNull(field.fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
+        assertTrue("The focused field must remain bounded", displayed.length <= 2_048)
+        val send = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.remote_send)
+        compose.onNodeWithText(send).performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle { assertTrue("Submitted value must equal the replacement", pasted == submitted) }
     }
 
     @Test fun equalReplacementQuestionDoesNotInheritWindowDraft() {
