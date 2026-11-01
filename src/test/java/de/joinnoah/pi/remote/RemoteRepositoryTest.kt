@@ -12491,6 +12491,117 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aNewEpochStatusSentWhileTheResumeIsInFlightShowsInTheList() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        assertEquals("idle", repository.state.value.sessions.single().text("status"))
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 3), resume.resumeBase())
+
+        // The session is reopened in place, and its first status counts from 1 again, below what
+        // the list saw; it arrives before the reply.
+        host.restart()
+        host.live("session.status", "status" to "waiting")
+        runCurrent()
+        transport.response = answer
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+
+        assertEquals("snapshot", host.answers.last())
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals("waiting", repository.state.value.sessions.single().text("status"))
+    }
+
+    @Test
+    fun aChatReopenedWithoutItsTimelineShowsItsNewEpochStatusAndTitleInTheList() = runTest {
+        val others = (1..DETACHED_TIMELINES).map { "other$it" }
+        val (transport, host) = journalTransport(sessions = listOf(session()) + others.map { session(it) })
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        host.live("session.title", "title" to "Before")
+        host.live("session.status", "status" to "idle")
+        host.live("session.title", "title" to "Before again")
+        runCurrent()
+        fun row() = repository.state.value.sessions.single { it.text("id") == "session" }
+        assertEquals("Before again", row().text("title"))
+
+        // Enough other chats are opened that the kept Timeline of the first one is dropped.
+        for (other in others) {
+            repository.activate(RemoteSelection("host", "project", other))
+            runCurrent()
+        }
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m1", "Reopened"))
+        val pages = transport.firstPages().size
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        // Read afresh, not resumed.
+        assertEquals(ResumeBase(null, 0), transport.firstPages()[pages].resumeBase())
+        assertEquals("snapshot", host.answers.last())
+
+        host.live("session.status", "status" to "waiting")
+        host.live("session.title", "title" to "After")
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+        assertEquals("After", row().text("title"))
+        assertEquals("waiting", repository.state.value.status)
+    }
+
+    private fun listEvent(sessionId: String, revision: Long, kind: String, vararg fields: Pair<String, Any?>) =
+        Wire.objectOf("type" to "event", "sessionId" to sessionId, "revision" to revision, "kind" to kind, *fields)
+
+    @Test
+    fun aListOnlySessionShowsAStatusAndTitleThatNameANewEpochAtALowRevision() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val repository = openedChat(transport, host)
+        fun row() = repository.state.value.sessions.single { it.text("id") == "other" }
+        transport.deliver(listEvent("other", 9, "session.status", "status" to "running", "epoch" to "A".repeat(22)))
+        transport.deliver(listEvent("other", 10, "session.title", "title" to "Before", "epoch" to "A".repeat(22)))
+        runCurrent()
+        assertEquals("running", row().text("status"))
+        assertEquals("Before", row().text("title"))
+
+        // The session restarted: its revisions count from 1 again.
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        transport.deliver(listEvent("other", 2, "session.title", "title" to "After", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+        assertEquals("After", row().text("title"))
+
+        // The same epoch keeps the newer-revision-wins guard.
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "idle", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+    }
+
+    @Test
+    fun aListStatusWithoutAnEpochAtALowRevisionIsStillDropped() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val repository = openedChat(transport, host)
+        fun row() = repository.state.value.sessions.single { it.text("id") == "other" }
+        transport.deliver(listEvent("other", 9, "session.status", "status" to "running"))
+        transport.deliver(listEvent("other", 10, "session.title", "title" to "Before"))
+        runCurrent()
+
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "waiting"))
+        transport.deliver(listEvent("other", 2, "session.title", "title" to "After"))
+        runCurrent()
+        assertEquals("running", row().text("status"))
+        assertEquals("Before", row().text("title"))
+    }
+
+    @Test
     fun aReplayedCompactionDoneClearsAndRefreshesTheContextUsage() = runTest {
         val (transport, host) = journalTransport()
         transport.capabilities = setOf(CONTEXT_CAPABILITY)
