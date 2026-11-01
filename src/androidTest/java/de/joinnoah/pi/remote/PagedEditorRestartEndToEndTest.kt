@@ -61,7 +61,7 @@ class PagedEditorRestartEndToEndTest {
             phase = requireNotNull(args.getString("pagedRestartPhase"))
             case = requireNotNull(args.getString("pagedRestartCase"))
             nonce = requireNotNull(args.getString("pagedRestartNonce"))
-            require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack", "positive") && nonce.matches(Regex("[a-f0-9]{32}")))
+            require(phase in setOf("A", "B") && case in setOf("draft", "lost-ack", "positive", "release") && nonce.matches(Regex("[a-f0-9]{32}")))
             val path = requireNotNull(args.getString("prStatusFixturePath"))
             fixture = JSONObject(readFixture(path).toString(Charsets.UTF_8))
             val relay = fixture.getString("relayUrl").toHttpUrl()
@@ -74,7 +74,7 @@ class PagedEditorRestartEndToEndTest {
             native = args.getString("prStatusNativeExpected") == "true"
             require(fixture.getBoolean("nativeWorker") == native && fixture.getBoolean("pagedEditorFixture"))
             require(fixture.getString("pagedEditorCase") == if (case == "draft") "max-edited" else "restart-lost-ack")
-            require(fixture.optBoolean("pagedEditorPositiveOutcomes") == (case == "positive"))
+            require(fixture.optBoolean("pagedEditorPositiveOutcomes") == (case in setOf("positive", "release")))
             verifyMetadata("Source", source)
             verifyMetadata("Final", finalValue)
             val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
@@ -103,8 +103,8 @@ class PagedEditorRestartEndToEndTest {
             val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), null) }
             client = OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, manager).callTimeout(3, TimeUnit.SECONDS).build()
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-            transport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), true, false)
-            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor, positiveOutcomeTestGate = case == "positive")
+            transport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), true, false, holdPositiveRelease = phase == "A" && case == "release")
+            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor, positiveOutcomeTestGate = case in setOf("positive", "release"))
             NavigationTestActivity.contentFactory = {
                 {
                     if (showNavigation.value) MaterialTheme {
@@ -156,6 +156,7 @@ class PagedEditorRestartEndToEndTest {
         compose.onNodeWithTag("questionEditorField").performScrollTo().performTextReplacement("é\\\n".repeat(1_024))
         compose.waitUntil(60_000) { repository.state.value.pagedEditors[id]?.text == edited }
         val key = PagedJournalKey(host.routeId, requireNotNull(selection.sessionId), id)
+        var capturedAttempt: StoredPagedAttempt? = null
         if (case == "draft") {
             compose.waitUntil(60_000) { persisted().drafts[key]?.text == finalValue }
             assertTrue(persisted().attempts.isEmpty())
@@ -164,9 +165,22 @@ class PagedEditorRestartEndToEndTest {
             compose.onNodeWithText(compose.activity.getString(R.string.remote_send)).performScrollTo().assertIsEnabled().performClick()
             compose.waitUntil(120_000) {
                 statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") && it.optBoolean("pagedLostAckInjected") && it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
-                    (if (case == "positive") statusOrNull()?.let { it.optBoolean("pagedHostAckDropped") && it.optBoolean("pagedPositiveOutcomeVerified") } == true else transport.pagedCommitUnknown(id, grant, fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256"))) && persisted().attempts.values.any { it.key == key && it.text == finalValue }
+                    (if (case in setOf("positive", "release")) statusOrNull()?.let { it.optBoolean("pagedHostAckDropped") && it.optBoolean("pagedPositiveOutcomeVerified") } == true else transport.pagedCommitUnknown(id, grant, fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256"))) && persisted().attempts.values.any { it.key == key && it.text == finalValue }
             }
             assertEquals(1, transport.uploadCounts().third)
+            capturedAttempt = persisted().attempts.values.single()
+            if (case == "release") {
+                compose.runOnIdle { repository.disconnect() }
+                activate(RemoteSelection(host.routeId))
+                activate(RemoteSelection(host.routeId, selection.projectId))
+                activate(selection)
+                compose.waitUntil(60_000) { transport.positiveReleaseHeld.get() && persisted().attempts.isEmpty() && persisted().pendingReleases.size == 1 }
+                val queued = persisted().pendingReleases.values.single()
+                assertEquals(capturedAttempt.attemptId, queued.releaseId)
+                assertEquals(capturedAttempt.commitRequestId, queued.commitRequestId)
+                assertFalse(transport.positiveOutcomeReleased.get())
+                assertEquals(0, transport.positiveOutcomeReleaseAttempts.get())
+            }
         }
         val snapshot = persisted()
         val owner = status()
@@ -180,8 +194,8 @@ class PagedEditorRestartEndToEndTest {
                 assertEquals(0, owner.getInt("nativeEditorOriginalCalls"))
             }
         }
-        val attempt = snapshot.attempts.values.singleOrNull()
-        if (case == "positive") {
+        val attempt = capturedAttempt ?: snapshot.attempts.values.singleOrNull()
+        if (case in setOf("positive", "release")) {
             assertNotNull(attempt?.outcomeBinding)
             assertEquals(host.deviceId, attempt?.outcomeBinding?.deviceId)
             assertEquals(question.text("editorOwnerIncarnationId"), attempt?.outcomeBinding?.ownerIncarnationId)
@@ -196,6 +210,8 @@ class PagedEditorRestartEndToEndTest {
             .put("attemptCommit", attempt?.commitRequestId ?: "")
             .put("attemptCreatedAt", attempt?.createdAt ?: 0L)
             .put("ownerIncarnationId", attempt?.outcomeBinding?.ownerIncarnationId ?: "")
+            .put("releaseHeld", case == "release" && transport.positiveReleaseHeld.get())
+            .put("queuedReleaseId", snapshot.pendingReleases.values.singleOrNull()?.releaseId ?: "")
             .put("ownerQuestion", owner.optString("pagedQuestion", ""))
             .put("sourceReadCount", owner.getInt("pagedSourceReadCount"))
             .put("sourceReadReplyCount", owner.getInt("pagedSourceReadReplyCount"))
@@ -257,9 +273,9 @@ class PagedEditorRestartEndToEndTest {
                     transport.pagedCommitAccepted(id, question.text("editorUploadGrantId"), fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256"))
             }
             phaseBProof.put("outcome", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified"))
-        } else if (case == "positive") {
+        } else if (case in setOf("positive", "release")) {
             try {
-                compose.waitUntil(60_000) { persisted().attempts.isEmpty() && transport.positiveOutcomeApplied.get() != null && transport.positiveOutcomeReleased.get() }
+                compose.waitUntil(60_000) { persisted().attempts.isEmpty() && persisted().pendingReleases.isEmpty() && (case == "release" || transport.positiveOutcomeApplied.get() != null) && transport.positiveOutcomeReleased.get() }
             } catch (failure: Throwable) {
                 val state = repository.state.value
                 val diagnostic = JSONObject().put("queries", transport.positiveOutcomeQueries.get()).put("applied", transport.positiveOutcomeApplied.get() != null)
@@ -270,7 +286,12 @@ class PagedEditorRestartEndToEndTest {
                 File(directory, "phase-b-diagnostic.json").writeText(diagnostic.toString())
                 throw AssertionError("Positive recovery stalled: $diagnostic", failure)
             }
-            val applied = requireNotNull(transport.positiveOutcomeApplied.get()).obj("receipt")
+            if (case == "release") {
+                assertTrue(proof.getBoolean("releaseHeld"))
+                assertEquals(proof.getString("attemptId"), proof.getString("queuedReleaseId"))
+                assertEquals(0, transport.positiveOutcomeQueries.get())
+            }
+            val applied = if (case == "release") requireNotNull(transport.positiveOutcomeReleaseReceipt.get()) else requireNotNull(transport.positiveOutcomeApplied.get()).obj("receipt")
             assertEquals(proof.getString("attemptCommit"), applied.text("commitRequestId"))
             assertEquals(proof.getString("attemptUpload"), applied.text("uploadId"))
             assertEquals(proof.getString("attemptGrant"), applied.text("grantId"))
@@ -281,6 +302,7 @@ class PagedEditorRestartEndToEndTest {
             val before = statusCounts(status()); val deadline = SystemClock.elapsedRealtime() + 3_000
             while (SystemClock.elapsedRealtime() < deadline) {
                 assertTrue(persisted().attempts.isEmpty())
+                assertTrue(persisted().pendingReleases.isEmpty())
                 assertEquals(Triple(0, 0, 0), transport.uploadCounts())
                 assertEquals(0, transport.questionAnswerAttempts.get())
                 val current = statusCounts(status())
@@ -288,7 +310,7 @@ class PagedEditorRestartEndToEndTest {
                 SystemClock.sleep(200)
             }
             phaseBProof.put("positiveReceipt", JSONObject(applied.toString())).put("outcomeQueries", transport.positiveOutcomeQueries.get()).put("releaseAttempts", transport.positiveOutcomeReleaseAttempts.get())
-                .put("cleanupVerified", persisted().attempts.isEmpty()).put("releaseAccepted", transport.positiveOutcomeReleased.get()).put("beforeObservation", before).put("afterObservation", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified")).put("answerAttempts", transport.questionAnswerAttempts.get())
+                .put("cleanupVerified", persisted().attempts.isEmpty() && persisted().pendingReleases.isEmpty()).put("releaseAccepted", transport.positiveOutcomeReleased.get()).put("beforeObservation", before).put("afterObservation", statusCounts(status())).put("sdkVerified", status().getBoolean("pagedSdkResultVerified")).put("answerAttempts", transport.questionAnswerAttempts.get())
         } else {
             val attempt = snapshot.attempts.values.single()
             assertEquals(key, attempt.key)

@@ -25,9 +25,13 @@ data class StoredPagedAttempt(
     val createdAt: Long,
     val outcomeBinding: StoredPagedOutcomeBinding? = null,
 )
+class PagedReleaseCapacityException : IllegalStateException("Pending release capacity reached")
+
+data class StoredPagedRelease(val releaseId: String, val key: PagedJournalKey, val deviceId: String, val ownerIncarnationId: String, val grantId: String, val uploadId: String, val commitRequestId: String, val byteLength: Int, val sha256: String)
 data class PagedJournalSnapshot(
     val drafts: Map<PagedJournalKey, StoredPagedDraft> = emptyMap(),
     val attempts: Map<String, StoredPagedAttempt> = emptyMap(),
+    val pendingReleases: Map<String, StoredPagedRelease> = emptyMap(),
 )
 interface PagedEditorStorage {
     fun load(): PagedJournalSnapshot
@@ -61,11 +65,11 @@ class PagedEditorJournal(
 
     private fun current(): PagedJournalSnapshot = loaded ?: storage.load().let {
         validatePagedJournal(it)
-        PagedJournalSnapshot(it.drafts.toMap(), it.attempts.toMap()).also { snapshot -> loaded = snapshot }
+        PagedJournalSnapshot(it.drafts.toMap(), it.attempts.toMap(), it.pendingReleases.toMap()).also { snapshot -> loaded = snapshot }
     }
 
     suspend fun snapshot(): PagedJournalSnapshot = withContext(dispatcher) {
-        mutex.withLock { current().let { PagedJournalSnapshot(it.drafts.toMap(), it.attempts.toMap()) } }
+        mutex.withLock { current().let { PagedJournalSnapshot(it.drafts.toMap(), it.attempts.toMap(), it.pendingReleases.toMap()) } }
     }
 
     private fun persist(updated: PagedJournalSnapshot) {
@@ -92,6 +96,41 @@ class PagedEditorJournal(
                 drafts = state.drafts + (attempt.key to StoredPagedDraft(attempt.text, attempt.createdAt)),
                 attempts = state.attempts + (attempt.attemptId to attempt),
             ))
+        }
+    }
+
+    suspend fun retireApplied(attempt: StoredPagedAttempt): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val binding = requireNotNull(attempt.outcomeBinding) { "Legacy attempt has no positive binding" }
+            val release = StoredPagedRelease(attempt.attemptId, attempt.key, binding.deviceId, binding.ownerIncarnationId,
+                attempt.grantId, attempt.uploadId, attempt.commitRequestId, binding.byteLength, binding.sha256)
+            val state = current()
+            val existing = state.attempts[attempt.attemptId]
+            val queued = state.pendingReleases[attempt.attemptId]
+            if (existing == null) {
+                require(queued == null || queued == release) { "Release ID already reserved" }
+                return@withLock
+            }
+            require(existing == attempt) { "Attempt changed" }
+            require(queued == null) { "Release ID already reserved" }
+            // Validate the record separately: invalid metadata is not a capacity condition.
+            validatePagedJournal(PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)))
+            require(state.pendingReleases.values.none { it.copy(releaseId = "") == release.copy(releaseId = "") }) { "Release tuple already reserved" }
+            val sameScope = state.pendingReleases.values.count { it.key.routeId == release.key.routeId && it.deviceId == release.deviceId }
+            val encodedBytes = JsonArray((state.pendingReleases.values + release).map(::encodeRelease))
+                .toString().toByteArray(Charsets.UTF_8).size
+            if (state.pendingReleases.size >= 128 || sameScope >= 32 || encodedBytes > 512 * 1024)
+                throw PagedReleaseCapacityException()
+            persist(state.copy(attempts = state.attempts - attempt.attemptId,
+                pendingReleases = state.pendingReleases + (release.releaseId to release)))
+        }
+    }
+
+    suspend fun removeRelease(release: StoredPagedRelease): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val state = current()
+            if (state.pendingReleases[release.releaseId] == release)
+                persist(state.copy(pendingReleases = state.pendingReleases - release.releaseId))
         }
     }
 
@@ -156,6 +195,29 @@ private fun validatePagedJournal(snapshot: PagedJournalSnapshot) {
         attemptBytes += attempt.text.length.toLong() * 2
     }
     require(attemptBytes <= PAGED_JOURNAL_MAX_ATTEMPT_TOTAL)
+    require(snapshot.pendingReleases.size <= 128)
+    val routeDeviceCounts = mutableMapOf<Pair<String, String>, Int>()
+    val tuples = mutableSetOf<StoredPagedRelease>()
+    var releaseBytes = 2L
+    val opaque = Regex("[A-Za-z0-9_-]{1,256}")
+    fun wireId(id: String): Boolean = id.isNotEmpty() && id.toByteArray(Charsets.UTF_8).size <= 256 &&
+        id.none { it <= ' ' || it == '\u007f' } && validPagedId(id)
+    snapshot.pendingReleases.forEach { (id, release) ->
+        require(id == release.releaseId && validPagedId(id) && id !in snapshot.attempts)
+        require(validPagedId(release.key.routeId) && wireId(release.key.sessionId) && wireId(release.key.questionId))
+        require(opaque.matches(release.deviceId) && opaque.matches(release.ownerIncarnationId) &&
+            opaque.matches(release.grantId) && opaque.matches(release.uploadId) && wireId(release.commitRequestId))
+        require(release.byteLength in 0..(1024 * 1024) && release.sha256.matches(Regex("[0-9a-f]{64}")))
+        require(tuples.add(release.copy(releaseId = "")))
+        val scope = release.key.routeId to release.deviceId
+        val count = (routeDeviceCounts[scope] ?: 0) + 1
+        require(count <= 32)
+        routeDeviceCounts[scope] = count
+        val size = encodeRelease(release).toString().toByteArray(Charsets.UTF_8).size
+        require(size <= 4096)
+        releaseBytes += size + if (releaseBytes > 2L) 1 else 0
+    }
+    require(releaseBytes <= 512 * 1024)
 }
 
 // Encode Java/Kotlin UTF-16 code units directly: charset encoders replace isolated surrogates.
@@ -170,6 +232,12 @@ private fun decodeText(value: String): String {
     return CharArray(bytes.size / 2) { i -> (((bytes[i * 2].toInt() and 255) shl 8) or (bytes[i * 2 + 1].toInt() and 255)).toChar() }.concatToString()
 }
 
+private fun encodeRelease(r: StoredPagedRelease): JsonArray = JsonArray(listOf(
+    JsonPrimitive(r.releaseId), JsonPrimitive(r.key.routeId), JsonPrimitive(r.key.sessionId), JsonPrimitive(r.key.questionId),
+    JsonPrimitive(r.deviceId), JsonPrimitive(r.ownerIncarnationId), JsonPrimitive(r.grantId), JsonPrimitive(r.uploadId),
+    JsonPrimitive(r.commitRequestId), JsonPrimitive(r.byteLength), JsonPrimitive(r.sha256),
+))
+
 // Fixed-shape arrays avoid ambiguous duplicate JSON object members. Duplicate record keys are rejected.
 private fun encodePagedJournal(snapshot: PagedJournalSnapshot): ByteArray {
     validatePagedJournal(snapshot)
@@ -179,7 +247,8 @@ private fun encodePagedJournal(snapshot: PagedJournalSnapshot): ByteArray {
         val binding = a.outcomeBinding?.let { JsonArray(listOf(JsonPrimitive(it.deviceId), JsonPrimitive(it.ownerIncarnationId), JsonPrimitive(it.byteLength), JsonPrimitive(it.sha256))) } ?: JsonNull
         JsonArray(key(a.key) + listOf(JsonPrimitive(a.attemptId), JsonPrimitive(a.grantId), JsonPrimitive(a.uploadId), JsonPrimitive(a.commitRequestId), JsonPrimitive(encodeText(a.text)), JsonPrimitive(a.createdAt), binding))
     }
-    val bytes = JsonArray(listOf(JsonPrimitive(2), JsonArray(drafts), JsonArray(attempts))).toString().toByteArray(Charsets.UTF_8)
+    val releases = snapshot.pendingReleases.values.map(::encodeRelease)
+    val bytes = JsonArray(listOf(JsonPrimitive(3), JsonArray(drafts), JsonArray(attempts), JsonArray(releases))).toString().toByteArray(Charsets.UTF_8)
     require(bytes.size <= PAGED_JOURNAL_MAX_ENCODED_BYTES)
     return bytes
 }
@@ -187,8 +256,9 @@ private fun encodePagedJournal(snapshot: PagedJournalSnapshot): ByteArray {
 private fun decodePagedJournal(bytes: ByteArray): PagedJournalSnapshot {
     require(bytes.size <= PAGED_JOURNAL_MAX_ENCODED_BYTES)
     val root = Json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true)).jsonArray
-    require(root.size == 3 && (root[0] == JsonPrimitive(1) || root[0] == JsonPrimitive(2)))
+    require(root.isNotEmpty() && (root[0] == JsonPrimitive(1) || root[0] == JsonPrimitive(2) || root[0] == JsonPrimitive(3)))
     val version = root[0].jsonPrimitive.content.toInt()
+    require(root.size == if (version == 3) 4 else 3)
     fun array(element: JsonElement, size: Int): JsonArray = element.jsonArray.also { require(it.size == size) }
     fun string(element: JsonElement): String = element.jsonPrimitive.let { require(it.isString); it.content }
     fun time(element: JsonElement): Long = element.jsonPrimitive.let { require(!it.isString); it.content.toLong().also { n -> require(n >= 0 && n.toString() == it.content) } }
@@ -210,5 +280,13 @@ private fun decodePagedJournal(bytes: ByteArray): PagedJournalSnapshot {
         val attempt = StoredPagedAttempt(key(a), string(a[3]), string(a[4]), string(a[5]), string(a[6]), decodeText(string(a[7])), time(a[8]), binding)
         require(attempts.put(attempt.attemptId, attempt) == null)
     }
-    return PagedJournalSnapshot(drafts, attempts).also(::validatePagedJournal)
+    val releases = linkedMapOf<String, StoredPagedRelease>()
+    if (version == 3) for (entry in root[3].jsonArray) {
+        val a = array(entry, 11)
+        val length = time(a[9]); require(length <= Int.MAX_VALUE)
+        val release = StoredPagedRelease(string(a[0]), PagedJournalKey(string(a[1]), string(a[2]), string(a[3])),
+            string(a[4]), string(a[5]), string(a[6]), string(a[7]), string(a[8]), length.toInt(), string(a[10]))
+        require(releases.put(release.releaseId, release) == null)
+    }
+    return PagedJournalSnapshot(drafts, attempts, releases).also(::validatePagedJournal)
 }

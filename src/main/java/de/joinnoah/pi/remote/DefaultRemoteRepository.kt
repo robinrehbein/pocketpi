@@ -629,8 +629,11 @@ class DefaultRemoteRepository(
     private var pagedJournalSnapshot = PagedJournalSnapshot()
     private var pagedStoragePending = pagedJournal != null
     private var pagedStorageFailed = false
+    private var pagedReleaseCapacityBlocked = false
     private val pagedCleanupProofs = mutableSetOf<String>()
     private val pagedReleaseProofs = mutableMapOf<String, StoredPagedAttempt>()
+    private var pagedReleaseJob: Job? = null
+    private var pagedReleaseContext: Pair<Long, Long>? = null
     private val pagedQueried = mutableSetOf<Triple<Long, Long, String>>()
     private val pagedPendingDrafts = mutableMapOf<PagedJournalKey, StoredPagedDraft>()
     private val pagedDrafts = java.util.IdentityHashMap<JsonObject, PagedDraft>()
@@ -1403,6 +1406,7 @@ class DefaultRemoteRepository(
         )
         reconcileNativePresence()
         schedulePagedOutcomeQueries()
+        schedulePagedReleases()
     }
 
     /**
@@ -8774,8 +8778,8 @@ class DefaultRemoteRepository(
         }
     }
 
-    private fun positiveOutcomeAvailable(current: RemoteState): Boolean =
-        pagedEditorTestGate && positiveOutcomeTestGate && pagedJournal != null && !pagedStoragePending && !pagedStorageFailed &&
+    private fun positiveOutcomeAvailable(current: RemoteState, allowCapacityBlocked: Boolean = false): Boolean =
+        pagedEditorTestGate && positiveOutcomeTestGate && pagedJournal != null && !pagedStoragePending && (!pagedStorageFailed || allowCapacityBlocked && pagedReleaseCapacityBlocked) &&
             current.connected && current.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 &&
             QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
             QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in current.capabilities && QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY !in current.unavailableCapabilities
@@ -8787,17 +8791,44 @@ class DefaultRemoteRepository(
             current.host?.deviceId == attempt.outcomeBinding?.deviceId
     }
 
-    private fun releasePagedOutcome(attempt: StoredPagedAttempt) {
-        // The proof describes a completed durable cleanup; bind release to the current
-        // authenticated connection, which may have changed selection during storage IO.
-        val connection = generation
-        val epoch = selectionEpoch
-        if (!outcomeStillCurrent(attempt, connection, epoch)) return
-        scope.launch {
-            try {
-                request("session.question.editor.outcome.release", epoch, "receipt" to PagedEditorWire.receipt(attempt),
-                    validateBeforeSend = { check(outcomeStillCurrent(attempt, connection, epoch)) })
-            } catch (e: CancellationException) { throw e } catch (_: Exception) { /* Retained server receipt occupies capacity until release or qualified expiry. */ }
+    private fun releaseStillCurrent(release: StoredPagedRelease, connection: Long, epoch: Long): Boolean {
+        val current = state.value
+        return connection == generation && epoch == selectionEpoch && positiveOutcomeAvailable(current, allowCapacityBlocked = true) &&
+            current.selection.routeId == release.key.routeId && current.host?.routeId == release.key.routeId &&
+            current.host?.deviceId == release.deviceId && pagedJournalSnapshot.pendingReleases[release.releaseId] == release
+    }
+
+    private fun schedulePagedReleases() {
+        val context = generation to selectionEpoch
+        if (pagedReleaseContext != context || !positiveOutcomeAvailable(state.value, allowCapacityBlocked = true)) {
+            pagedReleaseJob?.cancel()
+            pagedReleaseJob = null
+            pagedReleaseContext = null
+        }
+        if (!positiveOutcomeAvailable(state.value, allowCapacityBlocked = true) || pagedReleaseJob?.isActive == true) return
+        if (pagedJournalSnapshot.pendingReleases.values.none { releaseStillCurrent(it, context.first, context.second) }) return
+        pagedReleaseContext = context
+        pagedReleaseJob = scope.launch {
+            while (true) {
+                val release = pagedJournalSnapshot.pendingReleases.values.firstOrNull { releaseStillCurrent(it, context.first, context.second) } ?: break
+                try {
+                    val result = request("session.question.editor.outcome.release", context.second, "receipt" to PagedEditorWire.receipt(release),
+                        validateBeforeSend = { check(releaseStillCurrent(release, context.first, context.second)) })
+                    require(result.keys == setOf("kind") && result.text("kind") == "editor_outcome_released")
+                    check(releaseStillCurrent(release, context.first, context.second))
+                    pagedProjectionMutex.withLock {
+                        check(releaseStillCurrent(release, context.first, context.second))
+                        val journal = requireNotNull(pagedJournal)
+                        journal.removeRelease(release)
+                        pagedJournalSnapshot = journal.snapshot()
+                    }
+                    update { it }
+                    if (pagedReleaseCapacityBlocked) retryPagedEditorStorage()
+                } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                    if (!releaseStillCurrent(release, context.first, context.second)) break
+                    delay(5_000)
+                }
+            }
         }
     }
 
@@ -8824,16 +8855,16 @@ class DefaultRemoteRepository(
                             pagedCleanupProofs.add(attempt.attemptId)
                             pagedReleaseProofs[attempt.attemptId] = attempt
                             try {
-                                journal.removeAttempt(attempt.attemptId)
+                                journal.retireApplied(attempt)
                                 pagedJournalSnapshot = journal.snapshot()
                                 pagedCleanupProofs.remove(attempt.attemptId)
                                 pagedReleaseProofs.remove(attempt.attemptId)
                                 removed = true
-                            } catch (e: Exception) { pagedStorageFailed = true; throw e }
+                            } catch (e: Exception) { pagedReleaseCapacityBlocked = e is PagedReleaseCapacityException; pagedStorageFailed = true; throw e }
                         }
                     }
                     update { it }
-                    if (removed) releasePagedOutcome(attempt)
+                    if (removed) schedulePagedReleases()
                 } catch (e: CancellationException) { throw e } catch (_: Exception) { update { it } }
             }
         }
@@ -9010,14 +9041,16 @@ class DefaultRemoteRepository(
                     if (boundAttempt != null) pagedReleaseProofs[attemptId] = boundAttempt
                     try {
                         pagedProjectionMutex.withLock {
-                            requireNotNull(pagedJournal).removeAttempt(attemptId)
+                            if (boundAttempt != null) requireNotNull(pagedJournal).retireApplied(boundAttempt)
+                            else requireNotNull(pagedJournal).removeAttempt(attemptId)
                             pagedCleanupProofs.remove(attemptId)
                             pagedReleaseProofs.remove(attemptId)
                             pagedJournalSnapshot = pagedJournal.snapshot()
                             update { it }
                         }
-                        if (boundAttempt != null) releasePagedOutcome(boundAttempt)
-                    } catch (_: Exception) {
+                        if (boundAttempt != null) schedulePagedReleases()
+                    } catch (e: Exception) {
+                        pagedReleaseCapacityBlocked = e is PagedReleaseCapacityException
                         pagedStorageFailed = true
                         update { it }
                     }
@@ -9036,17 +9069,17 @@ class DefaultRemoteRepository(
         pagedStoragePending = true
         update { it }
         scope.launch {
-            val releases = mutableListOf<StoredPagedAttempt>()
             pagedProjectionMutex.withLock {
                 try {
                     pagedJournalSnapshot = journal.snapshot()
                     for (id in pagedCleanupProofs.toList()) {
                         val proof = pagedReleaseProofs[id]
                         val matches = proof == null || journal.snapshot().attempts[id] == proof
-                        if (matches) journal.removeAttempt(id)
+                        if (matches) {
+                            if (proof != null) journal.retireApplied(proof) else journal.removeAttempt(id)
+                        }
                         pagedCleanupProofs.remove(id)
                         pagedReleaseProofs.remove(id)
-                        if (proof != null && matches) releases += proof
                     }
                     for ((key, draft) in pagedPendingDrafts.toMap()) {
                         journal.putDraft(key, draft)
@@ -9054,8 +9087,10 @@ class DefaultRemoteRepository(
                     }
                     pagedJournalSnapshot = journal.snapshot()
                     pagedStorageFailed = false
-                } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                    pagedReleaseCapacityBlocked = false
+                } catch (e: CancellationException) { throw e } catch (e: Exception) {
                     pagedStorageFailed = true
+                    pagedReleaseCapacityBlocked = e is PagedReleaseCapacityException
                     // Preserve any successful removals in the projection even if a later write failed.
                     pagedJournalSnapshot = runCatching { journal.snapshot() }.getOrDefault(pagedJournalSnapshot)
                 } finally {
@@ -9076,7 +9111,7 @@ class DefaultRemoteRepository(
                     }
                 }
             }
-            releases.forEach { releasePagedOutcome(it) }
+            schedulePagedReleases()
         }
     }
 

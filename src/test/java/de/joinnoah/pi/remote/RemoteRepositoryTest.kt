@@ -8720,6 +8720,123 @@ class RemoteRepositoryTest {
         assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
     }
 
+    private fun pendingRelease(id: String = "a", route: String = "host", device: String = "device") = StoredPagedRelease(
+        id, PagedJournalKey(route, "session", "e"), device, "owner", "g", "u", "c", 0,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    )
+
+    private fun releaseTransport(): Transport = Transport().also { transport ->
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+    }
+
+    @Test fun persistedReleaseIsRetriedAfterReconstructionWithoutQuestionOrCommit() = runTest {
+        val release = pendingRelease()
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)) }
+        val transport = releaseTransport()
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        val request = transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }
+        assertEquals(PagedEditorWire.receipt(release), request.obj("receipt"))
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" || it.text("type") == "session.question.editor.outcome.get" })
+    }
+
+    @Test fun deathAfterAtomicCleanupBeforeReleaseRecoversPersistedReceipt() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val first = releaseTransport(); val normal = first.response
+        first.response = { request -> if (request.text("type") == "session.question.editor.outcome.get") Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt")) else normal(request) }
+        val gate = CompletableDeferred<Unit>()
+        var held = false
+        first.beforeGuardedSend = { if (it.text("type") == "session.question.editor.outcome.release") { held = true; gate.await() } }
+        val beforeDeath = repository(first, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        beforeDeath.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(held)
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertEquals(pendingRelease(), storage.saved.pendingReleases["a"])
+        // The first process is suspended at the possible-write boundary; reconstruct from disk.
+        assertTrue(first.sent.none { it.text("type") == "session.question.editor.outcome.release" })
+        val second = releaseTransport()
+        val afterDeath = repository(second, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        afterDeath.activate(RemoteSelection("host", "project", "session")); afterDeath.flush(); runCurrent()
+        assertEquals(1, second.sent.count { it.text("type") == "session.question.editor.outcome.release" })
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(second.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun fullReleaseQueueDrainsAndRetiresProvedAttemptWithoutResendingCommit() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val releases = (0 until 32).associate { index ->
+            val release = pendingRelease("r$index").copy(uploadId = "u$index", commitRequestId = "c$index")
+            release.releaseId to release
+        }
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt), pendingReleases = releases) }
+        val transport = releaseTransport(); val normal = transport.response
+        transport.response = { request -> if (request.text("type") == "session.question.editor.outcome.get") Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt")) else normal(request) }
+        val gate = CompletableDeferred<Unit>()
+        var held = false
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.outcome.release" && !held) { held = true; gate.await() } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(held)
+        assertEquals(attempt, storage.saved.attempts["a"])
+        assertEquals(32, storage.saved.pendingReleases.size)
+        gate.complete(Unit); runCurrent()
+        assertTrue("An already durable release must drain despite capacity pressure", transport.sent.any { it.text("type") == "session.question.editor.outcome.release" })
+        if (repo.state.value.pagedStorageFailed) { repo.retryPagedEditorStorage(); runCurrent() }
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun releaseAckLossRetainsRecordAndRetriesIdempotentlyWithFreshRequest() = runTest {
+        val release = pendingRelease()
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)) }
+        val transport = releaseTransport(); val normal = transport.response
+        var releaseCount = 0
+        transport.response = { request -> if (request.text("type") == "session.question.editor.outcome.release" && ++releaseCount == 1) null else normal(request) }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertEquals(release, storage.saved.pendingReleases[release.releaseId])
+        advanceTimeBy(36_000); runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "session.question.editor.outcome.release" }
+        assertTrue(requests.size >= 2)
+        assertNotEquals(requests[0].text("requestId"), requests[1].text("requestId"))
+        assertEquals(requests[0].obj("receipt"), requests[1].obj("receipt"))
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+    }
+
+    @Test fun pendingReleaseCannotUseDifferentRouteOrDevice() = runTest {
+        val release = pendingRelease(device = "old-device")
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)) }
+        val transport = releaseTransport()
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" })
+        assertEquals(release, storage.saved.pendingReleases[release.releaseId])
+    }
+
+    @Test fun releaseCleanupFailureKeepsRecordAndRetries() = runTest {
+        val release = pendingRelease()
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)); failSave = true }
+        val transport = releaseTransport()
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertEquals(release, storage.saved.pendingReleases[release.releaseId])
+        storage.failSave = false
+        advanceTimeBy(5_001); runCurrent()
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.count { it.text("type") == "session.question.editor.outcome.release" } >= 2)
+    }
+
     @Test fun positiveOutcomeMismatchAndLegacyRecordRemainFenced() = runTest {
         val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         val bound = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)

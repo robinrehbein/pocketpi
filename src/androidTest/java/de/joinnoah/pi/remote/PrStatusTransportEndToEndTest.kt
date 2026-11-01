@@ -925,6 +925,7 @@ internal class PresenceObservingTransport(
     private val sessionId: String,
     private val pagedDiagnostics: Boolean,
     private val holdSecondChunk: Boolean,
+    private val holdPositiveRelease: Boolean = false,
 ) : RemoteTransport {
     val presenceAccepted = AtomicBoolean(false)
     val inactivePresenceAccepted = AtomicBoolean(false)
@@ -936,6 +937,9 @@ internal class PresenceObservingTransport(
     val positiveOutcomeReleaseAttempts = AtomicInteger()
     val positiveOutcomeApplied = AtomicReference<JsonObject?>(null)
     val positiveOutcomeReleased = AtomicBoolean(false)
+    val positiveReleaseHeld = AtomicBoolean(false)
+    val releasePositiveRelease = CompletableDeferred<Unit>()
+    val positiveOutcomeReleaseReceipt = AtomicReference<JsonObject?>(null)
     private val positiveOutcomeRequests = ConcurrentHashMap<String, JsonObject>()
     private val positiveOutcomeReleaseRequests = ConcurrentHashMap.newKeySet<String>()
     private val pendingSnapshots = ConcurrentHashMap.newKeySet<String>()
@@ -1107,6 +1111,7 @@ internal class PresenceObservingTransport(
             positiveOutcomeReleaseAttempts.incrementAndGet()
             InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply { putString("positiveOutcomeDiagnostic", "release-send") })
             positiveOutcomeReleaseRequests.add(payload.text("requestId"))
+            positiveOutcomeReleaseReceipt.set(payload.obj("receipt"))
         }
         if (type == "session.snapshot" && payload.optionalText("sessionId") == sessionId) {
             acceptedSnapshotQuestions.set(null)
@@ -1162,6 +1167,10 @@ internal class PresenceObservingTransport(
         delegate.send(payload)
     }
     override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+        if (holdPositiveRelease && payload.optionalText("type") == "session.question.editor.outcome.release") {
+            positiveReleaseHeld.set(true)
+            releasePositiveRelease.await()
+        }
         if (payload.optionalText("type") == "question.answer") questionAnswerAttempts.incrementAndGet()
         if (holdSecondChunk && payload.optionalText("type") == "session.question.editor.upload.chunk" && payload.long("offset") == EDITOR_UPLOAD_CHUNK_BYTES.toLong()) {
             secondChunkHeld.set(true)

@@ -76,6 +76,16 @@ internal object PagedEditorWire {
         return question.text("editorOwnerIncarnationId").also(::sourceId)
     }
 
+    fun receipt(release: StoredPagedRelease): JsonObject {
+        ids(release.commitRequestId, release.key.sessionId, release.key.questionId)
+        sourceId(release.ownerIncarnationId); sourceId(release.grantId); sourceId(release.uploadId)
+        require(release.byteLength in 0..MAX_EDITOR_UPLOAD_BYTES); digest(release.sha256)
+        return Wire.objectOf("sessionId" to release.key.sessionId, "questionId" to release.key.questionId,
+            "ownerIncarnationId" to release.ownerIncarnationId, "grantId" to release.grantId,
+            "uploadId" to release.uploadId, "commitRequestId" to release.commitRequestId,
+            "byteLength" to release.byteLength, "sha256" to release.sha256)
+    }
+
     fun receipt(attempt: StoredPagedAttempt): JsonObject {
         val b = requireNotNull(attempt.outcomeBinding)
         ids(attempt.commitRequestId, attempt.key.sessionId, attempt.key.questionId)

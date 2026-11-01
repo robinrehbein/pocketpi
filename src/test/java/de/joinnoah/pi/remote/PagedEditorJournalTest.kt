@@ -102,7 +102,7 @@ class PagedEditorJournalTest {
     @Test fun rejectsMalformedSchemaDuplicateRecordsAndInvalidIdentifiers() {
         val raw = EncryptedFileStore(context, "paged-editor-journal.enc", "pi-remote-paged-editor-journal-v1")
         val badInputs = listOf(
-            "[3,[],[]]",
+            "[4,[],[],[]]",
             "[1,[[\"r\",\"s\",\"q\",\"\",0],[\"r\",\"s\",\"q\",\"\",0]],[]]",
             "[1,[[\"r\",\"s\",\"q\",\"A\",0]],[]]",
             "[1,[[\" \",\"s\",\"q\",\"\",0]],[]]",
@@ -175,6 +175,105 @@ class PagedEditorJournalTest {
             raw.write((prefix + binding + "]]]").toByteArray())
             val file = File(dir, "paged-editor-journal.enc")
             val before = file.readBytes()
+            assertThrows(Exception::class.java) { PagedEditorStore(context).load() }
+            assertThrows(Exception::class.java) { PagedEditorStore(context).save(PagedJournalSnapshot()) }
+            assertArrayEquals(before, file.readBytes())
+        }
+    }
+
+    @Test fun retiringBoundAttemptAtomicallyQueuesMetadataAndExactRemovalIsSafe() = runBlocking {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        val bound = attempt.copy(text = "abc", outcomeBinding = binding)
+        val expected = StoredPagedRelease("attempt", key, "device", "owner", "grant", "upload", "commit", 3, binding.sha256)
+        val journal = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined)
+        journal.reserve(bound)
+        assertTrue(runCatching { journal.retireApplied(bound.copy(commitRequestId = "other")) }.isFailure)
+        assertEquals(bound, journal.snapshot().attempts["attempt"])
+        journal.retireApplied(bound)
+        val restored = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
+        assertTrue(restored.attempts.isEmpty())
+        assertEquals("abc", restored.drafts.getValue(key).text)
+        assertEquals(expected, restored.pendingReleases["attempt"])
+        journal.retireApplied(bound)
+        journal.removeRelease(expected.copy(ownerIncarnationId = "other"))
+        assertEquals(expected, journal.snapshot().pendingReleases["attempt"])
+        journal.removeRelease(expected)
+        assertTrue(PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot().pendingReleases.isEmpty())
+        journal.retireApplied(bound)
+        assertTrue(journal.snapshot().pendingReleases.isEmpty())
+    }
+
+    @Test fun retirementFailurePreservesFenceDraftAndQueueAcrossReconstruction() = runBlocking {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        val bound = attempt.copy(text = "abc", outcomeBinding = binding)
+        val storage = MemoryStorage(); val journal = PagedEditorJournal(storage, Dispatchers.Unconfined)
+        journal.reserve(bound)
+        val before = journal.snapshot(); storage.fail = true
+        assertTrue(runCatching { journal.retireApplied(bound) }.isFailure)
+        assertEquals(before, journal.snapshot())
+        assertEquals(before, PagedEditorJournal(storage, Dispatchers.Unconfined).snapshot())
+        storage.fail = false; journal.retireApplied(bound)
+        val queued = journal.snapshot(); storage.fail = true
+        assertTrue(runCatching { journal.removeRelease(queued.pendingReleases.getValue("attempt")) }.isFailure)
+        assertEquals(queued, PagedEditorJournal(storage, Dispatchers.Unconfined).snapshot())
+        assertTrue(runCatching { PagedEditorJournal(MemoryStorage(), Dispatchers.Unconfined).retireApplied(attempt) }.isFailure)
+    }
+
+    @Test fun fullRouteDeviceQueuePreventsRetirementWithoutEviction() = runBlocking {
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val releases = (0 until 32).associate { n -> "r$n" to StoredPagedRelease("r$n", key.copy(questionId = "q$n"), "device", "owner", "grant", "upload", "c$n", 3, hash) }
+        val storage = MemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = releases) }
+        val journal = PagedEditorJournal(storage, Dispatchers.Unconfined)
+        val bound = attempt.copy(text = "abc", outcomeBinding = StoredPagedOutcomeBinding("device", "owner", 3, hash))
+        journal.reserve(bound); val before = journal.snapshot()
+        assertTrue(runCatching { journal.retireApplied(bound) }.exceptionOrNull() is PagedReleaseCapacityException)
+        assertEquals(before, journal.snapshot())
+        assertEquals(before, PagedEditorJournal(storage, Dispatchers.Unconfined).snapshot())
+    }
+
+    @Test fun fullGlobalQueueRetainsAttemptWithoutEviction() = runBlocking {
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val releases = (0 until 128).associate { n -> "r$n" to StoredPagedRelease("r$n", key.copy(routeId = "route$n"), "device", "owner", "grant", "upload", "c$n", 3, hash) }
+        val storage = MemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = releases) }
+        val journal = PagedEditorJournal(storage, Dispatchers.Unconfined)
+        val bound = attempt.copy(text = "abc", outcomeBinding = StoredPagedOutcomeBinding("device", "owner", 3, hash))
+        journal.reserve(bound); val before = journal.snapshot()
+        assertTrue(runCatching { journal.retireApplied(bound) }.isFailure)
+        assertEquals(before, PagedEditorJournal(storage, Dispatchers.Unconfined).snapshot())
+    }
+
+    @Test fun successfulReleaseReclaimsCapacityAcrossMoreThanThirtyTwoRetirements() = runBlocking {
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val journal = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined)
+        repeat(40) { n ->
+            val bound = attempt.copy(attemptId = "a$n", text = "abc", outcomeBinding = StoredPagedOutcomeBinding("device", "owner", 3, hash))
+            journal.reserve(bound); journal.retireApplied(bound)
+            journal.removeRelease(journal.snapshot().pendingReleases.getValue("a$n"))
+        }
+        val restored = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
+        assertTrue(restored.attempts.isEmpty())
+        assertTrue(restored.pendingReleases.isEmpty())
+        assertEquals("abc", restored.drafts.getValue(key).text)
+    }
+
+    @Test fun readsLiteralVersionThreeAndRejectsMalformedAndDuplicateReleaseRecords() {
+        val raw = EncryptedFileStore(context, "paged-editor-journal.enc", "pi-remote-paged-editor-journal-v1")
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val entry = """["a","route","session","question","device","owner","grant","upload","commit",3,"$hash"]"""
+        raw.write("""[3,[],[],[$entry]]""".toByteArray())
+        val expected = StoredPagedRelease("a", key, "device", "owner", "grant", "upload", "commit", 3, hash)
+        assertEquals(expected, PagedEditorStore(context).load().pendingReleases["a"])
+        val malformed = listOf(
+            """[3,[],[],[$entry,$entry]]""",
+            """[3,[],[],[$entry,["b","route","session","question","device","owner","grant","upload","commit",3,"$hash"]]]""",
+            """[3,[],[["route","session","question","a","grant","upload","commit","AGEAYgBj",42,["device","owner",3,"$hash"]]],[$entry]]""",
+            """[3,[],[],[["a","route","session","question","device",null,"grant","upload","commit",3,"$hash"]]]""",
+            """[3,[],[],[["a","route","session","question","device","owner","grant","upload","commit",1048577,"$hash"]]]""",
+            """[3,[],[],[$entry],[]]""",
+        )
+        for (input in malformed) {
+            raw.write(input.toByteArray())
+            val file = File(dir, "paged-editor-journal.enc"); val before = file.readBytes()
             assertThrows(Exception::class.java) { PagedEditorStore(context).load() }
             assertThrows(Exception::class.java) { PagedEditorStore(context).save(PagedJournalSnapshot()) }
             assertArrayEquals(before, file.readBytes())

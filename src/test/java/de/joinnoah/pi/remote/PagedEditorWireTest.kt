@@ -148,4 +148,11 @@ class PagedEditorWireTest {
         assertTrue(validEditorText("a".repeat(65536), 65536))
         assertFalse(validEditorText("a".repeat(65537), 65536))
     }
+    @Test fun persistedReleaseReceiptMatchesBoundAttemptWithoutEditorText() {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, emptyHash)
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "q"), "a", "g", "u", "c", "", 1, binding)
+        val release = StoredPagedRelease("a", attempt.key, "device", "owner", "g", "u", "c", 0, emptyHash)
+        assertEquals(PagedEditorWire.receipt(attempt), PagedEditorWire.receipt(release))
+    }
+
 }
