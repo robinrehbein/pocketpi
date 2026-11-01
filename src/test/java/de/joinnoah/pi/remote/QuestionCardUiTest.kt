@@ -1,9 +1,11 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.referentialEqualityPolicy
@@ -255,19 +257,21 @@ class QuestionCardUiTest {
         val submitted = mutableListOf<String>()
         var loads = 0
         compose.setContent { MaterialTheme {
-            QuestionCard(value, enabled = true, pagedEditor = view.value,
-                onLoadPagedEditor = { loads++ }, onSubmitPagedEditor = { submitted += it }) { answers += it }
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(value, enabled = true, pagedEditor = view.value,
+                    onLoadPagedEditor = { loads++ }, onSubmitPagedEditor = { submitted += it }) { answers += it }
+            }
         } }
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         compose.onNodeWithText("Load editor").performClick()
         assertEquals(1, loads)
         compose.runOnIdle { view.value = PagedEditorView(text = "hello") }
-        val field = compose.onNode(hasSetTextAction())
+        val field = compose.onNodeWithTag("questionEditorField")
         field.assertTextContains("hello")
         field.performTextReplacement("bad\rcontrol")
         field.assertTextContains("bad\rcontrol")
         compose.onNodeWithText("Send").assertIsNotEnabled()
-        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Cancel").performScrollTo().performClick()
         assertTrue(submitted.isEmpty())
         assertEquals(listOf(Wire.objectOf("kind" to "cancel")), answers)
     }
@@ -277,10 +281,12 @@ class QuestionCardUiTest {
         val view = mutableStateOf(PagedEditorView(text = "hello"))
         val submitted = mutableListOf<String>()
         compose.setContent { MaterialTheme {
-            QuestionCard(value, enabled = true, pagedEditor = view.value,
-                onSubmitPagedEditor = { submitted += it; view.value = PagedEditorView(text = "hello", loading = true) }) { answers += it }
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(value, enabled = true, pagedEditor = view.value,
+                    onSubmitPagedEditor = { submitted += it; view.value = PagedEditorView(text = "hello", loading = true) }) { answers += it }
+            }
         } }
-        compose.onNodeWithText("Send").performClick()
+        compose.onNodeWithText("Send").performScrollTo().performClick()
         compose.onNodeWithTag("questionEditorField").assertTextContains("hello").assertIsNotEnabled()
         compose.onNodeWithText("Send").assertIsNotEnabled()
         compose.onNodeWithText("Cancel").assertIsEnabled()
@@ -294,7 +300,7 @@ class QuestionCardUiTest {
             QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello"),
                 onEditPagedEditor = { edits += it }) { answers += it }
         } }
-        compose.onNode(hasSetTextAction()).performTextReplacement("bad\rcontrol")
+        compose.onNodeWithTag("questionEditorField").performTextReplacement("bad\rcontrol")
         compose.onNodeWithText("Send").assertIsNotEnabled()
         assertEquals(listOf("bad\rcontrol"), edits)
     }
@@ -303,12 +309,14 @@ class QuestionCardUiTest {
         val value = parse("""{"id":"e","kind":"editor","prefill":"new original","editorUploadGrantId":"new-grant"}""")
         val edits = mutableListOf<String>()
         compose.setContent { MaterialTheme {
-            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "new original", recoveryDraft = "old draft"),
-                onEditPagedEditor = { edits += it }) { answers += it }
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "new original", recoveryDraft = "old draft"),
+                    onEditPagedEditor = { edits += it }) { answers += it }
+            }
         } }
         compose.onNodeWithTag("questionEditorField").assertTextContains("new original")
         assertTrue(edits.isEmpty())
-        compose.onNodeWithText("Restore previous draft").performClick()
+        compose.onNodeWithText("Restore previous draft").performScrollTo().performClick()
         compose.onNodeWithTag("questionEditorField").assertTextContains("old draft")
         assertEquals(listOf("old draft"), edits)
     }
@@ -317,12 +325,14 @@ class QuestionCardUiTest {
         val value = parse("""{"id":"e","kind":"editor","prefill":"hello","editorUploadGrantId":"g"}""")
         val submitted = mutableListOf<String>()
         compose.setContent { MaterialTheme {
-            QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello", quarantined = true),
-                onSubmitPagedEditor = { submitted += it }) { answers += it }
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                QuestionCard(value, enabled = true, pagedEditor = PagedEditorView(text = "hello", quarantined = true),
+                    onSubmitPagedEditor = { submitted += it }) { answers += it }
+            }
         } }
         compose.onNodeWithText("Send").assertIsNotEnabled()
         compose.onNodeWithText("The answer may have been delivered; waiting for the session").assertExists()
-        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        compose.onNodeWithText("Cancel").performScrollTo().assertIsEnabled().performClick()
         assertTrue(submitted.isEmpty())
         assertEquals("cancel", answers.single().text("kind"))
     }

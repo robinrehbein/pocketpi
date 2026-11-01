@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import android.os.ParcelFileDescriptor
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -16,10 +18,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import java.io.File
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.cert.CertificateFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
@@ -27,6 +31,7 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
@@ -41,6 +46,8 @@ import org.junit.Test
 import org.junit.rules.ExternalResource
 import org.junit.rules.RuleChain
 
+private fun pagedDiagnostic(event: String) = println("PAGED_DIAG elapsedMs=${SystemClock.elapsedRealtime()} $event")
+
 /** Actual Pi and host events through the encrypted transport into production navigation and screens. */
 class PrStatusTransportEndToEndTest {
     private val compose = createAndroidComposeRule<NavigationTestActivity>()
@@ -53,12 +60,17 @@ class PrStatusTransportEndToEndTest {
     private var nativeEditorExpected = false
     private var nativeEditorReconnectExpected = false
     private var nativeEditorHandoffExpected = false
+    private var pagedEditorExpected = false
+    private var pagedEditorCase: String? = null
     private lateinit var observedTransport: PresenceObservingTransport
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
     private lateinit var host: PairedHost
     private lateinit var selection: RemoteSelection
+    private val mainProbe = Executors.newSingleThreadScheduledExecutor()
+    private val mainProbePending = AtomicBoolean(false)
+    private val mainProbeEnabled = AtomicBoolean(false)
     private val showNavigation = mutableStateOf(false)
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -95,6 +107,11 @@ class PrStatusTransportEndToEndTest {
             require(nativeEditorHandoffArg == null || nativeEditorHandoffArg == "true" || nativeEditorHandoffArg == "false") { "nativeEditorHandoffExpected must be true or false" }
             nativeEditorHandoffExpected = nativeEditorHandoffArg == "true"
             require(!nativeEditorHandoffExpected || (nativeEditorExpected && !nativeEditorReconnectExpected)) { "Native editor handoff requires native editor mode without reconnect mode" }
+            val pagedArg = args.getString("pagedEditorExpected")
+            require(pagedArg == null || pagedArg == "true" || pagedArg == "false") { "pagedEditorExpected must be true or false" }
+            pagedEditorExpected = pagedArg == "true"
+            pagedEditorCase = args.getString("pagedEditorCase")
+            require(if (pagedEditorExpected) (editorExpected || nativeEditorExpected) && !nativeEditorReconnectExpected && !nativeEditorHandoffExpected && pagedEditorCase in setOf("max-unchanged", "empty-final") else pagedEditorCase == null) { "Paged editor requires a matching supported case and editor mode" }
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -113,7 +130,7 @@ class PrStatusTransportEndToEndTest {
                 require(fixture.getBoolean("hostRpc")) { "Host-owned RPC is required for the editor fixture" }
                 require(fixture.getString("editorOutcome") in setOf("submit", "cancel")) { "Wrong editor outcome" }
                 require(fixture.getString("editorProbeCommand").isNotBlank() && fixture.getString("editorProbeNonce").isNotBlank())
-                require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Editor fixture values are required" }
+                if (!pagedEditorExpected) require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Editor fixture values are required" }
             }
             if (nativeEditorExpected) {
                 require(fixture.getBoolean("nativeEditorFixture")) { "Native editor fixture is required" }
@@ -123,8 +140,14 @@ class PrStatusTransportEndToEndTest {
                 require(fixture.optBoolean("nativeEditorHandoff") == nativeEditorHandoffExpected) { "Wrong native editor handoff fixture mode" }
                 require(!nativeEditorHandoffExpected || (fixture.getString("nativeEditorOutcome") == "submit" && fixture.getBoolean("handoffDeviceDistinct"))) { "Native editor handoff requires submit and a distinct paired device" }
                 require(fixture.getString("editorProbeCommand").isNotBlank() && fixture.getString("editorProbeNonce").isNotBlank())
-                require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Native editor fixture values are required" }
+                if (!pagedEditorExpected) require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Native editor fixture values are required" }
             }
+            if (pagedEditorExpected) {
+                require(fixture.optBoolean("pagedEditorFixture") && fixture.optString("pagedEditorCase") == pagedEditorCase) { "Wrong paged editor fixture" }
+                require(fixture.getString(if (nativeEditorExpected) "nativeEditorOutcome" else "editorOutcome") == "submit")
+                verifyPagedMetadata("Source", pagedSource())
+                verifyPagedMetadata("Final", pagedFinal())
+            } else require(!fixture.optBoolean("pagedEditorFixture")) { "Paged fixture requires explicit opt-in" }
             println("PR_STATUS_NATIVE_EXPECTED=$nativeExpected")
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
@@ -144,19 +167,42 @@ class PrStatusTransportEndToEndTest {
                 override fun load() = values
                 override fun save(drafts: Map<DraftKey, StoredDraft>) { values = drafts }
             }
-            observedTransport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId))
-            repository = DefaultRemoteRepository(pairings, drafts, observedTransport, scope)
+            observedTransport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), pagedEditorExpected)
+            repository = DefaultRemoteRepository(pairings, drafts, observedTransport, scope, pagedEditorTestGate = pagedEditorExpected)
+            val observingRepository = object : RemoteRepository by repository {
+                override fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit {
+                    if (pagedEditorExpected) pagedDiagnostic("presence-owner-acquire selectionMatches=${selection == this@PrStatusTransportEndToEndTest.selection}")
+                    val release = repository.acquireNativeEditorPresence(selection)
+                    return {
+                        if (pagedEditorExpected) pagedDiagnostic("presence-owner-dispose")
+                        release()
+                    }
+                }
+            }
+            if (pagedEditorExpected) scope.launch {
+                var previous: Pair<Boolean, Boolean>? = null
+                repository.state.collect { state ->
+                    val current = (state.selection == selection) to state.connected
+                    if (current != previous) {
+                        previous = current
+                        pagedDiagnostic("state selectionMatches=${current.first} connected=${current.second}")
+                    }
+                }
+            }
             val settings = PrStatusSettings()
             NavigationTestActivity.contentFactory = {
                 val content: @Composable () -> Unit = {
                     if (showNavigation.value) MaterialTheme {
-                        RemoteNavigation(repository, settings, false, {}, RemoteNotification(host.routeId, requireNotNull(selection.sessionId), 1))
+                        RemoteNavigation(observingRepository, settings, false, {}, RemoteNotification(host.routeId, requireNotNull(selection.sessionId), 1))
                     }
                 }
                 content
             }
         }
         override fun after() {
+            mainProbeEnabled.set(false)
+            mainProbe.shutdownNow()
+            if (pagedEditorExpected) pagedDiagnostic("fixture-teardown foreground=false")
             NavigationTestActivity.contentFactory = { {} }
             if (::repository.isInitialized) InstrumentationRegistry.getInstrumentation().runOnMainSync { repository.setForeground(false); repository.disconnect() }
             if (::scope.isInitialized) scope.cancel()
@@ -173,6 +219,7 @@ class PrStatusTransportEndToEndTest {
         // This test activity does not install the app lifecycle/network monitor. These signals
         // enable repository reconnection; the actual WebSocket and host remain real.
         compose.runOnIdle {
+            if (pagedEditorExpected) pagedDiagnostic("fixture-foreground=true")
             repository.setForeground(true)
             repository.setValidatedNetwork("pr-status-fixture-loopback")
         }
@@ -223,8 +270,9 @@ class PrStatusTransportEndToEndTest {
             }
         }
         if (questionDetailsExpected) exerciseQuestionDetails()
-        if (editorExpected) exerciseEditor()
-        if (nativeEditorExpected) exerciseNativeEditor()
+        if (pagedEditorExpected) exercisePagedEditor()
+        else if (editorExpected) exerciseEditor()
+        else if (nativeEditorExpected) exerciseNativeEditor()
         awaitTag("pullRequestChip")
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(compose.activity.getString(R.string.remote_pr_chip_number, 42L), substring = true)
         screenshot("pending")
@@ -279,6 +327,90 @@ class PrStatusTransportEndToEndTest {
         assertTrue("Native worker must be verified after reconnect", nativeWorkerVerified(recovered))
         if (editorExpected) assertTrue("Host-owned RPC must be verified after reconnect", recovered.getBoolean("hostRpcVerified"))
         screenshot("recovered")
+    }
+
+    private fun pagedSource(): String = when (pagedEditorCase) {
+        "max-unchanged" -> "😀".repeat(262_144)
+        "empty-final" -> "draft"
+        else -> error("Unsupported paged editor case")
+    }
+
+    private fun pagedFinal(): String = when (pagedEditorCase) {
+        "max-unchanged" -> pagedSource()
+        "empty-final" -> ""
+        else -> error("Unsupported paged editor case")
+    }
+
+    private fun verifyPagedMetadata(label: String, value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        assertEquals("$label UTF-8 byte count", bytes.size, fixture.getInt("pagedEditor${label}Bytes"))
+        assertEquals("$label SHA-256", digest, fixture.getString("pagedEditor${label}Sha256"))
+    }
+
+    private fun exercisePagedEditor() {
+        val command = fixture.getString("editorProbeCommand")
+        val nonce = fixture.getString("editorProbeNonce")
+        val probeName = requireNotNull(commandName(command))
+        require(command.startsWith("/") && command.none { it.isWhitespace() } && nonce.isNotBlank() && nonce.none { it.isWhitespace() })
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.selection == selection && state.connected && !state.loading && state.capabilitiesKnown &&
+                QUESTION_EDITOR_CAPABILITY in state.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities &&
+                QUESTION_PAGED_EDITOR_CAPABILITY !in state.unavailableCapabilities &&
+                (!nativeEditorExpected || NATIVE_EDITOR_CAPABILITY in state.capabilities && observedTransport.presenceAccepted.get()) &&
+                COMMANDS_CAPABILITY in state.capabilities && !state.commandsLoading && state.commands.any { it.name == probeName } &&
+                observedTransport.pagedV3Accepted.get()
+        }
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput("$command $nonce")
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        hideIme()
+        compose.waitUntil(60_000) { repository.state.value.questions.any { it.optionalText("kind") == "editor" && it.containsKey("editorUploadGrantId") } }
+        val question = repository.state.value.questions.single { it.optionalText("kind") == "editor" }
+        val id = question.text("id")
+        assertTrue("Host must issue a grant", question.text("editorUploadGrantId").matches(Regex("[A-Za-z0-9_-]{1,256}")))
+        assertEquals("Source representation must match the case", pagedEditorCase == "max-unchanged", question.containsKey("editorSource"))
+        startPagedMainProbe()
+        pagedDiagnostic("load-click-before")
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_load)).performScrollTo().assertIsEnabled().performClick()
+        pagedDiagnostic("load-click-after")
+        compose.waitUntil(120_000) { repository.state.value.pagedEditors[id]?.text != null }
+        pagedDiagnostic("source-ready")
+        val loaded = requireNotNull(repository.state.value.pagedEditors[id]?.text)
+        assertTrue("Question incarnation must remain current", repository.state.value.questions.any { it === question })
+        assertEquals("Exact loaded source", pagedSource(), loaded)
+        verifyPagedMetadata("Source", loaded)
+        pagedDiagnostic("field-query-before")
+        compose.onNodeWithTag("questionEditorField").performScrollTo().assertIsDisplayed()
+        pagedDiagnostic("field-query-after")
+        mainProbeEnabled.set(false)
+        // Avoid sending a megabyte through Binder: the loaded state above is byte/digest checked.
+        // The field is rendered and its actual semantics expose the beginning and end markers.
+        val field = compose.onNodeWithTag("questionEditorField")
+        val marker = if (pagedEditorCase == "max-unchanged") "😀😀" else "draft"
+        val renderedText = requireNotNull(field.fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
+        assertTrue("Rendered first window must be bounded and expose its marker", renderedText.length <= EditorWindows.MAX_UNITS && renderedText.startsWith(marker))
+        if (pagedEditorCase == "max-unchanged") {
+            compose.onNodeWithTag("pagedEditorLast").performScrollTo().assertIsEnabled().performClick()
+            val lastText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
+            assertTrue("Rendered last window must be bounded and expose its marker", lastText.length <= EditorWindows.MAX_UNITS && lastText.endsWith(marker))
+            compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
+        }
+        screenshot("paged-editor-before")
+        if (pagedEditorCase == "empty-final") {
+            field.performTextReplacement("")
+            field.assertTextEquals("")
+            compose.waitUntil(60_000) { repository.state.value.pagedEditors[id]?.text == "" }
+        }
+        verifyPagedMetadata("Final", requireNotNull(repository.state.value.pagedEditors[id]?.text))
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_send)).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(120_000) {
+            statusOrNull()?.let { it.optBoolean("pagedOwnerVerified") && it.optBoolean("pagedCommitDispatched") &&
+                it.optBoolean("pagedAckVerified") && it.optBoolean("pagedSdkResultVerified") && it.optInt("pagedCommitCount", -1) == 1 } == true &&
+                observedTransport.pagedCommitAccepted(id, question.text("editorUploadGrantId"), fixture.getInt("pagedEditorFinalBytes"), fixture.getString("pagedEditorFinalSha256")) &&
+                repository.state.value.questions.none { it.optionalText("id") == id }
+        }
+        screenshot("paged-editor-after")
     }
 
     private fun exerciseEditor() {
@@ -504,6 +636,20 @@ class PrStatusTransportEndToEndTest {
             insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime())
         }
     }
+    private fun startPagedMainProbe() {
+        val handler = Handler(Looper.getMainLooper())
+        mainProbeEnabled.set(true)
+        mainProbe.scheduleAtFixedRate({
+            if (mainProbeEnabled.get() && mainProbePending.compareAndSet(false, true)) {
+                val posted = SystemClock.elapsedRealtime()
+                handler.post {
+                    val delayMs = SystemClock.elapsedRealtime() - posted
+                    if (delayMs >= 250) pagedDiagnostic("main-queue-delay-ms=$delayMs")
+                    mainProbePending.set(false)
+                }
+            }
+        }, 0, 1, TimeUnit.SECONDS)
+    }
     private fun diagnoseRecoveredLayout() {
         screenshot("recovered-unscrolled")
         logChangesLayout("recovered-unscrolled")
@@ -581,10 +727,20 @@ class PrStatusTransportEndToEndTest {
 private class PresenceObservingTransport(
     private val delegate: RemoteTransport,
     private val sessionId: String,
+    private val pagedDiagnostics: Boolean,
 ) : RemoteTransport {
     val presenceAccepted = AtomicBoolean(false)
     val inactivePresenceAccepted = AtomicBoolean(false)
     val staleAnswerResult = AtomicReference<JsonObject?>(null)
+    val pagedV3Accepted = AtomicBoolean(false)
+    private val pagedV3Requests = ConcurrentHashMap.newKeySet<String>()
+    private data class UploadObservation(val begin: JsonObject, val digest: MessageDigest = MessageDigest.getInstance("SHA-256"), var bytes: Int = 0, var valid: Boolean = true)
+    private data class PendingCommit(val upload: UploadObservation, val request: JsonObject, val sha256: String)
+    private data class CommitObservation(val pending: PendingCommit, val result: JsonObject)
+    private val pendingBegins = ConcurrentHashMap<String, JsonObject>()
+    private val observedUploads = ConcurrentHashMap<String, UploadObservation>()
+    private val pendingCommits = ConcurrentHashMap<String, PendingCommit>()
+    private val observedCommit = AtomicReference<CommitObservation?>(null)
     private var staleAnswerRequestId: String? = null
     private val pendingPresence = ConcurrentHashMap<String, Boolean>()
     private lateinit var downstreamListener: RemoteTransport.Listener
@@ -594,22 +750,43 @@ private class PresenceObservingTransport(
             downstreamListener = value
             delegate.listener = object : RemoteTransport.Listener by value {
                 override fun ready(capabilities: Set<String>) {
+                    if (pagedDiagnostics) pagedDiagnostic("transport-ready")
                     clearPresence()
                     value.ready(capabilities)
                 }
                 override fun failed(reconnect: Boolean, error: Int) {
+                    if (pagedDiagnostics) pagedDiagnostic("transport-failed reconnect=$reconnect")
                     clearPresence()
                     value.failed(reconnect, error)
                 }
                 override fun closed(code: Int) {
+                    if (pagedDiagnostics) pagedDiagnostic("transport-closed code=$code")
                     clearPresence()
                     value.closed(code)
                 }
                 override fun broken() {
+                    if (pagedDiagnostics) pagedDiagnostic("transport-broken")
                     clearPresence()
                     value.broken()
                 }
                 override fun message(payload: JsonObject) {
+                    val resultId = payload.optionalText("requestId")
+                    if (payload.optionalText("type") == "result" && resultId != null) {
+                        pendingBegins.remove(resultId)?.let { begin ->
+                            runCatching {
+                                if (payload.flag("ok")) {
+                                    val data = payload.obj("data")
+                                    if (data.text("kind") == "editor_upload_begun" && data.text("sessionId") == sessionId && data.text("questionId") == begin.text("questionId")) {
+                                        observedUploads[data.text("uploadId")] = UploadObservation(begin)
+                                    }
+                                }
+                            }
+                        }
+                        pendingCommits.remove(resultId)?.let { pending -> observedCommit.set(CommitObservation(pending, payload)) }
+                    }
+                    if (payload.optionalText("type") == "result" && resultId != null && pagedV3Requests.remove(resultId) && payload.flag("ok")) {
+                        pagedV3Accepted.set(true)
+                    }
                     if (payload.optionalText("type") == "result" && payload.optionalText("requestId") == staleAnswerRequestId) {
                         staleAnswerResult.set(payload)
                         return
@@ -618,16 +795,18 @@ private class PresenceObservingTransport(
                         val active = if (payload.optionalText("type") == "result") pendingPresence.remove(payload.text("requestId")) else null
                         if (active != null && payload.flag("ok")) {
                             val data = payload.obj("data")
+                            if (pagedDiagnostics) pagedDiagnostic("presence-result active=$active accepted=${data.optionalText("kind") == "accepted" && data.optionalText("sessionId") == sessionId}")
                             if (data.optionalText("kind") == "accepted" && data.optionalText("sessionId") == sessionId) {
                                 if (active) presenceAccepted.set(true) else inactivePresenceAccepted.set(true)
                             }
-                        }
+                        } else if (active != null && pagedDiagnostics) pagedDiagnostic("presence-result active=$active accepted=false")
                     }
                     value.message(payload)
                 }
             }
         }
     override fun connect(host: PairedHost) {
+        if (pagedDiagnostics) pagedDiagnostic("transport-connect")
         clearPresence()
         delegate.connect(host)
     }
@@ -643,14 +822,54 @@ private class PresenceObservingTransport(
         ))
     }
     override fun send(payload: JsonObject) {
+        when (payload.optionalText("type")) {
+            "session.question.editor.upload.begin" -> pendingBegins[payload.text("requestId")] = payload
+            "session.question.editor.upload.chunk" -> observedUploads[payload.text("uploadId")]?.let { upload ->
+                synchronized(upload) {
+                    runCatching {
+                        val bytes = Wire.decode(payload.text("data"))
+                        if (payload.text("sessionId") != sessionId || payload.text("questionId") != upload.begin.text("questionId") || payload.long("offset") != upload.bytes.toLong()) upload.valid = false
+                        upload.digest.update(bytes)
+                        upload.bytes += bytes.size
+                    }.onFailure { upload.valid = false }
+                }
+            }
+            "session.question.editor.upload.commit" -> observedUploads[payload.text("uploadId")]?.let { upload ->
+                synchronized(upload) {
+                    val digest = upload.digest.digest().joinToString("") { "%02x".format(it) }
+                    pendingCommits[payload.text("requestId")] = PendingCommit(upload, payload, digest)
+                }
+            }
+        }
+        if (payload.optionalText("type") == "projects.list") {
+            val id = payload.optionalText("requestId")
+            if (id != null && id.startsWith("capabilities.v3:") && id.contains("question_editor_paged.v1")) pagedV3Requests.add(id)
+        }
         if (payload.optionalText("type") == "session.editor.presence" && payload.optionalText("sessionId") == sessionId) {
             val active = payload["active"] == JsonPrimitive(true)
+            if (pagedDiagnostics) pagedDiagnostic("presence-send active=$active")
             pendingPresence[payload.text("requestId")] = active
             if (!active) { presenceAccepted.set(false); inactivePresenceAccepted.set(false) }
         }
         delegate.send(payload)
     }
+    fun pagedCommitAccepted(questionId: String, grantId: String, bytes: Int, sha256: String): Boolean {
+        val receipt = observedCommit.get() ?: return false
+        return synchronized(receipt.pending.upload) {
+            runCatching {
+                val upload = receipt.pending.upload
+                val begin = upload.begin
+                val commit = receipt.pending.request
+                val result = receipt.result
+                upload.valid && upload.bytes == bytes && receipt.pending.sha256 == sha256 && begin.long("totalBytes") == bytes.toLong() &&
+                    begin.text("sha256") == sha256 && begin.text("sessionId") == sessionId && begin.text("questionId") == questionId && begin.text("grantId") == grantId &&
+                    commit.text("sessionId") == sessionId && commit.text("questionId") == questionId &&
+                    result.flag("ok") && result.obj("data").text("kind") == "accepted" && result.obj("data").text("sessionId") == sessionId
+            }.getOrDefault(false)
+        }
+    }
     override fun close() {
+        if (pagedDiagnostics) pagedDiagnostic("transport-close")
         clearPresence()
         delegate.close()
     }
@@ -658,6 +877,8 @@ private class PresenceObservingTransport(
         presenceAccepted.set(false)
         inactivePresenceAccepted.set(false)
         pendingPresence.clear()
+        pagedV3Accepted.set(false)
+        pagedV3Requests.clear()
     }
 }
 

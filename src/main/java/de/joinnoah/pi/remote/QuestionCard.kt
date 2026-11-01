@@ -8,14 +8,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.*
+
+private class PagedEditorCallbackFence { var active = false }
 
 @Composable
 internal fun QuestionCard(
@@ -196,30 +202,89 @@ internal fun QuestionCard(
             "editor" -> {
                 val prefill = editorPrefill(question)
                 if (pagedEditor != null && question.containsKey("editorUploadGrantId")) {
+                  key(EditorQuestionKey(question), editorScope) {
+                    val pagedCallbackFence = remember { PagedEditorCallbackFence() }
+                    SideEffect { pagedCallbackFence.active = true }
+                    DisposableEffect(pagedCallbackFence) { onDispose { pagedCallbackFence.active = false } }
+                    fun active() = pagedCallbackFence.active
                     val verified = pagedEditor.text
+                    val currentLoadAvailable by rememberUpdatedState(verified == null && !pagedEditor.loading && controlsEnabled && editorAvailable)
                     if (pagedEditor.quarantined && block != QuestionBlock.UNCERTAIN) Text(stringResource(R.string.remote_question_answer_uncertain))
                     if (verified == null) {
-                        OutlinedButton(onClick = { if (currentControlsEnabled && currentEditorAvailable) onLoadPagedEditor() }, enabled = controlsEnabled && editorAvailable && !pagedEditor.loading) {
+                        OutlinedButton(onClick = { if (active() && currentLoadAvailable) onLoadPagedEditor() }, enabled = controlsEnabled && editorAvailable && !pagedEditor.loading) {
                             Text(stringResource(if (pagedEditor.loading) R.string.remote_question_details_loading else R.string.remote_paged_editor_load))
                         }
                         if (pagedEditor.failed) Text(stringResource(R.string.remote_question_details_failed))
                     } else {
-                        var text by remember(EditorQuestionKey(question), editorScope) { mutableStateOf(verified) }
+                        val editorKey = EditorQuestionKey(question)
+                        var text by remember(editorKey, editorScope) { mutableStateOf(verified) }
+                        var window by remember(editorKey, editorScope) { mutableStateOf(EditorWindows.atOffset(verified, 0)) }
+                        var field by remember(editorKey, editorScope) { mutableStateOf(TextFieldValue(verified.substring(window.start, window.end))) }
+                        var section by remember(editorKey, editorScope) { mutableStateOf("1") }
                         val editEnabled = controlsEnabled && !pagedEditor.loading
-                        OutlinedTextField(value = text, onValueChange = { if (editEnabled) { text = it; onEditPagedEditor(it) } }, enabled = editEnabled,
-                            modifier = Modifier.fillMaxWidth().testTag("questionEditorField").then(rememberQuestionFieldKeys(text)), minLines = 4)
+                        val currentEditEnabled by rememberUpdatedState(editEnabled)
+                        fun canEdit() = active() && currentEditEnabled
+                        val validDraft = remember(text) { validEditorText(text, MAX_EDITOR_UPLOAD_BYTES) }
+                        fun showWindow(next: EditorWindow, selection: TextRange = TextRange(next.start), composition: TextRange? = null, requestedSection: Int? = null) {
+                            if (!canEdit()) return
+                            fun map(offset: Int) = (offset - next.start).coerceIn(0, next.end - next.start)
+                            val mappedComposition = composition?.takeIf { it.min >= next.start && it.max <= next.end }?.let { TextRange(map(it.start), map(it.end)) }
+                            window = next
+                            field = TextFieldValue(text.substring(next.start, next.end), TextRange(map(selection.start), map(selection.end)), mappedComposition)
+                            section = (requestedSection ?: ((next.start / EditorWindows.MAX_UNITS) + 1)).toString()
+                        }
+                        fun replaceWindow(value: TextFieldValue) {
+                            if (!canEdit()) return
+                            if (value.text == field.text) { field = value; return }
+                            val old = window
+                            val updated = EditorWindows.replace(text, old, value.text)
+                            val absoluteSelection = TextRange(old.start + value.selection.start, old.start + value.selection.end)
+                            val absoluteComposition = value.composition?.let { TextRange(old.start + it.start, old.start + it.end) }
+                            text = updated
+                            onEditPagedEditor(updated)
+                            val anchor = if (value.text.length > EditorWindows.MAX_UNITS) maxOf(0, absoluteSelection.end - EditorWindows.MAX_UNITS / 2) else old.start.coerceAtMost(updated.length)
+                            showWindow(EditorWindows.atOffset(updated, anchor), absoluteSelection, absoluteComposition)
+                        }
+                        fun navigate(next: EditorWindow, requestedSection: Int? = null) {
+                            if (!canEdit()) return
+                            val selection = TextRange(window.start + field.selection.start, window.start + field.selection.end)
+                            val composition = field.composition?.let { TextRange(window.start + it.start, window.start + it.end) }
+                            showWindow(next, selection, composition, requestedSection)
+                        }
+                        OutlinedTextField(value = field, onValueChange = { if (editEnabled) replaceWindow(it) }, enabled = editEnabled,
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("questionEditorField").then(rememberQuestionFieldKeys(text)), minLines = 4)
+                        Text(stringResource(R.string.remote_paged_editor_position, window.start, window.end, text.length))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { if (canEdit()) navigate(EditorWindows.atOffset(text, 0)) }, enabled = editEnabled && window.start > 0, modifier = Modifier.testTag("pagedEditorFirst")) { Text(stringResource(R.string.remote_paged_editor_first)) }
+                            TextButton(onClick = { if (canEdit()) EditorWindows.previous(text, window)?.let { navigate(it) } }, enabled = editEnabled && window.start > 0, modifier = Modifier.testTag("pagedEditorPrevious")) { Text(stringResource(R.string.remote_paged_editor_previous)) }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { if (canEdit()) EditorWindows.next(text, window)?.let { navigate(it) } }, enabled = editEnabled && window.end < text.length, modifier = Modifier.testTag("pagedEditorNext")) { Text(stringResource(R.string.remote_paged_editor_next)) }
+                            TextButton(onClick = { if (canEdit()) navigate(EditorWindows.last(text)) }, enabled = editEnabled && window.end < text.length, modifier = Modifier.testTag("pagedEditorLast")) { Text(stringResource(R.string.remote_paged_editor_last)) }
+                        }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            OutlinedTextField(value = section, onValueChange = { if (canEdit() && it.length <= 9 && it.all(Char::isDigit)) section = it }, enabled = editEnabled,
+                                modifier = Modifier.weight(1f).testTag("pagedEditorSection"), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                label = { Text(stringResource(R.string.remote_paged_editor_section, EditorWindows.sectionCount(text))) })
+                            val requested = section.toIntOrNull()
+                            TextButton(onClick = { if (canEdit()) requested?.let { navigate(EditorWindows.atSection(text, it), it) } }, enabled = editEnabled && requested != null && requested in 1..EditorWindows.sectionCount(text), modifier = Modifier.testTag("pagedEditorJump")) { Text(stringResource(R.string.remote_paged_editor_jump)) }
+                        }
                         if (pagedEditor.retentionWarning) Text(stringResource(R.string.remote_paged_editor_retention_warning))
                         if (pagedEditor.capacityFull && !pagedEditor.quarantined) Text(stringResource(R.string.remote_paged_editor_capacity_full))
                         pagedEditor.recoveryDraft?.let { recovery ->
-                            TextButton(onClick = { if (editEnabled) { text = recovery; onEditPagedEditor(recovery) } }, enabled = editEnabled) {
+                            TextButton(onClick = { if (canEdit()) { text = recovery; onEditPagedEditor(recovery); showWindow(EditorWindows.atOffset(recovery, 0)) } }, enabled = editEnabled) {
                                 Text(stringResource(R.string.remote_paged_editor_restore))
                             }
                         }
-                        Button(enabled = editEnabled && editorAvailable && !pagedEditor.quarantined && !pagedEditor.capacityFull && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES),
-                            onClick = { if (currentControlsEnabled && currentPagedSendAvailable && currentEditorAvailable && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES)) onSubmitPagedEditor(text) }) {
+                        Button(enabled = editEnabled && editorAvailable && !pagedEditor.quarantined && !pagedEditor.capacityFull && validDraft,
+                            onClick = { if (active() && currentControlsEnabled && currentPagedSendAvailable && currentEditorAvailable && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES)) onSubmitPagedEditor(text) }) {
                             Text(stringResource(R.string.remote_send))
                         }
                     }
+                    TextButton(onClick = { if (active()) submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
+                        Text(stringResource(R.string.remote_cancel))
+                    }
+                  }
                 } else if (prefill == null) {
                     Text(stringResource(R.string.remote_local_required))
                 } else {
@@ -248,7 +313,7 @@ internal fun QuestionCard(
                 )
             else -> Text(stringResource(R.string.remote_local_required))
         }
-        if (kind in setOf("confirm", "select", "input", "editor"))
+        if (kind in setOf("confirm", "select", "input", "editor") && !(kind == "editor" && pagedEditor != null && question.containsKey("editorUploadGrantId")))
             TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
                 Text(stringResource(R.string.remote_cancel))
             }
