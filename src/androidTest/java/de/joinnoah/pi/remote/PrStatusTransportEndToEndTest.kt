@@ -49,6 +49,12 @@ import org.junit.rules.ExternalResource
 import org.junit.rules.RuleChain
 
 private fun pagedDiagnostic(event: String) = println("PAGED_DIAG elapsedMs=${SystemClock.elapsedRealtime()} $event")
+private fun pagedTextSummary(value: String?): String {
+    if (value == null) return "absent"
+    val bytes = value.toByteArray(Charsets.UTF_8)
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    return "chars=${value.length},bytes=${bytes.size},sha256=$digest"
+}
 
 /** Actual Pi and host events through the encrypted transport into production navigation and screens. */
 class PrStatusTransportEndToEndTest {
@@ -73,6 +79,7 @@ class PrStatusTransportEndToEndTest {
     private val mainProbe = Executors.newSingleThreadScheduledExecutor()
     private val mainProbePending = AtomicBoolean(false)
     private val mainProbeEnabled = AtomicBoolean(false)
+    private val pagedEditCalls = AtomicInteger()
     private val showNavigation = mutableStateOf(false)
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -172,6 +179,21 @@ class PrStatusTransportEndToEndTest {
             observedTransport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId), pagedEditorExpected, pagedEditorCase == "cancel")
             repository = DefaultRemoteRepository(pairings, drafts, observedTransport, scope, pagedEditorTestGate = pagedEditorExpected)
             val observingRepository = object : RemoteRepository by repository {
+                override fun editPagedEditor(question: JsonObject, draft: String) {
+                    pagedEditCalls.incrementAndGet()
+                    fun flags(): String {
+                        val state = repository.state.value
+                        val view = question.optionalText("id")?.let { state.pagedEditors[it] }
+                        return "selectionMatches=${state.selection == selection} connected=${state.connected} loading=${state.loading} generation=${state.editorQuestionGeneration} " +
+                            "sameQuestion=${state.questions.any { it === question }} sourcePaged=${question.containsKey("editorSource")} " +
+                            "grantPresent=${question.containsKey("editorUploadGrantId")} capability=${QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities} " +
+                            "unavailable=${QUESTION_PAGED_EDITOR_CAPABILITY in state.unavailableCapabilities} viewLoading=${view?.loading} " +
+                            "view=${pagedTextSummary(view?.text)}"
+                    }
+                    if (pagedEditorExpected) pagedDiagnostic("editor-edit-before input=${pagedTextSummary(draft)} ${flags()}")
+                    repository.editPagedEditor(question, draft)
+                    if (pagedEditorExpected) pagedDiagnostic("editor-edit-after input=${pagedTextSummary(draft)} ${flags()}")
+                }
                 override fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit {
                     if (pagedEditorExpected) pagedDiagnostic("presence-owner-acquire selectionMatches=${selection == this@PrStatusTransportEndToEndTest.selection}")
                     val release = repository.acquireNativeEditorPresence(selection)
@@ -396,12 +418,18 @@ class PrStatusTransportEndToEndTest {
         assertTrue("Rendered first window must be bounded and expose its marker", renderedText.length <= EditorWindows.MAX_UNITS && renderedText.startsWith(marker))
         if (pagedEditorCase in setOf("max-unchanged", "max-edited", "cancel", "lost-ack")) {
             compose.onNodeWithTag("pagedEditorLast").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag("pagedEditorLast").assertIsNotEnabled()
             val lastText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
             assertTrue("Rendered last window must be bounded and expose its marker", lastText.length <= EditorWindows.MAX_UNITS && lastText.endsWith(marker))
             compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag("pagedEditorFirst").assertIsNotEnabled()
         }
         screenshot("paged-editor-before")
         val expectedFinal = pagedFinal()
+        val editCallsBefore = pagedEditCalls.get()
+        val stateBeforeInput = repository.state.value
+        pagedDiagnostic("editor-action-before calls=$editCallsBefore connected=${stateBeforeInput.connected} loading=${stateBeforeInput.loading} " +
+            "sameQuestion=${stateBeforeInput.questions.any { it === question }} generation=${stateBeforeInput.editorQuestionGeneration}")
         if (pagedEditorCase == "empty-final") {
             field.performTextReplacement("")
             field.assertTextEquals("")
@@ -409,17 +437,27 @@ class PrStatusTransportEndToEndTest {
         }
         if (pagedEditorCase == "max-edited") field.performTextReplacement("é\\\n".repeat(1_024))
         if (pagedEditorCase == "empty-expand") field.performTextReplacement(expectedFinal)
-        compose.waitUntil(120_000) { repository.state.value.pagedEditors[id]?.text == expectedFinal }
+        compose.waitForIdle()
+        val renderedAfter = field.fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)?.text
+        val stateAfterInput = repository.state.value
+        val draftAfter = stateAfterInput.pagedEditors[id]?.text
+        pagedDiagnostic("editor-after-input callsBefore=$editCallsBefore callsAfter=${pagedEditCalls.get()} connected=${stateAfterInput.connected} loading=${stateAfterInput.loading} " +
+            "sameQuestion=${stateAfterInput.questions.any { it === question }} generation=${stateAfterInput.editorQuestionGeneration} " +
+            "field=${pagedTextSummary(renderedAfter)} draft=${pagedTextSummary(draftAfter)} expected=${pagedTextSummary(expectedFinal)}")
+        check(draftAfter == expectedFinal) { "Editor draft did not match expected value after UI input; see anonymous PAGED_DIAG summaries" }
         val finalDraft = requireNotNull(repository.state.value.pagedEditors[id]?.text)
         assertEquals("Exact full editor draft", expectedFinal, finalDraft)
         verifyPagedMetadata("Final", finalDraft)
         if (pagedEditorCase in setOf("max-edited", "empty-expand")) {
             compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag("pagedEditorFirst").assertIsNotEnabled()
             compose.onNodeWithTag("pagedEditorLast").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag("pagedEditorLast").assertIsNotEnabled()
             val lastText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
             val endMarker = if (pagedEditorCase == "max-edited") "😀😀" else "é\\\n"
             assertTrue("Edited last window remains bounded and exact", lastText.length <= EditorWindows.MAX_UNITS && lastText.endsWith(endMarker))
             compose.onNodeWithTag("pagedEditorFirst").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag("pagedEditorFirst").assertIsNotEnabled()
             val firstText = requireNotNull(compose.onNodeWithTag("questionEditorField").fetchSemanticsNode().config.getOrNull(SemanticsProperties.EditableText)).text
             assertTrue("Edited first window remains bounded and exact", firstText.length <= EditorWindows.MAX_UNITS && firstText.startsWith("é\\\n"))
         }
