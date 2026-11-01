@@ -12754,12 +12754,13 @@ class RemoteRepositoryTest {
     /**
      * Opens "session" again after the phone missed an advisor status of it ([replayedEnabled]),
      * with the activation's advisor read answered ([readEnabled]) before the resume reply that
-     * replays the status. Returns the repository and the advisor reads of "session" that are
-     * still to be answered.
+     * replays the status, or after it with [readFirst] false. Returns the repository and the
+     * advisor reads of "session" that are still to be answered.
      */
     private suspend fun TestScope.advisorReplayedAfterARead(
         replayedEnabled: Boolean,
         readEnabled: Boolean,
+        readFirst: Boolean = true,
     ): Triple<Transport, DefaultRemoteRepository, MutableList<JsonObject>> {
         val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
         transport.capabilities = setOf(ADVISOR_CAPABILITY)
@@ -12788,9 +12789,12 @@ class RemoteRepositoryTest {
         runCurrent()
         val resume = transport.firstPages().last()
         assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
-        transport.result(advisorReads.removeAt(0), advisorOf("session", readEnabled))
-        runCurrent()
-        assertEquals(readEnabled, repository.state.value.advisor?.enabled)
+        assertEquals(1, advisorReads.size)
+        if (readFirst) {
+            transport.result(advisorReads.removeAt(0), advisorOf("session", readEnabled))
+            runCurrent()
+            assertEquals(readEnabled, repository.state.value.advisor?.enabled)
+        }
 
         transport.result(resume, host.answer(resume))
         runCurrent()
@@ -12819,8 +12823,21 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aReplayWhileTheActivationsAdvisorReadIsUnansweredSendsNoSecondRead() = runTest {
+        val (transport, repository, reads) =
+            advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false, readFirst = false)
+        // The replayed status is not merged, and the read in flight covers it: no second read.
+        assertEquals(1, reads.size)
+        assertNotEquals(true, repository.state.value.advisor?.enabled)
+        transport.result(reads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
     fun aLiveAdvisorStatusAfterTheReadStillAppliesWithoutAnotherRead() = runTest {
-        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = false, readEnabled = false)
+        // The replay leaves the live merge that follows intact.
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
         reads.forEach { transport.result(it, advisorOf("session", enabled = false)) }
         runCurrent()
         val before = transport.sent.count { it.text("type") == "session.advisor.get" }

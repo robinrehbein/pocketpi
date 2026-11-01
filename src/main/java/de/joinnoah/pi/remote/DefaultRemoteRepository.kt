@@ -3172,7 +3172,9 @@ class DefaultRemoteRepository(
             if (event.optionalText("kind") == "session.notice") continue
             // A replayed advisor status is history: the host may have answered an advisor read
             // after it, and neither carries anything to order the two by. The chip is read again
-            // instead; a read still in flight was answered after this reply, so it covers it.
+            // instead. A read still in flight was sent on this connection after any status the
+            // replay carries, which reached the phone only through the replay; a later status
+            // arrives live and invalidates that read.
             if (event.optionalText("kind") == "advisor.status") {
                 advisorReplayed = true
                 continue
@@ -3183,6 +3185,8 @@ class DefaultRemoteRepository(
                 Diagnostics.caught("repo.replay.event", dropped)
             }
         }
+        // select() keeps the Timeline and the selection in step, so this guard only keeps the read
+        // from going to another chat should that change.
         if (advisorReplayed && current.sessionId == state.value.selection.sessionId) refreshAdvisor()
         drainedEffects(current)
         if (result.fits) {
