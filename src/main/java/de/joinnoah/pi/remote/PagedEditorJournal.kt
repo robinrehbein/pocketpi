@@ -75,7 +75,13 @@ class PagedEditorJournal(
     private fun persist(updated: PagedJournalSnapshot) {
         // Validate alternate storage implementations too, including the full encoded envelope.
         encodePagedJournal(updated)
-        storage.save(updated)
+        try {
+            storage.save(updated)
+        } catch (e: Exception) {
+            // A failed verification can follow a successful commit. Reload before mutating.
+            loaded = null
+            throw e
+        }
         loaded = updated
     }
 

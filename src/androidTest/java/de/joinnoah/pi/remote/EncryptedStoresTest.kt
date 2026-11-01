@@ -3,8 +3,10 @@ package de.joinnoah.pi.remote
 import android.content.Context
 import android.content.ContextWrapper
 import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -37,6 +39,45 @@ class EncryptedStoresTest {
                 .filter { it.startsWith(directory.name) }
                 .forEach { keys.deleteEntry(it) }
         }
+    }
+
+    @Test
+    fun legacyBackupOnlyRestoresEncryptedJournalOnAndroid() = isolated { context ->
+        val alias = context.noBackupFilesDir.name + "-legacy"
+        val base = File(context.noBackupFilesDir, "legacy.enc")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        val journal = "unresolved mutation".toByteArray()
+        store.write(journal)
+        assertTrue(base.renameTo(File(base.path + ".bak")))
+
+        assertArrayEquals(journal, store.read())
+        assertFalse(store.takeReset())
+    }
+
+    @Test
+    fun failedAtomicRenameIsReportedAndLeavesPreviousCiphertext() = isolated { context ->
+        val alias = context.noBackupFilesDir.name + "-atomic"
+        val base = File(context.noBackupFilesDir, "atomic.enc")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        store.write("previous".toByteArray())
+        val oldCiphertext = base.readBytes()
+
+        // Unlink the pending file before the real framework commit. Its rename then fails,
+        // but Android's finishWrite logs the failure and returns normally.
+        val atomic = object : AtomicFile(base) {
+            override fun finishWrite(stream: FileOutputStream) {
+                check(File(base.path + ".new").delete())
+                super.finishWrite(stream)
+            }
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply {
+            isAccessible = true
+            set(store, atomic)
+        }
+
+        assertThrows(IOException::class.java) { store.write("replacement".toByteArray()) }
+        assertArrayEquals(oldCiphertext, base.readBytes())
+        assertArrayEquals("previous".toByteArray(), store.read())
     }
 
     @Test

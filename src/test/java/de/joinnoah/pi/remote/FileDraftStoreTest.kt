@@ -2,8 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -117,6 +119,33 @@ class FileDraftStoreTest {
         try { retry.get(key); fail("load should fail") } catch (_: IOException) { }
         failing.failLoad = false
         assertEquals(draft, retry.get(key))
+    }
+
+    @Test fun failedReadbackAfterCommitDoesNotLetNextMutationErasePendingWrite() = runBlocking {
+        val store = FileDraftStore(context)
+        val journal = FileDraftJournal(store, Dispatchers.Unconfined)
+        journal.put(key, draft.copy(pending = emptyList()))
+        val encrypted = FileDraftStore::class.java.getDeclaredField("file").apply { isAccessible = true }.get(store)
+        val atomic = object : AtomicFile(File(directory, "file-drafts.enc")) {
+            var failRead = false
+            var armed = true
+            override fun finishWrite(stream: FileOutputStream) {
+                super.finishWrite(stream)
+                if (armed) { failRead = true; armed = false }
+            }
+            override fun readFully(): ByteArray {
+                if (failRead) {
+                    failRead = false
+                    throw IOException("readback failed after commit")
+                }
+                return super.readFully()
+            }
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply { isAccessible = true; set(encrypted, atomic) }
+
+        assertTrue(runCatching { journal.put(key, draft) }.exceptionOrNull() is IOException)
+        journal.put(key.copy(path = "other.txt"), draft.copy(pending = emptyList()))
+        assertEquals(draft, FileDraftStore(context).load()[key])
     }
 
     private class MemoryStorage(var drafts: Map<FileDraftKey, StoredFileDraft>) : FileDraftStorage {

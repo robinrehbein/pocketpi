@@ -227,7 +227,9 @@ review pass. App APK is unchanged:
 `0c274fbad7b170b91ceb64e6a6b27760e27564fa67ebe3c0700fc001e6fec4c0`;
 instrumentation APK is
 `281c652fdedb7675ba65c52b3bbb8f5187350518484854d0dc611cc5f9b7606a`.
-This slice changes test fixtures only. Interrupted Android writes, power loss,
+This slice changes test fixtures only. Selected interrupted Android writes are now
+qualified in [encrypted journal atomic recovery](encrypted-journal-atomic-recovery.md).
+Power loss,
 full owner replacement/shared-settlement and resource qualification, physical
 Galaxy devices and independent Linux acceptance remain separate open gates.
 Public paged-editor and outcome capabilities remain OFF.

@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import androidx.annotation.VisibleForTesting
 import java.io.File
+import java.io.IOException
 import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -53,8 +54,10 @@ class EncryptedFileStore(
 
     fun read(): ByteArray? =
         synchronized(lock) {
-            if (!file.baseFile.exists()) return null
+            // AtomicFile.openRead restores a legacy backup, including when the base is absent.
+            if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
             val bytes = file.readFully()
+            if (File(file.baseFile.path + ".bak").exists()) throw IOException("Encrypted file backup recovery failed")
             if (bytes.size < IV_BYTES + TAG_BYTES) {
                 if (preserveUnreadable) throw java.io.IOException("Encrypted file is truncated")
                 Diagnostics.record(Diagnostics.Kind.CAUGHT, "store.quarantine", outcome = "truncated")
@@ -90,7 +93,13 @@ class EncryptedFileStore(
             val stream = file.startWrite()
             try {
                 stream.write(bytes)
+                // AtomicFile.finishWrite logs sync and rename failures instead of throwing them.
+                stream.fd.sync()
                 file.finishWrite(stream)
+                val committed = file.readFully()
+                if (File(file.baseFile.path + ".bak").exists() || !committed.contentEquals(bytes)) {
+                    throw IOException("Encrypted file commit failed")
+                }
             } catch (e: Exception) {
                 Diagnostics.caught("store.write", e)
                 file.failWrite(stream)

@@ -4,8 +4,10 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -83,6 +85,81 @@ class StoreRecoveryTest {
     }
 
     private val host = PairedHost("route", "https://relay.test", "device", "secret", "Mac")
+
+    @Test
+    fun legacyBackupOnlyRestoresUnresolvedJournal() {
+        val store = EncryptedFileStore(context, "journal.enc", alias, preserveUnreadable = true)
+        val journal = "unresolved mutation".toByteArray()
+        store.write(journal)
+        assertTrue(file("journal.enc").renameTo(file("journal.enc.bak")))
+
+        assertArrayEquals(journal, store.read())
+        assertFalse(store.takeReset())
+    }
+
+    @Test
+    fun silentlyFailedAtomicCommitIsReportedAndPreservesPreviousValue() {
+        val store = EncryptedFileStore(context, "journal.enc", alias, preserveUnreadable = true)
+        val previous = "unresolved mutation".toByteArray()
+        store.write(previous)
+        val oldCiphertext = file("journal.enc").readBytes()
+
+        // AtomicFile.finishWrite can return normally after its rename fails. Simulate that
+        // outcome while retaining the actual startWrite and readFully behavior.
+        val atomic = object : AtomicFile(file("journal.enc")) {
+            override fun finishWrite(stream: FileOutputStream) {
+                stream.close()
+            }
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply {
+            isAccessible = true
+            set(store, atomic)
+        }
+
+        assertThrows(IOException::class.java) { store.write("replacement".toByteArray()) }
+        assertArrayEquals(oldCiphertext, file("journal.enc").readBytes())
+        assertArrayEquals(previous, store.read())
+    }
+
+    @Test
+    fun unresolvedLegacyBackupMakesReadFailClosed() {
+        val base = file("journal.enc")
+        val backup = file("journal.enc.bak")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        store.write("old journal".toByteArray())
+        val oldBytes = base.readBytes()
+        store.write("new journal".toByteArray())
+        backup.writeBytes(oldBytes)
+        // Emulate AtomicFile.openRead's logged-and-swallowed legacy rename failure.
+        val atomic = object : AtomicFile(base) {
+            override fun readFully(): ByteArray = base.readBytes()
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply { isAccessible = true; set(store, atomic) }
+
+        assertThrows(IOException::class.java) { store.read() }
+        assertArrayEquals(oldBytes, backup.readBytes())
+    }
+
+    @Test
+    fun unresolvedLegacyBackupMakesCommitFailEvenWhenNewBytesMatch() {
+        val base = file("journal.enc")
+        val backup = file("journal.enc.bak")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        store.write("old journal".toByteArray())
+        val oldBytes = base.readBytes()
+        val atomic = object : AtomicFile(base) {
+            override fun finishWrite(stream: FileOutputStream) {
+                super.finishWrite(stream)
+                // Model an unresolved legacy backup left after a failed restoration.
+                backup.writeBytes(oldBytes)
+            }
+            override fun readFully(): ByteArray = base.readBytes()
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply { isAccessible = true; set(store, atomic) }
+
+        assertThrows(IOException::class.java) { store.write("new journal".toByteArray()) }
+        assertArrayEquals(oldBytes, backup.readBytes())
+    }
 
     @Test
     fun theKeyIsLoadedOncePerAliasAcrossStores() {

@@ -2,8 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.UnrecoverableKeyException
 import java.util.UUID
@@ -55,6 +57,36 @@ class PagedEditorJournalTest {
         assertEquals(attempt, saved.attempts["attempt"])
         journal.removeDraft(key)
         assertEquals(attempt, journal.snapshot().attempts["attempt"])
+    }
+
+    @Test fun failedReadbackAfterCommitDoesNotLetNextMutationEraseCommittedAttempt() = runBlocking {
+        val store = PagedEditorStore(context)
+        val journal = PagedEditorJournal(store, Dispatchers.Unconfined)
+        journal.putDraft(key, StoredPagedDraft("old", 1))
+        val encrypted = PagedEditorStore::class.java.getDeclaredField("file").apply { isAccessible = true }.get(store)
+        val base = File(dir, "paged-editor-journal.enc")
+        val atomic = object : AtomicFile(base) {
+            var failRead = false
+            var armed = true
+            override fun finishWrite(stream: FileOutputStream) {
+                super.finishWrite(stream)
+                if (armed) { failRead = true; armed = false }
+            }
+            override fun readFully(): ByteArray {
+                if (failRead) {
+                    failRead = false
+                    throw IOException("readback failed after commit")
+                }
+                return super.readFully()
+            }
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply { isAccessible = true; set(encrypted, atomic) }
+
+        assertTrue(runCatching { journal.reserve(attempt) }.exceptionOrNull() is IOException)
+        // The commit happened despite the reported failure. A later independent mutation
+        // must reload that outcome instead of writing the cached pre-reservation snapshot.
+        journal.putDraft(key.copy(questionId = "other"), StoredPagedDraft("other", 2))
+        assertEquals(attempt, PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot().attempts[attempt.attemptId])
     }
 
     @Test fun exactRetryIsIdempotentButAnyOtherAttemptForKeyIsBlocked() = runBlocking {

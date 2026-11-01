@@ -54,6 +54,17 @@ class FileDraftJournal(
         loaded ?: storage.load().mapValues { (_, value) -> value.copy(pending = value.pending.toList()) }
             .also { loaded = it }
 
+    private fun persist(updated: Map<FileDraftKey, StoredFileDraft>) {
+        try {
+            storage.save(updated)
+        } catch (e: Exception) {
+            // A failed verification can follow a successful commit. Reload before mutating.
+            loaded = null
+            throw e
+        }
+        loaded = updated
+    }
+
     suspend fun get(key: FileDraftKey): StoredFileDraft? = withContext(dispatcher) {
         mutex.withLock { current()[key]?.let { it.copy(pending = it.pending.toList()) } }
     }
@@ -63,16 +74,14 @@ class FileDraftJournal(
             val updated = current() + (key to draft.copy(pending = draft.pending.toList()))
             // Validate even when a test or alternate implementation supplies the storage.
             encodeFileDrafts(updated)
-            storage.save(updated)
-            loaded = updated
+            persist(updated)
         }
     }
 
     suspend fun remove(key: FileDraftKey) = withContext(dispatcher) {
         mutex.withLock {
             val updated = current() - key
-            storage.save(updated)
-            loaded = updated
+            persist(updated)
         }
     }
 }
