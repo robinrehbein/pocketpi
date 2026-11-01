@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Native custom terminal checkpoint on 2026-11-01
+
+The actual MainActivity / native Pi 1.4.0 custom-component path passed on phone and tablet emulator layouts. The test confirms takeover from an owned local fixture attachment, verifies its revocation and stale-input rejection, visually checks the actual rendered component, selects through terminal UI keys and proves the exact source result plus a later command in the same worker/session. Both cases and cleanup passed; 43 source pins, installed/build APKs and the six-event source trace were independently audited. Existing text process recovery also passed.
+
+See [custom terminal qualification](testing/native-custom-terminal-qualification.md) for exact labels, historical failures and scope. This is one deterministic public custom component, not arbitrary component or physical-device qualification. The separate [iOS public API feasibility](plans/2026-11-01-ios-simulator-feasibility.md) identifies a missing Mac backend: capture and public XCTest input primitives still require a working ownership/transport prototype. The paged editor's public capability remains off pending its remaining authority/lifecycle gates. The overall goal remains active.
+
 ## Real Android image delivery checkpoint on 2026-11-01
 
 Four scoped phone/tablet emulator cases passed with cleanup: unchanged attachment clearing and offline replacement retention after an exact recovered image-prompt receipt. The actual system picker, importer, encrypted stores, attachment upload and native Pi SDK model path are exercised. Source JPEG integrity and SDK-normalized PNG integrity are checked separately. The observer records exactly one matching Android write attempt, and the host records one prompt request despite the withheld acknowledgement and echo.
@@ -663,7 +669,7 @@ established on `main`. Neither label by itself means the qualifying run has veri
 | 2 | Edit and save a file, with a clear conflict when the Mac changed it | App | Implemented (`session.files.write.v1`) |
 | 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Implemented locally for workers; combined ticket workflow and physical-device qualification open (gap 6) |
 | 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Confirm-details implementation reviewed and enabled by default; native and external RPC scenarios passed, broad Host run non-green, corrected files passed targeted rerun; hardware/Linux/production qualification open; bounded RPC editors qualified locally on emulators, native/paged editors open (gap 3) |
-| 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Terminal relay implemented locally; combined custom-dialog workflow and physical-device qualification open (gaps 4 and 7) |
+| 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | One deterministic public native custom component qualified locally on phone/tablet emulators with confirmed takeover and exact result; arbitrary components, remote Linux and physical-device qualification remain open (gaps 4 and 7) |
 | 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
 | 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; actual Pi through a Host-managed native worker to Android navigation passed on four emulator profiles. Live GitHub CI and physical-device qualification remain open. |
 
