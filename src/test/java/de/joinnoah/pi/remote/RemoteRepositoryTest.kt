@@ -13639,6 +13639,198 @@ class RemoteRepositoryTest {
         }
     }
 
+    /** Reopen from the durable snapshot after an unacknowledged prompt is restored. */
+    private suspend fun TestScope.savedUnconfirmedPrompt(): Pair<Map<DraftKey, StoredDraft>, String> {
+        val drafts = Drafts()
+        val transport = promptReceiptTransport()
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Original")
+        repository.prompt()
+        runCurrent()
+        assertEquals("Original", repository.state.value.draft)
+        repository.flush()
+        return drafts.values.toMap() to transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+    }
+
+    private fun receiptTransport(id: String): Transport = promptReceiptTransport().also { transport ->
+        withTimeline(transport, Wire.objectOf("id" to "source", "role" to "user", "text" to "Original",
+            "remoteDelivery" to Wire.objectOf("requestId" to id, "delivery" to "prompt")))
+    }
+
+    @Test
+    fun restoredPromptReceiptClearsUntouchedComposerAfterRepositoryReopen() = runTest {
+        val (snapshot, id) = savedUnconfirmedPrompt()
+        val drafts = Drafts().apply { values = snapshot }
+        val transport = receiptTransport(id)
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun restoredPromptEditedAwayAndBackSurvivesReopenAndReceipt() = runTest {
+        val (snapshot, id) = savedUnconfirmedPrompt()
+        val beforeReceipt = Drafts().apply { values = snapshot }
+        val editor = repository(promptReceiptTransport(), beforeReceipt)
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.draft("Changed")
+        editor.draft("Original")
+        editor.flush()
+        val drafts = Drafts().apply { values = beforeReceipt.values.toMap() }
+        val transport = receiptTransport(id)
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun restoredPromptQuoteEditedAwayAndBackSurvivesReopenAndReceipt() = runTest {
+        val (snapshot, id) = savedUnconfirmedPrompt()
+        val beforeReceipt = Drafts().apply { values = snapshot }
+        val editingTransport = promptReceiptTransport()
+        withTimeline(editingTransport, Wire.objectOf("id" to "reply", "role" to "assistant", "text" to "A reply"))
+        val editor = repository(editingTransport, beforeReceipt)
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.quote("reply")
+        assertNotNull(editor.state.value.quote)
+        editor.quote(null)
+        editor.flush()
+        val drafts = Drafts().apply { values = beforeReceipt.values.toMap() }
+        val transport = receiptTransport(id)
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertNull(reopened.state.value.quote)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun quoteEditedDuringSendDoesNotPreventTextRecoveryAfterReopen() = runTest {
+        val drafts = Drafts()
+        val transport = promptReceiptTransport()
+        withTimeline(transport, Wire.objectOf("id" to "reply", "role" to "assistant", "text" to "A reply"))
+        val editor = inFlightPrompt(transport, drafts, "Original")
+        editor.quote("reply")
+        val newQuote = editor.state.value.quote
+        assertNotNull(newQuote)
+        editor.flush()
+        val reopenedTransport = promptReceiptTransport()
+        val reopened = repository(reopenedTransport, Drafts().apply { values = drafts.values.toMap() })
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("Original", reopened.state.value.draft)
+        assertEquals(newQuote, reopened.state.value.quote)
+        assertTrue(reopened.state.value.uncertain)
+        assertTrue(reopenedTransport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun attachmentRemovedDuringUploadDoesNotPreventTextRecoveryAfterReopen() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.attachments.begin") gate.await() }
+        val editor = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.importAttachments(editor.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        editor.draft("Original")
+        editor.prompt()
+        runCurrent()
+        editor.removeAttachment(attachment.id)
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        editor.flush()
+        val reopenedTransport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val reopened = repository(reopenedTransport, Drafts().apply { values = drafts.values.toMap() }, storage)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("Original", reopened.state.value.draft)
+        assertTrue(reopened.state.value.attachments.isEmpty())
+        assertTrue(reopened.state.value.uncertain)
+        assertTrue(reopenedTransport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun legacyEmptyComposerRestoresTextButReceiptDoesNotEraseAmbiguousText() = runTest {
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+            mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+        val transport = receiptTransport("lost-id")
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(key).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun userClearedUnconfirmedPromptStaysEmptyAfterRepositoryReopen() = runTest {
+        val (snapshot, _) = savedUnconfirmedPrompt()
+        val beforeReopen = Drafts().apply { values = snapshot }
+        val editor = repository(promptReceiptTransport(), beforeReopen)
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.draft("")
+        editor.flush()
+        val transport = promptReceiptTransport()
+        val reopened = repository(transport, Drafts().apply { values = beforeReopen.values.toMap() })
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("", reopened.state.value.draft)
+        assertTrue(reopened.state.value.uncertain)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun legacyJournalWithIdenticalComposerKeepsTextOnReceipt() = runTest {
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+            text = "Original", mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+        val transport = receiptTransport("lost-id")
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(key).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
     @Test
     fun unconfirmedPromptIsNotConfirmedAndItsTextReturnsToTheComposer() = runTest {
         val drafts = Drafts()

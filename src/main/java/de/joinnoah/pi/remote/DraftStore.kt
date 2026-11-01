@@ -34,6 +34,10 @@ data class StoredDraft(
     val gitPush: GitPushIntent? = null,
     val gitPullRequest: GitPullRequestIntent? = null,
     val gitPullRequestDraft: GitPullRequestDraft? = null,
+    /** Per-field provenance for the current prompt journal; absent in older files. */
+    val promptTextState: String? = null,
+    val promptQuoteState: String? = null,
+    val promptAttachmentsState: String? = null,
 )
 
 interface DraftStorage {
@@ -81,6 +85,9 @@ class DraftStore(
                                 value.reviewComments.takeIf { it.isNotEmpty() }
                                     ?.let { comments -> JsonArray(comments.map { it.json() }) },
                             "submittedDelivery" to value.submittedDelivery,
+                            "promptTextState" to value.promptTextState,
+                            "promptQuoteState" to value.promptQuoteState,
+                            "promptAttachmentsState" to value.promptAttachmentsState,
                             "gitCommit" to value.gitCommit?.json(),
                             "gitPush" to value.gitPush?.json(),
                             "gitPullRequest" to value.gitPullRequest?.json(),
@@ -146,5 +153,10 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                 gitPush = (value["gitPush"] as? JsonObject)?.let(::parseGitPushIntent),
                 gitPullRequest = (value["gitPullRequest"] as? JsonObject)?.let(::parseGitPullRequestIntent),
                 gitPullRequestDraft = (value["gitPullRequestDraft"] as? JsonObject)?.let(::parseGitPullRequestDraft),
+                promptTextState = value.optionalText("promptTextState").promptState(),
+                promptQuoteState = value.optionalText("promptQuoteState").promptState(),
+                promptAttachmentsState = value.optionalText("promptAttachmentsState").promptState(),
             )
     }
+
+private fun String?.promptState(): String? = takeIf { it in setOf("cleared", "restored", "edited") }

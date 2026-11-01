@@ -61,6 +61,23 @@ class EncryptedStoresTest {
     }
 
     @Test
+    fun independentDraftStoreRecreationPreservesPromptComposerProvenance() = isolated { context ->
+        val alias = context.noBackupFilesDir.name + "-prompt-provenance"
+        val values = mapOf(
+            DraftKey("route", "restored") to StoredDraft(text = "Original", mutationId = "one",
+                submittedText = "Original", submittedDelivery = "prompt", promptTextState = "restored",
+                promptQuoteState = "restored", promptAttachmentsState = "restored"),
+            DraftKey("route", "edited") to StoredDraft(text = "", mutationId = "two",
+                submittedText = "Original", submittedDelivery = "prompt", promptTextState = "edited",
+                promptQuoteState = "cleared", promptAttachmentsState = "restored"),
+            DraftKey("route", "legacy") to StoredDraft(text = "Original", mutationId = "three",
+                submittedText = "Original", submittedDelivery = "prompt"),
+        )
+        DraftStore(context, alias = alias).save(values)
+        assertEquals(values, DraftStore(context, alias = alias).load())
+    }
+
+    @Test
     fun independentDraftStoreRecreationRetainsTextAndUncertaintyWithStructuredKeys() =
         isolated { context ->
             val drafts =

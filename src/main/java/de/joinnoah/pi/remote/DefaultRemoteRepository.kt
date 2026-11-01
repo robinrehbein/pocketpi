@@ -972,6 +972,13 @@ class DefaultRemoteRepository(
     private val restoredPromptVersions = mutableMapOf<DraftKey, ComposerVersions>()
     private fun composerVersion(key: DraftKey) = composerVersions[key] ?: ComposerVersions()
     private fun composerEdited(key: DraftKey, field: String) {
+        drafts[key]?.takeIf { it.mutationId != null && it.submittedDelivery in setOf(null, "prompt") }?.let {
+            drafts[key] = when (field) {
+                "text" -> it.copy(promptTextState = "edited")
+                "quote" -> it.copy(promptQuoteState = "edited")
+                else -> it.copy(promptAttachmentsState = "edited")
+            }
+        }
         val version = composerVersion(key)
         composerVersions[key] = when (field) {
             "text" -> version.copy(text = version.text + 1)
@@ -1048,7 +1055,7 @@ class DefaultRemoteRepository(
                 val (storedDrafts, draftsReset) = loadedDrafts.await().getOrThrow()
                 drafts.putAll(storedDrafts.mapValues { (key, value) ->
                     val restored = value.restoringSubmitted()
-                    if (restored != value && value.submittedDelivery in setOf(null, "prompt"))
+                    if (value.submittedDelivery in setOf(null, "prompt") && restored.promptComposerRestored())
                         restoredPromptVersions[key] = composerVersion(key)
                     restored.copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
@@ -2997,6 +3004,7 @@ class DefaultRemoteRepository(
             uploads = latest.uploads.filter { upload -> attachments.any { it.id == upload.localId } },
             mutationId = null, submittedText = null, submittedQuote = null,
             submittedAttachments = emptyList(), submittedDelivery = null,
+            promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
         )
         drafts[key] = resolved
         restoredPromptVersions.remove(key)
@@ -3038,6 +3046,7 @@ class DefaultRemoteRepository(
                     submittedQuote = null,
                     submittedAttachments = emptyList(),
                     submittedDelivery = null,
+                    promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
                     followUps = latest.followUps + PendingFollowUp(id, latest.submittedText, "delivered", delivery),
                 )
                 drafts[key] = confirmed
@@ -5957,7 +5966,7 @@ class DefaultRemoteRepository(
         val stored = drafts[key] ?: StoredDraft()
         if (stored.text == text) return
         composerEdited(key, "text")
-        drafts[key] = stored.copy(text = text)
+        drafts[key] = (drafts[key] ?: stored).copy(text = text)
         if (preparedSource == key) update { it.copy(preparedText = text.takeIf(String::isNotEmpty)) }
         persist()
     }
@@ -6038,7 +6047,7 @@ class DefaultRemoteRepository(
                             val attachments = latest.attachments + imported
                             require(validAttachmentSet(attachments))
                             composerEdited(key, "attachments")
-                            drafts[key] = latest.copy(attachments = attachments)
+                            drafts[key] = (drafts[key] ?: latest).copy(attachments = attachments)
                             persistNow()
                             update { it.copy(attachments = attachments) }
                         } catch (e: Exception) {
@@ -6084,7 +6093,7 @@ class DefaultRemoteRepository(
         val latest = drafts[key] ?: return
         if (latest.attachments.none { it.id == id }) return
         composerEdited(key, "attachments")
-        drafts[key] = latest.copy(attachments = latest.attachments.filterNot { it.id == id })
+        drafts[key] = (drafts[key] ?: latest).copy(attachments = latest.attachments.filterNot { it.id == id })
         update { it.copy(attachments = drafts.getValue(key).attachments) }
         val epoch = selectionEpoch
         scope.launch {
@@ -6489,7 +6498,14 @@ class DefaultRemoteRepository(
                         submittedQuote = current.quote,
                         submittedAttachments = current.attachments,
                         submittedDelivery = kind,
+                        promptTextState = if (!plain) null else if (resend != null && stored.mutationId == id)
+                            stored.promptTextState else if (clearText) "cleared" else "edited",
+                        promptQuoteState = if (!plain) null else if (resend != null && stored.mutationId == id)
+                            stored.promptQuoteState else if (clearQuote) "cleared" else "edited",
+                        promptAttachmentsState = if (!plain) null else if (resend != null && stored.mutationId == id)
+                            stored.promptAttachmentsState else if (clearAttachments) "cleared" else "edited",
                     )
+                restoredPromptVersions.remove(key)
                 journalOwners[key] = attempt
                 persistNow()
                 checkEpoch(epoch)
@@ -6610,6 +6626,7 @@ class DefaultRemoteRepository(
                                 submittedQuote = null,
                                 submittedAttachments = emptyList(),
                                 submittedDelivery = null,
+                                promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
                             )
                         if (journalOwners[key] === attempt) journalOwners.remove(key)
                         persist()
@@ -6697,7 +6714,11 @@ class DefaultRemoteRepository(
                 submittedQuote = current.quote,
                 submittedAttachments = emptyList(),
                 submittedDelivery = "prompt",
+                promptTextState = if (clear) "cleared" else "edited",
+                promptQuoteState = if (clear) "cleared" else "edited",
+                promptAttachmentsState = "cleared",
             )
+        restoredPromptVersions.remove(key)
         journalOwners[key] = attempt
         promptOwners[key] = attempt
         persist()
@@ -6856,6 +6877,7 @@ class DefaultRemoteRepository(
                     submittedQuote = null,
                     submittedAttachments = emptyList(),
                     submittedDelivery = null,
+                    promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
                 )
             journalOwners.remove(key)
             persist()
@@ -7005,12 +7027,17 @@ class DefaultRemoteRepository(
         )
         else before
         // A merged composer holds typed text too, so a late acknowledgement never clears it.
-        val ownership = if (restoreText) RestoredComposer(version, restoreQuote, restoreAttachments)
-            else if (mergeQueued && before!!.text.isEmpty()) RestoredComposer(version, cleared!!.quote, false)
+        val proven = restored?.copy(
+            promptTextState = if (restoreText && before?.promptTextState == "cleared") "restored" else before?.promptTextState,
+            promptQuoteState = if (restoreQuote && before?.promptQuoteState == "cleared") "restored" else before?.promptQuoteState,
+            promptAttachmentsState = if (restoreAttachments && before?.promptAttachmentsState == "cleared") "restored" else before?.promptAttachmentsState,
+        )
+        val ownership = if (proven?.promptComposerRestored() == true && restoreText)
+            RestoredComposer(version, restoreQuote, restoreAttachments)
             else null
         if (ownership != null) restoredPromptVersions[key] = version
-        if (restored != null) {
-            drafts[key] = restored
+        if (proven != null) {
+            drafts[key] = proven
             persist()
         }
         if (currentDraftKey() != key) return ownership
@@ -10382,13 +10409,29 @@ private fun Map<DraftKey, StoredDraft>.journals(): Map<DraftKey, SendJournal> =
  */
 private fun StoredDraft.restoringSubmitted(): StoredDraft {
     val submitted = submittedText ?: return this
-    if (mutationId == null || text.isNotEmpty()) return this
+    if (mutationId == null) return this
+    // Older journals have no field ownership. Keep their historical text restoration, but do
+    // not treat it as proof that a matching composer can be erased by a later receipt.
+    if (promptTextState == null && promptQuoteState == null && promptAttachmentsState == null) {
+        if (text.isNotEmpty()) return this
+        return copy(text = submitted, quote = quote ?: submittedQuote,
+            attachments = attachments.ifEmpty { submittedAttachments })
+    }
+    val restoreText = promptTextState == "cleared" && text.isEmpty()
+    val restoreQuote = promptQuoteState == "cleared" && quote == null
+    val restoreAttachments = promptAttachmentsState == "cleared" && attachments.isEmpty()
     return copy(
-        text = submitted,
-        quote = quote ?: submittedQuote,
-        attachments = attachments.ifEmpty { submittedAttachments },
+        text = if (restoreText) submitted else text,
+        quote = if (restoreQuote) submittedQuote else quote,
+        attachments = if (restoreAttachments) submittedAttachments else attachments,
+        promptTextState = if (restoreText) "restored" else promptTextState,
+        promptQuoteState = if (restoreQuote) "restored" else promptQuoteState,
+        promptAttachmentsState = if (restoreAttachments) "restored" else promptAttachmentsState,
     )
 }
+
+private fun StoredDraft.promptComposerRestored() = promptTextState == "restored" &&
+    promptQuoteState == "restored" && promptAttachmentsState == "restored"
 
 /**
  * The pending prompt once the timeline may show the host's copy of it: a confirmed prompt leaves

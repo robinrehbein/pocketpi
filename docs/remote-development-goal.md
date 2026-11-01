@@ -1,6 +1,19 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Android process recovery checkpoint on 2026-11-01
+
+Phone and tablet emulator runs now prove recovery of an accepted prompt after the Android process
+is force-stopped with neither result nor user echo received. A new process loads the same encrypted
+journal, receives the exact source receipt and sends no second prompt; the native Pi worker stays
+unchanged. Untouched restored text clears, while an edit away and back to the same text survives.
+Durable per-field provenance also protects intentional empty text and mixed quote/attachment edits
+in repository regressions. See [process qualification](testing/prompt-process-recovery-qualification.md).
+The Host upstream was integrated on a separate preserved branch; see [integration checks](testing/host-upstream-2026-11-01.md).
+This qualifies production repository/transport/storage inside a test Activity. Production MainActivity
+startup/background-service restoration, Host/Pi process death, fresh-device handoff, physical Samsung
+and an independent Linux machine remain open. Historical checkpoints below retain their original bounds.
+
 ## Accepted initial prompt lost-ACK checkpoint on 2026-11-01
 
 Phone and tablet workflows passed actual initial prompt acceptance with acknowledgment and user
