@@ -15,6 +15,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.File
+import java.security.MessageDigest
+import org.json.JSONObject
+import kotlinx.serialization.json.JsonObject
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
@@ -33,12 +36,14 @@ internal object ProductionEntryBootstrap {
     fun awaitStarted() {
         check(started.await(20, TimeUnit.SECONDS) && installed && appCreated) { "Fixture application bootstrap did not complete" }
     }
-    data class ActivityEvent(val kind: String, val activity: MainActivity, val elapsed: Long)
+    data class ActivityEvent(val kind: String, val activity: MainActivity, val elapsed: Long, val hadSavedState: Boolean? = null)
     val activityEvents = mutableListOf<ActivityEvent>() // main thread only
     private var application: Application? = null
     private val callbacks = object : Application.ActivityLifecycleCallbacks {
         private fun record(kind: String, activity: Activity) { if (activity is MainActivity) activityEvents.add(ActivityEvent(kind, activity, SystemClock.elapsedRealtime())) }
-        override fun onActivityCreated(activity: Activity, state: Bundle?) = record("created", activity)
+        override fun onActivityCreated(activity: Activity, state: Bundle?) {
+            if (activity is MainActivity) activityEvents.add(ActivityEvent("created", activity, SystemClock.elapsedRealtime(), state != null))
+        }
         override fun onActivityStarted(activity: Activity) = record("started", activity)
         override fun onActivityResumed(activity: Activity) = record("resumed", activity)
         override fun onActivityPaused(activity: Activity) = record("paused", activity)
@@ -54,6 +59,37 @@ internal object ProductionEntryBootstrap {
     @Volatile var lastEndpointAllowed: Boolean? = null
         private set
     private var client: OkHttpClient? = null
+
+    private const val OBSERVER_LIMIT = 1024
+    private val inbound = mutableListOf<JsonObject>()
+    private val writes = mutableListOf<JsonObject>()
+    @Volatile var observerOverflow = false
+        private set
+    fun inboundMessages(): List<JsonObject> = synchronized(inbound) { inbound.toList() }
+    fun writeAttempts(): List<JsonObject> = synchronized(writes) { writes.toList() }
+    private fun record(target: MutableList<JsonObject>, payload: JsonObject) = synchronized(target) {
+        if (target.size < OBSERVER_LIMIT) target.add(payload) else observerOverflow = true
+    }
+    private fun observe(transport: RemoteTransport): RemoteTransport = object : RemoteTransport by transport {
+        override fun send(payload: JsonObject) { record(writes, payload); transport.send(payload) }
+        override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+            transport.sendGuarded(payload) { record(writes, payload); beforePossibleWrite() }
+        }
+        override var listener: RemoteTransport.Listener
+            get() = transport.listener
+            set(value) { transport.listener = object : RemoteTransport.Listener by value {
+                override fun message(payload: JsonObject) { record(inbound, payload); value.message(payload) }
+            } }
+    }
+    fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    fun fixtureIdentity(args: Bundle): String {
+        val fields = listOf("productionEntryRoute", "productionEntryRelay", "productionEntryDeviceId", "productionEntryDeviceSecret",
+            "productionEntrySessionId", "productionEntryProjectId", "productionEntryCaBase64")
+            .map { requireNotNull(args.getString(it)) }
+        require(fields.all { it.isNotEmpty() && !it.contains('\n') && !it.contains('\r') })
+        return sha256(fields.joinToString("\n").toByteArray(Charsets.UTF_8))
+    }
 
     fun install(application: Application, args: Bundle) {
         check(application is RemoteApplication)
@@ -100,20 +136,46 @@ internal object ProductionEntryBootstrap {
                 throw failure
             }
         }
-        val preflight = File(application.noBackupFilesDir, "production-entry-preflight-$label.marker")
-        val marker = File(application.noBackupFilesDir, "production-entry-$label.marker")
-        check(preflight.isFile && !marker.exists()) { "Fresh owned emulator preflight marker required" }
-        // A load can quarantine corrupt data, so inspect file presence without reading the store.
-        listOf("paired-hosts.enc", "paired-hosts.enc.bak", "paired-hosts.enc.new").forEach {
-            check(!File(application.noBackupFilesDir, it).exists()) { "Pairing storage already exists" }
+        val mode = args.getString("productionEntryMode") ?: "seed"
+        require(mode in setOf("seed", "restore", "unpaired"))
+        val recovery = args.getString("productionEntryProcessRecovery") == "true"
+        if (recovery) check(requireNotNull(args.getString("productionEntryIdentity")) == fixtureIdentity(args)) {
+            "Fixture identity does not match bootstrap arguments"
         }
-        check(preflight.renameTo(marker)) { "Unable to consume preflight marker" }
-        application.stores.pairings.save(listOf(PairedHost(route, url.toString().removeSuffix("/"),
-            requireNotNull(args.getString("productionEntryDeviceId")),
-            requireNotNull(args.getString("productionEntryDeviceSecret")), "Isolated fixture")))
+        check(mode != "restore" || recovery) { "Restore requires the process recovery fixture" }
+        val pairing = File(application.noBackupFilesDir, "paired-hosts.enc")
+        if (mode == "restore") {
+            val identity = requireNotNull(args.getString("productionEntryIdentity"))
+            val pairingHash = requireNotNull(args.getString("productionEntryPairingSha256"))
+            require(identity.matches(Regex("[0-9a-f]{64}")) && pairingHash.matches(Regex("[0-9a-f]{64}")))
+            val preflight = File(application.noBackupFilesDir, "production-entry-restore-preflight-$label.marker")
+            val consumed = File(application.noBackupFilesDir, "production-entry-restore-$label.marker")
+            val proof = File(application.filesDir, "production-entry-recovery-$label-a.json")
+            check(preflight.isFile && !consumed.exists() && proof.isFile && pairing.isFile)
+            check(listOf("paired-hosts.enc.bak", "paired-hosts.enc.new").none { File(application.noBackupFilesDir, it).exists() }) {
+                "Pairing atomic-file siblings must be absent"
+            }
+            check(preflight.readText() == "$identity\n$pairingHash\n") { "Restore preflight identity mismatch" }
+            val saved = JSONObject(proof.readText())
+            check(saved.getString("identity") == identity && saved.getString("pairingSha256") == pairingHash)
+            check(sha256(pairing.readBytes()) == pairingHash) { "Pairing file changed since phase A" }
+            check(preflight.renameTo(consumed)) { "Unable to consume restore preflight" }
+        } else {
+            val preflight = File(application.noBackupFilesDir, "production-entry-preflight-$label.marker")
+            val marker = File(application.noBackupFilesDir, "production-entry-$label.marker")
+            check(preflight.isFile && !marker.exists()) { "Fresh owned emulator preflight marker required" }
+            // A load can quarantine corrupt data; inspect presence without loading the store.
+            listOf("paired-hosts.enc", "paired-hosts.enc.bak", "paired-hosts.enc.new").forEach {
+                check(!File(application.noBackupFilesDir, it).exists()) { "Pairing storage already exists" }
+            }
+            check(preflight.renameTo(marker)) { "Unable to consume preflight marker" }
+            if (mode == "seed") application.stores.pairings.save(listOf(PairedHost(route, url.toString().removeSuffix("/"),
+                requireNotNull(args.getString("productionEntryDeviceId")),
+                requireNotNull(args.getString("productionEntryDeviceSecret")), "Isolated fixture")))
+        }
         this.application = application
         application.registerActivityLifecycleCallbacks(callbacks)
-        DebugTransportFixture.install(factory)
+        DebugTransportFixture.install(factory, if (recovery) ::observe else null)
         installed = true
     }
 

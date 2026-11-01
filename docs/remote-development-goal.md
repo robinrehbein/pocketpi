@@ -1,5 +1,20 @@
-<!-- Current integration qualification: testing/held-event-integration-qualification.md. Historical checkpoints retain their original bounds. -->
+<!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
+
+## Actual process recovery and fresh Android pairing checkpoint on 2026-11-01
+
+Four phone/tablet-layout cases now recover the real Application-created repository and encrypted
+stores after force-stop and a normal launcher. The same native worker returns one exact source
+receipt with no second prompt attempt; untouched composer text clears and edit-and-revert text
+survives. The user reopens the chat through normal UI after reconnect; automatic last-chat and OS
+saved-task restoration are separate. See [process qualification](testing/mainactivity-process-recovery-qualification.md).
+
+Fresh phone/tablet-layout cases reset only the verified owned emulator app, pair a distinct client
+through the real Paste Code interface and continue the same native session/assistant message with
+one Stop and one follow-up. See [fresh-client qualification](testing/fresh-client-handoff-qualification.md).
+All six cases have independent source/APK/runner/proof review. Physical devices, independent Linux,
+production relay/provider, prolonged background/Doze behavior and remaining paged-editor gates
+retain their separate qualification. The overall goal remains active.
 
 ## Actual MainActivity and live-run checkpoint on 2026-11-01
 

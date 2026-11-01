@@ -6,14 +6,15 @@ import okhttp3.WebSocket
 
 /** Debug instrumentation may install one factory before RemoteApplication.onCreate. */
 internal object DebugTransportFixture {
-    private var next: WebSocket.Factory? = null
+    internal data class Fixture(val factory: WebSocket.Factory, val decorate: ((RemoteTransport) -> RemoteTransport)?)
+    private var next: Fixture? = null
 
-    @Synchronized fun install(factory: WebSocket.Factory) {
+    @Synchronized fun install(factory: WebSocket.Factory, decorate: ((RemoteTransport) -> RemoteTransport)? = null) {
         check(next == null) { "A fixture transport is already installed" }
-        next = factory
+        next = Fixture(factory, decorate)
     }
 
-    @Synchronized fun take(): WebSocket.Factory? = next.also { next = null }
+    @Synchronized fun take(): Fixture? = next.also { next = null }
 
     @Synchronized fun clear() { next = null }
 }
@@ -21,5 +22,8 @@ internal object DebugTransportFixture {
 @Suppress("UNUSED_PARAMETER")
 internal fun remoteTransport(context: Context, scope: CoroutineScope): RemoteTransport {
     val fixture = DebugTransportFixture.take()
-    return if (fixture == null) SecureRemoteTransport(scope) else SecureRemoteTransport(scope, fixture)
+    return if (fixture == null) SecureRemoteTransport(scope) else {
+        val transport = SecureRemoteTransport(scope, fixture.factory)
+        fixture.decorate?.invoke(transport) ?: transport
+    }
 }
