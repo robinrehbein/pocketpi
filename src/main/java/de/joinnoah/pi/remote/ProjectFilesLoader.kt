@@ -39,6 +39,7 @@ internal class ProjectFilesLoader(
     private val current: () -> RemoteState,
     private val selectionIdentity: () -> Long = { 0L },
     private val journal: FileDraftJournal? = null,
+    private val settleParkedDiscard: (FileDraftKey, FileEditor, Boolean?) -> Unit = { _, _, _ -> },
     private val update: ((RemoteState) -> RemoteState) -> Unit,
 ) {
     private var searchJob: Job? = null
@@ -850,7 +851,9 @@ internal class ProjectFilesLoader(
         }
         val version = editorVersion
         val generation = nextSnapshot(key)
+        val discardedText = editor.latestText
         fun active() = editorActive(version, key) && files()?.editor?.buffer === editor.buffer
+        fun unchanged() = snapshotGenerations[key] == generation && editor.latestText == discardedText
         writeEditor(key.sessionId, key.path) { it.copy(saving = true, saveFailure = null) }
         scope.launch {
             try {
@@ -864,13 +867,20 @@ internal class ProjectFilesLoader(
                     }
                     true
                 }
-                if (active()) {
-                    if (discarded && snapshotGenerations[key] == generation) after()
-                    else writeEditor(key.sessionId, key.path) { it.copy(saving = false) }
+                // The field can change before its watcher publishes a new snapshot. If that
+                // happened while IO was suspended, restore the newer text to the journal.
+                if (discarded && snapshotGenerations[key] == generation && editor.latestText != discardedText) {
+                    val newerGeneration = nextSnapshot(key)
+                    persist(key, snapshot(editor), newerGeneration)
                 }
+                if (active()) {
+                    if (discarded && unchanged()) after()
+                    else writeEditor(key.sessionId, key.path) { it.copy(saving = false) }
+                } else if (discarded) settleParkedDiscard(key, editor, if (unchanged()) true else null)
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 if (active()) writeEditor(key.sessionId, key.path) { it.copy(saving = false, saveFailure = FilesFailure.STORAGE) }
+                else settleParkedDiscard(key, editor, false)
             }
         }
     }

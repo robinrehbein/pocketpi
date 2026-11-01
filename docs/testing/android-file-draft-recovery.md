@@ -32,3 +32,29 @@ The frozen process run is `/private/tmp/pocketpi-file-draft-process-9p64yo1g`: s
 Meaningful RED observations include the missing recovery error view, loss of the storage warning when acknowledgement retry is omitted, and a retained editor stuck loading after an epoch change. Corrupt-key regression also demonstrated that the earlier write path deleted the key even when ciphertext survived; the opt-in preservation path now passes that regression. Initial compile-time missing-API failures are not treated as behavioral proof.
 
 The final repository quick-check passes in 106 seconds: resource parity has zero mismatches; all affected source sets compile; 3573 app and 34 Wear unit tests pass with zero failures, errors or skips. No CI or physical-device result is implied.
+
+## Parked-editor discard completion, 2026-11-01
+
+A repository regression reproduced a completed durable discard whose editor was parked during
+journal IO: returning to the session showed the discarded text again with an offline warning.
+The corrected completion is matched by route/session/path and exact editor-buffer identity.
+It updates the active or parked original editor, keeps a replacement or newer edit, and never
+executes an obsolete navigation action after a session switch. A failed discard retains the
+text and shows the storage error on return. A direct field edit which precedes its snapshot
+watcher is persisted again after the older discard completes.
+
+Seven additional repository cases cover parked success, storage failure, return before IO
+completion, newer edits, failure after a newer edit, a replacement editor and direct field edits.
+The targeted repository/file-journal run passes 76 tests with zero failures, errors or skips,
+and app/instrumentation APK assembly passes. The valid pre-fix RED observation was the old
+`discard me` editor returned instead of a closed editor; an earlier test setup timeout did not
+count as behavior evidence. A later compilation error from an unnecessary test import was fixed
+before the passing run. Independent static review found no remaining clear blocker in the
+changed completion paths.
+
+These deterministic delayed-IO tests exercise the actual repository and its parked-state cache.
+They do not establish every navigation/parking race or zero-loss recent typing. Public paged
+editor capability remains disabled; its separate restart work is planned in
+[paged durable recovery](../plans/2026-11-01-paged-editor-durable-recovery.md).
+
+Final quick-check after the parked-editor correction passes in 101 seconds: 3582 app and 34 Wear tests, zero failures/errors/skips, resource parity and all affected source-set compilation. Current native phone/tablet workflow repetitions pass as recorded in the linked native qualification. Physical Samsung/DeX and comprehensive parking/lifecycle coverage remain separate.

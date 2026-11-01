@@ -3853,6 +3853,29 @@ class DefaultRemoteRepository(
      */
     private val parkedFiles = LinkedHashMap<DraftKey, FilesState>()
 
+    /** Complete a durable discard against only the editor that initiated it. */
+    private fun settleParkedDiscard(key: FileDraftKey, original: FileEditor, success: Boolean?) {
+        fun settle(files: FilesState): FilesState {
+            val editor = files.editor ?: return files
+            if (editor.path != key.path || editor.buffer !== original.buffer) return files
+            return files.copy(editor = when (success) {
+                true -> null
+                false -> editor.copy(saving = false, saveFailure = FilesFailure.STORAGE)
+                null -> editor.copy(saving = false, saveFailure = editor.saveFailure.takeUnless { it == FilesFailure.OFFLINE })
+            })
+        }
+        val selected = state.value.selection
+        if (selected.routeId == key.routeId && selected.sessionId == key.sessionId) {
+            update { current ->
+                val files = current.files
+                if (files?.sessionId == key.sessionId) current.copy(files = settle(files)) else current
+            }
+        } else {
+            val parkedKey = DraftKey(key.routeId, key.sessionId)
+            parkedFiles[parkedKey]?.let { parkedFiles[parkedKey] = settle(it) }
+        }
+    }
+
     /**
      * Parks the file browser of [previous] when its editor holds unsaved changes, and returns the
      * one parked for [selection], ready to show again: nothing loading, and a save that was still
@@ -3874,7 +3897,7 @@ class DefaultRemoteRepository(
         val routeId = selection.routeId ?: return null
         val sessionId = selection.sessionId ?: return null
         val parked = parkedFiles.remove(DraftKey(routeId, sessionId)) ?: return null
-        val editor = checkNotNull(parked.editor)
+        val editor = parked.editor
         return parked.copy(
             loading = false,
             failure = parked.failure ?: if (parked.listing == null) FilesFailure.FAILED else null,
@@ -3883,7 +3906,7 @@ class DefaultRemoteRepository(
             peek = null,
             search = FileSearchState(),
             file = parked.file?.copy(loading = false, moreLoading = false),
-            editor = editor.copy(
+            editor = editor?.copy(
                 saving = false,
                 saveFailure = if (editor.saving) FilesFailure.OFFLINE else editor.saveFailure,
                 leaveRequest = null,
@@ -10612,6 +10635,7 @@ class DefaultRemoteRepository(
             { state.value },
             { selectionEpoch },
             journal = fileDraftStorage?.let { FileDraftJournal(it, io) },
+            settleParkedDiscard = ::settleParkedDiscard,
             update = ::update,
         )
 

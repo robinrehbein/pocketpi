@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Parked editor completion checkpoint, 2026-11-01
+
+A reproduced session-switch race could show discarded file text again after its encrypted journal had already completed the discard. Completion now settles only the original active or parked editor buffer; newer edits/replacement editors survive, and storage failure stays visible on return. Seven added delayed-IO repository cases and the existing file-journal suite pass (76 targeted tests). See [file draft qualification](testing/android-file-draft-recovery.md).
+
+The current-source real MainActivity/native-Host phone and tablet repetitions pass with independent source/APK/audit verification. The full quick-check passes 3582 app and 34 Wear tests. A separate [paged durable-recovery plan](plans/2026-11-01-paged-editor-durable-recovery.md) now defines the missing process-restart fence/draft work; it is not implemented. Public paged capability remains OFF. iPhone is deferred, Wear stays watch-appropriate, physical Samsung/DeX and independent Linux remain open, and the overall goal is active.
+
 ## Native MainActivity file recovery checkpoint, 2026-11-01
 
 The real application now passes the manual file-editor recovery workflow against an isolated local Mac Host and registered native Pi worker on phone and tablet emulator layouts. UI edits reach the encrypted journal, the first actual Host write loses its acknowledgement, and cold MainActivity after force-stop offers the newer local draft. Restore sends no write; explicit Save meets the expected version conflict and rebases once. Independent Host audits prove three distinct attempts, two content changes and a stable native worker. The unanswered original request remains protected. See [native recovery qualification](testing/native-file-draft-recovery.md).

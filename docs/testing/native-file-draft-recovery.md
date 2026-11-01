@@ -30,3 +30,13 @@ This uses a private Android emulator and isolated local Mac fixture. It does not
 Build the current app/test APKs and install them only in the explicitly owned emulator. The private runner `/private/tmp/run-pocketpi-file-recovery.py <fresh-label>` validates the AVD and installed APK hashes before clearing the owned test app, starts `--native-worker --native-file-draft-recovery`, executes both instrumentation phases and removes its own fixture state. The tablet wrapper records and restores its display override. These local runner paths require the original private test environment; they are evidence helpers, not general device automation commands.
 
 The final Android quick-check passes in 115 seconds: 3575 app and 34 Wear unit tests, zero failures/errors/skips, resource parity and affected source-set compilation. Host TypeScript and exact-file formatting pass; the 49 targeted file-write/protocol tests pass. No CI status or release is claimed.
+
+## Source refresh after parked-discard correction
+
+The updated production repository/loader were requalified with `filedraft-native-phone-03`
+(31.137 s, app PIDs 31202 → 31490) and `filedraft-native-tablet-02` (26.327 s, PIDs 31932 → 32214).
+Both pass and clean up; independent verification again matches all 26 source pins, runner/APKs,
+Host request/version audit, retained receipt and stopped fixture workers. The tablet display is
+restored. These runs cover the existing cold-MainActivity workflow with the changed sources;
+the additional parked-discard race is exercised by the deterministic delayed-IO repository tests
+in [file draft recovery](android-file-draft-recovery.md), not by an additional UI parking sequence.

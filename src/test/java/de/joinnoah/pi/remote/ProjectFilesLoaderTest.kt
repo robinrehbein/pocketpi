@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.coroutines.test.*
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlin.coroutines.CoroutineContext
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -74,6 +76,26 @@ class ProjectFilesLoaderTest {
         override fun load() = emptyMap<DraftKey, StoredDraft>()
 
         override fun save(drafts: Map<DraftKey, StoredDraft>) {}
+    }
+
+    private class FileDrafts : FileDraftStorage {
+        var drafts = emptyMap<FileDraftKey, StoredFileDraft>()
+        var fail = false
+        override fun load() = drafts
+        override fun save(drafts: Map<FileDraftKey, StoredFileDraft>) {
+            if (fail) error("disk failure")
+            this.drafts = drafts
+        }
+    }
+
+    private class ManualIo : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+        override fun dispatch(context: CoroutineContext, block: Runnable) { tasks.addLast(block) }
+        fun drain() { while (tasks.isNotEmpty()) tasks.removeFirst().run() }
+    }
+
+    private fun TestScope.flushIo(io: ManualIo) {
+        repeat(10) { io.drain(); runCurrent() }
     }
 
     /** Answers `session.files.*` through [files]; null holds the request for [result]. */
@@ -155,14 +177,15 @@ class ProjectFilesLoaderTest {
         }
     }
 
-    private fun TestScope.repository(transport: Transport) =
+    private fun TestScope.repository(transport: Transport, drafts: FileDraftStorage? = null, io: CoroutineDispatcher = StandardTestDispatcher(testScheduler)) =
         DefaultRemoteRepository(
             Pairings(host),
             Drafts(),
             transport,
             backgroundScope,
-            StandardTestDispatcher(testScheduler),
+            io,
             now = { testScheduler.currentTime },
+            fileDraftStorage = drafts,
         )
 
     private suspend fun TestScope.opened(transport: Transport): DefaultRemoteRepository {
@@ -954,6 +977,174 @@ class ProjectFilesLoaderTest {
         runCurrent()
         assertEquals(2, held.size)
         assertEquals(held[0].text("requestId"), held[1].text("requestId"))
+    }
+
+    @Test
+    fun durableDiscardFinishingWhileSessionIsParkedClosesItsEditorOnReturn() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = repository(transport, drafts, io)
+        runCurrent()
+        flushIo(io) // Finish repository startup storage reads before activate awaits them.
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openFiles()
+        runCurrent()
+        repository.openFilesFile("src/app/main.ts")
+        runCurrent()
+        repository.startFileEditing()
+        flushIo(io)
+        repository.updateFileEditorText("discard me\n")
+        flushIo(io)
+        assertEquals("discard me\n", drafts.drafts.values.single().text)
+
+        repository.discardFileEditor()
+        runCurrent() // The discard passed its active-editor check and is waiting on IO.
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        flushIo(io)
+        assertTrue(drafts.drafts.isEmpty())
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+
+        assertNull(repository.state.value.files?.editor)
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    private suspend fun TestScope.editingWithDrafts(transport: Transport, drafts: FileDrafts, io: ManualIo): DefaultRemoteRepository {
+        val repository = repository(transport, drafts, io)
+        runCurrent()
+        flushIo(io)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openFiles()
+        runCurrent()
+        repository.openFilesFile("src/app/main.ts")
+        runCurrent()
+        repository.startFileEditing()
+        flushIo(io)
+        repository.updateFileEditorText("discard me\n")
+        flushIo(io)
+        return repository
+    }
+
+    @Test
+    fun failedDiscardWhileParkedRetainsTextAndShowsStorageFailure() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = editingWithDrafts(transport, drafts, io)
+        repository.discardFileEditor()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        drafts.fail = true
+        flushIo(io)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals("discard me\n", editor.latestText)
+        assertEquals(FilesFailure.STORAGE, editor.saveFailure)
+        assertFalse(editor.saving)
+        assertEquals("discard me\n", drafts.drafts.values.single().text)
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    @Test
+    fun discardFinishingAfterReturningClosesOnlyTheOriginalEditor() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = editingWithDrafts(transport, drafts, io)
+        repository.discardFileEditor()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        flushIo(io)
+        assertNull(repository.state.value.files?.editor)
+        assertTrue(drafts.drafts.isEmpty())
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    @Test
+    fun newerEditAfterReturningSurvivesTheOlderDiscard() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = editingWithDrafts(transport, drafts, io)
+        repository.discardFileEditor()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        repository.updateFileEditorText("newer edit\n")
+        flushIo(io)
+        assertEquals("newer edit\n", repository.state.value.files?.editor?.latestText)
+        assertEquals("newer edit\n", drafts.drafts.values.single().text)
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    @Test
+    fun failedDiscardAfterNewerEditStillShowsStorageFailure() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = editingWithDrafts(transport, drafts, io)
+        repository.discardFileEditor()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        repository.updateFileEditorText("newer edit\n")
+        drafts.fail = true
+        flushIo(io)
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals("newer edit\n", editor.latestText)
+        assertEquals(FilesFailure.STORAGE, editor.saveFailure)
+    }
+
+    @Test
+    fun oldDiscardCannotCloseReplacementEditorInSameSession() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = editingWithDrafts(transport, drafts, io)
+        repository.discardFileEditor()
+        runCurrent()
+        repository.closeFiles()
+        repository.openFiles()
+        runCurrent()
+        repository.openFilesFile("src/app/main.ts")
+        runCurrent()
+        repository.startFileEditing()
+        val replacement = checkNotNull(repository.state.value.files?.editor).buffer
+        flushIo(io)
+        assertSame(replacement, repository.state.value.files?.editor?.buffer)
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    @Test
+    fun fieldChangeBeforeWatcherRunsIsPersistedAfterDiscardIo() = runTest {
+        val io = ManualIo()
+        val drafts = FileDrafts()
+        val transport = editorTransport()
+        val repository = editingWithDrafts(transport, drafts, io)
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        val field = editor.buffer.state(editor.text, 0)
+        repository.discardFileEditor()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        field.edit { replace(0, length, "field edit\n") }
+        flushIo(io)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        assertEquals("field edit\n", repository.state.value.files?.editor?.latestText)
+        assertEquals("field edit\n", drafts.drafts.values.single().text)
+        assertTrue(writes(transport).isEmpty())
     }
 
     @Test
