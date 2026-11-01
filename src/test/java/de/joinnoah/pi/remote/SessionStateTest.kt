@@ -1204,6 +1204,37 @@ class TimelineResumeTest {
     }
 
     @Test
+    fun takeDrainedReturnsTheBufferedEventsAppliedAfterTheReplyThatWereNotHeard() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("a")))
+        timeline.awaitReply()
+        val heard = upsert(12, "c")
+        val unheard = event(13, "session.compaction", null, "state" to "done")
+        timeline.eventNeed(heard)
+        timeline.eventNeed(unheard, heard = false)
+        val replayed = upsert(11, "b")
+        val result = timeline.replay(events(10, 11, replayed))
+        assertTrue(result.fits)
+        assertEquals(listOf(replayed), result.applied)
+        assertEquals(13L, timeline.revision)
+        assertEquals(listOf(unheard), timeline.takeDrained())
+        assertTrue(timeline.takeDrained().isEmpty())
+
+        // The same after a first page, and after a failed wait.
+        timeline.awaitReply()
+        val afterPage = event(15, "session.compaction", null, "state" to "done")
+        timeline.eventNeed(afterPage, heard = false)
+        assertTrue(timeline.snapshot(snapshot(14, message("a"))))
+        assertEquals(listOf(afterPage), timeline.takeDrained())
+        timeline.awaitReply()
+        val afterFailure = status(16, "running")
+        timeline.eventNeed(afterFailure, heard = false)
+        timeline.eventNeed(status(17, "idle"))
+        assertTrue(timeline.endAwaiting())
+        assertEquals(listOf(afterFailure), timeline.takeDrained())
+    }
+
+    @Test
     fun continueFromTakesOverWhatThePreviousTimelineHeardLive() {
         val previous = Timeline("session")
         previous.snapshot(snapshot(10, message("a")))
