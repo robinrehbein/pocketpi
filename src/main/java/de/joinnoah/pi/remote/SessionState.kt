@@ -235,8 +235,9 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
      * The revisions of this session's events that reached the owner live while this Timeline held
      * them for a reply ([awaitingReply]) or behind a gap, or skipped them ([detached], see
      * [heardWhileDetached]). The owner ran their side effects on arrival, so [replay] leaves them
-     * out of what it returns as applied when the reply carries them again. Cleared as each wait
-     * ends; [continueFrom] takes them over.
+     * out of what it returns as applied when the reply carries them again, and [takeDrained] out
+     * of what the buffer applied. As each wait ends only those still buffered stay; [continueFrom]
+     * takes them over.
      */
     private val heardLive = LinkedHashSet<Long>()
 
@@ -253,6 +254,12 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         heardLive.clear()
     }
 
+    /**
+     * Buffered events that [drainPending] applied and that did not reach the owner in full when
+     * they arrived (not [heardLive]): the owner runs their side effects; see [takeDrained].
+     */
+    private val drainedUnheard = mutableListOf<JsonObject>()
+
     /** See [takeOwedResume]. */
     private var resumeOwed = false
 
@@ -267,8 +274,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
      */
     var tasksKnown = false
 
-    /** The events [replay] applies while it runs, in order; null otherwise. */
+    /** The events [replay] or [drainPending] applies while it runs, in order; null otherwise. */
     private var applying: MutableList<JsonObject>? = null
+
+    /** [replay] applies the reply's own events, which no owner heard live. */
+    private var replaying = false
 
     /**
      * Where a resume continues: the journal epoch and the last applied revision, or null when this
@@ -311,6 +321,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         // behind a gap) already ran its effects; the resume that follows replays it.
         heardLive.clear()
         heardLive.addAll(previous.heardLive)
+        drainedUnheard.clear()
         resumeOwed = false
         awaitingReply = false
         detached = false
@@ -329,8 +340,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     fun endAwaiting(): Boolean {
         if (!awaitingReply) return false
         awaitingReply = false
-        heardLive.clear()
         drainPending()
+        forgetHeard()
         return true
     }
 
@@ -358,6 +369,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         pendingEvents.clear()
         heldThrough = -1L
         heardLive.clear()
+        drainedUnheard.clear()
         resumeOwed = false
         compaction = null
         suggestion = null
@@ -401,7 +413,6 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         if (restart) require(data.text("status") in SESSION_STATUSES)
         val held = awaitingReply
         awaitingReply = false
-        heardLive.clear()
         if (restart) {
             // Events that arrived for the resume past the new page are fetched with a resume; see
             // [takeOwedResume].
@@ -411,6 +422,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         if (incomingRevision < revision) {
             // An outdated reply to a resume: the events held for it apply on what is already here.
             if (held) drainPending()
+            forgetHeard()
             return false
         }
         val incomingStatus = data.text("status")
@@ -458,6 +470,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                 compaction ?: SessionCompaction(null, now())
             else null
         drainPending()
+        forgetHeard()
         return true
     }
 
@@ -479,22 +492,49 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         tasksKnown = false
         pendingEvents.clear()
         heldThrough = -1L
+        // Their revisions count in the old epoch.
+        heardLive.clear()
     }
 
-    /** Applies the buffered events in revision order; those after a gap wait again. */
+    /**
+     * Applies the buffered events in revision order; those after a gap wait again. The applied ones
+     * the owner did not hear live wait in [drainedUnheard].
+     */
     private fun drainPending() {
         val waiting = pendingEvents.values.toList()
         pendingEvents.clear()
         heldThrough = -1L
-        for (event in waiting) {
-            try {
-                eventNeed(event)
-            } catch (malformed: Exception) {
-                // What came before is applied; a bad buffered event only asks for a snapshot.
-                unknownKindSeen = true
+        val outer = applying
+        val drained = mutableListOf<JsonObject>()
+        applying = drained
+        try {
+            for (event in waiting) {
+                try {
+                    // One that waits again keeps whether it was heard.
+                    eventNeed(event, heard = event.long("revision") in heardLive)
+                } catch (malformed: Exception) {
+                    // What came before is applied; a bad buffered event only asks for a snapshot.
+                    unknownKindSeen = true
+                }
             }
+        } finally {
+            applying = outer
         }
+        drained.filterTo(drainedUnheard) { it.long("revision") !in heardLive }
+        while (drainedUnheard.size > MAX_HEARD_LIVE) drainedUnheard.removeAt(0)
     }
+
+    /** A wait ended: only the revisions of events still buffered stay heard. */
+    private fun forgetHeard() {
+        heardLive.retainAll(pendingEvents.keys)
+    }
+
+    /**
+     * The buffered events applied after a reply or a failed wait whose side effects the owner did
+     * not run in full on arrival (an event held before its chat was selected), in their Timeline
+     * form; taking them clears the list.
+     */
+    fun takeDrained(): List<JsonObject> = drainedUnheard.toList().also { drainedUnheard.clear() }
 
     /**
      * Applies a `session.events` reply to the resume this Timeline asked for: each event goes
@@ -511,6 +551,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         val applied = mutableListOf<JsonObject>()
         val wire = IdentityHashMap<JsonObject, JsonObject>()
         applying = applied
+        replaying = true
         try {
             if (usable)
                 for (event in reply.events) {
@@ -522,14 +563,16 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                         unknownKindSeen = true
                     }
                 }
+            replaying = false
+            // Held events past the reply apply here; see [takeDrained].
             drainPending()
         } finally {
             applying = null
+            replaying = false
         }
-        // Held live events also apply above, and the reply may carry them again; their side effects
-        // ran when they arrived.
+        // The reply may carry events that also arrived live; their side effects ran then.
         val fresh = applied.mapNotNull { wire[it] }.filterNot { it.long("revision") in heardLive }
-        heardLive.clear()
+        forgetHeard()
         return Replay(fresh, usable && revision >= reply.revision && pendingEvents.isEmpty())
     }
 
@@ -596,7 +639,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             if (required) tasksKnown = false
             buffer(event)
             // A live event the gap holds back: the resume that fills the gap carries it again.
-            if (heard && applying == null) hear(event.long("revision"))
+            if (heard && !replaying) hear(event.long("revision"))
             return if (required) SnapshotNeed.REQUIRED else SnapshotNeed.GAP
         }
         revision = event.long("revision")

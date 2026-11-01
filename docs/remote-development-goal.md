@@ -1,5 +1,20 @@
-<!-- Current integration qualification: testing/session-epoch-replay-qualification.md. Historical checkpoints retain their original bounds. -->
+<!-- Current integration qualification: testing/held-event-integration-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
+
+## Held-event and current Linux qualification checkpoint on 2026-11-01
+
+Upstream TOOLING-1110 is integrated while preserving causal epoch fencing and exact question-close
+receipts. The required checks pass 3,538 App and 34 Wear tests. A new-process recovery and full
+phone/tablet native workflows pass on fresh APKs, with independent source/APK/evidence review.
+See [held-event qualification](testing/held-event-integration-qualification.md).
+
+The current packaged Linux image passes frozen installation, consumer and service-lifecycle
+checks, plus an isolated connected native-worker/reconnect fixture. The public Dev Containers
+adapter also passes with an explicitly fixture-derived image and its actual supervisor; see
+[Linux qualification](testing/linux-host-qualification.md). Native and RPC duplicate editor
+commits are qualified privately; the remaining editor gates keep public capabilities disabled.
+The next acceptance path is the actual MainActivity and background service. Physical Samsung,
+independent-host and external-provider/CI evidence remain open. The overall goal is active.
 
 ## Session epoch and replay integration checkpoint on 2026-11-01
 

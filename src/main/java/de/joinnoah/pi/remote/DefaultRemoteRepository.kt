@@ -2905,9 +2905,16 @@ class DefaultRemoteRepository(
         val current = timeline?.takeIf { it.sessionId == held.sessionId }
         while (held.events.isNotEmpty()) {
             val kept = held.events.removeFirst()
+            if (current == null || current !== timeline) continue
             // One that arrived before its chat was selected skipped the chat's own effects (a
-            // finished compaction's context refresh): a replay that carries it runs them.
-            if (current != null && current === timeline) timelineEvent(current, kept.event, heard = kept.selected)
+            // finished compaction's context refresh): a replay that carries it, or the buffer that
+            // holds it, runs them. One the Timeline applies at once (it neither waits nor has a
+            // gap, as after a reply without a base) runs them here.
+            val before = current.revision
+            timelineEvent(current, kept.event, heard = kept.selected)
+            if (!kept.selected && current.revision > before &&
+                (kept.event["revision"] as? JsonPrimitive)?.longOrNull == current.revision
+            ) unheardHints(kept.event)
         }
     }
 
@@ -2917,27 +2924,7 @@ class DefaultRemoteRepository(
      */
     private fun eventEffects(payload: JsonObject) {
         if (payload.text("kind") == "session.status") updateSessionStatus(payload)
-        // Live or replayed, a finished compaction of the open chat makes its context usage stale.
-        if (payload.text("kind") == "session.compaction" &&
-            payload.optionalText("sessionId") == state.value.selection.sessionId &&
-            payload.optionalText("state") == "done"
-        ) {
-            update { it.copy(contextUsage = null) }
-            refreshContextUsage()
-        }
-        if (payload.text("kind") == "message.upsert" &&
-            payload.text("sessionId") == state.value.selection.sessionId &&
-            // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
-            !canLeaseJobsList(state.value) &&
-            (payload["message"] as? JsonObject)?.let {
-                it.optionalText("role") == "tool" && isJobChangingTool(it.optionalText("toolName"))
-            } == true
-        ) jobsController.refreshSoon()
-        // The open Changes view follows the agent's edits.
-        if (payload.text("kind") == "message.upsert" &&
-            payload.text("sessionId") == state.value.selection.sessionId &&
-            (payload["message"] as? JsonObject)?.let(::mayChangeFiles) == true
-        ) changesLoader.reloadSoon()
+        selectedChatHints(payload)
         if (payload.text("kind") == "advisor.status") {
             val sessionId = payload.text("sessionId")
             if (sessionId == state.value.selection.sessionId) {
@@ -3007,6 +2994,35 @@ class DefaultRemoteRepository(
         if (payload.text("kind") == "command.status") commandReceipt(payload)
         if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
         if (payload.text("kind") == "session.notice") sessionNotice(payload)
+    }
+
+    /**
+     * What an event of the selected chat asks this phone to read again: a finished compaction its
+     * context usage, a tool upsert its jobs and Changes. Only re-reads and hints, so running them
+     * once more does no harm.
+     */
+    private fun selectedChatHints(payload: JsonObject) {
+        // Live or replayed, a finished compaction of the open chat makes its context usage stale.
+        if (payload.text("kind") == "session.compaction" &&
+            payload.optionalText("sessionId") == state.value.selection.sessionId &&
+            payload.optionalText("state") == "done"
+        ) {
+            update { it.copy(contextUsage = null) }
+            refreshContextUsage()
+        }
+        if (payload.text("kind") == "message.upsert" &&
+            payload.text("sessionId") == state.value.selection.sessionId &&
+            // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
+            !canLeaseJobsList(state.value) &&
+            (payload["message"] as? JsonObject)?.let {
+                it.optionalText("role") == "tool" && isJobChangingTool(it.optionalText("toolName"))
+            } == true
+        ) jobsController.refreshSoon()
+        // The open Changes view follows the agent's edits.
+        if (payload.text("kind") == "message.upsert" &&
+            payload.text("sessionId") == state.value.selection.sessionId &&
+            (payload["message"] as? JsonObject)?.let(::mayChangeFiles) == true
+        ) changesLoader.reloadSoon()
     }
 
     /**
@@ -3629,6 +3645,7 @@ class DefaultRemoteRepository(
                 } else {
                     val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
                     closeTimelineQuestions(current)
+                    drainedEffects(current)
                     if (accepted && pendingEpoch) epochRefreshPending = null
                     if (accepted) current.journalEpoch?.let {
                         pageEpoch(current.sessionId, it, current.revision, current.status)
@@ -3671,7 +3688,11 @@ class DefaultRemoteRepository(
             // A reply that never came or was not taken: the events held for it apply now.
             val heldArrivals = awaited && current.heldArrivals
             val drained = awaited && current.endAwaiting()
-            if (drained) closeTimelineQuestions(current)
+            if (drained) {
+                closeTimelineQuestions(current)
+                // A successor resumes a replaced Timeline and replays its events.
+                if (current === timeline) drainedEffects(current) else current.takeDrained()
+            }
             if (drained && current === timeline) publishTimeline()
             if (epoch == selectionEpoch) resynchronizing = false
             // A reread that failed leaves the Timeline lapsed for the next focus change or read.
@@ -3731,6 +3752,27 @@ class DefaultRemoteRepository(
         }
     }
 
+    /**
+     * Runs [selectedChatHints] for the buffered events [current] applied after a reply or a failed
+     * wait that did not reach this owner in full on arrival ([Timeline.takeDrained]): held before
+     * their chat was selected, they skipped what only the selected chat runs. Everything else
+     * [eventEffects] does ran on arrival whatever the selection, or carries state (an advisor
+     * status) that the reads the activation started already replaced with newer, so only the
+     * re-reads and hints run here.
+     */
+    private fun drainedEffects(current: Timeline) {
+        for (event in current.takeDrained()) unheardHints(event)
+    }
+
+    /** [selectedChatHints] for an event whose side effects ran before its chat was selected. */
+    private fun unheardHints(event: JsonObject) {
+        try {
+            selectedChatHints(event)
+        } catch (dropped: Exception) {
+            Diagnostics.caught("repo.drained.event", dropped)
+        }
+    }
+
     /** Settles the question blocks whose answer was uncertain: the host's reply says what is still open. */
     private fun settleUncertainQuestions() =
         update {
@@ -3757,6 +3799,7 @@ class DefaultRemoteRepository(
                 Diagnostics.caught("repo.replay.event", dropped)
             }
         }
+        drainedEffects(current)
         if (result.fits) {
             recheckFollowUps(current.sessionId)
             val shown = state.value.tasks.freshness
@@ -4447,6 +4490,7 @@ class DefaultRemoteRepository(
                     // A held resume whose reply is dropped: the events held for it apply now.
                     pending.endAwaiting()
                     closeTimelineQuestions(pending)
+                    drainedEffects(pending)
                     if (pending.needsSnapshot && state.value.connected) snapshotAsync(intent = SnapshotIntent.RESUME)
                 }
                 if (outcome != "ok") refreshPanes(unreadOnly = true)
