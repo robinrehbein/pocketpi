@@ -46,6 +46,8 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private lateinit var host: PairedHost
     private lateinit var selection: RemoteSelection
     private lateinit var originalOwner: JSONObject
+    private var ticketMode = false
+    private lateinit var remoteRef: String
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
         override fun before() {
@@ -57,6 +59,9 @@ class DevelopmentWorkflowTransportEndToEndTest {
             require(expected) { "developmentWorkflowExpected=true is required" }
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
             require(fixture.optBoolean("developmentWorkflowFixture") && fixture.optBoolean("nativeWorker") && fixture.optString("sessionKind") == "actual-pi")
+            ticketMode = fixture.optBoolean("ticketWorkflowFixture")
+            if (ticketMode) require(!fixture.has("sessionId") || fixture.isNull("sessionId"))
+            require((args.getString("ticketWorkflowExpected") == "true") == ticketMode) { "ticketWorkflowExpected must match fixture mode" }
             workflow = fixture.getJSONObject("workflow")
             listOf("fileName", "originalText", "editedText", "agentPrompt", "agentMarker", "agentToolSha256", "shellCommand", "shellMarker", "commitMessage", "prTitle", "prBody", "initialRemoteRef", "initialMainHead").forEach { require(workflow.has(it)) }
             require(workflow.getString("fileName").isNotBlank() && workflow.getString("shellCommand").isNotBlank())
@@ -67,7 +72,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             client = OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, manager).callTimeout(3, TimeUnit.SECONDS).build()
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
             host = PairedHost(fixture.getString("routeId"), fixture.getString("relayUrl"), fixture.getString("deviceId"), fixture.getString("deviceSecret"), "Development fixture")
-            selection = RemoteSelection(host.routeId, fixture.getString("projectId"), fixture.getString("sessionId"))
+            if (!ticketMode) selection = RemoteSelection(host.routeId, fixture.getString("projectId"), fixture.getString("sessionId"))
             val pairings = object : PairingStorage {
                 override fun load() = listOf(host)
                 override fun save(hosts: List<PairedHost>) = Unit
@@ -89,7 +94,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             NavigationTestActivity.contentFactory = {
                 {
                     if (showNavigation.value) MaterialTheme {
-                        RemoteNavigation(observingRepository, settings, false, {}, RemoteNotification(host.routeId, requireNotNull(selection.sessionId), 1))
+                        RemoteNavigation(observingRepository, settings, false, {}, if (ticketMode) null else RemoteNotification(host.routeId, requireNotNull(selection.sessionId), 1))
                     }
                 }
             }
@@ -103,25 +108,33 @@ class DevelopmentWorkflowTransportEndToEndTest {
     }).around(compose)
 
     @Test fun actualNativeSessionEditsTestsCommitsPushesAndShowsPrChecks() {
-        val initial = awaitStatus { it.optBoolean("ownerStable") && it.optString("initialHead").isNotBlank() }
-        assertTrue(initial.getBoolean("ownerStable"))
-        originalOwner = initial.getJSONObject("initialOwner")
+        val initial = if (ticketMode) status() else awaitStatus { it.optBoolean("ownerStable") && it.optString("initialHead").isNotBlank() }
         val initialHead = initial.getString("initialHead")
         assertEquals(initialHead, initial.getString("head"))
-        assertEquals("refs/heads/fixture-feature", workflow.getString("initialRemoteRef"))
         assertEquals(initialHead, workflow.getString("initialMainHead"))
         assertTrue(initial.has("initialRemoteHead") && initial.isNull("initialRemoteHead"))
         assertTrue(initial.has("remoteHead") && initial.isNull("remoteHead"))
-        assertGuards(initial, initialHead, null, 0, 0, 0)
+        if (ticketMode) {
+            assertBeforeTicketStart()
+        } else {
+            originalOwner = initial.getJSONObject("initialOwner")
+            remoteRef = workflow.getString("initialRemoteRef")
+            assertEquals("refs/heads/fixture-feature", remoteRef)
+            assertGuards(initial, initialHead, null, 0, 0, 0)
+        }
         compose.runOnIdle { repository.setForeground(true); repository.setValidatedNetwork("development-fixture-loopback") }
         compose.waitUntil(60_000) { repository.state.value.hostsLoaded && repository.state.value.hosts.any { it.routeId == host.routeId } }
-        activate(RemoteSelection(host.routeId))
-        compose.waitUntil(60_000) { repository.state.value.projects.any { it.optionalText("id") == selection.projectId } }
-        activate(RemoteSelection(host.routeId, selection.projectId))
-        compose.waitUntil(60_000) { repository.state.value.sessions.any { it.optionalText("id") == selection.sessionId } }
-        compose.runOnIdle { showNavigation.value = true }
-        compose.waitUntil(60_000) { repository.state.value.selection == selection && repository.state.value.connected && !repository.state.value.loading }
-        awaitTag("composerField")
+        if (ticketMode) {
+            startTicketThroughUi(initialHead)
+        } else {
+            activate(RemoteSelection(host.routeId))
+            compose.waitUntil(60_000) { repository.state.value.projects.any { it.optionalText("id") == selection.projectId } }
+            activate(RemoteSelection(host.routeId, selection.projectId))
+            compose.waitUntil(60_000) { repository.state.value.sessions.any { it.optionalText("id") == selection.sessionId } }
+            compose.runOnIdle { showNavigation.value = true }
+            compose.waitUntil(60_000) { repository.state.value.selection == selection && repository.state.value.connected && !repository.state.value.loading }
+            awaitTag("composerField")
+        }
 
         chatAction("files")
         awaitTag("filesPane")
@@ -245,7 +258,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
         val created = awaitStatus { it.optBoolean("pullRequestVerified") && it.optInt("pullRequestCreateCount") == 1 }
         assertGuards(created, head, head, 1, 1, 1)
         assertEquals("main", created.getString("pullRequestBase"))
-        assertEquals("fixture-feature", created.getString("pullRequestBranch"))
+        assertEquals(remoteRef.removePrefix("refs/heads/"), created.getString("pullRequestBranch"))
         assertEquals(head, created.getString("pullRequestHead"))
         assertEquals(workflow.getString("prTitle"), created.getString("pullRequestTitle"))
         assertEquals(workflow.getString("prBody"), created.getString("pullRequestBody"))
@@ -281,12 +294,109 @@ class DevelopmentWorkflowTransportEndToEndTest {
         assertAgentTrace(finalStatus)
     }
 
+    private fun assertBeforeTicketStart() {
+        val observed = fullStatus()
+        val ticket = observed.getJSONObject("ticket")
+        assertEquals(0, ticket.getInt("startRequestCount"))
+        assertEquals(0, ticket.getInt("workerCount"))
+        for (key in listOf("projectId", "ref", "note", "startId", "state", "sessionId", "worktree", "branch")) {
+            assertTrue("Expected null ticket.$key before start", ticket.has(key) && ticket.isNull(key))
+        }
+        val before = observed.getJSONObject("workflow")
+        for (key in listOf("initialOwner", "currentOwner")) assertTrue(before.has(key) && before.isNull(key))
+        assertEquals(workflow.getString("initialMainHead"), before.getString("head"))
+        assertEquals(workflow.getString("initialMainHead"), before.getString("baseRemoteHead"))
+        assertTrue(before.has("remoteHead") && before.isNull("remoteHead"))
+        assertEquals(0, before.getInt("commitCount"))
+        assertEquals(0, before.getInt("pushCount"))
+        assertEquals(0, before.getInt("pullRequestCreateCount"))
+    }
+
+    private fun startTicketThroughUi(initialHead: String) {
+        val expected = fixture.getJSONObject("ticket")
+        val projectId = fixture.getString("projectId")
+        compose.runOnIdle { showNavigation.value = true }
+        compose.waitUntil(60_000) {
+            exists("macOverflow") || compose.onAllNodesWithText(host.name).fetchSemanticsNodes().isNotEmpty()
+        }
+        if (!exists("macOverflow")) compose.onNodeWithText(host.name).performClick()
+        awaitTag("macOverflow")
+        compose.waitUntil(60_000) { canUseTickets(repository.state.value) }
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macTickets").performClick()
+        awaitTag("ticketsList")
+        compose.waitUntil(60_000) {
+            compose.onAllNodes(hasText(expected.getString("title"), substring = true)).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNode(hasText(expected.getString("title"), substring = true)).performClick()
+        val startLabel = compose.activity.getString(R.string.remote_ticket_start)
+        compose.waitUntil(60_000) { compose.onAllNodesWithText(startLabel).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(startLabel).assertIsEnabled().performClick()
+        awaitTag("ticketSheetField")
+        compose.onNodeWithTag("ticketSheetField").performTextInput(expected.getString("note"))
+        assertBeforeTicketStart()
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsEnabled().performClick()
+        compose.waitUntil(120_000) {
+            runCatching {
+                val observed = fullStatus()
+                val ticket = observed.getJSONObject("ticket")
+                ticket.optString("state") == "succeeded" && ticket.optString("sessionId").isNotBlank() &&
+                    observed.getJSONObject("workflow").optBoolean("ownerStable")
+            }.getOrDefault(false)
+        }
+        val observed = fullStatus()
+        val ticket = observed.getJSONObject("ticket")
+        val current = observed.getJSONObject("workflow")
+        assertEquals(1, ticket.getInt("startRequestCount"))
+        assertEquals(1, ticket.getInt("workerCount"))
+        assertEquals(projectId, ticket.getString("projectId"))
+        assertEquals(expected.getString("ref"), ticket.getString("ref"))
+        assertEquals(expected.getString("note"), ticket.getString("note"))
+        assertTrue(ticket.getString("startId").isNotBlank())
+        assertEquals("succeeded", ticket.getString("state"))
+        assertTrue(ticket.getBoolean("moved"))
+        val sessionId = ticket.getString("sessionId")
+        selection = RemoteSelection(host.routeId, projectId, sessionId)
+        remoteRef = "refs/heads/" + ticket.getString("branch")
+        assertEquals(workflow.getString("initialRemoteRef"), remoteRef)
+        originalOwner = current.getJSONObject("initialOwner")
+        assertEquals(sessionId, originalOwner.getString("sessionId"))
+        assertEquals(ticket.getString("worktree"), originalOwner.getString("project"))
+        assertGuards(current, initialHead, null, 0, 0, 0)
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.selection == selection && state.connected && !state.loading &&
+                state.tickets.start?.let { it.state == TicketStartState.SUCCEEDED && it.sessionId == sessionId && it.projectId == projectId && it.ref == expected.getString("ref") } == true
+        }
+        awaitTag("composerField")
+        awaitStatus { it.optBoolean("ticketPromptVerified") }
+        val marker = expected.getString("marker")
+        require(marker.isNotBlank() && marker != workflow.getString("agentMarker"))
+        compose.waitUntil(60_000) {
+            compose.onAllNodes(hasText(marker, substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNode(hasText(marker, substring = true), useUnmergedTree = true).assertIsDisplayed()
+    }
+
     private fun activate(target: RemoteSelection) {
         compose.runOnIdle { scope.launch { repository.activate(target, ActivationMode.USER_OPEN) } }
         compose.waitUntil(60_000) { repository.state.value.selection == target && !repository.state.value.loading && repository.state.value.connected }
     }
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
-    private fun awaitTag(tag: String) = compose.waitUntil(60_000) { exists(tag) }
+    private fun awaitTag(tag: String) {
+        val diagnostic = InstrumentationRegistry.getArguments().getString("workflowNavigationDiagnostics") == "true"
+        try {
+            compose.waitUntil(if (diagnostic && tag == "ticketsList") 10_000 else 60_000) { exists(tag) }
+        } catch (failure: Throwable) {
+            val state = repository.state.value
+            println("DEVELOPMENT_WORKFLOW timeout=$tag projectsPlaceholder=${exists("projectsPlaceholder")} chatPane=${exists("chatPane")} ticketsList=${exists("ticketsList")} ticketProjects=${state.tickets.projects.size} ticketLoading=${state.tickets.loading}")
+            runCatching {
+                UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(
+                    File(compose.activity.getExternalFilesDir(null), "development-workflow-timeout-$tag.png"))
+            }
+            throw failure
+        }
+    }
     private fun chatAction(action: String) {
         val direct = "chatAction_$action"
         if (exists(direct)) compose.onNodeWithTag(direct).performClick()
@@ -321,16 +431,19 @@ class DevelopmentWorkflowTransportEndToEndTest {
         }
         error("Could not close the foreground pane through its UI controls")
     }
-    private fun status(): JSONObject = client.newCall(Request.Builder().url(fixture.getString("statusUrl")).build()).execute().use {
-        assertTrue(it.isSuccessful); JSONObject(requireNotNull(it.body).string()).getJSONObject("workflow")
+    private fun fullStatus(): JSONObject = client.newCall(Request.Builder().url(fixture.getString("statusUrl")).build()).execute().use {
+        assertTrue(it.isSuccessful); JSONObject(requireNotNull(it.body).string())
     }
+    private fun status(): JSONObject = fullStatus().getJSONObject("workflow")
     private fun awaitStatus(predicate: (JSONObject) -> Boolean): JSONObject {
         compose.waitUntil(60_000) { runCatching { predicate(status()) }.getOrDefault(false) }
         return status().also { assertTrue("Fixture owner changed", it.getBoolean("ownerStable")) }
     }
     private fun assertAgentTrace(value: JSONObject) {
         val events = value.getJSONArray("agentEvents")
-        val kinds = listOf("provider_ready", "prompt", "model_call", "tool_execution_end", "model_call", "tool_execution_end", "model_call", "agent_end")
+        val workflowKinds = listOf("prompt", "model_call", "tool_execution_end", "model_call", "tool_execution_end", "model_call", "agent_end")
+        val kinds = listOf("provider_ready") +
+            (if (ticketMode) listOf("ticket_prompt", "ticket_model_call", "ticket_agent_end") else emptyList()) + workflowKinds
         assertEquals(kinds.size, events.length())
         for ((index, kind) in kinds.withIndex()) {
             val event = events.getJSONObject(index)
@@ -338,11 +451,25 @@ class DevelopmentWorkflowTransportEndToEndTest {
             assertEquals(originalOwner.getLong("pid"), event.getLong("pid"))
             assertEquals(originalOwner.getString("sessionId"), event.getString("sessionId"))
         }
-        assertTrue(events.getJSONObject(1).getBoolean("matched"))
-        for ((index, count) in listOf(2 to 1, 4 to 2, 6 to 3)) {
-            assertEquals(count, events.getJSONObject(index).getInt("callCount"))
+        if (ticketMode) {
+            val digest = fixture.getJSONObject("ticket").getString("promptSha256")
+            assertTrue(digest.matches(Regex("[0-9a-f]{64}")))
+            for (index in 1..3) assertEquals(digest, events.getJSONObject(index).getString("promptSha256"))
+            assertTrue(events.getJSONObject(1).getBoolean("matched"))
+            for (index in 2..3) {
+                assertEquals(1, events.getJSONObject(index).getInt("callCount"))
+                assertEquals(1, events.getJSONObject(index).getInt("globalCallCount"))
+            }
+            assertTrue(events.getJSONObject(3).getBoolean("markerEmitted"))
+            assertTrue(events.getJSONObject(3).getBoolean("success"))
         }
-        val firstCall = events.getJSONObject(2)
+        fun workflowEvent(index: Int): JSONObject = events.getJSONObject(index + if (ticketMode) 3 else 0)
+        assertTrue(workflowEvent(1).getBoolean("matched"))
+        for ((index, count) in listOf(2 to 1, 4 to 2, 6 to 3)) {
+            assertEquals(count, workflowEvent(index).getInt("callCount"))
+            if (ticketMode) assertEquals(count + 1, workflowEvent(index).getInt("globalCallCount"))
+        }
+        val firstCall = workflowEvent(2)
         for (key in listOf("contextMatched", "contextToolCallId", "contextResultSha256")) {
             assertTrue(firstCall.has(key) && firstCall.isNull(key))
         }
@@ -350,26 +477,35 @@ class DevelopmentWorkflowTransportEndToEndTest {
             Triple(4, "workflow-read", sha256(workflow.getString("editedText"))),
             Triple(6, "workflow-bash", workflow.getString("agentToolSha256")),
         )) {
-            val call = events.getJSONObject(index)
+            val call = workflowEvent(index)
             assertTrue(call.getBoolean("contextMatched"))
             assertEquals(toolCallId, call.getString("contextToolCallId"))
             assertEquals(expectedHash, call.getString("contextResultSha256"))
         }
         for ((index, tool) in listOf(3 to "read", 5 to "bash")) {
-            val event = events.getJSONObject(index)
+            val event = workflowEvent(index)
             assertEquals(tool, event.getString("tool"))
             assertFalse(event.getBoolean("isError"))
             assertTrue(event.getBoolean("resultMatched"))
             assertTrue(event.getString("resultSha256").matches(Regex("[0-9a-f]{64}")))
         }
-        assertEquals(sha256(workflow.getString("editedText")), events.getJSONObject(3).getString("resultSha256"))
-        assertEquals(0, events.getJSONObject(5).getInt("exitCode"))
-        assertEquals(workflow.getString("agentToolSha256"), events.getJSONObject(5).getString("resultSha256"))
-        assertTrue(events.getJSONObject(7).getBoolean("markerEmitted"))
-        assertTrue(events.getJSONObject(7).getBoolean("success"))
+        assertEquals(sha256(workflow.getString("editedText")), workflowEvent(3).getString("resultSha256"))
+        assertEquals(0, workflowEvent(5).getInt("exitCode"))
+        assertEquals(workflow.getString("agentToolSha256"), workflowEvent(5).getString("resultSha256"))
+        assertTrue(workflowEvent(7).getBoolean("markerEmitted"))
+        assertTrue(workflowEvent(7).getBoolean("success"))
     }
     private fun assertGuards(value: JSONObject, head: String, remoteHead: String?, commits: Int, pushes: Int, creates: Int) {
         assertTrue("Fixture owner changed", value.getBoolean("ownerStable"))
+        if (ticketMode) {
+            val ticket = fullStatus().getJSONObject("ticket")
+            assertEquals(1, ticket.getInt("startRequestCount"))
+            assertEquals(1, ticket.getInt("workerCount"))
+            assertEquals("succeeded", ticket.getString("state"))
+            assertEquals(selection.sessionId, ticket.getString("sessionId"))
+            assertEquals(remoteRef, "refs/heads/" + ticket.getString("branch"))
+            assertEquals(originalOwner.getString("project"), ticket.getString("worktree"))
+        }
         val initialOwner = value.getJSONObject("initialOwner")
         val currentOwner = value.getJSONObject("currentOwner")
         assertTrue(initialOwner.getLong("pid") > 0)
@@ -381,7 +517,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             assertEquals(originalOwner.get(key), currentOwner.get(key))
         }
         assertEquals(head, value.getString("head"))
-        assertEquals(workflow.getString("initialRemoteRef"), value.getString("remoteRef"))
+        assertEquals(remoteRef, value.getString("remoteRef"))
         assertEquals(workflow.getString("initialMainHead"), value.getString("baseRemoteHead"))
         assertTrue(value.has("remoteHead"))
         assertEquals(remoteHead, if (value.isNull("remoteHead")) null else value.getString("remoteHead"))

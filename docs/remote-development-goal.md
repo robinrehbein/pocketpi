@@ -1,6 +1,16 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Ticket-started native Android workflow checkpoint on 2026-11-01
+
+Phone- and tablet-sized Android emulator runs passed ticket selection and start through production
+navigation, followed by a real native Pi worker's automatic ticket turn and the file, agent, shell,
+confirmed Git, controlled PR and CI workflow. The tablet run passed after fixing a wide-layout
+placeholder that concealed detail pages above Projects. The phone passed on the earlier app
+snapshot; the tablet used the corrected app. The fixture uses an in-memory Plane API and
+deterministic local provider. External services, real model behavior and physical devices remain
+unqualified. See [ticket workflow qualification](testing/ticket-workflow-qualification.md).
+
 ## Native agent turn in the Android workflow checkpoint on 2026-11-01
 
 Phone and tablet-sized emulator runs completed the joined file edit, real native Pi agent/tool turn, manual shell,
