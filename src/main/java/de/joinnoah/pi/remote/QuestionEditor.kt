@@ -2,6 +2,8 @@ package de.joinnoah.pi.remote
 
 import kotlinx.serialization.json.JsonPrimitive
 
+internal const val NATIVE_EDITOR_CAPABILITY = "session.question_editor_native.v1"
+
 internal const val QUESTION_EDITOR_CAPABILITY = "session.question_editor.v1"
 
 /** Accept only Unicode scalar values and the controls supported by the bounded editor wire. */
@@ -31,3 +33,13 @@ internal class EditorQuestionKey(private val question: kotlinx.serialization.jso
     override fun equals(other: Any?): Boolean = other is EditorQuestionKey && question === other.question
     override fun hashCode(): Int = System.identityHashCode(question)
 }
+
+/** Missing means the legacy editor; a present marker must be the literal boolean true. */
+internal fun nativeEditorMarkerValid(question: kotlinx.serialization.json.JsonObject): Boolean =
+    !question.containsKey("native") || question["native"] == JsonPrimitive(true)
+
+internal fun editorCapabilityAvailable(question: kotlinx.serialization.json.JsonObject, state: RemoteState): Boolean =
+    nativeEditorMarkerValid(question) && state.capabilitiesKnown &&
+        QUESTION_EDITOR_CAPABILITY in state.capabilities && QUESTION_EDITOR_CAPABILITY !in state.unavailableCapabilities &&
+        (!question.containsKey("native") ||
+            NATIVE_EDITOR_CAPABILITY in state.capabilities && NATIVE_EDITOR_CAPABILITY !in state.unavailableCapabilities)

@@ -65,7 +65,7 @@ private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
-private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1:"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1:"
 
 private fun capabilityRevision(route: String): Int = when {
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
@@ -301,6 +301,7 @@ class DefaultRemoteRepository(
             STEER_CAPABILITY,
             QUESTION_DETAILS_CAPABILITY,
             QUESTION_EDITOR_CAPABILITY,
+            NATIVE_EDITOR_CAPABILITY,
             // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
             COMPACT_CAPABILITY,
             SETTINGS_CAPABILITY,
@@ -356,6 +357,98 @@ class DefaultRemoteRepository(
     private var tasksCapabilityKnown = false
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
+    private var nativePresenceOwner: Any? = null
+    private var nativePresenceSelection: RemoteSelection? = null
+    private var nativePresenceJob: Job? = null
+    private var nativePresenceConnection = -1L
+    private var nativePresenceSession: String? = null
+    private var nativePresenceUnsupportedOn = -1L
+    private var nativePromotionJob: Job? = null
+    private var nativeFirstPagesInFlight = 0
+
+    override fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit {
+        checkMainThread()
+        val token = Any()
+        nativePresenceOwner = token
+        nativePresenceSelection = selection
+        reconcileNativePresence()
+        return {
+            checkMainThread()
+            if (nativePresenceOwner === token) {
+                nativePresenceOwner = null
+                nativePresenceSelection = null
+                reconcileNativePresence()
+            }
+        }
+    }
+
+    private fun reconcileNativePresence() {
+        val current = state.value
+        val selection = nativePresenceSelection
+        val eligible = nativePresenceOwner != null && selection != null && selection == current.selection &&
+            selection.sessionId != null && !inBackground && current.connected && current.capabilitiesKnown &&
+            capabilityRevision(capabilityRoute) == 3 && nativePresenceUnsupportedOn != generation &&
+            QUESTION_EDITOR_CAPABILITY in current.capabilities && NATIVE_EDITOR_CAPABILITY in current.capabilities &&
+            QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities && NATIVE_EDITOR_CAPABILITY !in current.unavailableCapabilities
+        val desiredSession = if (eligible) selection?.sessionId else null
+        if (nativePresenceJob != null && (desiredSession != nativePresenceSession || nativePresenceConnection != generation)) {
+            val oldSession = nativePresenceSession
+            val oldConnection = nativePresenceConnection
+            nativePresenceJob?.cancel()
+            nativePromotionJob?.cancel()
+            nativePromotionJob = null
+            nativePresenceJob = null
+            nativePresenceSession = null
+            // Never carry the old session across a connection or host boundary.
+            if (oldSession != null && oldConnection == generation && current.connected && nativePresenceUnsupportedOn != generation) {
+                scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try { request("session.editor.presence", selectionEpoch, "sessionId" to oldSession, "active" to false) }
+                    catch (_: CancellationException) { throw CancellationException() }
+                    catch (_: Exception) { }
+                }
+            }
+        }
+        if (desiredSession == null || nativePresenceJob != null) return
+        val connection = generation
+        nativePresenceConnection = connection
+        nativePresenceSession = desiredSession
+        nativePresenceJob = scope.launch {
+            var promoted = false
+            while (isActive && connection == generation) {
+                try {
+                    val reply = request("session.editor.presence", selectionEpoch, "sessionId" to desiredSession, "active" to true)
+                    if (!promoted && reply.optionalText("kind") == "accepted" && reply.optionalText("sessionId") == desiredSession &&
+                        connection == generation && nativePresenceSession == desiredSession) {
+                        promoted = true
+                        val ownerSelection = selection
+                        nativePromotionJob = scope.launch {
+                            while (isActive && connection == generation && nativePresenceSession == desiredSession &&
+                                (nativeFirstPagesInFlight > 0 || snapshotPending != null || state.value.loading || timeline == null)) delay(10)
+                            if (connection == generation && nativePresenceSession == desiredSession && state.value.selection == ownerSelection &&
+                                state.value.questions.any { it.optionalText("kind") == "local_required" }) snapshotAsync()
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    // Selection invalidation cancels the in-flight request's completion, but
+                    // may leave this exact chat visible (for example, a refused fork). Keep
+                    // the same sequential heartbeat alive in that case. A canceled job still
+                    // exits immediately when the owner, connection, or foreground changes.
+                    if (!isActive) throw e
+                    continue
+                }
+                catch (e: RemoteRequestException) {
+                    if (e.kind == RemoteRequestException.Kind.UNSUPPORTED) {
+                        nativePresenceUnsupportedOn = connection
+                        nativePresenceJob = null
+                        nativePresenceSession = null
+                        return@launch
+                    }
+                } catch (_: Exception) { }
+                delay(5000)
+            }
+        }
+    }
+
     private val attachmentMutex = Mutex()
     private var importJob: Job? = null
     private var sendJob: Job? = null
@@ -1136,6 +1229,10 @@ class DefaultRemoteRepository(
         checkMainThread()
         val previous = mutable.value
         val next = block(previous)
+        if (previous.selection != next.selection && nativePresenceSelection == previous.selection) {
+            nativePresenceOwner = null
+            nativePresenceSelection = null
+        }
         fun reviewAuthority(value: RemoteState) = listOf(value.selection, value.connected,
             GIT_CAPABILITY in value.capabilities, GIT_CAPABILITY in value.unavailableCapabilities,
             GIT_WRITE_CAPABILITY in value.capabilities, GIT_WRITE_CAPABILITY in value.unavailableCapabilities,
@@ -1150,7 +1247,9 @@ class DefaultRemoteRepository(
         val editorAuthorityChanged = previous.connected != next.connected || previous.selection != next.selection ||
             previous.capabilitiesKnown != next.capabilitiesKnown ||
             (QUESTION_EDITOR_CAPABILITY in previous.capabilities) != (QUESTION_EDITOR_CAPABILITY in next.capabilities) ||
-            (QUESTION_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_EDITOR_CAPABILITY in next.unavailableCapabilities)
+            (QUESTION_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_EDITOR_CAPABILITY in next.unavailableCapabilities) ||
+            (NATIVE_EDITOR_CAPABILITY in previous.capabilities) != (NATIVE_EDITOR_CAPABILITY in next.capabilities) ||
+            (NATIVE_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (NATIVE_EDITOR_CAPABILITY in next.unavailableCapabilities)
         if (editorAuthorityChanged) editorAuthorityGeneration++
         val oldEditors = previous.questions.filter { it.optionalText("kind") == "editor" }
         val newEditors = next.questions.filter { it.optionalText("kind") == "editor" }
@@ -1160,6 +1259,7 @@ class DefaultRemoteRepository(
             questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
             gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
         )
+        reconcileNativePresence()
     }
 
     /**
@@ -2051,6 +2151,11 @@ class DefaultRemoteRepository(
         browserClient.disconnected()
         previewClient.disconnected()
         clearQuestionDetails()
+        nativePresenceJob?.cancel()
+        nativePromotionJob?.cancel()
+        nativePromotionJob = null
+        nativePresenceJob = null
+        nativePresenceSession = null
         generation++
         clearLateAcknowledgements()
         failConnectionRequests()
@@ -2195,10 +2300,10 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
-                if (revision < 3 && QUESTION_EDITOR_CAPABILITY in state.value.capabilities)
-                    update { it.copy(capabilities = it.capabilities - QUESTION_EDITOR_CAPABILITY) }
+                if (revision < 3)
+                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY)) }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2207,10 +2312,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
@@ -3057,6 +3162,7 @@ class DefaultRemoteRepository(
         val connection = generation
         // Which first page this is; a later one, scheduled or running, owns the queued prompt.
         val firstPage = if (older) -1L else ++firstPageReads
+        if (!older) nativeFirstPagesInFlight++
         try {
             // Cleared as the request goes out: a focus that excludes the session again while it is
             // awaited lapses it again.
@@ -3155,6 +3261,7 @@ class DefaultRemoteRepository(
             cancelled = true
             throw e
         } finally {
+            if (!older) nativeFirstPagesInFlight--
             // A reply that never came or was not taken: the events held for it apply now.
             val heldArrivals = awaited && current.heldArrivals
             val drained = awaited && current.endAwaiting()
@@ -4386,6 +4493,11 @@ class DefaultRemoteRepository(
         retry?.cancel()
         connectionEnded()
         clearQuestionDetails()
+        nativePresenceJob?.cancel()
+        nativePromotionJob?.cancel()
+        nativePromotionJob = null
+        nativePresenceJob = null
+        nativePresenceSession = null
         generation++
         clearLateAcknowledgements()
         transport.close()
@@ -4512,6 +4624,11 @@ class DefaultRemoteRepository(
         browserClient.disconnected()
         previewClient.disconnected()
         clearQuestionDetails()
+        nativePresenceJob?.cancel()
+        nativePromotionJob?.cancel()
+        nativePromotionJob = null
+        nativePresenceJob = null
+        nativePresenceSession = null
         generation++
         clearLateAcknowledgements()
         folderVersion++
@@ -4854,6 +4971,7 @@ class DefaultRemoteRepository(
         backgroundFocusTimer?.cancel()
         backgroundFocusTimer = null
         inBackground = !foreground
+        reconcileNativePresence()
         backgroundGraceOver = false
         if (!foreground) {
             backgroundFocusTimer = scope.launch {
@@ -8110,8 +8228,7 @@ class DefaultRemoteRepository(
             if (editor) {
                 val value = answer["value"] as? JsonPrimitive ?: return false
                 return editorAuthority == editorAuthorityGeneration && pending.optionalText("kind") == "editor" && editorPrefill(pending) != null &&
-                    value.isString && validEditorText(value.content, 65536) && current.capabilitiesKnown &&
-                    QUESTION_EDITOR_CAPABILITY in current.capabilities && QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities
+                    value.isString && validEditorText(value.content, 65536) && editorCapabilityAvailable(pending, current)
             }
             if (pending.optionalText("kind") != "confirm") return false
             if (!pending.containsKey("details")) return true

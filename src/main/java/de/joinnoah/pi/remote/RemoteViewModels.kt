@@ -15,6 +15,9 @@ internal open class DestinationViewModel(
     protected val repository: RemoteRepository,
     val key: RemoteNavKey,
 ) : ViewModel() {
+    fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit =
+        repository.acquireNativeEditorPresence(selection)
+
     internal var cleared = false
         private set
 

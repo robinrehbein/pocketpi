@@ -30,6 +30,24 @@ class EditorComposerUiTest {
         } }
     }
 
+    @Test fun renderedComposerAcquiresAndReleasesItsExactSelection() {
+        val shown = mutableStateOf(true)
+        val selection = mutableStateOf(RemoteSelection("host", "project", "session"))
+        val owner = Any()
+        val events = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            if (shown.value) ChatComposer(state.value, presenceOwner = owner,
+                presenceSelection = selection.value, acquirePresence = { selected ->
+                    events.add("acquire:${selected.sessionId}")
+                    val release: () -> Unit = { events.add("release:${selected.sessionId}"); Unit }
+                    release
+                }, onSend = {}, onStop = {}, onRemoveQuote = {})
+        } }
+        compose.runOnIdle { assertEquals(listOf("acquire:session"), events); selection.value = RemoteSelection("host", "project", "other") }
+        compose.runOnIdle { assertEquals(listOf("acquire:session", "release:session", "acquire:other"), events); shown.value = false }
+        compose.runOnIdle { assertEquals("release:other", events.last()) }
+    }
+
     @Test fun editorCapabilityRevocationDisablesSendAndRegrantRestoresItWhileCancelWorks() {
         render()
         compose.onNodeWithText("Send").assertIsEnabled()
@@ -41,6 +59,20 @@ class EditorComposerUiTest {
             unavailableCapabilities = setOf(QUESTION_EDITOR_CAPABILITY)) }
         compose.onNodeWithText("Send").assertIsNotEnabled()
         compose.runOnIdle { state.value = state.value.copy(unavailableCapabilities = emptySet()) }
+        compose.onNodeWithText("Send").assertIsEnabled()
+    }
+
+    @Test fun nativeEditorRequiresNativeCapabilityWhileCancelRemainsAvailable() {
+        val native = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "native" to true)
+        state.value = state.value.copy(questions = listOf(native),
+            capabilities = setOf(QUESTION_EDITOR_CAPABILITY, "session.question_editor_native.v1"))
+        render()
+        compose.onNodeWithText("Send").assertIsEnabled()
+        compose.runOnIdle { state.value = state.value.copy(capabilities = setOf(QUESTION_EDITOR_CAPABILITY)) }
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        assertEquals("cancel", answers.single().text("kind"))
+        compose.runOnIdle { state.value = state.value.copy(capabilities = setOf(QUESTION_EDITOR_CAPABILITY, "session.question_editor_native.v1")) }
         compose.onNodeWithText("Send").assertIsEnabled()
     }
 

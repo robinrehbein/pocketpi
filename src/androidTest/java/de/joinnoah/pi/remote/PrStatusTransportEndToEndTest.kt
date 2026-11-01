@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -18,11 +19,16 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -44,6 +50,10 @@ class PrStatusTransportEndToEndTest {
     private var layoutDiagnostics = false
     private var questionDetailsExpected = false
     private var editorExpected = false
+    private var nativeEditorExpected = false
+    private var nativeEditorReconnectExpected = false
+    private var nativeEditorHandoffExpected = false
+    private lateinit var observedTransport: PresenceObservingTransport
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
@@ -73,6 +83,18 @@ class PrStatusTransportEndToEndTest {
             require(editorArg == null || editorArg == "true" || editorArg == "false") { "editorExpected must be true or false" }
             editorExpected = editorArg == "true"
             require(!editorExpected || (!nativeExpected && !inputExpected && !questionDetailsExpected)) { "Editor fixture requires external RPC without input or question-details mode" }
+            val nativeEditorArg = args.getString("nativeEditorExpected")
+            require(nativeEditorArg == null || nativeEditorArg == "true" || nativeEditorArg == "false") { "nativeEditorExpected must be true or false" }
+            nativeEditorExpected = nativeEditorArg == "true"
+            require(!nativeEditorExpected || (nativeExpected && !inputExpected && !questionDetailsExpected && !editorExpected)) { "Native editor fixture requires native worker without other fixture modes" }
+            val nativeEditorReconnectArg = args.getString("nativeEditorReconnectExpected")
+            require(nativeEditorReconnectArg == null || nativeEditorReconnectArg == "true" || nativeEditorReconnectArg == "false") { "nativeEditorReconnectExpected must be true or false" }
+            nativeEditorReconnectExpected = nativeEditorReconnectArg == "true"
+            require(!nativeEditorReconnectExpected || nativeEditorExpected) { "Native editor reconnect requires nativeEditorExpected=true" }
+            val nativeEditorHandoffArg = args.getString("nativeEditorHandoffExpected")
+            require(nativeEditorHandoffArg == null || nativeEditorHandoffArg == "true" || nativeEditorHandoffArg == "false") { "nativeEditorHandoffExpected must be true or false" }
+            nativeEditorHandoffExpected = nativeEditorHandoffArg == "true"
+            require(!nativeEditorHandoffExpected || (nativeEditorExpected && !nativeEditorReconnectExpected)) { "Native editor handoff requires native editor mode without reconnect mode" }
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -93,6 +115,16 @@ class PrStatusTransportEndToEndTest {
                 require(fixture.getString("editorProbeCommand").isNotBlank() && fixture.getString("editorProbeNonce").isNotBlank())
                 require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Editor fixture values are required" }
             }
+            if (nativeEditorExpected) {
+                require(fixture.getBoolean("nativeEditorFixture")) { "Native editor fixture is required" }
+                require(fixture.getString("nativeEditorOutcome") in setOf("submit", "cancel", "local")) { "Wrong native editor outcome" }
+                require(fixture.optBoolean("nativeEditorReconnect") == nativeEditorReconnectExpected) { "Wrong native editor reconnect fixture mode" }
+                require(!nativeEditorReconnectExpected || fixture.getString("nativeEditorOutcome") == "submit") { "Native editor reconnect requires submit outcome" }
+                require(fixture.optBoolean("nativeEditorHandoff") == nativeEditorHandoffExpected) { "Wrong native editor handoff fixture mode" }
+                require(!nativeEditorHandoffExpected || (fixture.getString("nativeEditorOutcome") == "submit" && fixture.getBoolean("handoffDeviceDistinct"))) { "Native editor handoff requires submit and a distinct paired device" }
+                require(fixture.getString("editorProbeCommand").isNotBlank() && fixture.getString("editorProbeNonce").isNotBlank())
+                require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Native editor fixture values are required" }
+            }
             println("PR_STATUS_NATIVE_EXPECTED=$nativeExpected")
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
@@ -112,7 +144,8 @@ class PrStatusTransportEndToEndTest {
                 override fun load() = values
                 override fun save(drafts: Map<DraftKey, StoredDraft>) { values = drafts }
             }
-            repository = DefaultRemoteRepository(pairings, drafts, SecureRemoteTransport(scope, client), scope)
+            observedTransport = PresenceObservingTransport(SecureRemoteTransport(scope, client), requireNotNull(selection.sessionId))
+            repository = DefaultRemoteRepository(pairings, drafts, observedTransport, scope)
             val settings = PrStatusSettings()
             NavigationTestActivity.contentFactory = {
                 val content: @Composable () -> Unit = {
@@ -191,6 +224,7 @@ class PrStatusTransportEndToEndTest {
         }
         if (questionDetailsExpected) exerciseQuestionDetails()
         if (editorExpected) exerciseEditor()
+        if (nativeEditorExpected) exerciseNativeEditor()
         awaitTag("pullRequestChip")
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(compose.activity.getString(R.string.remote_pr_chip_number, 42L), substring = true)
         screenshot("pending")
@@ -286,6 +320,137 @@ class PrStatusTransportEndToEndTest {
                 repository.state.value.questions.none { it.text("id") == questionId }
         }
         screenshot("editor-after")
+    }
+    private fun exerciseNativeEditor() {
+        val command = fixture.getString("editorProbeCommand")
+        val nonce = fixture.getString("editorProbeNonce")
+        val prefill = fixture.getString("editorPrefill")
+        val value = fixture.getString("editorExpectedValue")
+        val outcome = fixture.getString("nativeEditorOutcome")
+        require(command.startsWith("/") && command.none { it.isWhitespace() } && nonce.isNotBlank() && nonce.none { it.isWhitespace() })
+        require(value != prefill) { "Edited value must differ from prefill" }
+        val probeName = requireNotNull(commandName(command))
+        awaitTag("composerField")
+        compose.onNodeWithTag("composerField").assertIsDisplayed()
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.selection == selection && state.connected && !state.loading && state.capabilitiesKnown &&
+                QUESTION_EDITOR_CAPABILITY in state.capabilities && NATIVE_EDITOR_CAPABILITY in state.capabilities &&
+                QUESTION_EDITOR_CAPABILITY !in state.unavailableCapabilities && NATIVE_EDITOR_CAPABILITY !in state.unavailableCapabilities &&
+                COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities &&
+                !state.commandsLoading && state.commands.any { it.name == probeName } && observedTransport.presenceAccepted.get()
+        }
+        compose.onNodeWithTag("composerField").performTextInput("$command $nonce")
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        hideIme()
+        compose.waitUntil(60_000) {
+            repository.state.value.questions.any { it.text("kind") == "editor" } &&
+                statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                    it.optBoolean("nativeEditorPending") && it.optInt("nativeEditorOriginalCalls", -1) == 0 } == true
+        }
+        val question = repository.state.value.questions.single { it.text("kind") == "editor" }
+        val questionId = question.text("id")
+        assertEquals("Native marker must be boolean true", JsonPrimitive(true), question["native"])
+        assertEquals("Native editor prefill must match exactly", prefill, editorPrefill(question))
+        compose.onNodeWithTag("questionEditorField").performScrollTo().assertIsDisplayed().assertTextEquals(prefill)
+        screenshot("native-editor-before")
+        if (nativeEditorReconnectExpected) reconnectPendingNativeEditor(questionId, prefill)
+        if (nativeEditorHandoffExpected) {
+            handoffNativeEditor(questionId, value)
+        } else if (outcome == "local") {
+            action("native-editor-local-key")
+            compose.waitUntil(60_000) {
+                statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                    it.optBoolean("nativeEditorLocalReady") && it.optInt("nativeEditorOriginalCalls", -1) == 1 } == true &&
+                    repository.state.value.questions.none { it.text("id") == questionId }
+            }
+            awaitNoTag("questionEditorField")
+            observedTransport.sendStaleEditorAnswer(questionId, value)
+            compose.waitUntil(60_000) { observedTransport.staleAnswerResult.get() != null }
+            val rejection = requireNotNull(observedTransport.staleAnswerResult.get())
+            assertFalse("Host must reject the stale editor answer", rejection.flag("ok"))
+            assertEquals("Host must report the revoked question as resolved", "already_resolved", rejection.obj("error").text("code"))
+            val localHold = status()
+            assertTrue("Native worker identity must remain verified", nativeWorkerVerified(localHold))
+            assertTrue("Local editor must remain verified and ready", localHold.getBoolean("nativeEditorVerified") && localHold.getBoolean("nativeEditorLocalReady"))
+            assertFalse("Stale answer must not resolve the local editor", localHold.getBoolean("nativeEditorAnswered"))
+            assertEquals("Exactly one original editor call must remain", 1, localHold.getInt("nativeEditorOriginalCalls"))
+            action("native-editor-local-submit")
+        } else {
+            if (outcome == "submit") {
+                compose.onNodeWithTag("questionEditorField").performTextReplacement(value)
+                compose.onNodeWithTag("questionEditorField").assertTextEquals(value)
+            }
+            val button = if (outcome == "submit") R.string.remote_send else R.string.remote_cancel
+            compose.onNodeWithText(compose.activity.getString(button)).performScrollTo().assertIsEnabled().performClick()
+        }
+        compose.waitUntil(60_000) {
+            statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                it.optBoolean("nativeEditorAnswered") && it.optBoolean("nativeEditorValueVerified") == (outcome != "cancel") &&
+                it.optBoolean("nativeEditorCancelled") == (outcome == "cancel") &&
+                it.optInt("nativeEditorOriginalCalls", -1) == if (outcome == "local") 1 else 0 } == true &&
+                repository.state.value.questions.none { it.text("id") == questionId }
+        }
+        screenshot("native-editor-after")
+    }
+    private fun handoffNativeEditor(questionId: String, value: String) {
+        action("native-editor-handoff-start")
+        compose.waitUntil(60_000) {
+            statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                it.optBoolean("nativeEditorHandoffReady") && it.optBoolean("nativeEditorPending") &&
+                !it.optBoolean("nativeEditorAnswered") && it.optInt("nativeEditorOriginalCalls", -1) == 0 } == true
+        }
+        compose.runOnIdle { showNavigation.value = false }
+        awaitNoTag("composerField")
+        compose.waitUntil(60_000) { observedTransport.inactivePresenceAccepted.get() && repository.state.value.connected }
+        observedTransport.sendStaleEditorAnswer(questionId, value)
+        compose.waitUntil(60_000) { observedTransport.staleAnswerResult.get() != null }
+        val rejection = requireNotNull(observedTransport.staleAnswerResult.get())
+        assertFalse("Host must reject the absent reader's answer", rejection.flag("ok"))
+        assertEquals("Host must deny an absent reader's native editor lease", "forbidden", rejection.obj("error").text("code"))
+        val pending = status()
+        assertTrue("Distinct reader must still hold the verified pending editor", nativeWorkerVerified(pending) &&
+            pending.getBoolean("nativeEditorVerified") && pending.getBoolean("nativeEditorHandoffReady") && pending.getBoolean("nativeEditorPending"))
+        assertFalse("Absent reader must not answer the editor", pending.getBoolean("nativeEditorAnswered"))
+        assertEquals("Original editor must not have run", 0, pending.getInt("nativeEditorOriginalCalls"))
+        action("native-editor-handoff-submit")
+        compose.waitUntil(60_000) {
+            statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                it.optBoolean("nativeEditorHandoffAnswerAccepted") && it.optBoolean("nativeEditorAnswered") &&
+                it.optBoolean("nativeEditorValueVerified") && it.optInt("nativeEditorOriginalCalls", -1) == 0 } == true
+        }
+        compose.runOnIdle { showNavigation.value = true }
+        awaitTag("composerField")
+        compose.onNodeWithTag("composerField").assertIsDisplayed()
+        compose.waitUntil(60_000) { repository.state.value.questions.none { it.optionalText("id") == questionId } }
+        awaitNoTag("questionEditorField")
+    }
+    private fun reconnectPendingNativeEditor(questionId: String, prefill: String) {
+        val upgrades = status().getInt("upgrades")
+        val started = SystemClock.elapsedRealtime()
+        action("native-editor-cut")
+        compose.waitUntil(12_000) {
+            statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                it.optBoolean("nativeEditorReconnectCut") && !it.optBoolean("deviceOnline") && it.optBoolean("upgradesBlocked") &&
+                !it.optBoolean("nativeEditorAnswered") && it.optInt("nativeEditorOriginalCalls", -1) == 0 } == true &&
+                !repository.state.value.connected
+        }
+        check(SystemClock.elapsedRealtime() - started < 15_000) { "Native editor reconnect grace expired before allowing reconnect" }
+        action("native-editor-allow-reconnect")
+        val remaining = 15_000 - (SystemClock.elapsedRealtime() - started)
+        check(remaining > 0) { "Native editor reconnect grace expired" }
+        compose.waitUntil(remaining) {
+            val state = repository.state.value
+            val matching = state.questions.filter { it.optionalText("id") == questionId && it.optionalText("kind") == "editor" }
+            statusOrNull()?.let { nativeWorkerVerified(it) && it.optBoolean("nativeEditorVerified") &&
+                it.optBoolean("nativeEditorReconnectAllowed") && it.optBoolean("deviceOnline") && it.optInt("upgrades") > upgrades &&
+                it.optBoolean("nativeEditorPending") && !it.optBoolean("nativeEditorAnswered") &&
+                it.optInt("nativeEditorOriginalCalls", -1) == 0 } == true && state.connected && state.selection == selection &&
+                observedTransport.presenceAccepted.get() && matching.size == 1 && matching.single()["native"] == JsonPrimitive(true) &&
+                editorPrefill(matching.single()) == prefill
+        }
+        compose.onNodeWithTag("questionEditorField").performScrollTo().assertIsDisplayed().assertTextEquals(prefill)
+        screenshot("native-editor-reconnected")
     }
     private fun exerciseQuestionDetails() {
         val command = fixture.getString("questionProbeCommand")
@@ -409,6 +574,90 @@ class PrStatusTransportEndToEndTest {
         require(path.matches(Regex("/data/local/tmp/[A-Za-z0-9._/-]+")) && !path.contains(".."))
         val fd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")
         return ParcelFileDescriptor.AutoCloseInputStream(fd).use { it.readBytes() }.also { require(it.isNotEmpty()) }
+    }
+}
+
+/** Observes the real encrypted transport's decoded messages without changing either direction. */
+private class PresenceObservingTransport(
+    private val delegate: RemoteTransport,
+    private val sessionId: String,
+) : RemoteTransport {
+    val presenceAccepted = AtomicBoolean(false)
+    val inactivePresenceAccepted = AtomicBoolean(false)
+    val staleAnswerResult = AtomicReference<JsonObject?>(null)
+    private var staleAnswerRequestId: String? = null
+    private val pendingPresence = ConcurrentHashMap<String, Boolean>()
+    private lateinit var downstreamListener: RemoteTransport.Listener
+    override var listener: RemoteTransport.Listener
+        get() = downstreamListener
+        set(value) {
+            downstreamListener = value
+            delegate.listener = object : RemoteTransport.Listener by value {
+                override fun ready(capabilities: Set<String>) {
+                    clearPresence()
+                    value.ready(capabilities)
+                }
+                override fun failed(reconnect: Boolean, error: Int) {
+                    clearPresence()
+                    value.failed(reconnect, error)
+                }
+                override fun closed(code: Int) {
+                    clearPresence()
+                    value.closed(code)
+                }
+                override fun broken() {
+                    clearPresence()
+                    value.broken()
+                }
+                override fun message(payload: JsonObject) {
+                    if (payload.optionalText("type") == "result" && payload.optionalText("requestId") == staleAnswerRequestId) {
+                        staleAnswerResult.set(payload)
+                        return
+                    }
+                    runCatching {
+                        val active = if (payload.optionalText("type") == "result") pendingPresence.remove(payload.text("requestId")) else null
+                        if (active != null && payload.flag("ok")) {
+                            val data = payload.obj("data")
+                            if (data.optionalText("kind") == "accepted" && data.optionalText("sessionId") == sessionId) {
+                                if (active) presenceAccepted.set(true) else inactivePresenceAccepted.set(true)
+                            }
+                        }
+                    }
+                    value.message(payload)
+                }
+            }
+        }
+    override fun connect(host: PairedHost) {
+        clearPresence()
+        delegate.connect(host)
+    }
+    override fun pair(value: JsonObject) = delegate.pair(value)
+    /** Send one deliberately stale, unprivileged wire request, outside the UI. */
+    fun sendStaleEditorAnswer(questionId: String, value: String) {
+        check(staleAnswerRequestId == null)
+        val requestId = Wire.random()
+        staleAnswerRequestId = requestId
+        delegate.send(Wire.objectOf(
+            "type" to "question.answer", "requestId" to requestId, "sessionId" to sessionId,
+            "questionId" to questionId, "answer" to Wire.objectOf("kind" to "editor", "value" to value),
+        ))
+    }
+    override fun send(payload: JsonObject) {
+        if (payload.optionalText("type") == "session.editor.presence" && payload.optionalText("sessionId") == sessionId) {
+            val active = payload["active"] == JsonPrimitive(true)
+            pendingPresence[payload.text("requestId")] = active
+            if (!active) { presenceAccepted.set(false); inactivePresenceAccepted.set(false) }
+        }
+        delegate.send(payload)
+    }
+    override fun close() {
+        clearPresence()
+        delegate.close()
+    }
+    private fun clearPresence() {
+        presenceAccepted.set(false)
+        inactivePresenceAccepted.set(false)
+        pendingPresence.clear()
     }
 }
 

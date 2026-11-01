@@ -668,6 +668,33 @@ class FilesPaneUiTest {
         compose.onNode(hasTestTag("filesList") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
     }
 
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun coveringChatWithFilesReleasesPresenceAndClosingRestoresIt() {
+        chat(setOf(FILES_CAPABILITY))
+        val selection = RemoteSelection("host", "project", "s1")
+        assertEquals(listOf("acquire" to selection), repository.presenceEvents)
+        compose.onNodeWithTag("chatAction_files").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesPane").assertIsDisplayed()
+        assertEquals(listOf("acquire" to selection, "release" to selection), repository.presenceEvents)
+        compose.runOnIdle { repository.closeFiles() }
+        compose.waitForIdle()
+        assertEquals(listOf("acquire" to selection, "release" to selection, "acquire" to selection), repository.presenceEvents)
+    }
+
+    @Test
+    @Config(qualifiers = "w1300dp-h800dp")
+    fun filesBesideChatKeepsPresence() {
+        chat(setOf(FILES_CAPABILITY))
+        val selection = RemoteSelection("host", "project", "s1")
+        assertEquals(listOf("acquire" to selection), repository.presenceEvents)
+        compose.onNodeWithTag("chatAction_files").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("filesPane") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        assertEquals(listOf("acquire" to selection), repository.presenceEvents)
+    }
+
     /*
      * On a phone either pane covers the chat header, so the other cannot be opened while it is
      * shown; ProjectFilesLoaderTest covers the exclusion itself. Beside the chat both stay open,

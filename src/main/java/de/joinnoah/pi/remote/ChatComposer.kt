@@ -352,6 +352,9 @@ internal fun QuotePreview(
 @Composable
 internal fun ChatComposer(
     state: RemoteState,
+    presenceOwner: Any? = null,
+    presenceSelection: RemoteSelection? = null,
+    acquirePresence: ((RemoteSelection) -> () -> Unit)? = null,
     /** Where typed text goes when the caller does not hoist [draft]. */
     onDraft: (String) -> Unit = {},
     onSend: () -> Unit,
@@ -400,6 +403,12 @@ internal fun ChatComposer(
     /** Offers the "Expand editor" control when set; it toggles the large editor. */
     onEditorExpanded: ((Boolean) -> Unit)? = null,
 ) {
+    if (presenceOwner != null && presenceSelection != null && acquirePresence != null) {
+        DisposableEffect(presenceOwner, presenceSelection) {
+            val release = acquirePresence(presenceSelection)
+            onDispose { release() }
+        }
+    }
     // Everything below reads the text on screen, which runs ahead of the repository's draft
     // while the user types.
     val repositoryState = state
@@ -1274,8 +1283,7 @@ private fun QuestionComposer(
                     QuestionCard(
                         question = question,
                         editorScope = state.editorQuestionGeneration,
-                        editorAvailable = state.capabilitiesKnown && QUESTION_EDITOR_CAPABILITY in state.capabilities &&
-                            QUESTION_EDITOR_CAPABILITY !in state.unavailableCapabilities,
+                        editorAvailable = editorCapabilityAvailable(question, state),
                         enabled = state.connected && questionId !in state.answering,
                         pending = questionId in state.answering,
                         block = state.questionBlocks[questionId],

@@ -446,7 +446,7 @@ class RemoteRepositoryTest {
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
             assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1:"))
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -8620,6 +8620,258 @@ class RemoteRepositoryTest {
         return repository(transport).also { it.activate(RemoteSelection("host", "project", "session")); it.flush() }
     }
 
+    private suspend fun TestScope.nativePresenceRepository(transport: Transport): DefaultRemoteRepository {
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            val result = normal(request)
+            if (request.text("type") == "projects.list") JsonObject(checkNotNull(result) +
+                ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1"),
+                    JsonPrimitive("session.question_editor_native.v1"), JsonPrimitive(SESSION_FORK_CAPABILITY)))))
+            else if (request.text("type") == "session.editor.presence")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else result
+        }
+        return repository(transport).also {
+            it.setForeground(true)
+            it.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+        }
+    }
+
+    private fun Transport.presences() = sent.filter { it.text("type") == "session.editor.presence" }
+
+    @Test fun nativePresenceRequiresRenderedOwnerAndStopsOnForegroundLoss() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        assertTrue(transport.presences().isEmpty())
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(listOf(true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(listOf(true, true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        repo.setForeground(false); runCurrent()
+        assertEquals(listOf(true, true, false), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        advanceTimeBy(10000); runCurrent()
+        assertEquals(3, transport.presences().size)
+        release()
+    }
+
+    @Test fun staleDisposalCannotReleaseNewRenderedOwner() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        val old = repo.acquireNativeEditorPresence(selection); runCurrent()
+        val current = repo.acquireNativeEditorPresence(selection); runCurrent()
+        old(); runCurrent()
+        assertFalse(transport.presences().any { it["active"]?.jsonPrimitive?.boolean == false })
+        current(); runCurrent()
+        assertEquals(false, transport.presences().last()["active"]?.jsonPrimitive?.boolean)
+    }
+
+    @Test fun wrongSelectionAndDisconnectedOwnerNeverSendPresenceToAnotherConnection() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val wrong = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "other")); runCurrent()
+        assertTrue(transport.presences().isEmpty())
+        wrong()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val before = transport.presences().size
+        release(); runCurrent()
+        assertEquals(before, transport.presences().size)
+    }
+
+    @Test fun unsupportedPresenceStopsHeartbeatWithoutRepeatedRequests() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        transport.failure = { if (it.text("type") == "session.editor.presence") "unsupported" else null }
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        advanceTimeBy(20000); runCurrent()
+        assertEquals(1, transport.presences().size)
+        release(); runCurrent()
+        assertEquals(1, transport.presences().size)
+    }
+
+    @Test fun nativeHeartbeatWaitsForReplyAndRetriesTransientFailure() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var held: JsonObject? = null
+        transport.response = { request ->
+            if (request.text("type") == "session.editor.presence" && held == null) {
+                held = request
+                null
+            } else normal(request)
+        }
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        advanceTimeBy(6000); runCurrent()
+        assertEquals(1, transport.presences().size)
+        transport.result(checkNotNull(held), Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.editor.presence") "temporary" else null }
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(2, transport.presences().size)
+        transport.failure = { null }
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(3, transport.presences().size)
+        release()
+    }
+
+    @Test fun refusedForkRestartsHeartbeatCanceledWhileRequestWasInFlight() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var held: JsonObject? = null
+        transport.response = { request ->
+            if (request.text("type") == "session.editor.presence" && held == null) {
+                held = request
+                null
+            } else normal(request)
+        }
+        transport.failure = { if (it.text("type") == "session.fork") "busy" else null }
+        val selection = RemoteSelection("host", "project", "session")
+        val release = repo.acquireNativeEditorPresence(selection)
+        runCurrent()
+        assertEquals(1, transport.presences().size)
+        assertEquals(selection, repo.forkSession(selection, "user-1", ForkMode.EDIT))
+        runCurrent()
+        assertEquals(selection, repo.state.value.selection)
+        assertEquals(listOf(true, true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        transport.result(checkNotNull(held), Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(listOf(true, true, true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        release()
+    }
+
+    @Test fun nativePresenceReconnectRenegotiatesBeforeRenewing() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        repo.setValidatedNetwork("wifi"); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        val before = transport.presences().size
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1000); runCurrent()
+        assertTrue(repo.state.value.connected)
+        val after = transport.presences().drop(before)
+        assertTrue(after.isNotEmpty())
+        assertTrue(after.all { it.text("sessionId") == "session" && it["active"]?.jsonPrimitive?.boolean == true })
+        release()
+    }
+
+    @Test fun staleOwnerCannotSendOldSessionToNewHost() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            val result = normal(request)
+            if (request.text("type") == "projects.list") JsonObject(checkNotNull(result) +
+                ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1"), JsonPrimitive("session.question_editor_native.v1")))))
+            else result
+        }
+        val second = PairedHost("other-host", "https://relay.test", "device-2", "secret-2", "Other")
+        val repo = repository(transport, hosts = listOf(host, second))
+        repo.setForeground(true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        repo.activate(RemoteSelection("other-host", "project", "session")); runCurrent()
+        val before = transport.presences().size
+        release(); runCurrent()
+        advanceTimeBy(10000); runCurrent()
+        assertEquals(before, transport.presences().size)
+    }
+
+    @Test fun nativeCapabilityRevocationDetachesAndRegrantResumesVisibleOwner() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var native = false
+        transport.response = { request ->
+            val result = normal(request)
+            if (request.text("type") == "projects.list") JsonObject(checkNotNull(result) +
+                ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1")) +
+                    if (native) listOf(JsonPrimitive("session.question_editor_native.v1")) else emptyList())))
+            else result
+        }
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        repo.openNotification("host", "missing-1"); runCurrent()
+        assertEquals(false, transport.presences().last()["active"]?.jsonPrimitive?.boolean)
+        native = true
+        repo.openNotification("host", "missing-2"); runCurrent()
+        assertEquals(true, transport.presences().last()["active"]?.jsonPrimitive?.boolean)
+        release()
+    }
+
+    @Test fun firstPresenceAckPromotesLocalRequiredSnapshotOnlyOnce() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var promoted = false
+        transport.response = { request -> when (request.text("type")) {
+            "session.editor.presence" -> { promoted = true; normal(request) }
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(
+                    if (promoted) Wire.objectOf("id" to "e", "kind" to "editor", "native" to true, "prefill" to "hello")
+                    else Wire.objectOf("id" to "e", "kind" to "local_required"))))
+            else -> normal(request)
+        } }
+        repo.openNotification("host", "unknown"); runCurrent()
+        // Trigger a fresh snapshot without claiming visibility first.
+        repo.setForeground(false); repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        assertEquals("editor", repo.state.value.questions.single().text("kind"))
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        advanceTimeBy(10000); runCurrent()
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        release()
+    }
+
+    @Test fun lateInitialSnapshotCannotOverwritePostPresencePromotion() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var held: JsonObject? = null
+        transport.response = { request -> when (request.text("type")) {
+            "session.snapshot" -> if (held == null) { held = request; null } else Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting",
+                "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(
+                    Wire.objectOf("id" to "e", "kind" to "editor", "native" to true, "prefill" to "hello"))))
+            else -> normal(request)
+        } }
+        repo.setForeground(false); repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        transport.result(checkNotNull(held), Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+            "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(
+                Wire.objectOf("id" to "e", "kind" to "local_required")))))
+        runCurrent(); advanceTimeBy(20); runCurrent()
+        assertEquals("editor", repo.state.value.questions.single().text("kind"))
+        release()
+    }
+
+    @Test fun nativeCapabilityRequiresBaseCapabilityAndV3OptIn() = runTest {
+        for (version in 2..3) for (base in listOf(false, true)) {
+            val transport = Transport().also(::configure)
+            val normal = transport.response
+            transport.response = { request ->
+                val result = normal(request)
+                if (request.text("type") == "projects.list" &&
+                    request.text("requestId").startsWith("capabilities.v$version:"))
+                    JsonObject(checkNotNull(result) + ("capabilities" to JsonArray(
+                        listOf(JsonPrimitive("session.question_editor_native.v1")) +
+                            if (base) listOf(JsonPrimitive("session.question_editor.v1")) else emptyList())))
+                else result
+            }
+            val repo = repository(transport)
+            repo.setForeground(true)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+            assertEquals(version == 3 && base, transport.presences().isNotEmpty())
+            release()
+        }
+    }
+
     @Test fun editorAnswerRequiresNegotiatedCapabilityAndValidExactValue() = runTest {
         val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello")
         for (capability in listOf(false, true)) {
@@ -8633,6 +8885,28 @@ class RemoteRepositoryTest {
             repo.answer("e", Wire.objectOf("kind" to "editor", "value" to value)); runCurrent()
             assertEquals(if (capability) 1 else 0, transport.sent.count { it.text("type") == "question.answer" })
             if (capability) assertEquals(value, transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("value"))
+        }
+    }
+
+    @Test fun nativeEditorAnswerNeedsNativeCapabilityButCancelStillWorks() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "native" to true)
+        val transport = Transport()
+        val repo = editorRepository(transport, question)
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "changed")); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+    }
+
+    @Test fun malformedNativeMarkerNeverAllowsEditorAnswerButAllowsCancel() = runTest {
+        for (marker in listOf<JsonElement>(JsonPrimitive(false), JsonPrimitive("true"), JsonNull)) {
+            val question = JsonObject(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original") + ("native" to marker))
+            val transport = Transport()
+            val repo = editorRepository(transport, question)
+            repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "changed")); runCurrent()
+            assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+            repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+            assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
         }
     }
 
@@ -8678,7 +8952,7 @@ class RemoteRepositoryTest {
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
         val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1:"))
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1:"))
         assertTrue(ids[1].startsWith("capabilities.v2:"))
         assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
     }

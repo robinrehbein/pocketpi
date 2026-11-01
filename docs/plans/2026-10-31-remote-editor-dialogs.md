@@ -57,8 +57,8 @@ Host paths below are relative to `packages/pi-atlas/extensions/remote` in the ho
 
 **Inspect first:** host `index.ts`, `dialogs.ts` and their focused tests. Pi's public `editor(title, prefill?)` has no signal or timeout, and an already opened native editor cannot be assumed remotely dismissible.
 
-- [ ] Design and test a remote-first deferred wrapper only if its lifetime, local fallback trigger and source authority can be proven with public APIs. Before invoking the original native editor, atomically revoke remote answer authority and prove a concurrent phone answer cannot settle it. Test disconnect, session replacement, disposal and local fallback racing a remote answer.
-- [ ] If the gate cannot be proven, leave native editor local-only and report the precise limitation. Do not label native support complete on SDK signature inference alone.
+- [x] Design and test a remote-first deferred wrapper only if its lifetime, local fallback trigger and source authority can be proven with public APIs. Before invoking the original native editor, atomically revoke remote answer authority and prove a concurrent phone answer cannot settle it. Test disconnect, session replacement, disposal and local fallback racing a remote answer.
+- [x] The bounded native gate was proven with actual Pi/Android runtime evidence and independent review; see [native qualification](../testing/native-editor-qualification.md). This is not SDK signature inference or oversized-editor qualification.
 
 ### 6. Oversized/paged prefill, separate gate
 
@@ -75,3 +75,5 @@ Host tests and four actual Host-owned Pi-to-Android Submit/Cancel runs passed.
 Host implementation: `0cfd68d05`; the App implementation is included in this change.
 See [qualification](../testing/remote-editor-qualification.md) for exact results and boundaries.
 Tasks 5–6 and the full remote-development goal remain open.
+
+Native follow-up: the bounded native bridge is now qualified and enabled by default with per-connection native/base opt-in and explicit rendered-chat presence. The earlier RPC-only qualification below remains historical evidence for that slice. Task 6 remains open.

@@ -3744,6 +3744,9 @@ internal fun RemoteScreen(
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
+                        presenceOwner = model,
+                        presenceSelection = chatKey?.selection()?.takeUnless { composerCovered },
+                        acquirePresence = model::acquireNativeEditorPresence,
                         // Typed text goes through `composer`, which pushes it to model::draft.
                         draft = composer,
                         onSend = { if (!runShellCommand() && !runLocalCommand()) model.prompt() },

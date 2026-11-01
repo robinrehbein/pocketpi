@@ -267,6 +267,7 @@ data class Picked(val uri: String, val photo: Boolean)
 
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
+    fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit = {}
     fun canOpenPreview(): Boolean = false
     fun openPreview(port: Int): Boolean = false
     fun closePreview() {}
