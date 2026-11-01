@@ -20,6 +20,7 @@ class RemoteTransportTest {
         lateinit var requestValue: Request
         val sent = java.util.Collections.synchronizedList(mutableListOf<String>())
         val sendThreads = java.util.Collections.synchronizedSet(mutableSetOf<Thread>())
+        var observeSend: (String) -> Unit = {}
         var cancelled = false
 
         /** False once OkHttp would refuse frames: the socket is closing or failed. */
@@ -42,6 +43,7 @@ class RemoteTransportTest {
             if (!accepting) return false
             sendThreads += Thread.currentThread()
             sent += text
+            observeSend(text)
             return true
         }
 
@@ -437,7 +439,8 @@ class RemoteTransportTest {
             val (listener, server) =
                 authenticated(socket = socket, sender = executor.asCoroutineDispatcher(), created = { transport = it })
             val before = socket.sent.size
-            val count = 100
+            // Keep this ordering test within the bounded queue and one rolling budget window.
+            val count = 20
             repeat(count) { checkNotNull(transport).send(Wire.objectOf("type" to "steer", "n" to it)) }
             val deadline = System.currentTimeMillis() + 10_000
             while (socket.sent.size < before + count && System.currentTimeMillis() < deadline) Thread.sleep(1)
@@ -475,6 +478,186 @@ class RemoteTransportTest {
         assertEquals(before + 1, socket.sent.size)
         assertFalse(listener.failed)
         assertEquals(0, listener.brokenCount)
+    }
+
+    @Test
+    fun guardedCancellationBeforeSenderAdmissionNeverCallsTheWriteBoundaryOrConsumesASequence() = runTest {
+        val socket = Socket()
+        val sender = HeldDispatcher()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, sender = sender, created = { transport = it })
+        sender.runAll()
+        val before = socket.sent.size
+        var possibleWrites = 0
+        val pending = launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.sendGuarded(Wire.objectOf("type" to "steer", "n" to 1)) { possibleWrites++ }
+        }
+        assertEquals("no possible-write callback while the sender is held", 0, possibleWrites)
+        pending.cancelAndJoin()
+        sender.runAll()
+        runCurrent()
+        transport.send(Wire.objectOf("type" to "steer", "n" to 2))
+        sender.runAll()
+        runCurrent()
+        assertEquals(before + 1, socket.sent.size)
+        assertEquals(2L, server.open(Wire.parse(socket.sent.last())).long("n"))
+        assertEquals(0, possibleWrites)
+    }
+
+    @Test
+    fun cancellationImmediatelyBeforeAdmissionReleasesCapacityWithoutAWriteOrSequenceGap() = runTest {
+        val socket = Socket()
+        val sender = HeldDispatcher()
+        lateinit var transport: SecureRemoteTransport
+        val (listener, server) = authenticated(socket = socket, sender = sender, created = { transport = it })
+        sender.runAll()
+        val owner = Job()
+        var callbacks = 0
+        transport.beforeGuardedEnqueueForTest = { owner.cancel() }
+        val cancelled = launch(owner, start = CoroutineStart.UNDISPATCHED) {
+            transport.sendGuarded(Wire.objectOf("type" to "steer", "n" to -1)) { callbacks++ }
+        }
+        transport.beforeGuardedEnqueueForTest = null
+        cancelled.join()
+        // Every ordinary slot must still be usable before the held sender consumes anything.
+        repeat(56) { transport.send(Wire.objectOf("type" to "steer", "n" to it)) }
+        sender.runAll()
+        runCurrent()
+        assertEquals(0, callbacks)
+        assertEquals(0L, server.open(Wire.parse(socket.sent[2])).long("n"))
+        assertFalse(listener.failed)
+    }
+
+    @Test
+    fun guardedCallbackRejectsStaleAuthorityBeforeSealingWithoutBreakingFollowingFrame() = runTest {
+        val socket = Socket()
+        val sender = HeldDispatcher()
+        lateinit var transport: SecureRemoteTransport
+        val (listener, server) = authenticated(socket = socket, sender = sender, created = { transport = it })
+        sender.runAll()
+        var current = true
+        var rejected = false
+        val pending = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { transport.sendGuarded(Wire.objectOf("type" to "steer", "n" to 1)) { check(current) } }
+            catch (_: IllegalStateException) { rejected = true }
+        }
+        current = false
+        sender.runAll()
+        runCurrent()
+        sender.runAll()
+        runCurrent()
+        pending.join()
+        assertTrue("stale authority must be rejected on the caller context", rejected)
+        transport.send(Wire.objectOf("type" to "steer", "n" to 2))
+        sender.runAll()
+        runCurrent()
+        assertEquals(2L, server.open(Wire.parse(socket.sent.last())).long("n"))
+        assertFalse(listener.failed)
+    }
+
+    @Test
+    fun ordinaryQueueRejectsOverflowWithoutFailingOrDiscardingEarlierFrames() = runTest {
+        val socket = Socket()
+        val sender = HeldDispatcher()
+        lateinit var transport: SecureRemoteTransport
+        val (listener, server) = authenticated(socket = socket, sender = sender, created = { transport = it })
+        sender.runAll()
+        repeat(56) { transport.send(Wire.objectOf("type" to "steer", "n" to it)) }
+        assertThrows(IllegalStateException::class.java) { transport.send(Wire.objectOf("type" to "steer", "n" to 56)) }
+        sender.runAll()
+        runCurrent()
+        assertFalse(listener.failed)
+        assertEquals(0L, server.open(Wire.parse(socket.sent[2])).long("n"))
+    }
+
+    @Test
+    fun encryptedMixedTrafficSharesRollingFrameAndByteBudget() = runTest {
+        val socket = Socket()
+        val frames = mutableListOf<Pair<Long, Int>>()
+        socket.observeSend = { frames += testScheduler.currentTime to it.toByteArray(Charsets.UTF_8).size }
+        lateinit var transport: SecureRemoteTransport
+        val (listener, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        transport.send(sessionFocusPayload("focus-paced", listOf("session")))
+        runCurrent()
+        repeat(10) { n ->
+            transport.send(Wire.objectOf("type" to "session.question.editor.upload.chunk", "n" to n, "data" to "A".repeat(65_536)))
+            runCurrent()
+        }
+        transport.send(Wire.objectOf("type" to "session.editor.presence", "active" to true))
+        runCurrent()
+        // At least one encrypted chunk must wait; a sequential sender can otherwise exceed the relay.
+        assertTrue(socket.sent.size < 2 + 2 + 10 + 1)
+        advanceTimeBy(1_101)
+        runCurrent()
+        val sent = outbound.take()
+        assertEquals(10, sent.count { it.text("type") == "session.question.editor.upload.chunk" })
+        assertEquals(1, sent.count { it.text("type") == "session.editor.presence" })
+        assertEquals(1, sent.count { it.text("type") == "remote.ack" })
+        assertEquals((0 until 10).toList(), sent.filter { it.text("type") == "session.question.editor.upload.chunk" }.map { it.long("n").toInt() })
+        for ((at, _) in frames) {
+            val window = frames.filter { (time, _) -> time <= at && at - time < 1_100 }
+            assertTrue("frame-count rolling budget", window.size <= 24)
+            assertTrue("complete encrypted-byte rolling budget", window.sumOf { it.second } <= 768 * 1024)
+        }
+        assertFalse(listener.failed)
+    }
+
+    @Test
+    fun fullQueueRetainsHighestAckUntilCapacityReturnsWithoutSequenceGap() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (listener, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        transport.send(sessionFocusPayload("focus-full", listOf("session")))
+        runCurrent()
+        assertEquals(listOf(1L), outbound.acks())
+        advanceTimeBy(201)
+        runCurrent()
+        // Do not run the sender: use every ordinary slot, then every reserved control slot.
+        repeat(56) { transport.send(Wire.objectOf("type" to "steer", "n" to it)) }
+        repeat(8) { transport.send(Wire.objectOf("type" to "session.editor.presence", "n" to it)) }
+        socket.receive(bigEvent(server, 1))
+        socket.receive(bigEvent(server, 2))
+        // Reader-thread ACK admission must not throw or break the live connection when full.
+        assertFalse(listener.failed)
+        runCurrent()
+        advanceTimeBy(4_401)
+        runCurrent()
+        val sent = outbound.take() // decrypting every frame also checks consecutive secure sequences
+        assertEquals((0 until 56).toList(), sent.filter { it.text("type") == "steer" }.map { it.long("n").toInt() })
+        assertEquals((0 until 8).toList(), sent.filter { it.text("type") == "session.editor.presence" }.map { it.long("n").toInt() })
+        assertEquals(listOf(3L), sent.filter { it.text("type") == "remote.ack" }.map { it.long("seq") })
+        assertEquals("remote.ack", sent.last().text("type"))
+        assertFalse(listener.failed)
+        assertEquals(0, listener.brokenCount)
+    }
+
+    @Test
+    fun cancelledGuardedBudgetWaiterDoesNotDelayFollowingSmallFrame() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (listener, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        val bulk = "A".repeat(65_536)
+        repeat(8) { n ->
+            transport.send(Wire.objectOf("type" to "bulk", "n" to n, "data" to bulk))
+            runCurrent()
+        }
+        var boundaryCalls = 0
+        val blocked = launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.sendGuarded(Wire.objectOf("type" to "bulk", "n" to 8, "data" to bulk)) { boundaryCalls++ }
+        }
+        runCurrent()
+        assertTrue("ninth bulk frame should be waiting for the byte budget", blocked.isActive)
+        blocked.cancelAndJoin()
+        transport.send(Wire.objectOf("type" to "session.editor.presence", "active" to true))
+        runCurrent()
+        val sent = outbound.take()
+        assertEquals(8, sent.count { it.text("type") == "bulk" })
+        assertEquals("session.editor.presence", sent.last().text("type"))
+        assertEquals(0, boundaryCalls)
+        assertFalse(listener.failed)
     }
 
     @Test

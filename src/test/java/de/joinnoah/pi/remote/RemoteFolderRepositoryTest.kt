@@ -1,6 +1,10 @@
 package de.joinnoah.pi.remote
 
 import androidx.navigation3.runtime.NavKey
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -34,6 +38,14 @@ class RemoteFolderRepositoryTest {
         var sessions = listOf(session("session", "project"))
         val failures = mutableMapOf<String, JsonObject>()
         val replies = mutableMapOf<String, (JsonObject) -> JsonObject?>()
+        var beforeGuardedSend: suspend (JsonObject) -> Unit = {}
+
+        override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+            beforeGuardedSend(payload)
+            currentCoroutineContext().ensureActive()
+            beforePossibleWrite()
+            send(payload)
+        }
 
         override fun connect(host: PairedHost) {
             listener.ready(emptySet())
@@ -195,6 +207,25 @@ class RemoteFolderRepositoryTest {
         assertEquals(1, transport.of("session.prompt").size)
     }
 
+    @Test fun pacedHealthyMutationReportsNotSentWhenConnectionChangesBeforeAdmission() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val gate = CompletableDeferred<Unit>()
+        var possibleWrites = 0
+        transport.beforeGuardedSend = { if (it.text("type") == "session.prompt") gate.await() }
+        val result = backgroundScope.async {
+            runCatching { repository.withHealthyConnection("host", onSent = { possibleWrites++ }) { it.prompt("session", "Go on", "mutation-1") } }
+        }
+        runCurrent()
+        assertEquals(0, possibleWrites)
+        assertTrue(transport.of("session.prompt").isEmpty())
+        repository.activate(RemoteSelection("other")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertEquals(0, possibleWrites)
+        assertTrue(transport.of("session.prompt").isEmpty())
+        assertTrue(result.await().exceptionOrNull() is MutationNotSentException)
+    }
+
     @Test
     fun aQuietConnectionIsNotHealthyAndAMissingReplyTimesOut() = runTest {
         val transport = Transport()
@@ -249,6 +280,31 @@ class RemoteFolderRepositoryTest {
         repository.browseFolder("host", "../etc")
         runCurrent()
         assertEquals(1, transport.of("fs.browse").size)
+    }
+
+    @Test fun pacedConnectionRequestSurvivesSelectionChangeOnSameConnection() = runTest {
+        val transport = Transport()
+        transport.replies["fs.browse"] = { listing(it.text("path")) }
+        val repository = connected(transport)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "fs.browse") gate.await() }
+        repository.browseFolder("host", "Code"); runCurrent()
+        assertTrue(transport.of("fs.browse").isEmpty())
+        repository.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertEquals(1, transport.of("fs.browse").size)
+    }
+
+    @Test fun pacedConnectionRequestNeverWritesAfterConnectionReplacement() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "fs.browse") gate.await() }
+        repository.browseFolder("host", "Code"); runCurrent()
+        assertTrue(transport.of("fs.browse").isEmpty())
+        repository.activate(RemoteSelection("other")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertTrue(transport.of("fs.browse").isEmpty())
     }
 
     @Test

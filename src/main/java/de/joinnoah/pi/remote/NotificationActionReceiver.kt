@@ -158,8 +158,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
     private fun replier(app: Context) =
         CompletionReplier(
             pairedHost = { pairedHost(app, it) },
-            live = { routeId, block ->
-                (app as? RemoteApplication)?.repository?.withHealthyConnection(routeId, block = block)
+            live = { routeId, onSent, block ->
+                (app as? RemoteApplication)?.repository?.withHealthyConnection(routeId, onSent, block)
             },
             background = { host, block -> BackgroundRemoteClient().use(host, block) },
         )

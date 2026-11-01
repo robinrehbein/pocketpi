@@ -74,6 +74,14 @@ class RemoteRepositoryTest {
         var failure: (JsonObject) -> String? = { null }
         var failureMessage: (JsonObject) -> String? = { null }
         var failureReason: (JsonObject) -> String? = { null }
+        var beforeGuardedSend: suspend (JsonObject) -> Unit = {}
+
+        override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+            beforeGuardedSend(payload)
+            currentCoroutineContext().ensureActive()
+            beforePossibleWrite()
+            send(payload)
+        }
 
         /** Delivers [payload] as the real transport does: receipt is reported before the payload. */
         fun deliver(payload: JsonObject) {
@@ -3003,6 +3011,25 @@ class RemoteRepositoryTest {
         assertEquals(connects + 1, transport.connects)
         assertTrue(repository.state.value.connected)
         assertNull(repository.state.value.error)
+    }
+
+    @Test fun aFrameDuringPacedAdmissionDoesNotHideADeadListRead() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = listingRepository(transport)
+        val answered = transport.response
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "sessions.list") gate.await() }
+        transport.response = { if (it.text("type") == "sessions.list") null else answered(it) }
+        val closes = transport.closes
+        val opening = async { repository.activate(RemoteSelection("host", "project")) }
+        runCurrent()
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
+        gate.complete(Unit); runCurrent()
+        transport.beforeGuardedSend = {}
+        transport.response = answered
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS); runCurrent()
+        opening.await()
+        assertEquals("Frame before dispatch must not count as liveness after dispatch", closes + 1, transport.closes)
     }
 
     @Test
@@ -8643,6 +8670,20 @@ class RemoteRepositoryTest {
         assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
     }
 
+    @Test fun pacedSourcePageRechecksQuestionIdentityBeforeDispatch() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val (repo, transport) = pagedFixture(question)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.details.get") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.details.get" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.parse(question.toString())))
+        gate.complete(Unit); runCurrent()
+        assertEquals("A replacement question cannot receive the old source request", 0, transport.sent.count { it.text("type") == "session.question.details.get" })
+    }
+
     @Test fun pagedEditorDisconnectRevokesCapturedInlineAuthority() = runTest {
         val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g"))
         val displayed = repo.state.value.questions.single()
@@ -8652,6 +8693,62 @@ class RemoteRepositoryTest {
         repo.submitPagedEditor(displayed, "hello"); runCurrent()
         assertTrue(repo.state.value.pagedEditors.isEmpty())
         assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pacedBeginRechecksQuestionIdentityAfterAdmissionWait() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.upload.begin") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.parse(question.toString())))
+        gate.complete(Unit); runCurrent()
+        assertEquals("An equal replacement cannot inherit a queued begin", 0, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pacedCommitCancelledBeforeDispatchDoesNotCreateUncertainReceipt() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.upload.commit") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.closed", "questionId" to "e"))
+        gate.complete(Unit); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        assertNotEquals(QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+    }
+
+    @Test fun pacedAdmissionDoesNotConsumeRequestResponseTimeout() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            "session.question.editor.upload.commit" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> null
+        } }
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.upload.begin") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        assertNotEquals("No receipt before a possible commit write", QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        gate.complete(Unit); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        assertEquals("A dispatched commit retains its receipt until question close", QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.closed", "questionId" to "e")); runCurrent()
+        assertNull(repo.state.value.questionBlocks["e"])
     }
 
     @Test fun pagedEditorMalformedUploadAckNeverCommits() = runTest {
@@ -14364,6 +14461,21 @@ class RemoteRepositoryTest {
         sent.filter { it.text("type") == "session.focus" }.map { focus -> focus.getValue("sessionIds").jsonArray.map { it.jsonPrimitive.content } }
 
     private fun Transport.pings() = sent.count { it.text("type") == "remote.ping" }
+
+    @Test fun aFrameDuringPacedFocusAdmissionDoesNotHideADeadConnection() = runTest {
+        val (transport, host) = streamTransport()
+        val repository = openedChat(transport, host)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.focus") gate.await() }
+        repository.activate(RemoteSelection("host", "project")); runCurrent()
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
+        val closes = transport.closes
+        transport.response = { null }
+        gate.complete(Unit); runCurrent()
+        transport.beforeGuardedSend = {}
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS); runCurrent()
+        assertTrue("Frame before focus dispatch must not hide a dead socket", transport.closes > closes)
+    }
 
     private fun Transport.lastIndexOf(type: String) = sent.indexOfLast { it.text("type") == type }
 

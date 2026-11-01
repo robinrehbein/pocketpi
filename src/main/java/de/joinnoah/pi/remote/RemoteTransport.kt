@@ -3,6 +3,10 @@ package de.joinnoah.pi.remote
 import android.os.Build
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.*
@@ -100,6 +104,13 @@ interface RemoteTransport {
      */
     fun send(payload: JsonObject)
 
+    /** Calls [beforePossibleWrite] before any write can occur, after caller cancellation checks. */
+    suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+        currentCoroutineContext().ensureActive()
+        beforePossibleWrite()
+        send(payload)
+    }
+
     fun close()
 }
 
@@ -135,6 +146,21 @@ class SecureRemoteTransport(
     private val deviceName: () -> String = { (Build.MANUFACTURER + " " + Build.MODEL).take(100) },
 ) : RemoteTransport {
     override lateinit var listener: RemoteTransport.Listener
+    // Test-only race barrier: cancellation after handler registration, before queue admission.
+    internal var beforeGuardedEnqueueForTest: (() -> Unit)? = null
+
+    private class QueuedFrame(
+        var payload: JsonObject,
+        var cost: Int,
+        val control: Boolean,
+        val caller: CoroutineContext? = null,
+        val callerJob: Job? = null,
+        val beforeWrite: (() -> Unit)? = null,
+        val continuation: CancellableContinuation<Unit>? = null,
+        val gate: AtomicInteger = AtomicInteger(0),
+        val cancelled: CompletableDeferred<Unit> = CompletableDeferred(),
+        val invalid: Exception? = null,
+    )
 
     /**
      * One socket and what the reader thread and the sender share with [scope]. Everything else
@@ -162,7 +188,13 @@ class SecureRemoteTransport(
         @Volatile var closingCode: Int? = null
 
         private val lane = Channel<() -> Unit>(Channel.UNLIMITED)
-        private val outgoing = Channel<JsonObject>(Channel.UNLIMITED)
+        private val queueLock = Any()
+        private val pending = ArrayDeque<QueuedFrame>()
+        private val queueBudget = OutboundQueueBudget()
+        private val wake = Channel<Unit>(Channel.CONFLATED)
+        private val budgetLock = Any()
+        private val frameBudget = OutboundFrameBudget()
+        private var senderJob: Job? = null
 
         /** Guards the ack state below, which the reader thread, [send] and the trailing timer share. */
         private val ackLock = Any()
@@ -177,6 +209,7 @@ class SecureRemoteTransport(
         private var lastAckAt = 0L
         private var lastFrameAt = 0L
         private var trailingAck: Job? = null
+        private var ackPending = false
 
         /**
          * On the reader thread, after frame [sequence] of [size] characters was decrypted: an ack
@@ -210,11 +243,15 @@ class SecureRemoteTransport(
          */
         private fun ackLocked(now: Long) {
             if (receivedSequence < 0 || receivedSequence <= ackedSequence) return
+            if (!queueAck(remoteAckPayload(receivedSequence))) {
+                ackPending = true
+                return
+            }
+            ackPending = false
             ackedSequence = receivedSequence
             unackedChars = 0
             lastAckAt = now
             Diagnostics.count(Diagnostics.Counter.ACKS_SENT)
-            queue(remoteAckPayload(receivedSequence))
         }
 
         private fun scheduleTrailingAckLocked() {
@@ -249,8 +286,85 @@ class SecureRemoteTransport(
             lane.trySend { if (epoch == generation) task() }
         }
 
+        private fun frameCost(payload: JsonObject): Int =
+            OutboundFrameBudget.encryptedFrameUpperBound(payload.toString().toByteArray(Charsets.UTF_8).size)
+
+        private fun queueFrame(frame: QueuedFrame): Boolean = synchronized(queueLock) {
+            if (closed.get() || !queueBudget.tryReserve(frame.cost, frame.control)) return@synchronized false
+            pending.addLast(frame)
+            wake.trySend(Unit)
+            true
+        }
+
+        private fun queueAck(payload: JsonObject): Boolean = synchronized(queueLock) {
+            if (closed.get()) return@synchronized false
+            val cost = frameCost(payload)
+            val tail = pending.lastOrNull()
+            if (tail != null && tail.control && tail.payload.optionalText("type") == "remote.ack") {
+                queueBudget.release(tail.cost, true)
+                if (!queueBudget.tryReserve(cost, true)) {
+                    check(queueBudget.tryReserve(tail.cost, true))
+                    return@synchronized false
+                }
+                tail.payload = payload
+                tail.cost = cost
+                return@synchronized true
+            }
+            if (!queueBudget.tryReserve(cost, true)) return@synchronized false
+            pending.addLast(QueuedFrame(payload, cost, true))
+            wake.trySend(Unit)
+            true
+        }
+
         fun queue(payload: JsonObject) {
-            check(outgoing.trySend(payload).isSuccess)
+            val control = payload.optionalText("type") == "session.editor.presence"
+            val frame = try { QueuedFrame(payload, frameCost(payload), control) }
+            catch (error: IllegalArgumentException) {
+                QueuedFrame(Wire.objectOf("type" to "invalid"), 1024, control, invalid = error)
+            }
+            check(queueFrame(frame))
+        }
+
+        suspend fun queueGuarded(payload: JsonObject, beforeWrite: () -> Unit) {
+            val context = currentCoroutineContext()
+            context.ensureActive()
+            suspendCancellableCoroutine<Unit> { continuation ->
+                val frame = QueuedFrame(payload, frameCost(payload), payload.optionalText("type") == "session.editor.presence", context.minusKey(Job), context[Job], beforeWrite, continuation)
+                continuation.invokeOnCancellation {
+                    if (frame.gate.compareAndSet(0, 2)) {
+                        frame.cancelled.complete(Unit)
+                        val removed = synchronized(queueLock) {
+                            if (pending.remove(frame)) { queueBudget.release(frame.cost, frame.control); true } else false
+                        }
+                        if (removed) retryAck()
+                    }
+                }
+                beforeGuardedEnqueueForTest?.invoke()
+                if (!queueFrame(frame)) {
+                    if (frame.gate.compareAndSet(0, 2)) frame.cancelled.complete(Unit)
+                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException("Outbound queue full or closed"))
+                } else if (frame.gate.get() == 2 || (!continuation.isActive && frame.gate.compareAndSet(0, 2))) {
+                    frame.cancelled.complete(Unit)
+                    val removed = synchronized(queueLock) {
+                        if (pending.remove(frame)) { queueBudget.release(frame.cost, frame.control); true } else false
+                    }
+                    if (removed) retryAck()
+                }
+            }
+        }
+
+        private fun retryAck() {
+            synchronized(ackLock) { if (ackPending && !closed.get()) ackLocked(clock()) }
+        }
+
+        fun sendImmediate(payload: JsonObject, encrypted: Boolean): Boolean = synchronized(budgetLock) {
+            val text = if (encrypted) {
+                val estimated = frameCost(payload)
+                check(frameBudget.delayMillis(clock(), estimated) == 0L)
+                checkNotNull(channel).seal(payload).toString().also { check(it.toByteArray(Charsets.UTF_8).size <= estimated) }
+            } else payload.toString().also { check(frameBudget.delayMillis(clock(), it.toByteArray(Charsets.UTF_8).size) == 0L) }
+            frameBudget.record(clock(), text.toByteArray(Charsets.UTF_8).size)
+            checkNotNull(socket).send(text)
         }
 
         /**
@@ -272,22 +386,47 @@ class SecureRemoteTransport(
                     yield()
                 }
             }
-            scope.launch(sender) {
-                for (payload in outgoing) {
-                    val open = channel
-                    // Dropped without sealing: the connection closed, or a failure already ended it.
-                    if (closed.get() || unreadable || open == null || open.isClosed) continue
-                    try {
-                        val sent = checkNotNull(socket).send(open.seal(payload).toString())
-                        if (!sent) {
-                            unreadable = true
-                            onSendFailure(null)
+            senderJob = scope.launch(sender) {
+                for (ignored in wake) {
+                    while (true) {
+                        val frame = synchronized(queueLock) { pending.removeFirstOrNull() } ?: break
+                        try {
+                            while (!closed.get() && frame.gate.get() != 2) {
+                                val wait = synchronized(budgetLock) { frameBudget.delayMillis(clock(), frame.cost) }
+                                if (wait <= 0) break
+                                withTimeoutOrNull(wait) { frame.cancelled.await() }
+                            }
+                            if (closed.get() || unreadable || channel?.isClosed != false || frame.gate.get() == 2) {
+                                frame.continuation?.cancel()
+                                continue
+                            }
+                            var writeStarted = false
+                            try {
+                                val send = {
+                                    if (frame.continuation != null) {
+                                        if (!frame.gate.compareAndSet(0, 1) || frame.callerJob?.isActive == false || closed.get() || !active || epoch != generation) throw CancellationException("Guarded send cancelled")
+                                        frame.beforeWrite?.invoke()
+                                    }
+                                    writeStarted = true
+                                    frame.invalid?.let { throw it }
+                                    sendImmediate(frame.payload, true)
+                                }
+                                val sent = if (frame.caller != null) withContext(frame.caller) { send() } else send()
+                                if (!sent) { unreadable = true; onSendFailure(null); throw IllegalStateException("Socket refused send") }
+                                frame.continuation?.takeIf { it.isActive }?.resume(Unit)
+                            } catch (e: CancellationException) {
+                                frame.continuation?.cancel(e)
+                            } catch (e: Exception) {
+                                if (writeStarted && !unreadable) { unreadable = true; onSendFailure(e) }
+                                frame.continuation?.takeIf { it.isActive }?.resumeWithException(e)
+                            }
+                        } catch (e: CancellationException) {
+                            frame.continuation?.cancel(e)
+                            throw e
+                        } finally {
+                            synchronized(queueLock) { queueBudget.release(frame.cost, frame.control) }
+                            retryAck()
                         }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        unreadable = true
-                        onSendFailure(e)
                     }
                 }
             }
@@ -295,10 +434,19 @@ class SecureRemoteTransport(
 
         fun end() {
             closed.set(true)
+            senderJob?.cancel()
             synchronized(ackLock) { trailingAck?.cancel() }
             channel?.close()
             lane.close()
-            outgoing.close()
+            synchronized(queueLock) {
+                while (pending.isNotEmpty()) {
+                    val frame = pending.removeFirst()
+                    queueBudget.release(frame.cost, frame.control)
+                    if (frame.gate.compareAndSet(0, 2)) frame.cancelled.complete(Unit)
+                    frame.continuation?.cancel()
+                }
+            }
+            wake.close()
             socket?.cancel()
         }
     }
@@ -342,6 +490,13 @@ class SecureRemoteTransport(
         val current = checkNotNull(connection)
         check(current.active)
         current.queue(payload)
+        if ((payload["type"] as? JsonPrimitive)?.content == "session.focus") current.startAcks()
+    }
+
+    override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+        val current = checkNotNull(connection)
+        check(current.active)
+        current.queueGuarded(payload, beforePossibleWrite)
         if ((payload["type"] as? JsonPrimitive)?.content == "session.focus") current.startAcks()
     }
 
@@ -423,8 +578,7 @@ class SecureRemoteTransport(
         // acknowledgement must leave before the close that follows it. Returns false once a
         // refused frame ended the connection as lost; a seal failure throws into [broke].
         fun sendNow(payload: JsonObject): Boolean {
-            val frame = checkNotNull(connection.channel).seal(payload)
-            if (checkNotNull(connection.socket).send(frame.toString())) return true
+            if (connection.sendImmediate(payload, true)) return true
             lost()
             return false
         }
@@ -555,7 +709,7 @@ class SecureRemoteTransport(
                             trace.extensions(extensions)
                             // The relay is reached; from here on only the Mac can answer.
                             advance(HandshakePhase.CHALLENGE)
-                            webSocket.send(hello.toString())
+                            if (!connection.sendImmediate(hello, false)) { lost(); return@post }
                             challengeTimeout = scope.launch {
                                 delay(CHALLENGE_TIMEOUT_MILLIS)
                                 // The reader thread accepts the challenge before its lane task

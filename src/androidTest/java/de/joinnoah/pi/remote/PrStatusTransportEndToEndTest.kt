@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -741,6 +742,9 @@ private class PresenceObservingTransport(
     private val observedUploads = ConcurrentHashMap<String, UploadObservation>()
     private val pendingCommits = ConcurrentHashMap<String, PendingCommit>()
     private val observedCommit = AtomicReference<CommitObservation?>(null)
+    private data class UploadTrace(val alias: Int, val kind: String, val offset: Long?)
+    private val uploadTraceSequence = AtomicInteger()
+    private val uploadRequests = ConcurrentHashMap<String, UploadTrace>()
     private var staleAnswerRequestId: String? = null
     private val pendingPresence = ConcurrentHashMap<String, Boolean>()
     private lateinit var downstreamListener: RemoteTransport.Listener
@@ -772,6 +776,14 @@ private class PresenceObservingTransport(
                 override fun message(payload: JsonObject) {
                     val resultId = payload.optionalText("requestId")
                     if (payload.optionalText("type") == "result" && resultId != null) {
+                        uploadRequests.remove(resultId)?.let { trace ->
+                            val ok = runCatching { payload.flag("ok") }.getOrDefault(false)
+                            val rawKind = if (ok) runCatching { payload.obj("data").optionalText("kind") }.getOrNull() else null
+                            val kind = rawKind?.takeIf { it in setOf("editor_upload_begun", "editor_upload_ack", "accepted") } ?: "other"
+                            val rawCode = if (!ok) runCatching { payload.obj("error").optionalText("code") }.getOrNull() else null
+                            val code = rawCode?.takeIf { it in setOf("invalid_request", "forbidden", "unsupported", "outcome_unknown", "not_found", "unavailable") } ?: "other"
+                            pagedDiagnostic("upload-result alias=${trace.alias} kind=${trace.kind} offset=${trace.offset} ok=$ok resultKind=$kind errorCode=$code")
+                        }
                         pendingBegins.remove(resultId)?.let { begin ->
                             runCatching {
                                 if (payload.flag("ok")) {
@@ -821,7 +833,17 @@ private class PresenceObservingTransport(
             "questionId" to questionId, "answer" to Wire.objectOf("kind" to "editor", "value" to value),
         ))
     }
-    override fun send(payload: JsonObject) {
+    private fun observe(payload: JsonObject) {
+        val type = payload.optionalText("type")
+        if (pagedDiagnostics && type in setOf("session.question.editor.upload.begin", "session.question.editor.upload.chunk", "session.question.editor.upload.commit")) {
+            val kind = requireNotNull(type).substringAfterLast('.')
+            val offset = if (kind == "chunk") payload.long("offset") else null
+            val trace = UploadTrace(uploadTraceSequence.incrementAndGet(), kind, offset)
+            uploadRequests[payload.text("requestId")] = trace
+            val dataChars = if (kind == "chunk") payload.text("data").length else 0
+            val plainBytes = payload.toString().toByteArray(Charsets.UTF_8).size
+            pagedDiagnostic("upload-send alias=${trace.alias} kind=$kind offset=$offset plaintextBytes=$plainBytes dataChars=$dataChars")
+        }
         when (payload.optionalText("type")) {
             "session.question.editor.upload.begin" -> pendingBegins[payload.text("requestId")] = payload
             "session.question.editor.upload.chunk" -> observedUploads[payload.text("uploadId")]?.let { upload ->
@@ -851,7 +873,14 @@ private class PresenceObservingTransport(
             pendingPresence[payload.text("requestId")] = active
             if (!active) { presenceAccepted.set(false); inactivePresenceAccepted.set(false) }
         }
+    }
+    override fun send(payload: JsonObject) {
+        observe(payload)
         delegate.send(payload)
+    }
+    override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) = delegate.sendGuarded(payload) {
+        beforePossibleWrite()
+        observe(payload)
     }
     fun pagedCommitAccepted(questionId: String, grantId: String, bytes: Int, sha256: String): Boolean {
         val receipt = observedCommit.get() ?: return false
@@ -879,6 +908,10 @@ private class PresenceObservingTransport(
         pendingPresence.clear()
         pagedV3Accepted.set(false)
         pagedV3Requests.clear()
+        if (pagedDiagnostics && uploadRequests.isNotEmpty()) {
+            uploadRequests.values.sortedBy { it.alias }.forEach { pagedDiagnostic("upload-unanswered alias=${it.alias} kind=${it.kind} offset=${it.offset}") }
+        }
+        uploadRequests.clear()
     }
 }
 

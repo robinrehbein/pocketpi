@@ -70,13 +70,20 @@ private class PushAttemptObserver(private val delegate: RemoteTransport) : Remot
         }
     override fun connect(host: PairedHost) = delegate.connect(host)
     override fun pair(value: JsonObject) = delegate.pair(value)
-    override fun send(payload: JsonObject) {
+    private fun observe(payload: JsonObject) {
         if (payload.optionalText("type") == "session.git.push") {
             pushes.incrementAndGet()
             requestId = payload.optionalText("requestId")
             sentAt = android.os.SystemClock.elapsedRealtime()
         }
+    }
+    override fun send(payload: JsonObject) {
+        observe(payload)
         delegate.send(payload)
+    }
+    override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) = delegate.sendGuarded(payload) {
+        beforePossibleWrite()
+        observe(payload)
     }
     override fun close() = delegate.close()
 }

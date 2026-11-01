@@ -16,10 +16,14 @@ class CompletionReplyTest {
     private class Socket(private val answer: suspend (String) -> JsonObject = { Wire.objectOf("kind" to "accepted") }) :
         MutationCommands {
         val sent = mutableListOf<Pair<String, JsonObject>>()
+        var beforeMutation: suspend () -> Unit = {}
+        var onDispatch: () -> Unit = {}
 
         override suspend fun request(type: String, vararg fields: Pair<String, Any?>) = error("not used")
 
         override suspend fun mutate(requestId: String, type: String, vararg fields: Pair<String, Any?>): JsonObject {
+            beforeMutation()
+            onDispatch()
             sent += requestId to Wire.objectOf("type" to type, *fields)
             return answer(requestId)
         }
@@ -34,9 +38,9 @@ class CompletionReplyTest {
     ) =
         CompletionReplier(
             pairedHost = { paired },
-            live = { routeId, block ->
+            live = { routeId, onSent, block ->
                 order += "live:$routeId"
-                if (live == null) null else block(live)
+                if (live == null) null else { live.onDispatch = onSent; block(live) }
             },
             background = { pairedHost, block ->
                 order += "background:${pairedHost.routeId}"
@@ -81,10 +85,21 @@ class CompletionReplyTest {
         assertEquals(listOf("live:r"), order)
     }
 
+    @Test fun aLiveDispatchFollowedByNullNeverRetriesInBackground() = runTest {
+        var backgroundCalls = 0
+        val replier = CompletionReplier(
+            pairedHost = { host },
+            live = { _, onSent, _ -> onSent(); null },
+            background = { _, _ -> backgroundCalls++ },
+        )
+        assertEquals(ReplyOutcome.UNCERTAIN, replier.send("r", "s", "Go on"))
+        assertEquals(0, backgroundCalls)
+    }
+
     @Test
     fun aLiveSendRefusedBeforeItLeftGoesOnOverTheBackgroundConnection() = runTest {
         // The app's connection dropped between the health check and the send.
-        val live = Socket { throw MutationNotSentException() }
+        val live = Socket().apply { beforeMutation = { throw MutationNotSentException() } }
         val background = Socket()
         val order = mutableListOf<String>()
         assertEquals(ReplyOutcome.SENT, replier(live, background, order = order).send("r", "s", "Go on"))
@@ -93,7 +108,7 @@ class CompletionReplyTest {
         // Refused on both: nothing left the phone.
         assertEquals(
             ReplyOutcome.FAILED,
-            replier(Socket { throw MutationNotSentException() }, Socket { throw MutationNotSentException() })
+            replier(Socket().apply { beforeMutation = { throw MutationNotSentException() } }, Socket().apply { beforeMutation = { throw MutationNotSentException() } })
                 .send("r", "s", "Go on"),
         )
     }
@@ -115,6 +130,22 @@ class CompletionReplyTest {
         assertEquals(1, background.sent.size)
     }
 
+    @Test fun aLiveReplyStillWaitingForDispatchAtDeadlineIsKnownNotSent() = runTest {
+        val live = Socket().apply { beforeMutation = { awaitCancellation() } }
+        val background = Socket()
+        assertEquals(ReplyOutcome.FAILED, replier(live, background, timeoutMillis = 1_000).send("r", "s", "Go on"))
+        assertTrue(live.sent.isEmpty())
+        assertTrue(background.sent.isEmpty())
+    }
+
+    @Test fun aLiveReplyAtDeadlineAfterActualDispatchIsUncertainAndNotRetried() = runTest {
+        val live = Socket { awaitCancellation() }
+        val background = Socket()
+        assertEquals(ReplyOutcome.UNCERTAIN, replier(live, background, timeoutMillis = REPLY_TIMEOUT_MILLIS).send("r", "s", "Go on"))
+        assertEquals(1, live.sent.size)
+        assertTrue("A possibly delivered live reply must not be replayed", background.sent.isEmpty())
+    }
+
     @Test
     fun aRefusedReplyFailedAndOneThatNeverLeftFailedToo() = runTest {
         val refusedLive = Socket { throw RemoteRequestException("busy") }
@@ -125,7 +156,7 @@ class CompletionReplyTest {
         val unreachable =
             CompletionReplier(
                 pairedHost = { host },
-                live = { _, _ -> null },
+                live = { _, _, _ -> null },
                 background = { _, _ -> throw RemoteConnectionException() },
             )
         assertEquals(ReplyOutcome.FAILED, unreachable.send("r", "s", "Go on"))
@@ -133,7 +164,7 @@ class CompletionReplyTest {
         val hanging =
             CompletionReplier(
                 pairedHost = { host },
-                live = { _, _ -> null },
+                live = { _, _, _ -> null },
                 background = { _, _ -> CompletableDeferred<Unit>().await() },
                 timeoutMillis = 1_000,
             )
@@ -154,7 +185,7 @@ class CompletionReplyTest {
         val replier =
             CompletionReplier(
                 pairedHost = { host },
-                live = { _, block -> block(live) },
+                live = { _, onSent, block -> live.onDispatch = onSent; block(live) },
                 background = { _, _ -> error("not used") },
                 mutationId = { "mutation-${++next}" },
             )

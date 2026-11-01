@@ -54,12 +54,19 @@ private class BrowserAttemptObserver(private val delegate: RemoteTransport) : Re
         set(value) { delegate.listener = value }
     override fun connect(host: PairedHost) = delegate.connect(host)
     override fun pair(value: JsonObject) = delegate.pair(value)
-    override fun send(payload: JsonObject) {
+    private fun observe(payload: JsonObject) {
         when (payload.optionalText("type")) {
             "browser.input" -> inputAttempts.incrementAndGet()
             "browser.acquire" -> acquireAttempts.incrementAndGet()
         }
+    }
+    override fun send(payload: JsonObject) {
+        observe(payload)
         delegate.send(payload)
+    }
+    override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) = delegate.sendGuarded(payload) {
+        beforePossibleWrite()
+        observe(payload)
     }
     override fun close() = delegate.close()
 }

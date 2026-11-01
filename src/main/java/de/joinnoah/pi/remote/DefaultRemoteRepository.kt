@@ -2284,6 +2284,7 @@ class DefaultRemoteRepository(
         draft: String? = null,
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
+        validateBeforeSend: (() -> Unit)? = null,
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         // Runs once the request went out, for one that follows it without waiting for its reply.
         thenSend: (() -> Unit)? = null,
@@ -2317,11 +2318,16 @@ class DefaultRemoteRepository(
         var outcome = "failed"
         var ended: Long? = null
         val connection = generation
-        val inboundAtSend = inboundFrames
+        var inboundAtSend = -1L
         try {
-            // Set before sending: a send that throws may still have reached the host.
-            onSent?.invoke()
-            transport.send(payload)
+            transport.sendGuarded(payload) {
+                checkEpoch(epoch)
+                check(state.value.connected && connection == generation)
+                validateBeforeSend?.invoke()
+                inboundAtSend = inboundFrames
+                // Set immediately before a possible write: a send that throws may have reached the host.
+                onSent?.invoke()
+            }
             thenSend?.invoke()
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
@@ -7529,8 +7535,9 @@ class DefaultRemoteRepository(
         fields: Array<out Pair<String, Any?>>,
         timeoutMillis: Long,
         record: Boolean,
+        onSent: (() -> Unit)? = null,
     ): JsonObject =
-        awaitConnectionReply(Wire.objectOf("type" to type, "requestId" to requestId, *fields), timeoutMillis, record)
+        awaitConnectionReply(Wire.objectOf("type" to type, "requestId" to requestId, *fields), timeoutMillis, record, onSent = onSent)
 
     /**
      * Sends [payload], a command with its `requestId`, bound to the connection, and waits for its
@@ -7542,6 +7549,7 @@ class DefaultRemoteRepository(
         timeoutMillis: Long,
         record: Boolean,
         liveness: Boolean = false,
+        onSent: (() -> Unit)? = null,
     ): JsonObject {
         val requestId = payload.text("requestId")
         val type = payload.text("type")
@@ -7550,10 +7558,15 @@ class DefaultRemoteRepository(
         connectionCompletions[requestId] = completion
         val started = Diagnostics.now()
         val connection = generation
-        val inboundAtSend = inboundFrames
+        val route = activeHost?.routeId
+        var inboundAtSend = -1L
         var outcome = "failed"
         try {
-            transport.send(payload)
+            transport.sendGuarded(payload) {
+                if (!state.value.connected || connection != generation || activeHost?.routeId != route) throw MutationNotSentException()
+                inboundAtSend = inboundFrames
+                onSent?.invoke()
+            }
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
@@ -7644,12 +7657,21 @@ class DefaultRemoteRepository(
                         requestId in connectionCompletions
                 )
                     throw MutationNotSentException()
-                onSent()
+                var dispatched = false
                 try {
-                    awaitConnectionReply(requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false)
+                    awaitConnectionReply(requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false, onSent = {
+                        dispatched = true
+                        onSent()
+                    })
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: RemoteRequestException) {
                     // The host answered: its code means the same on any connection.
                     if (e.answered) throw RemoteCommandException(e.code)
+                    if (!dispatched) throw MutationNotSentException()
+                    throw e
+                } catch (e: Exception) {
+                    if (!dispatched) throw MutationNotSentException()
                     throw e
                 }
             }
@@ -8277,7 +8299,7 @@ class DefaultRemoteRepository(
                 val assembler = QuestionDetailsAssembler(sessionId, questionId, descriptor)
                 while (assembler.offset < descriptor.totalBytes) {
                     check(valid())
-                    val page = request("session.question.details.get", epoch, "sessionId" to sessionId, "questionId" to questionId, "detailsId" to descriptor.id, "offset" to assembler.offset)
+                    val page = request("session.question.details.get", epoch, "sessionId" to sessionId, "questionId" to questionId, "detailsId" to descriptor.id, "offset" to assembler.offset, validateBeforeSend = { check(valid()) })
                     check(valid())
                     assembler.append(page)
                 }
@@ -8331,7 +8353,7 @@ class DefaultRemoteRepository(
                 var offset = 0
                 while (offset < descriptor.totalBytes) {
                     check(valid())
-                    val page = request("session.question.details.get", epoch, "sessionId" to session, "questionId" to id, "detailsId" to descriptor.id, "offset" to offset)
+                    val page = request("session.question.details.get", epoch, "sessionId" to session, "questionId" to id, "detailsId" to descriptor.id, "offset" to offset, validateBeforeSend = { check(valid()) })
                     check(valid())
                     source.append(page)
                     offset += minOf(EDITOR_UPLOAD_CHUNK_BYTES, descriptor.totalBytes - offset)
@@ -8377,9 +8399,9 @@ class DefaultRemoteRepository(
             suspend fun send(payload: JsonObject, onSent: (() -> Unit)? = null): JsonObject {
                 check(valid())
                 val fields = payload.filterKeys { it != "type" && it != "requestId" }.map { it.key to it.value }.toTypedArray()
-                return request(payload.text("type"), epoch, *fields, requestId = payload.text("requestId"), onSent = onSent)
+                return request(payload.text("type"), epoch, *fields, requestId = payload.text("requestId"), onSent = onSent, validateBeforeSend = { check(valid()) })
             }
-            var committing = false
+            var commitDispatched = false
             try {
                 val begun = send(PagedEditorWire.begin(Wire.random(), session, id, action.grantId, action.source, bytes.size, hash))
                 check(valid())
@@ -8393,8 +8415,8 @@ class DefaultRemoteRepository(
                     offset = end
                 }
                 check(valid())
-                committing = true
                 val result = send(PagedEditorWire.commit(Wire.random(), session, id, uploadId)) {
+                    commitDispatched = true
                     pagedReceipts += PagedReceipt(requireNotNull(selection.routeId), session, id, question, action.grantId, connection)
                     update { it }
                 }
@@ -8402,7 +8424,7 @@ class DefaultRemoteRepository(
                 if (valid()) update { it.copy(answering = it.answering + id) }
             } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 if (valid()) {
-                    if (committing) update { it.copy(questionBlocks = it.questionBlocks + (id to QuestionBlock.UNCERTAIN)) }
+                    if (commitDispatched) update { it.copy(questionBlocks = it.questionBlocks + (id to QuestionBlock.UNCERTAIN)) }
                     else reportError(R.string.remote_request_error)
                 }
             } finally {
