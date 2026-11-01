@@ -3158,7 +3158,8 @@ class DefaultRemoteRepository(
     /**
      * Applies a `session.events` reply to [current] and runs for each event it applied what a live
      * event runs at receipt ([eventEffects]: list status, titles, receipts, job and Changes hints),
-     * except a notice, which is transient. A reply that fit then counts like an accepted snapshot:
+     * except a notice, which is transient, and an advisor status, after which the selected chat's
+     * advisor is read again rather than merged. A reply that fit then counts like an accepted snapshot:
      * follow-ups are rechecked, uncertain questions settled, the chat persisted and published once,
      * and the lists read again. Tasks the Timeline knew stay current, since task changes emit
      * `snapshot.required`, which no replay spans; unknown ones are read with a fresh snapshot.
@@ -3166,14 +3167,23 @@ class DefaultRemoteRepository(
      */
     private fun applyReplay(current: Timeline, reply: SessionEventsReply): Boolean {
         val result = current.replay(reply)
+        var advisorReplayed = false
         for (event in result.applied) {
             if (event.optionalText("kind") == "session.notice") continue
+            // A replayed advisor status is history: the host may have answered an advisor read
+            // after it, and neither carries anything to order the two by. The chip is read again
+            // instead; a read still in flight was answered after this reply, so it covers it.
+            if (event.optionalText("kind") == "advisor.status") {
+                advisorReplayed = true
+                continue
+            }
             try {
                 eventEffects(event)
             } catch (dropped: Exception) {
                 Diagnostics.caught("repo.replay.event", dropped)
             }
         }
+        if (advisorReplayed && current.sessionId == state.value.selection.sessionId) refreshAdvisor()
         drainedEffects(current)
         if (result.fits) {
             recheckFollowUps(current.sessionId)
