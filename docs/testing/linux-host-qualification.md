@@ -1,5 +1,52 @@
 # Linux host qualification
 
+## Versioned current-source candidate, 2026-11-01 — local Linux image qualification
+
+A clean Git export of Host `d66f848d892eb4a0dc4d16ccf035ad89b83196d5` was built with the normal
+prepack command and its versioned workspace/catalog metadata. The archive SHA-256 is
+`d4813be33032d1de758ca8f40b2c53aec7b35a463c398fa99eaf00aa166c7c8c`.
+All 444 non-generated members (other than pnpm-normalized package metadata) match the source
+export; 308 members are freshly generated dist output. Runtime dependency/peer/export/bin metadata
+matches source. No deploy lock, node_modules, credentials or source-checkout mount is packaged.
+
+A fresh pinned Linux/Node npm resolver recomputed the archive SHA-512 and identical Atlas metadata.
+The candidate preserves the existing 161-entry consumer graph, changing only Atlas integrity;
+the resolver's unrelated root `ws` patch update was excluded after structural comparison.
+The versioned image-context helper accepts the actual archive against both refreshed locks.
+Twenty-five local packaging/helper/mock tests pass. Evidence is retained in
+`/private/tmp/pocketpi-versioned-current.sox2wp18/evidence/`.
+
+The versioned Dockerfile.core build completed a frozen npm install, node-pty rebuild and consumer
+verifier on Node 24.22.0, Linux arm64, ABI 137. Image
+`sha256:e05d7a48f114d8874f3a44bdd5904da28bc7fc2f8001d096ae31c5fb8c1de4f4`
+passed the disconnected image verifier: nonroot read-only operation, explicit setup, duplicate
+setup and host refusal, private persistent state, provisioning environment scrubbing, TERM and
+INT shutdown, restart and cleanup.
+
+A separate local isolated connected fixture passed the packaged CLI, TLS relay, encrypted paired
+synthetic device, native worker, PTY, fake provider turn, bash, reconnect and supervisor, with
+cleanup completed. Browser, preview and an external supervisor were not exercised in that run.
+Evidence is in `image-build.log`, `image-verify.log` and `connected-supervisor.log` in the evidence
+directory above.
+
+The actual public prepare/run adapter and Dev Containers CLI 0.90.0 also passed the connected
+fixture with the external supervisor and reconnect. It used derived image
+`sha256:b1112b09282d52d4301e3c50c862a1109d51136da2e9c4909006a072978308ea`, which adds only
+fixture environment variables to the same base image and code. Networks were disconnected before
+the local loopback fixture; this does not establish isolation before that point. The owned container
+stopped with exit code zero and was removed. State volume
+`pocketpi-state-0jqsmfe32b778julrs1hinv5ldui2lk54ig689lnpjpaogii1v0h` remains and contains
+fixture secrets; the derived image and staged fixture also remain. Evidence is
+`public-devcontainer-connected.log` in the evidence directory above. An earlier raw-image-ID FROM
+attempt failed before container creation; `public-devcontainer-connected-attempt1.log` retains
+that evidence. Connected Android acceptance, browser/preview and an independent Linux host remain
+unqualified for this candidate.
+
+During preparation Docker Engine became unresponsive and the optional preserved-cohort resolver
+was cancelled through its identified client. After the Engine restart, inspection found no
+containers mounting the candidate's `consumer-preserved` directory; this does not assert how any
+earlier fixture was removed. The historical derived-image evidence below retains its own scope.
+
 ## Current package and derived Dev Containers adapter, 2026-11-01
 
 A fresh Atlas archive from Host commit `ddb00a1c8bea27dfc1ecf6dd72dc880950de54a9`
