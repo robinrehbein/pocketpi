@@ -1,6 +1,12 @@
 <!-- Current recovery qualification: testing/mainactivity-process-recovery-qualification.md and testing/fresh-client-handoff-qualification.md. Historical checkpoints retain their original bounds. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Public iOS Simulator feasibility checkpoint on 2026-11-01
+
+A bounded public-XCTest command bridge passed on one owned iPhone 17 Pro / iOS 26.5 simulator: screenshot capture, coordinate tap, exact text entry, Home/background, Activate preserving state, three drags to the final item, invalid-coordinate rejection, two idle replies and a later successful input. Root visually inspected actual XCTest and same-UDID simctl captures; the portrait scale is 3:1 in both axes. Build/test and cleanup passed; the owned simulator was deleted, original device IDs restored and the xcodebuild process ended.
+
+This is a feasibility prototype, **not an integrated PocketPi iOS backend**. See [qualification](testing/ios-simulator-probe-qualification.md) for exact evidence and the two preserved failures, and [backend design](plans/2026-11-01-owned-ios-simulator-backend.md) for ownership, negotiated platform profiles and remaining runtime/Android integration. Existing Android capabilities and the paged editor's disabled production gate are unchanged. The overall goal remains active.
+
 ## Native custom terminal checkpoint on 2026-11-01
 
 The actual MainActivity / native Pi 1.4.0 custom-component path passed on phone and tablet emulator layouts. The test confirms takeover from an owned local fixture attachment, verifies its revocation and stale-input rejection, visually checks the actual rendered component, selects through terminal UI keys and proves the exact source result plus a later command in the same worker/session. Both cases and cleanup passed; 43 source pins, installed/build APKs and the six-event source trace were independently audited. Existing text process recovery also passed.
