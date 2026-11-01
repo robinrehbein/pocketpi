@@ -53,6 +53,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private lateinit var originalOwner: JSONObject
     private var ticketMode = false
     private var nativeExportExpected = false
+    private var nativeLifecycleExpected = false
     private lateinit var remoteRef: String
 
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -67,6 +68,9 @@ class DevelopmentWorkflowTransportEndToEndTest {
             require(fixture.optBoolean("developmentWorkflowFixture") && fixture.optBoolean("nativeWorker") && fixture.optString("sessionKind") == "actual-pi")
             ticketMode = fixture.optBoolean("ticketWorkflowFixture")
             nativeExportExpected = args.getString("nativeExportExpected") == "true"
+            nativeLifecycleExpected = args.getString("nativeLifecycleExpected") == "true"
+            require(!nativeLifecycleExpected || (!ticketMode && !nativeExportExpected && fixture.has("nativeLifecycle")))
+            require(nativeLifecycleExpected == fixture.has("nativeLifecycle")) { "nativeLifecycleExpected must match fixture mode" }
             if (ticketMode) require(!fixture.has("sessionId") || fixture.isNull("sessionId"))
             require((args.getString("ticketWorkflowExpected") == "true") == ticketMode) { "ticketWorkflowExpected must match fixture mode" }
             workflow = fixture.getJSONObject("workflow")
@@ -179,6 +183,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
         assertAgentTrace(agentResult)
         if (nativeExportExpected) verifyNativeExport()
         assertGuards(agentResult, initialHead, null, 0, 0, 0)
+        if (nativeLifecycleExpected) exerciseNativeLifecycle(initialHead)
         val shell = workflow.getString("shellCommand")
         require(!shell.contains('\n') && !shell.contains('\r') && workflow.getString("shellMarker").isNotBlank())
         compose.onNodeWithTag("composerField").performTextInput("!$shell")
@@ -300,6 +305,12 @@ class DevelopmentWorkflowTransportEndToEndTest {
         val finalStatus = status()
         assertGuards(finalStatus, head, head, 1, 1, 1)
         assertAgentTrace(finalStatus)
+        if (nativeLifecycleExpected) {
+            val lifecycle = fullStatus().getJSONObject("nativeLifecycle")
+            assertTrue(lifecycle.getBoolean("valid"))
+            assertTrue(lifecycle.getBoolean("followupVerified"))
+            assertEquals(1, lifecycle.getInt("abortRequests"))
+        }
     }
 
     private fun assertBeforeTicketStart() {
@@ -389,6 +400,86 @@ class DevelopmentWorkflowTransportEndToEndTest {
     private fun activate(target: RemoteSelection) {
         compose.runOnIdle { scope.launch { repository.activate(target, ActivationMode.USER_OPEN) } }
         compose.waitUntil(60_000) { repository.state.value.selection == target && !repository.state.value.loading && repository.state.value.connected }
+    }
+
+    private fun exerciseNativeLifecycle(initialHead: String) {
+        val config = fixture.getJSONObject("nativeLifecycle")
+        val prompt = config.getString("prompt")
+        val partial = config.getString("partialMarker")
+        val withheld = config.getString("withheldMarker")
+        val followup = config.getString("followupPrompt")
+        val completed = config.getString("followupMarker")
+        require(listOf(prompt, partial, withheld, followup, completed).all { it.isNotBlank() })
+        require(listOf(partial, withheld, completed).distinct().size == 3 && prompt != followup)
+        require(!prompt.contains(partial) && !prompt.contains(withheld) && !followup.contains(completed))
+        fun matches(marker: String) = compose.onAllNodes(hasText(marker, substring = true), useUnmergedTree = true)
+        fun lifecycle() = fullStatus().getJSONObject("nativeLifecycle")
+        fun noWithheld() = matches(withheld).assertCountEquals(0)
+
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(prompt)
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        compose.waitUntil(60_000) {
+            runCatching { lifecycle().getBoolean("running") }.getOrDefault(false) &&
+                repository.state.value.status == "running" && exists("stopRun") &&
+                matches(partial).fetchSemanticsNodes().isNotEmpty()
+        }
+        matches(partial).assertCountEquals(1)
+        compose.onNode(hasText(partial, substring = true), useUnmergedTree = true).assertIsDisplayed()
+        noWithheld()
+        screenshot("lifecycle-running")
+        compose.onNodeWithTag("stopRun").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.waitUntil(60_000) {
+            runCatching { lifecycle().getBoolean("stopped") }.getOrDefault(false) &&
+                repository.state.value.status == "idle" && !exists("stopRun")
+        }
+        val stopped = lifecycle()
+        assertTrue(stopped.getBoolean("valid"))
+        assertEquals(1, stopped.getInt("abortRequests"))
+        assertGuards(status(), initialHead, null, 0, 0, 0)
+        noWithheld()
+        screenshot("lifecycle-stopped")
+
+        action("cut-lifecycle")
+        compose.waitUntil(60_000) {
+            runCatching {
+                val current = fullStatus()
+                current.getJSONObject("nativeLifecycle").getBoolean("cut") &&
+                    !current.getBoolean("deviceOnline") && current.getBoolean("upgradesBlocked") &&
+                    !repository.state.value.connected
+            }.getOrDefault(false)
+        }
+        val baseline = lifecycle().getInt("baselineUpgrades")
+        action("allow-lifecycle")
+        compose.waitUntil(90_000) {
+            runCatching {
+                val current = fullStatus()
+                val proof = current.getJSONObject("nativeLifecycle")
+                proof.getBoolean("allowed") && proof.getBoolean("valid") &&
+                    current.getBoolean("deviceOnline") && current.getBoolean("nativeWorkerVerified") &&
+                    current.getInt("upgrades") > baseline &&
+                    repository.state.value.let { it.connected && !it.loading && it.selection == selection && it.status == "idle" }
+            }.getOrDefault(false)
+        }
+        assertGuards(status(), initialHead, null, 0, 0, 0)
+        compose.waitUntil(60_000) { matches(partial).fetchSemanticsNodes().isNotEmpty() }
+        matches(partial).assertCountEquals(1)
+        compose.onNode(hasText(partial, substring = true), useUnmergedTree = true).assertIsDisplayed()
+        noWithheld()
+        assertEquals(1, lifecycle().getInt("abortRequests"))
+        screenshot("lifecycle-reconnected")
+
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(followup)
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        compose.waitUntil(60_000) {
+            runCatching { lifecycle().getBoolean("followupVerified") }.getOrDefault(false) &&
+                repository.state.value.status == "idle" && matches(completed).fetchSemanticsNodes().isNotEmpty()
+        }
+        matches(completed).assertCountEquals(1)
+        compose.onNode(hasText(completed, substring = true), useUnmergedTree = true).assertIsDisplayed()
+        noWithheld()
+        assertTrue(lifecycle().getBoolean("valid"))
+        assertEquals(1, lifecycle().getInt("abortRequests"))
+        assertGuards(status(), initialHead, null, 0, 0, 0)
     }
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
     private fun awaitTag(tag: String) {

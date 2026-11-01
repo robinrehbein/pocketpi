@@ -1,6 +1,16 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Native Stop and idle reconnect checkpoint on 2026-11-01
+
+Phone and tablet emulator workflows passed a visibly streaming native Pi turn, real Android Stop,
+actual provider cancellation and idle socket disconnect/reconnect to the same worker, followed by
+one successful new turn and the file/shell/local Git/controlled PR/CI chain. Exact traces and Stop
+counts were reasserted at workflow completion. This does not qualify a disconnect during active
+work, a lost acknowledgment or process death. See [lifecycle qualification](testing/native-lifecycle-qualification.md).
+The tablet screenshot also exposed an error-count classification question after deliberate Stop;
+that UX behavior is being investigated separately.
+
 ## Native session export checkpoint on 2026-11-01
 
 Host-owned native workers now support capability-gated PocketPi HTML snapshot export using public
