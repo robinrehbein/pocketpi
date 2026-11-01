@@ -268,6 +268,7 @@
     <string name="remote_tool_pending">Werkzeug arbeitet</string>
     <string name="remote_tool_complete">Werkzeug abgeschlossen</string>
     <string name="remote_tool_error">Werkzeug fehlgeschlagen</string>
+    <string name="remote_message_interrupted">Unterbrochen</string>
     <string name="remote_tool_arguments">Argumente</string>
     <string name="remote_tool_output">Ausgabe</string>
     <string name="remote_prompt_too_long">Nachricht und Zitat überschreiten das Größenlimit. Kürze die Nachricht oder entferne das Zitat.</string>

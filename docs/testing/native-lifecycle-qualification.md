@@ -33,3 +33,7 @@ The reconnected tablet screenshot shows `Errors (1)` after the intentional abort
 ## Boundaries
 
 This choreography proves Stop during streaming followed by idle transport recovery only when the actual runs pass. It does not prove lost acknowledgments, disconnection during an active turn, Android/Pi/Host process death, production network monitoring, arbitrary real providers, physical Samsung devices or an independent Linux Host. The user confirmed no physical devices or authorized SSH test host currently available. Personal Host and external services remain untouched.
+
+## Subsequent correction
+
+The error-count observation was reproduced and corrected in the [interrupted assistant outcome qualification](interrupted-assistant-qualification.md). This earlier record describes its original inputs; the later phone/tablet runs qualify the negotiated outcome and neutral UI.

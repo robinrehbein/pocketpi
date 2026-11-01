@@ -155,6 +155,19 @@ class PromptPredictionTest {
     }
 
     @Test
+    fun interruptedPartialSuggestsContinueButEmptyInterruptionDoesNot() {
+        fun interrupted(text: String) = Wire.objectOf("id" to "interrupted", "role" to "assistant",
+            "text" to text, "state" to "error", "terminalOutcome" to "interrupted")
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user(), interrupted("Partial")), "idle", false))
+        assertNull(predictPrompt(listOf(user(), interrupted("")), "idle", false))
+        val multipart = Wire.objectOf("id" to "parts", "role" to "assistant", "text" to "", "state" to "error",
+            "terminalOutcome" to "interrupted", "parts" to JsonArray(listOf(
+                Wire.objectOf("type" to "text", "text" to "Partial in parts"),
+            )))
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user(), multipart), "idle", false))
+    }
+
+    @Test
     fun aReplyOfferingANextStepSuggestsAcceptingIt() {
         for (text in listOf(
             "All tests pass. Shall I commit this?",

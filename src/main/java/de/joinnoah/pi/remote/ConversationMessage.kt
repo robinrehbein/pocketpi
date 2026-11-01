@@ -560,6 +560,12 @@ private fun ConversationMessageContent(
                                                 stringResource(R.string.remote_truncated),
                                                 style = MaterialTheme.typography.labelSmall,
                                             )
+                                        if (item.interrupted)
+                                            Text(
+                                                stringResource(R.string.remote_message_interrupted),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
                                         if (canCopy && copyButton)
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 IconButton(

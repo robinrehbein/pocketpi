@@ -65,7 +65,7 @@ private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
-private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1:"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1:"
 
 private fun capabilityRevision(route: String): Int = when {
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3

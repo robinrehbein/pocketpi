@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.ClipboardManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +71,7 @@ class ConversationMessageUiTest {
         onOpenTool: ((ConversationItem.Activity) -> Unit)? = null,
         onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)? = null,
         onAskToFix: ((String) -> Unit)? = null,
+        copyButton: Boolean = false,
     ) {
         compose.setContent {
             MaterialTheme {
@@ -81,9 +83,24 @@ class ConversationMessageUiTest {
                     onOpenTool = onOpenTool,
                     onOpenAgent = onOpenAgent,
                     onAskToFix = onAskToFix,
+                    copyButton = copyButton,
                 )
             }
         }
+    }
+
+    @Test
+    fun interruptedPartialShowsNeutralLabelAndCanBeCopied() {
+        val message = Wire.objectOf("id" to "interrupted", "role" to "assistant", "text" to "Partial reply",
+            "state" to "error", "terminalOutcome" to "interrupted")
+        show(conversationItems(listOf(message)).single(), copyButton = true)
+        compose.onNodeWithText("Partial reply").assertExists()
+        compose.onNodeWithText(text(R.string.remote_message_interrupted)).assertExists()
+        compose.onNodeWithContentDescription(text(R.string.remote_copy_message)).performClick()
+        compose.waitForIdle()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        assertEquals("Partial reply", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
     }
 
     @Test

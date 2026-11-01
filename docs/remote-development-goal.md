@@ -1,6 +1,17 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Interrupted assistant outcome checkpoint on 2026-11-01
+
+Interrupted partial replies now carry a negotiated sanitized outcome and display a neutral
+Interrupted / Unterbrochen label, retain Copy, and do not count as Errors. Genuine and legacy
+failures remain errors. Phone and tablet real-native-Pi workflows passed the label and zero-error
+checks before and after idle reconnect, then follow-up and the full local development chain.
+The actual old-product regression attributed the earlier Errors(1) chip to the interrupted reply.
+Mixed-client, old-Host bridge, snapshot/replay and a blocked-outbox negotiation race are covered
+by focused regressions. See [interruption qualification](testing/interrupted-assistant-qualification.md).
+Physical Samsung, independent Linux, active-turn disconnection and process death remain unqualified.
+
 ## Native Stop and idle reconnect checkpoint on 2026-11-01
 
 Phone and tablet emulator workflows passed a visibly streaming native Pi turn, real Android Stop,
@@ -8,8 +19,8 @@ actual provider cancellation and idle socket disconnect/reconnect to the same wo
 one successful new turn and the file/shell/local Git/controlled PR/CI chain. Exact traces and Stop
 counts were reasserted at workflow completion. This does not qualify a disconnect during active
 work, a lost acknowledgment or process death. See [lifecycle qualification](testing/native-lifecycle-qualification.md).
-The tablet screenshot also exposed an error-count classification question after deliberate Stop;
-that UX behavior is being investigated separately.
+The tablet screenshot exposed an error-count classification question after deliberate Stop;
+this historical observation is resolved by the interrupted-outcome checkpoint above.
 
 ## Native session export checkpoint on 2026-11-01
 

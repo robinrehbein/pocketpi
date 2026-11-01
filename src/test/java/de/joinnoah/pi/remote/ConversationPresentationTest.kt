@@ -618,6 +618,39 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun interruptedPartialIsVisibleButOnlyGenuineFailuresAreFilteredAsErrors() {
+        val parts = JsonArray(listOf(
+            Wire.objectOf("type" to "text", "text" to "First"),
+            Wire.objectOf("type" to "text", "text" to "Second"),
+        ))
+        val interrupted = message("interrupted", "assistant", "First Second", "state" to "error",
+            "terminalOutcome" to "interrupted", "parts" to parts)
+        val legacy = message("legacy", "assistant", "legacy failure", "state" to "error")
+        val failed = message("failed", "assistant", "provider failure", "state" to "error")
+        val tool = message("tool", "tool", "exit 1", "toolName" to "bash", "state" to "error")
+        val items = conversationItems(listOf(interrupted, legacy, failed, tool))
+        assertEquals(listOf("First", "Second"), items.filterIsInstance<ConversationItem.Bubble>()
+            .filter { it.sourceId == "interrupted" }.map { it.text })
+        assertEquals(listOf(false, true), items.filterIsInstance<ConversationItem.Bubble>()
+            .filter { it.sourceId == "interrupted" }.map { it.interrupted })
+        assertEquals(setOf("legacy", "failed", "tool"), onlyErrors(items).map { it.sourceId }.toSet())
+        assertTrue(conversationItems(listOf(message("empty", "assistant", "", "state" to "error",
+            "terminalOutcome" to "interrupted"))).none(::isErrorItem))
+    }
+
+    @Test
+    fun interruptionRequiresTheExactAssistantErrorOutcome() {
+        for ((role, state, outcome) in listOf(
+            Triple("assistant", "error", "unknown"),
+            Triple("tool", "error", "interrupted"),
+        )) {
+            val item = conversationItems(listOf(message("m", role, "failure", "state" to state,
+                "terminalOutcome" to outcome, "toolName" to "bash"))).single()
+            assertTrue(isErrorItem(item))
+        }
+    }
+
+    @Test
     fun editDetailsReachThePairedActivity() {
         val result = fixtureMessage("message-edit-details")
         val call = Wire.objectOf("type" to "toolCall", "id" to "toolu_edit_01", "name" to "edit",
@@ -693,6 +726,22 @@ class ConversationPresenterTest {
 
     private fun output(id: String, callId: String, name: String, state: String = "complete") =
         Wire.objectOf("id" to id, "role" to "tool", "text" to "done", "toolCallId" to callId, "toolName" to name, "state" to state)
+
+    @Test
+    fun interruptionSurvivesLiveUpsertAndSnapshotWithoutAnErrorCount() {
+        val partial = Wire.objectOf("id" to "a", "role" to "assistant", "text" to "Partial", "state" to "error",
+            "terminalOutcome" to "interrupted")
+        val live = timeline(text("a", "assistant", "Partial", "streaming"))
+        val presenter = ConversationPresenter()
+        presenter.present(live.messages, sessionActive = true)
+        live.upsert(partial)
+        val updated = presenter.present(live.messages, sessionActive = false)
+        val restored = ConversationPresenter().present(timeline(partial).messages, sessionActive = false)
+        assertEquals(updated.items, restored.items)
+        assertEquals("Partial", (updated.items.single() as ConversationItem.Bubble).text)
+        assertEquals(0, updated.errorCount)
+        assertEquals(0, restored.errorCount)
+    }
 
     @Test
     fun aStreamedDeltaRebuildsOnlyTheMessageItChanged() {

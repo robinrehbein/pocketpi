@@ -23,6 +23,8 @@ internal sealed interface ConversationItem {
         val streaming: Boolean = false,
         /** Set only on the pending prompt at the chat's tail; its label shows below the bubble. */
         val pendingState: PendingSendState? = null,
+        /** A terminal interruption, without implying who initiated it. */
+        val interrupted: Boolean = false,
     ) : ConversationItem
 
     data class Thinking(
@@ -601,7 +603,9 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
     val decoded = QuoteCodec.decode(attached.body)
     val quote = (message["quote"] as? JsonObject)?.let(QuoteCodec::parse) ?: decoded.quote
     val parts = message.parts()
-    val error = message.safeText("state") == "error"
+    val interrupted = role == "assistant" && message.safeText("state") == "error" &&
+        message.optionalText("terminalOutcome") == "interrupted"
+    val error = message.safeText("state") == "error" && !interrupted
     val usage = messageUsage(message)
     val streaming = message.optionalText("state") == "streaming"
     if (parts.isEmpty()) {
@@ -620,6 +624,7 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                     error,
                     usage,
                     streaming,
+                    interrupted = interrupted,
                 )
             )
         }
@@ -724,12 +729,12 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
             }
         }
     }
-    if (usage != null) {
+    if (usage != null || interrupted) {
         val lastBubble = indices.lastOrNull { this[it] is ConversationItem.Bubble }
         for (i in indices) {
             val entry = this[i]
-            if (i != lastBubble && entry is ConversationItem.Bubble && entry.usage != null)
-                this[i] = entry.copy(usage = null)
+            if (entry is ConversationItem.Bubble)
+                this[i] = entry.copy(usage = entry.usage.takeIf { i == lastBubble }, interrupted = interrupted && i == lastBubble)
         }
     }
 }

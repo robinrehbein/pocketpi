@@ -310,6 +310,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             assertTrue(lifecycle.getBoolean("valid"))
             assertTrue(lifecycle.getBoolean("followupVerified"))
             assertEquals(1, lifecycle.getInt("abortRequests"))
+            assertInterruptedPartial(fixture.getJSONObject("nativeLifecycle").getString("partialMarker"), checkLabel = false)
         }
     }
 
@@ -432,6 +433,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
             runCatching { lifecycle().getBoolean("stopped") }.getOrDefault(false) &&
                 repository.state.value.status == "idle" && !exists("stopRun")
         }
+        assertInterruptedPartial(partial, checkLabel = true)
         val stopped = lifecycle()
         assertTrue(stopped.getBoolean("valid"))
         assertEquals(1, stopped.getInt("abortRequests"))
@@ -466,6 +468,7 @@ class DevelopmentWorkflowTransportEndToEndTest {
         compose.onNode(hasText(partial, substring = true), useUnmergedTree = true).assertIsDisplayed()
         noWithheld()
         assertEquals(1, lifecycle().getInt("abortRequests"))
+        assertInterruptedPartial(partial, checkLabel = true)
         screenshot("lifecycle-reconnected")
 
         compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(followup)
@@ -480,6 +483,16 @@ class DevelopmentWorkflowTransportEndToEndTest {
         assertTrue(lifecycle().getBoolean("valid"))
         assertEquals(1, lifecycle().getInt("abortRequests"))
         assertGuards(status(), initialHead, null, 0, 0, 0)
+    }
+    private fun assertInterruptedPartial(partial: String, checkLabel: Boolean) {
+        fun partials() = conversationItems(repository.state.value.messages)
+            .filterIsInstance<ConversationItem.Bubble>().filter { it.text.contains(partial) }
+        compose.waitUntil(10_000) { partials().singleOrNull()?.interrupted == true }
+        val bubble = partials().single()
+        assertFalse("An interrupted partial must not be classified as a failed answer", bubble.error)
+        assertTrue(bubble.interrupted)
+        assertEquals("This clean fixture must have no genuine error items", 0, conversationItems(repository.state.value.messages).count(::isErrorItem))
+        if (checkLabel) compose.onNodeWithText(compose.activity.getString(R.string.remote_message_interrupted), useUnmergedTree = true).assertIsDisplayed()
     }
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
     private fun awaitTag(tag: String) {
