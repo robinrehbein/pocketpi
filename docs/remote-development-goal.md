@@ -1,6 +1,16 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Current derived Linux package and Dev Containers checkpoint on 2026-11-01
+
+The freshly packed current Host archive passes the Linux consumer and native PTY verifier in an
+explicitly derived local image. The unchanged Dev Containers adapter also passes disconnected
+setup, stop/restart and same-container reuse against that image. The owned container and state
+volume were cleaned up. This does not establish a versioned Dockerfile build, a connected
+current-source Devcontainer chain, complete CLI-distribution provenance or an independent
+Linux host. Older connected-image checkpoints below describe their historical artifacts. See
+[Linux qualification](testing/linux-host-qualification.md).
+
 ## Confirmed pull-request checkpoint on 2026-10-31
 
 The local Host and Android worktrees now implement explicit PR preparation, confirmation and

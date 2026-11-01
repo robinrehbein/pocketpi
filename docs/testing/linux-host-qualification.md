@@ -1,5 +1,28 @@
 # Linux host qualification
 
+## Current package and derived Dev Containers adapter, 2026-11-01
+
+A fresh Atlas archive from Host commit `ddb00a1c8bea27dfc1ecf6dd72dc880950de54a9`
+(SHA-256 `bbfe74844a8e8b71c2428aeee2547ea0be5405e18ab7fdb6bd77c069998cd2a8`)
+was installed over a previously built Linux/arm64 core as a **derived image**
+`sha256:61f459db59e657bc9418c662af20ebef965b9ff87f393a88202fb1b767c2daed`.
+The installed package matched the archive, and the retained nested dependency subtree matched
+the base file hashes, modes and symlink targets. The 160 installed lock entries and current Linux
+consumer verifier passed, including Pi 1.4 CLI, native PTY, Host CLI and session-extension
+resolution. Evidence: `/private/tmp/pocketpi-current-derived.vkC2FP5z/evidence/`.
+
+The unchanged current prepare/run Dev Containers adapter and cached CLI 0.90.0 then passed a
+disconnected local Docker Desktop lifecycle: synthetic loopback setup, running supervisor and
+Host, clean stop/restart with unchanged configuration hash, and reuse of the same container.
+The owned container and state volume were removed after identity and mount verification; the
+derived image and alias were retained. Evidence: `/private/tmp/pocketpi-current-adapter.YDVLJsTD/evidence/`.
+
+This qualifies the derived runtime and adapter for that bounded disconnected scenario. It is
+not a current-source build of the versioned `Dockerfile.core` or a connected current-source
+Devcontainer chain. Full CLI-distribution provenance, independently enforced adapter network
+isolation and an independent Linux host remain open. The older connected and browser-image
+results below remain evidence for their own historical artifacts, not this current image.
+
 ## Read-only Git transport guard on the existing Linux runtime, 2026-10-31
 
 The current source read runner is also checked with the existing immutable browser image's
