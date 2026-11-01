@@ -6032,6 +6032,11 @@ class DefaultRemoteRepository(
         val key = currentDraftKey() ?: return false
         val projectId = current.selection.projectId ?: return false
         val command = commandName(current.draft)
+        // A `!` draft the session cannot run never goes to pi as a prompt; the draft stays.
+        if (shellDraftRefused(current)) {
+            reportError(R.string.remote_shell_draft_not_sent)
+            return false
+        }
         if (queued && (command != null || current.draft.trimStart().startsWith("/"))) return false
         if (command != null) {
             if (current.quote != null || current.attachments.isNotEmpty()) {

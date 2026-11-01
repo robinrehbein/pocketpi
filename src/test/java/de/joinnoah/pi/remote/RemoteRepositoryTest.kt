@@ -6952,6 +6952,28 @@ class RemoteRepositoryTest {
         )
 
     @Test
+    fun aBangDraftWithoutTheShellCapabilityIsNeverSentAsAPrompt() = runTest {
+        val transport = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("!rm -rf build")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+        assertEquals("!rm -rf build", repository.state.value.draft)
+        assertEquals(R.string.remote_shell_draft_not_sent, repository.state.value.error)
+        // A plain prompt still goes out.
+        repository.dismissError()
+        repository.draft("list the files")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
     fun runBashSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
         val old = Transport().also { bashing(it, advertise = false) }
         val repository = repository(old)
