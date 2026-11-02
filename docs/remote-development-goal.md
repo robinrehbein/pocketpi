@@ -13,6 +13,7 @@ this map links the newer recovery evidence that supersedes their open items.
 
 | Area | Latest recorded evidence | Remaining boundary |
 | --- | --- | --- |
+| Native runtime selection | [Native startup policy](testing/native-start-failure-policy.md): attempted Native failures no longer silently start RPC; lifecycle and actual local Pi startup/cleanup cases pass | Final integrated Android/package acceptance; frozen legacy fallback remains |
 | Terminal in constrained windows | [Compact terminal](testing/android-terminal-compact.md): five UI cases and repeated actual native Pi/MainActivity phone/tablet workflows | Physical Samsung/DeX, wider IME/hardware input and arbitrary TUIs |
 | Shared encrypted Android storage | [Atomic recovery](testing/encrypted-journal-atomic-recovery.md): six reproduced unit regressions corrected, 3,642 app + 34 Wear tests, nine actual process-crash cases and 12 Android store tests pass | Power loss, maximum-size physical-device memory qualification |
 | Windowed editor input | [Input and quota recovery](testing/paged-editor-quota-recovery.md): reproduced delayed input corruption corrected; eleven layout tests, full unit suite and four actual Native/RPC byte/slot quota cases pass | Broader IME/composition, real Samsung and DeX |
