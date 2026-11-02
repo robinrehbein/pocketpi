@@ -245,6 +245,7 @@ internal fun RemoteScreen(
     pushDecided: Boolean = false,
     /** Records a denial of the notification permission as the user's answer, so no card offers it again. */
     onNotificationDenied: () -> Unit = {},
+    onOpenEditorRecovery: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     // The first list the user came for is on screen: the time to full display that startup
@@ -2954,6 +2955,11 @@ internal fun RemoteScreen(
                         // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
                         is RemoteNavKey.Activity -> Unit
                         RemoteNavKey.Hosts -> {
+                            item(key = "editor_recovery") {
+                                TextButton(onClick = onOpenEditorRecovery, modifier = Modifier.testTag("openEditorRecovery")) {
+                                    Text(stringResource(R.string.editor_recovery_open))
+                                }
+                            }
                             // While the Mac asks its user, the wait leads the page, above any Macs.
                             state.pairingDeadline?.let { deadline ->
                                 item(key = "pairing_wait") {
@@ -3188,7 +3194,7 @@ internal fun RemoteScreen(
                             else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                                 item { Text(stringResource(R.string.remote_session_search_empty)) }
                             items(listedSessions, key = SessionListItem::id) { session ->
-                                Box(Modifier.itemMotion(this)) {
+                                Box(Modifier.itemMotion(this).testTag("sessionRow-${session.id}")) {
                                     SessionListRow(
                                         item = session,
                                         selected = session.id == listPane?.selectedSessionId,

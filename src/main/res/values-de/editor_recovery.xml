@@ -1,0 +1,31 @@
+<resources>
+    <string name="editor_recovery_open">Gespeicherte Editortexte</string>
+    <string name="editor_recovery_title">Gespeicherte Editortexte</string>
+    <string name="editor_recovery_close">Schließen</string>
+    <string name="editor_recovery_back">Zurück zur Liste</string>
+    <string name="editor_recovery_loading">Gespeicherte Texte werden geladen…</string>
+    <string name="editor_recovery_error">Gespeicherte Texte konnten nicht gelesen werden.</string>
+    <string name="editor_recovery_unavailable">Gespeicherte Editortexte sind nicht verfügbar.</string>
+    <string name="editor_recovery_retry">Erneut versuchen</string>
+    <string name="editor_recovery_empty">Keine gespeicherten Editortexte.</string>
+    <string name="editor_recovery_draft">Entwurf</string>
+    <string name="editor_recovery_uncertain">Ungewisse Übermittlung</string>
+    <string name="editor_recovery_warning">Diese Übermittlung könnte den Rechner erreicht haben. Prüfe sie vor dem Fortfahren; sie wird nicht automatisch erneut gesendet.</string>
+    <string name="editor_recovery_host">Rechner: %1$s</string>
+    <string name="editor_recovery_unknown_host">Unbekannter Rechner (ID: %1$s)</string>
+    <string name="editor_recovery_session">Sitzungs-ID: %1$s</string>
+    <string name="editor_recovery_question">Fragen-ID: %1$s</string>
+    <string name="editor_recovery_first">Anfang</string>
+    <string name="editor_recovery_previous">Zurück</string>
+    <string name="editor_recovery_next">Weiter</string>
+    <string name="editor_recovery_last">Ende</string>
+    <string name="editor_recovery_section">Abschnitt (1–%1$d)</string>
+    <string name="editor_recovery_jump">Öffnen</string>
+    <string name="editor_recovery_copy">Diesen Abschnitt kopieren</string>
+    <string name="editor_recovery_export">Gesamten Text exportieren</string>
+    <string name="editor_recovery_binary">Dieser Text enthält ungültiges Unicode. Der Export erhält die ursprünglichen UTF-16-Codeeinheiten in einer .utf16-Datei.</string>
+    <string name="editor_recovery_export_saved">Datei gespeichert.</string>
+    <string name="editor_recovery_export_failed">Datei konnte nicht gespeichert werden. Bitte erneut versuchen.</string>
+    <string name="editor_recovery_export_lost">Der Export wurde unterbrochen. Bitte erneut versuchen.</string>
+    <string name="editor_recovery_export_pending">Dateiauswahl ausstehend…</string>
+</resources>

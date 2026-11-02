@@ -1577,9 +1577,11 @@ private fun RemoteNavDisplay(
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
+                    var recoveryOpen by rememberSaveable { mutableStateOf(false) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied, onOpenEditorRecovery = { recoveryOpen = true })
                     }
+                    if (recoveryOpen) EditorRecoveryDialog(repository::loadEditorRecovery) { recoveryOpen = false }
                 }
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ProjectsViewModel(repository, key) }

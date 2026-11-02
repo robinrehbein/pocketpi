@@ -271,6 +271,7 @@ internal const val PUSH_WAKE_WAIT_MILLIS = 3_000L
 data class Picked(val uri: String, val photo: Boolean)
 
 interface RemoteRepository {
+    suspend fun loadEditorRecovery(): EditorRecoveryLoad = EditorRecoveryLoad.Unavailable
     val state: StateFlow<RemoteState>
     fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit = {}
     fun canOpenPreview(): Boolean = false

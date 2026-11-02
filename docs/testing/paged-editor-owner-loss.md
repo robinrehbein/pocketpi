@@ -78,3 +78,7 @@ traces use aliases and raw question correlation relies on the pinned fixture.
 An offline audit does not establish process exit independently; root live process
 checks are separate. Physical Samsung/DeX, wider IME and independent remote Linux
 remain unqualified. Native graceful termination is not included in this matrix.
+
+## Continuing afterward
+
+[Saved editor access and normal reopen](editor-recovery-access.md) now qualify the actual Android history-row flow into a new Native/RPC session copy and fresh owner, while the old encrypted attempt and draft remain unchanged. A local offline viewer and explicit document export make retained text accessible without sending or settling it. This does not turn the old uncertain attempt into a safe automatic retry.

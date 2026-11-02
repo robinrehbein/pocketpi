@@ -8686,6 +8686,7 @@ class RemoteRepositoryTest {
         var saved = PagedJournalSnapshot()
         var failLoad = false
         var failSave = false
+        var saves = 0
         var afterSave: (() -> Unit)? = null
         override fun load(): PagedJournalSnapshot {
             check(!failLoad)
@@ -8693,9 +8694,67 @@ class RemoteRepositoryTest {
         }
         override fun save(snapshot: PagedJournalSnapshot) {
             check(!failSave)
+            saves++
             saved = snapshot
             afterSave?.also { afterSave = null }?.invoke()
         }
+    }
+
+    @Test fun editorRecoveryReadsOfflineWithoutMutatingJournal() = runTest {
+        val key = PagedJournalKey("host", "session", "e")
+        val foreign = PagedJournalKey("foreign", "other", "q")
+        val attempt = StoredPagedAttempt(key, "a", "g", "u", "c", "attempt\uD800", 2)
+        val release = pendingRelease("release", "foreign")
+        val original = PagedJournalSnapshot(
+            drafts = mapOf(key to StoredPagedDraft("draft\uD800", 3), foreign to StoredPagedDraft("foreign", 4)),
+            attempts = mapOf("a" to attempt), pendingReleases = mapOf(release.releaseId to release),
+        )
+        val storage = PagedMemoryStorage().apply { saved = original }
+        val transport = Transport()
+        val repo = repository(transport, pagedEditorStorage = storage)
+        runCurrent()
+        val entries = (repo.loadEditorRecovery() as EditorRecoveryLoad.Ready).entries
+        assertEquals(3, entries.size)
+        assertEquals("draft\uD800", entries.single { it.key == key && it.kind == EditorRecoveryKind.DRAFT }.text)
+        val uncertain = entries.single { it.kind == EditorRecoveryKind.UNCERTAIN_ATTEMPT }
+        assertEquals("attempt\uD800", uncertain.text)
+        assertEquals("a", uncertain.attemptId)
+        assertEquals("Host", uncertain.hostName)
+        assertNull(entries.single { it.key == foreign }.hostName)
+        assertEquals(entries.size, entries.map { it.id }.toSet().size)
+        assertEquals(original, storage.saved)
+        assertEquals(0, storage.saves)
+        assertEquals(0, transport.connects)
+        assertTrue(transport.sent.isEmpty())
+    }
+
+    @Test fun editorRecoveryDistinguishesEmptyUnavailableAndStorageFailure() = runTest {
+        val transport = Transport()
+        assertEquals(EditorRecoveryLoad.Unavailable, repository(transport).loadEditorRecovery())
+        val empty = repository(Transport(), pagedEditorStorage = PagedMemoryStorage())
+        assertEquals(EditorRecoveryLoad.Ready(emptyList()), empty.loadEditorRecovery())
+        val failed = repository(Transport(), pagedEditorStorage = PagedMemoryStorage().apply { failLoad = true })
+        assertEquals(EditorRecoveryLoad.Failed, failed.loadEditorRecovery())
+    }
+
+    @Test fun editorRecoveryPropagatesCancellation() = runTest {
+        val storage = object : PagedEditorStorage {
+            override fun load(): PagedJournalSnapshot = throw CancellationException("cancelled")
+            override fun save(snapshot: PagedJournalSnapshot) = error("unexpected write")
+        }
+        val repo = repository(Transport(), pagedEditorStorage = storage)
+        try {
+            repo.loadEditorRecovery()
+            fail("Expected cancellation")
+        } catch (_: CancellationException) { }
+    }
+
+    @Test fun editorRecoveryIdsEncodeComponentsWithoutCollisions() {
+        val first = EditorRecoveryEntry(PagedJournalKey("a", "bc", "q"), EditorRecoveryKind.DRAFT, "", 0)
+        val second = EditorRecoveryEntry(PagedJournalKey("ab", "c", "q"), EditorRecoveryKind.DRAFT, "", 0)
+        assertNotEquals(first.id, second.id)
+        assertNotEquals(first.id, first.copy(attemptId = "").id)
+        assertEquals(first.id, first.copy(text = "changed", savedAt = 1).id)
     }
 
     @Test fun negotiatedPositiveOutcomeRetiresOnlyExactBoundAttemptWithoutQuestion() = runTest {

@@ -304,6 +304,25 @@ class DefaultRemoteRepository(
     private val pagedEditorStorage: PagedEditorStorage? = null,
     private val positiveOutcomeTestGate: Boolean = false,
 ) : RemoteRepository {
+    override suspend fun loadEditorRecovery(): EditorRecoveryLoad {
+        val journal = pagedJournal ?: return EditorRecoveryLoad.Unavailable
+        return try {
+            val snapshot = journal.snapshot()
+            val hosts = state.value.hosts.associateBy { it.routeId }
+            val drafts = snapshot.drafts.map { (key, draft) ->
+                EditorRecoveryEntry(key, EditorRecoveryKind.DRAFT, draft.text, draft.editedAt, hostName = hosts[key.routeId]?.name)
+            }
+            val attempts = snapshot.attempts.values.map { attempt ->
+                EditorRecoveryEntry(attempt.key, EditorRecoveryKind.UNCERTAIN_ATTEMPT, attempt.text, attempt.createdAt, attempt.attemptId, hosts[attempt.key.routeId]?.name)
+            }
+            EditorRecoveryLoad.Ready((drafts + attempts).sortedWith(compareByDescending<EditorRecoveryEntry> { it.savedAt }.thenBy { it.id }))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            EditorRecoveryLoad.Failed
+        }
+    }
+
     private val routeCapabilities =
         setOf(
             STEER_CAPABILITY,
