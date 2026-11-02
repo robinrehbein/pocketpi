@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -189,5 +190,49 @@ class WatchTileTest {
         val flags = android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
         assertEquals(flags, WatchTileTarget.forward(context, extras).flags and flags)
         assertEquals(flags, WatchTileTarget.forward(context, null).flags and flags)
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], application = Application::class)
+class WatchGlanceStoreTest {
+    private val context get() = ApplicationProvider.getApplicationContext<Application>()
+    private val host = PairedHost("route", "wss://example.invalid", "device", "not-a-real-key", "Mac")
+    private class Memory(var bytes: ByteArray?) : WatchGlanceFile {
+        override fun read() = bytes
+        override fun write(bytes: ByteArray) { this.bytes = bytes }
+    }
+    private class Pairings(var hosts: List<PairedHost>) : PairingStorage {
+        override fun load() = hosts
+        override fun save(hosts: List<PairedHost>) { this.hosts = hosts }
+    }
+    private val stored = WatchGlance(HomeSnapshot(true, listOf(HomeSession("route", "p", "P", "a", "Title", "running")), 1L))
+    private fun store(scope: kotlinx.coroutines.CoroutineScope, pairings: PairingStorage) =
+        WatchGlanceStore(context, scope, WatchFakeRepository(), pairings, Memory(stored.json().toString().toByteArray()), redraw = {})
+    private suspend fun settle() = kotlinx.coroutines.delay(HOME_UPDATE_INTERVAL_MS * 3)
+
+    @Test fun `before the app has read its pairings the stored ones keep the rows`() = runBlocking {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val store = store(scope, Pairings(listOf(host)))
+            store.observe(kotlinx.coroutines.flow.MutableStateFlow(RemoteState()))
+            settle()
+            assertEquals(stored, store.load())
+        } finally { scope.cancel() }
+    }
+    @Test fun `pairing a forgotten Mac again makes it paired again`() = runBlocking {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val state = kotlinx.coroutines.flow.MutableStateFlow(RemoteState())
+            val store = store(scope, Pairings(listOf(host)))
+            store.observe(state)
+            store.forgetRoute("route")
+            settle()
+            assertFalse(store.load().home.paired)
+            assertTrue(store.load().home.sessions.isEmpty())
+            state.value = RemoteState(hosts = listOf(host), hostsLoaded = true)
+            settle()
+            assertTrue(store.load().home.paired)
+        } finally { scope.cancel() }
     }
 }

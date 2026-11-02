@@ -27,6 +27,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+/** Where [WatchGlanceStore] keeps its snapshot; tests use memory instead of the Keystore. */
+internal interface WatchGlanceFile {
+    fun read(): ByteArray?
+    fun write(bytes: ByteArray)
+}
+
 /**
  * The status tile's snapshot: kept from the app's state and pushes, stored encrypted like the other
  * watch stores because it holds session titles, and refreshed over a short-lived connection of its
@@ -38,7 +44,9 @@ internal class WatchGlanceStore(
     private val scope: CoroutineScope,
     private val repository: RemoteRepository,
     private val pairings: PairingStorage,
-    private val file: EncryptedFileStore = EncryptedFileStore(context, "watch-glance.enc", "pi-remote-watch-glance-v1"),
+    private val file: WatchGlanceFile = EncryptedFileStore(context, "watch-glance.enc", "pi-remote-watch-glance-v1").let { store ->
+        object : WatchGlanceFile { override fun read() = store.read(); override fun write(bytes: ByteArray) = store.write(bytes) }
+    },
     private val redraw: () -> Unit = { TileService.getUpdater(context).requestUpdate(WatchTileService::class.java) },
 ) {
     private val mutex = Mutex()
