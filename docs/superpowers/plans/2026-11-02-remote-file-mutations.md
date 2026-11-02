@@ -20,6 +20,7 @@
 - Retain unknown operations until explicitly reconciled; never infer that a delete or rename happened from the current path state, or automatically submit a new operation ID after an uncertain result. Replayed exact IDs must never cause a second filesystem effect, including after retention maintenance.
 - No overwrite, recursive directory mutation or implicit parent creation. Rename is restricted to a basename change in the same parent directory. File path, authorization, platform and filesystem guarantees must match the approved spec. Do not promise atomic compare-and-swap against arbitrary external writers unless actually provided and tested by the target platform.
 - Exactly one Host writer may own the durable outcome store; refuse admission if exclusive ownership is unavailable. Keep permanent records bounded and refuse new operations when full; no automatic eviction or identity reuse.
+- Gate enablement on a verified lock domain covering every Host start path and store instance, plus an external trusted continuity or epoch decision covering combined journal/marker loss and rollback. If either guarantee cannot be established, keep the capability disabled; do not claim universal exactly-once execution.
 - Keep each capability disabled by default until its durable storage, platform primitive and end-to-end qualification are complete; then enable the qualified scope within the user's existing authorization.
 
 ## Review focus
@@ -43,11 +44,14 @@
 
 **Files:** new Host `file-mutation-outcomes.ts` and `file-mutation-outcomes_test.ts`; inspect `editor-outcomes.ts` for safe storage primitives.
 
+The editor ledger relies on a caller-held lock, including the existing CLI `flock`, and its instance queue is not a process lock. Its reserve, lookup and release semantics are unsuitable unchanged for this contract. Its provisioning marker detects one missing file but not combined marker/ledger loss or rollback; it does not establish continuity by itself.
+
 **Interfaces:** `FileMutationTuple` identifies an operation by authenticated device plus opId; a canonical fingerprint binds session, project, operation kind, source and destination, and every precondition. Reusing an opId with any changed field is refused even across sessions or projects. `reserve(tuple)` returns new, prior completed result, pending/unknown, or mismatch; `complete(tuple, result)` durably records a terminal result; `lookup(tuple)` is read-only. Exact names may be aligned with the completed spec before parallel dispatch.
 
 - [ ] Add tests for concurrent identical requests, same ID with different kind/path/precondition, authenticated device isolation, capacity and malformed or unreadable storage. No effect may run before reservation is durably committed.
 - [ ] Run the focused test before implementation and record the behavioral failure.
 - [ ] Implement atomic durable reservation and terminal outcome persistence; fsync as required by the storage contract. Incomplete reservations after restart return unknown and do not dispatch. Fail closed when persistence, integrity or capacity is uncertain.
+- [ ] Identify and test the actual exclusive lock domain across all Host start paths and direct store instances, including lock lifetime and loss. Decide and verify an external trusted continuity or epoch mechanism for combined marker/ledger loss and rollback before enabling the capability; otherwise leave it disabled.
 - [ ] Add crash-point tests before reservation, after durable reservation, after effect and before result persistence, and after result persistence. An outcome query never starts an operation. Keep permanent records bounded and fail closed when full; do not silently discard anti-replay evidence. Test that a second Host writer cannot acquire the store, and that uncertain interrupted storage writes block admission. Any future reclamation requires a separate decision and a verified issuance/epoch mechanism.
 - [ ] Run `pnpm --filter @noah/pi-atlas test:extensions -- remote/host/file-mutation-outcomes_test.ts` from NOAH; require all focused tests to pass. Review storage crash and retention semantics independently.
 
