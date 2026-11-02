@@ -113,3 +113,11 @@ revocation or replacement while the original Pi remains alive. Positive-outcome
 incarnation, real Samsung/DeX, independent authorized Linux, broader IME/resource
 and production-relay acceptance remain separate. No Wear emulator, iPhone,
 external push, release or production-host change is included.
+
+## Native observer follow-up
+
+The subsequent [claim-observer qualification](native-claim-observer.md) corrects
+a dropped optional paged-claim argument and repeats this Native empty-prefill
+workflow on pinned current sources. This case intentionally uses unpaged Source
+claims; separate large-prefill recovery now proves actual paged claims. The
+historical rows above remain their recorded source scope.
