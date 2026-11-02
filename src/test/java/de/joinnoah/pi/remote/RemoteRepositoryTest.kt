@@ -2086,6 +2086,50 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun knownCommandIsSentWhileTheCatalogRevalidates() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.state.value.commands.any { it.name == "review" })
+        // A turn's end revalidates the catalog; the send button stays enabled meanwhile.
+        val answering = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.commands.get" -> null
+                "session.command" -> Wire.objectOf("kind" to "command", "sessionId" to "session", "status" to "dispatched")
+                else -> answering(it)
+            }
+        }
+        repository.refreshCommands()
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        repository.draft("/review  now")
+        repository.prompt()
+        runCurrent()
+        assertEquals("/review  now", transport.sent.last { it.text("type") == "session.command" }.text("text"))
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun unknownCommandIsRefusedWhileTheCatalogRevalidates() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val answering = transport.response
+        transport.response = { if (it.text("type") == "session.commands.get") null else answering(it) }
+        repository.refreshCommands()
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        repository.draft("/unknown")
+        repository.prompt()
+        runCurrent()
+        assertEquals(R.string.remote_command_unknown, repository.state.value.error)
+        assertFalse(transport.sent.any { it.text("type") == "session.command" })
+    }
+
+    @Test
     fun quotedCommandIsRetainedAndNotDispatched() = runTest {
         val transport = Transport().also(::capable)
         val repository = repository(transport)
