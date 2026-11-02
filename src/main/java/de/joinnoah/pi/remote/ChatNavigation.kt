@@ -549,7 +549,7 @@ private fun ChatHistoryList(
     }
     // Opens where the chat stands, so the nearby entries are at hand in a long chat.
     val state = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex.coerceIn(0, entries.lastIndex))
-    LazyColumn(modifier.testTag("chatHistoryList"), state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(modifier.testTag("chatHistoryList").glassSource(), state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
         items(entries, key = { it.itemId }) { entry -> ChatHistoryRow(entry) { onOpen(entry.itemId) } }
     }
 }

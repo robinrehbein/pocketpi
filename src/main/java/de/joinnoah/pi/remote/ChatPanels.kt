@@ -348,7 +348,7 @@ internal fun StatusPopover(
     Box {
         FloatingSurface(
             shape = CircleShape,
-            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else floatingHeaderColor(),
+            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         ) {
             Row(
                 Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }
@@ -387,12 +387,12 @@ internal fun StatusPopover(
                 onDismissRequest = { onExpandedChange(false) },
                 properties = PopupProperties(focusable = true),
             ) {
-                Surface(
+                // The same floating surface as the pill it opens from; a popup's own window has
+                // nothing of the chat to blur, so it shows the tint alone.
+                FloatingSurface(
+                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag(popoverTag),
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    shadowElevation = 8.dp,
-                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag(popoverTag),
                 ) {
                     Column {
                         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -466,7 +466,7 @@ internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit
     if (count == 0 && !selected) return
     FloatingSurface(
         shape = CircleShape,
-        color = if (selected) MaterialTheme.colorScheme.errorContainer else floatingHeaderColor(),
+        color = if (selected) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(
             Modifier.selectable(selected = selected, role = Role.Button, onClick = onToggle)

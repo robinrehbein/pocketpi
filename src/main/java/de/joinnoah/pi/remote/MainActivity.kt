@@ -337,20 +337,23 @@ internal fun RemoteApp(
             typography = RemoteTypography,
             shapes = RemoteShapes,
         ) {
-            // Right-click and S Pen menus open here, over everything in the window.
-            PointerMenuHost {
-                RemoteNavigation(
-                    repository,
-                    settings,
-                    pushConfigured,
-                    enablePush,
-                    notification,
-                    consumeNotification,
-                    disablePush,
-                    share,
-                    consumeShare,
-                    home,
-                )
+            // The lists of every page are the frosted backdrop of the floating pills over them.
+            ProvideGlass {
+                // Right-click and S Pen menus open here, over everything in the window.
+                PointerMenuHost {
+                    RemoteNavigation(
+                        repository,
+                        settings,
+                        pushConfigured,
+                        enablePush,
+                        notification,
+                        consumeNotification,
+                        disablePush,
+                        share,
+                        consumeShare,
+                        home,
+                    )
+                }
             }
         }
     }

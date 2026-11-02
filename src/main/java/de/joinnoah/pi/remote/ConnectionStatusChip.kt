@@ -57,7 +57,7 @@ internal fun connectionStatusLine(state: RemoteState): Int? =
  * draws no frames. The text wraps rather than cut off a long state at a large font size.
  */
 @Composable
-internal fun ConnectionStatusChip(@StringRes connection: Int, modifier: Modifier = Modifier) {
+internal fun ConnectionStatusChip(@StringRes connection: Int, modifier: Modifier = Modifier, blur: Boolean = true) {
     val text = stringResource(connection)
     val description = stringResource(R.string.remote_connection_status, text)
     FloatingSurface(
@@ -67,6 +67,7 @@ internal fun ConnectionStatusChip(@StringRes connection: Int, modifier: Modifier
         },
         // Round on one line, and still a pill rather than an oval once the text wraps.
         shape = MaterialTheme.shapes.medium,
+        blur = blur,
     ) {
         Row(
             Modifier.padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
@@ -106,7 +107,8 @@ internal fun connectionStatusIcon(@StringRes connection: Int): ImageVector? =
 internal fun LazyListScope.connectionStatusItem(@StringRes line: Int?, topInset: Dp) {
     stickyHeader(key = CONNECTION_STATUS_KEY, contentType = CONNECTION_STATUS_KEY) { _ ->
         Box(Modifier.fillMaxWidth().padding(top = topInset)) {
-            if (line != null) ConnectionStatusChip(line)
+            // A sticky item is drawn by the list it floats over, so it cannot blur that list.
+            if (line != null) ConnectionStatusChip(line, blur = false)
         }
     }
 }

@@ -153,7 +153,7 @@ internal fun TicketsContent(
         snackbarHost = { TicketUndoBar(tickets.pendingAccept, onUndo) },
     ) { insets ->
         LazyColumn(
-            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList"),
+            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

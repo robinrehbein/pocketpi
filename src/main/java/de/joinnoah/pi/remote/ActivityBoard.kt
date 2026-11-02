@@ -255,7 +255,7 @@ internal fun ActivityBoardContent(
         else if (wide)
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 260.dp),
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxSize().glassSource().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -273,6 +273,7 @@ internal fun ActivityBoardContent(
         else
             LazyColumn(
                 Modifier.fillMaxSize()
+                    .glassSource()
                     .wrapContentWidth(Alignment.CenterHorizontally)
                     .widthIn(max = MAX_PAGE_WIDTH)
                     .fillMaxWidth()

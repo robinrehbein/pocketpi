@@ -373,7 +373,7 @@ private fun ToolDetailContent(
             ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
             HorizontalDivider()
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().testTag("toolDetailContent"),
+                Modifier.weight(1f).fillMaxWidth().testTag("toolDetailContent").glassSource(),
                 state = listState,
             ) {
                 item(key = "arguments") {
