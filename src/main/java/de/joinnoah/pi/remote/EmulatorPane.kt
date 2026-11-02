@@ -24,20 +24,20 @@ internal data class EmulatorPaneActions(val select: (String)->Boolean, val acqui
     DisposableEffect(actions) { actions.visible(true); onDispose { actions.visible(false) } }
     var confirmStop by remember { mutableStateOf(false) }
     val currentView by rememberUpdatedState(view)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).testTag("emulatorPane")) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(stringResource(R.string.emulator_title), style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = close) { Text(stringResource(R.string.browser_close)) }
+            TextButton(onClick = close, Modifier.testTag("emulatorClose")) { Text(stringResource(R.string.browser_close)) }
         }
         if (view.opening) LinearProgressIndicator(Modifier.fillMaxWidth())
         view.notice?.let { Text(stringResource(when (it) { "busy" -> R.string.emulator_busy; "disconnected" -> R.string.emulator_disconnected; "uncertain" -> R.string.emulator_uncertain; else -> R.string.emulator_failed })) }
         if (view.emulatorId == null) {
             Text(stringResource(R.string.emulator_select_profile))
-            view.profiles.forEach { profile -> TextButton(onClick = { actions.select(profile.id) }, enabled = !view.opening) { Text(profile.label) } }
+            view.profiles.forEach { profile -> TextButton(onClick = { actions.select(profile.id) }, Modifier.testTag("emulatorProfile_${profile.id}"), enabled = !view.opening) { Text(profile.label) } }
         } else {
             Text(view.label ?: "")
             Row {
-                TextButton(onClick = { actions.acquire() }, enabled = !view.ownsControl && !view.opening) { Text(stringResource(R.string.emulator_acquire)) }
+                TextButton(onClick = { actions.acquire() }, Modifier.testTag("emulatorAcquire"), enabled = !view.ownsControl && !view.opening) { Text(stringResource(R.string.emulator_acquire)) }
                 TextButton(onClick = { actions.refresh() }) { Text(stringResource(R.string.remote_refresh)) }
                 TextButton(onClick = { confirmStop = true }, enabled = view.ownsControl) { Text(stringResource(R.string.emulator_stop)) }
             }
@@ -74,7 +74,7 @@ internal data class EmulatorPaneActions(val select: (String)->Boolean, val acqui
                     })
             }
             listOf(listOf("Home", "Back", "Enter", "Tab", "Escape"), listOf("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace")).forEach { row ->
-                Row { row.forEach { key -> TextButton(onClick = { actions.input(EmulatorInput.Key(key)) }, enabled = view.ownsControl && image != null && !view.inputPending, contentPadding = PaddingValues(4.dp)) { Text(key) } } }
+                Row { row.forEach { key -> TextButton(onClick = { actions.input(EmulatorInput.Key(key)) }, Modifier.testTag("emulatorKey_$key"), enabled = view.ownsControl && image != null && !view.inputPending, contentPadding = PaddingValues(4.dp)) { Text(key) } } }
             }
         }
     }

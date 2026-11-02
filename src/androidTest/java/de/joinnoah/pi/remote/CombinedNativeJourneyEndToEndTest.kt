@@ -281,6 +281,7 @@ class CombinedNativeJourneyEndToEndTest {
         assertAgentTrace(finalStatus)
         if (fixture.optBoolean("journeyBrowser")) exerciseBrowser(head)
         if (fixture.optBoolean("journeyPreview")) exercisePreview(head)
+        if (fixture.optBoolean("journeyEmulator")) exerciseEmulator(head)
 
             assertFalse(ProductionEntryBootstrap.observerOverflow)
             scenario.onActivity { assertSame(activity, it) }
@@ -883,6 +884,67 @@ class CombinedNativeJourneyEndToEndTest {
             .put("deviceAcquires", observed.getInt("deviceAcquires")).put("deviceTextInputs", observed.getInt("deviceTextInputs"))
             .put("submittedMatched", true).put("updateAcknowledged", true).put("magentaFrame", true))
         record("preview-complete")
+    }
+    private fun exerciseEmulator(head: String) {
+        val profileId = fixture.getString("emulatorProfileId")
+        require(profileId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")))
+        val before = fullStatus().getJSONObject("emulator")
+        assertTrue(before.getBoolean("enabled"))
+        assertEquals(profileId, before.getString("profileId"))
+        assertEquals(0, before.getInt("opens"))
+        record("emulator")
+        try {
+            // A browser or preview pane left open by the previous stage covers the chat header on a phone.
+            if (exists("browserClose")) {
+                compose.onNodeWithTag("browserClose").performClick()
+                compose.waitUntil(30_000) { !exists("browserPane") }
+            }
+            compose.waitUntil(60_000) { repository.state.value.selection == selection && repository.canOpenEmulator() }
+            chatAction("emulator")
+            awaitTag("emulatorProfile_$profileId")
+            compose.onNodeWithTag("emulatorProfile_$profileId").performScrollTo().performClick()
+            // The Host starts the target AVD on the first open; its own startup limit is 120 s.
+            compose.waitUntil(180_000) { repository.state.value.emulator?.let { !it.opening && it.profileId == profileId && it.emulatorId != null && it.image != null } == true }
+            assertFalse("Opening joins as a reader", requireNotNull(repository.state.value.emulator).ownsControl)
+            compose.onNodeWithTag("emulatorAcquire").performScrollTo().performClick()
+            compose.waitUntil(60_000) { repository.state.value.emulator?.let { it.ownsControl && it.image?.revision == it.geometry?.revision } == true }
+            // Settings first, so the home activity afterwards can only come from the Home input.
+            action("emulator-prepare-home")
+            compose.waitUntil(30_000) { statusOrNull()?.getJSONObject("emulator")?.optBoolean("settingsBeforeHome") == true }
+            compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("emulatorKey_Home").assertIsEnabled(); true }.getOrDefault(false) }
+            compose.onNodeWithTag("emulatorKey_Home").performScrollTo().performClick()
+            compose.waitUntil(60_000) {
+                statusOrNull()?.getJSONObject("emulator")?.let { it.optBoolean("homeObserved") && it.optString("inputStatus") == "accepted" } == true &&
+                    repository.state.value.emulator?.inputPending == false
+            }
+        } catch (failure: Throwable) {
+            runCatching {
+                val view = repository.state.value.emulator
+                val host = statusOrNull()?.optJSONObject("emulator")
+                proof.put("emulatorFailure", JSONObject().put("viewPresent", view != null).put("opening", view?.opening ?: JSONObject.NULL)
+                    .put("profiles", view?.profiles?.size ?: 0).put("emulatorIdPresent", view?.emulatorId != null)
+                    .put("ownsControl", view?.ownsControl ?: JSONObject.NULL).put("inputPending", view?.inputPending ?: JSONObject.NULL)
+                    .put("imagePresent", view?.image != null).put("notice", view?.notice ?: JSONObject.NULL)
+                    .put("hostInputStatus", host?.opt("inputStatus") ?: JSONObject.NULL).put("hostHomeObserved", host?.opt("homeObserved") ?: JSONObject.NULL)
+                    .put("hostObservationError", host?.opt("homeObservationError") ?: JSONObject.NULL).put("hostLastFailure", host?.opt("lastFailure") ?: JSONObject.NULL))
+                record(proof.optString("stage", "emulator"))
+            }
+            runCatching { UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(File(app.getExternalFilesDir(null), "combined-native-emulator-failure.png")) }
+            throw failure
+        }
+        val observed = fullStatus().getJSONObject("emulator")
+        assertEquals(selection.sessionId, observed.getString("sessionId"))
+        assertTrue(observed.getInt("opens") in 1..3)
+        assertTrue(observed.getInt("deviceAcquires") >= 1)
+        assertTrue(observed.getInt("deviceHomeInputs") >= 1)
+        assertEquals("accepted", observed.getString("inputStatus"))
+        assertTrue(observed.getBoolean("homeObserved"))
+        assertTrue(observed.getBoolean("settingsBeforeHome"))
+        assertGuards(status(), head, head, 1, 1, 1)
+        proof.put("emulator", JSONObject().put("sessionMatched", true).put("profileMatched", true).put("opens", observed.getInt("opens"))
+            .put("deviceAcquires", observed.getInt("deviceAcquires")).put("deviceHomeInputs", observed.getInt("deviceHomeInputs"))
+            .put("inputAccepted", true).put("homeObserved", true).put("settingsBeforeHome", true))
+        record("emulator-complete")
     }
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }
