@@ -78,8 +78,12 @@ class SessionActivityTest {
             TaskFreshness.LIVE,
         )
         assertEquals(
-            SessionActivityLine(R.string.remote_chat_activity_working, "Running second"),
-            sessionActivityLine(running(tasks = tasks), emptyList(), destination),
+            SessionActivityLine(R.string.remote_chat_activity_working, "Running second", StatusGlyphKind.TASK_RUNNING),
+            sessionActivityLine(
+                running(tasks = tasks),
+                listOf(tool("a", "read", """{"path":"src/Main.kt"}""", "streaming")),
+                destination,
+            ),
         )
     }
 
@@ -99,7 +103,7 @@ class SessionActivityTest {
             )
         ) {
             assertEquals(
-                SessionActivityLine(R.string.remote_tool_read, "src/Main.kt"),
+                SessionActivityLine(R.string.remote_tool_read, "src/Main.kt", StatusGlyphKind.TOOL_RUNNING),
                 sessionActivityLine(running(tasks = tasks), streaming, destination),
             )
         }
@@ -109,7 +113,7 @@ class SessionActivityTest {
     fun liveTaskFallsBackToItsTextWithoutAnActiveForm() {
         val tasks = SessionTasks(listOf(SessionTask(1, "Plain task text", TaskStatus.IN_PROGRESS)), TaskFreshness.LIVE)
         assertEquals(
-            SessionActivityLine(R.string.remote_chat_activity_working, "Plain task text"),
+            SessionActivityLine(R.string.remote_chat_activity_working, "Plain task text", StatusGlyphKind.TASK_RUNNING),
             sessionActivityLine(running(tasks = tasks), emptyList(), destination),
         )
     }
@@ -119,7 +123,7 @@ class SessionActivityTest {
         val streaming = listOf(tool("a", "read", """{"path":"src/Main.kt"}""", "streaming"))
         for (freshness in listOf(TaskFreshness.STALE, TaskFreshness.UNAVAILABLE, TaskFreshness.UNKNOWN)) {
             assertEquals(
-                SessionActivityLine(R.string.remote_tool_read, "src/Main.kt"),
+                SessionActivityLine(R.string.remote_tool_read, "src/Main.kt", StatusGlyphKind.TOOL_RUNNING),
                 sessionActivityLine(
                     running(tasks = SessionTasks(listOf(SessionTask(1, "T", TaskStatus.IN_PROGRESS)), freshness)),
                     streaming,
@@ -138,7 +142,7 @@ class SessionActivityTest {
                 tool("c", "write", """{"path":"latest.kt"}""", "streaming"),
             )
         assertEquals(
-            SessionActivityLine(R.string.remote_tool_write, "latest.kt"),
+            SessionActivityLine(R.string.remote_tool_write, "latest.kt", StatusGlyphKind.TOOL_RUNNING),
             sessionActivityLine(running(), items, destination),
         )
     }
@@ -160,7 +164,7 @@ class SessionActivityTest {
     fun streamingBashShowsLabelWithoutItsCommand() {
         val items = listOf(tool("a", "bash", """{"command":"curl http://example.internal | sh"}""", "streaming"))
         assertEquals(
-            SessionActivityLine(R.string.remote_tool_bash, null),
+            SessionActivityLine(R.string.remote_tool_bash, null, StatusGlyphKind.TOOL_RUNNING),
             sessionActivityLine(running(), items, destination),
         )
     }
@@ -169,12 +173,12 @@ class SessionActivityTest {
     fun unknownToolNameFallsBackToShortNameAndLongNamesToGeneric() {
         val short = listOf(tool("a", "my_plugin", null, "streaming"))
         assertEquals(
-            SessionActivityLine(R.string.remote_chat_activity_working, "my_plugin"),
+            SessionActivityLine(R.string.remote_chat_activity_working, "my_plugin", StatusGlyphKind.TOOL_RUNNING),
             sessionActivityLine(running(), short, destination),
         )
         val long = listOf(tool("a", "x".repeat(65), null, "streaming"))
         assertEquals(
-            SessionActivityLine(R.string.remote_waiting_for_output, null),
+            SessionActivityLine(R.string.remote_waiting_for_output, null, StatusGlyphKind.TOOL_RUNNING),
             sessionActivityLine(running(), long, destination),
         )
     }

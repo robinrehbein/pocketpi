@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextDecoration
 
 internal fun taskInsightStatusIcon(stale: Boolean, active: Int, completed: Int, total: Int): ImageVector =
     when {
@@ -90,17 +91,23 @@ internal fun TaskInsightSheet(tasks: SessionTasks, sessionTitle: String?, onDism
                             TaskStatus.COMPLETED -> R.string.task_insight_completed
                         })
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("taskInsightRow")) {
-                            Text(
-                                when (task.status) {
-                                    TaskStatus.PENDING -> "○"
-                                    TaskStatus.IN_PROGRESS -> "◉"
-                                    TaskStatus.COMPLETED -> "✓"
+                            StatusGlyph(
+                                kind = when (task.status) {
+                                    TaskStatus.PENDING -> StatusGlyphKind.TASK_PENDING
+                                    TaskStatus.IN_PROGRESS -> StatusGlyphKind.TASK_RUNNING
+                                    TaskStatus.COMPLETED -> StatusGlyphKind.DONE
                                 },
                                 modifier = Modifier.padding(end = 12.dp),
                                 color = if (task.status == TaskStatus.IN_PROGRESS) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                animate = tasks.freshness == TaskFreshness.LIVE,
                             )
                             Column {
-                                Text(task.text, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    task.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (task.status == TaskStatus.COMPLETED) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                                    textDecoration = if (task.status == TaskStatus.COMPLETED) TextDecoration.LineThrough else TextDecoration.None,
+                                )
                                 Text(stringResource(R.string.task_insight_id_status, task.id, status), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 if (task.status == TaskStatus.IN_PROGRESS && !task.activeForm.isNullOrBlank()) {
                                     Text(task.activeForm, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
