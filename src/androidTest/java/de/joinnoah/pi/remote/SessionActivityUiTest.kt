@@ -45,14 +45,14 @@ class SessionActivityUiTest {
     }
 
     @Test
-    fun longActivityTextStaysOnOneLineAndEllipsizes() {
+    fun longActivityTextUsesTwoLinesAndEllipsizes() {
         val longTask = "A very long running description ".repeat(30)
         compose.setContent { MaterialTheme { ChatCurrentActivity(SessionActivityLine(R.string.remote_chat_activity_working, longTask)) } }
         compose.onNodeWithText("$working · $longTask").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
             val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
             assertTrue(action(results))
-            assertEquals(1, results.single().lineCount)
-            assertTrue(results.single().hasVisualOverflow)
+            assertEquals(2, results.single().lineCount)
+            assertTrue(results.single().isLineEllipsized(1))
         }
     }
 }

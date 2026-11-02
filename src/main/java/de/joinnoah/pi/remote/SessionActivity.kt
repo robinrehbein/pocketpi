@@ -65,7 +65,7 @@ internal fun waitingForOutputAllowed(
     activity: SessionActivityLine?,
 ): Boolean = sessionActivityAllowed(state, destination) && activity == null
 
-/** The one-line spinner and activity label immediately above the chat composer. */
+/** The spinner and activity label immediately above the chat composer. */
 @Composable
 internal fun ChatCurrentActivity(line: SessionActivityLine?) {
     if (line == null) return
