@@ -1,8 +1,9 @@
 # Conservative outcome retention foundation
 
 The internal Host ledger can preview and explicitly expire entries after at least
-30 days of provable observed monotonic retention. There is no timer, automatic
-cleanup, remote command or local-admin UI wired by this foundation. Public paged
+30 days of provable observed monotonic retention. The foundation itself adds no timer or automatic cleanup. The subsequent
+[local-admin entry point](outcome-maintenance-admin.md) now provides explicit
+preview/confirmation over local IPC. Public paged
 and positive-outcome gates remain off; resource/recovery enablement is not closed.
 
 Ledger v2 stores bounded retainedMs for each pending/applied record. Canonical v1
@@ -44,9 +45,9 @@ Tests cover both states at the boundary, no wall-clock aging, restart credit,
 repeated checkpoints, rollback/non-finite readings, conservative v1 migration,
 read-only preview, active async callbacks/error cleanup, eligible quota recovery,
 malformed records and storage failure. This is deterministic injected time, not
-30 real calendar days of runtime acceptance. Further local-admin UX/authorization,
-confirmation/snapshot semantics and actual maintenance-through-Daemon resource
-qualification remain before an exposed cleanup feature can be called complete.
+30 real calendar days of runtime acceptance. The subsequent [admin qualification](outcome-maintenance-admin.md) records local
+authorization, confirmation/snapshot semantics and real IPC capacity recovery.
+Genuine Source/Android-after-expiry resource qualification remains open.
 
 
 ## Actual positive transport regressions
