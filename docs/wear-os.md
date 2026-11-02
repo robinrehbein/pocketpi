@@ -55,8 +55,14 @@ relay protocol changes are required.
 | Mac folders | Browse, create, clone and open; disclose and confirm project trust |
 | Send journal | Inspect delivery status and confirm dismissal; never automatically resend |
 | Notifications | Optional independent Firebase event notifications with watch routing |
+| Status tile | Up to two sessions that need you or are working, with their last-seen pull request checks |
 | Phone handoff | Open the matching phone session for photos/documents or a larger view |
 | Settings | Thinking visibility, offline-session filtering and watch notification opt-in |
+
+Starting a ticket task stays on the phone and tablet. Choosing a ticket needs its
+description, priority and project in view, and the start is a polled operation of up
+to ten minutes; that is neither a brief status check nor a one-tap confirmed action
+with enough context on a watch display.
 
 Unsupported capabilities stay unavailable. TUI-only prompts may still require
 input on the Mac. Advisor context sharing goes through the host's advertised
@@ -67,6 +73,36 @@ Photos/documents and camera capture intentionally remain on the phone. Opening
 the phone transfers **routing identifiers only**, not watch drafts, attachments,
 chat contents or credentials. The phone must already have its own approved pairing
 with that Mac. Files selected there belong to the phone's draft and are sent there.
+
+## Status tile
+
+The **PocketPi status** tile, to the right of the watch face, answers "what is the
+agent doing" without opening the app. It shows how many sessions need you, when a
+paired Mac last confirmed the rows (one time for all paired Macs), and up to two sessions that wait for you or are working,
+waiting ones first. Each row names the session and, when the watch has seen one,
+its pull request with the checks state and the age of that information, for example
+`needs you · PR #189 · 2 failing · 5 min`. A tap opens that session through the same
+validated path as a notification; the hint texts open the app.
+
+The rows come from the app's own state while it runs and from push events (a question
+marks a session waiting, a completion idle; subagent and job pushes change no row,
+and no push changes the rows' time). Because the Mac lists sessions without
+their pull requests, the watch remembers the pull request status it last saw for each
+session, from an open chat or a tile refresh, and drops it after 24 hours. Every row
+shows its age; no push carries pull request data.
+
+Unlike the phone widget, which never asks the network itself, the tile refreshes when
+the system asks to draw it and its snapshot is older than 30 seconds. For each paired
+Mac the refresh uses the app's connection when it is open and healthy, and otherwise
+a short-lived encrypted connection of its own. It reads the project and session lists
+(up to 24 projects) and the top session's snapshot for its pull request, and is
+bounded to ten seconds per Mac. It never changes the app's selection. Until it ends,
+the tile shows the stored rows with their time; a failure leaves them as they were.
+The tile sets no update interval, so nothing refreshes on a schedule.
+
+Fresh pull request checks for every row would need the Mac to include a compact pull
+request summary in `sessions.list`. That is a protocol change for noah-monorepo first
+and is not part of this client.
 
 ## Pairing
 
@@ -195,6 +231,9 @@ until performed; a testing release does not establish device acceptance.
 - WLAN/LTE transitions, wrist-down/background/foreground recovery and battery use.
 - Optional independent push, revoked permission, host revocation and phone mirroring.
 - Phone handoff with matching, missing and revoked phone pairings.
+- Status tile: add it, round clipping of two rows at large font scale, TalkBack, tap
+  routing to a session and to the app, swipe refresh over WLAN and LTE (and its
+  battery cost), stale rows after a failed refresh, and push-driven row changes.
 
 Do not treat a built APK or a round Robolectric test as evidence that these Samsung
 hardware, network, push and power-management behaviors have been accepted.

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="remote_app_name">PocketPi</string>
     <string name="remote_hosts">Macs</string>
     <string name="remote_projects">Projects</string>
@@ -511,6 +511,20 @@
     <string name="wear_advisor_share">Draft context-sharing request</string>
     <string name="wear_notifications">Watch notifications</string>
     <string name="wear_push_unconfigured">Push is unavailable in this build because Firebase is not configured. Reopen the app to refresh your sessions.</string>
+    <!-- The watch's status tile; the phone app does not use these. -->
+    <string name="wear_tile_label" tools:ignore="UnusedResources">PocketPi status</string>
+    <string name="wear_tile_description" tools:ignore="UnusedResources">Sessions that need you or are working, with their pull request checks.</string>
+    <string name="wear_tile_needs_you" tools:ignore="UnusedResources">needs you</string>
+    <string name="wear_tile_working" tools:ignore="UnusedResources">working</string>
+    <string name="wear_tile_age_now" tools:ignore="UnusedResources">now</string>
+    <plurals name="wear_tile_age_minutes" tools:ignore="UnusedResources">
+        <item quantity="one">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <plurals name="wear_tile_age_hours" tools:ignore="UnusedResources">
+        <item quantity="one">%d h</item>
+        <item quantity="other">%d h</item>
+    </plurals>
     <string name="providers_title">Providers</string>
     <string name="providers_open">Providers and sign-in</string>
     <string name="providers_host_fallback">the Mac</string>
