@@ -54,6 +54,7 @@ class PagedEditorPeerReloadEndToEndTest {
     private lateinit var transport: PresenceObservingTransport
     private lateinit var repository: DefaultRemoteRepository
     private var native = false
+    private var positive = false
     private val source = "😀".repeat(262_144)
     private val finalValue = "é\\\n".repeat(1_024) + "😀".repeat(261_120)
 
@@ -69,7 +70,9 @@ class PagedEditorPeerReloadEndToEndTest {
             require(native && fixture.getBoolean("nativeWorker") && fixture.getBoolean("pagedEditorFixture"))
             require(fixture.getBoolean("pagedEditorPeerReloadProof"))
             require(fixture.getString("pagedEditorCase") == "max-edited")
-            require(!fixture.optBoolean("pagedEditorPositiveOutcomes"))
+            positive = args.getString("pagedPeerReloadPositiveExpected") == "true"
+            require(fixture.optBoolean("pagedEditorPositiveOutcomes") == positive)
+            require(fixture.optBoolean("pagedEditorPeerReloadPositiveProof") == positive)
             val relay = fixture.getString("relayUrl").toHttpUrl()
             require(relay.scheme == "https" && relay.host == "10.0.2.2" && relay.encodedPath == "/")
             for ((name, path) in listOf("statusUrl" to "/fixture-status", "actionUrl" to "/fixture-action")) {
@@ -94,7 +97,7 @@ class PagedEditorPeerReloadEndToEndTest {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
             gate = PeerReloadCommitObserver(SecureRemoteTransport(scope, client))
             transport = PresenceObservingTransport(gate, requireNotNull(selection.sessionId), true, false)
-            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor, positiveOutcomeTestGate = false)
+            repository = DefaultRemoteRepository(stores.pairings, stores.drafts, transport, scope, pagedEditorTestGate = true, pagedEditorStorage = stores.pagedEditor, positiveOutcomeTestGate = positive)
             NavigationTestActivity.contentFactory = { { if (showNavigation.value) MaterialTheme {
                 RemoteNavigation(repository, PrStatusSettings(), false, {}, RemoteNotification(host.routeId, requireNotNull(selection.sessionId), 1))
             } } }
@@ -133,6 +136,7 @@ class PagedEditorPeerReloadEndToEndTest {
         val question = repository.state.value.questions.single { it.optionalText("kind") == "editor" }
         val id = question.text("id")
         val grant = question.text("editorUploadGrantId")
+        val oldOwner = if (positive) PagedEditorWire.ownerIncarnationId(question) else null
         val key = PagedJournalKey(host.routeId, requireNotNull(selection.sessionId), id)
         compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_load)).performScrollTo().assertIsEnabled().performClick()
         compose.waitUntil(120_000) { repository.state.value.pagedEditors[id]?.text != null }
@@ -155,6 +159,11 @@ class PagedEditorPeerReloadEndToEndTest {
         assertEquals(key, heldAttempt.key); assertEquals(request.text("requestId"), heldAttempt.commitRequestId)
         assertEquals(grant, heldAttempt.grantId)
         assertEquals(finalValue, heldAttempt.text)
+        if (positive) {
+            assertNotNull(oldOwner)
+            assertEquals(oldOwner, heldAttempt.outcomeBinding?.ownerIncarnationId)
+            assertEquals(host.deviceId, heldAttempt.outcomeBinding?.deviceId)
+        }
         assertEquals(0, held.getInt("sourceSdkResultCount"))
         action("probe-busy-reload")
         awaitPhase("busy-verified")
@@ -178,6 +187,11 @@ class PagedEditorPeerReloadEndToEndTest {
         assertTrue(transition.getBoolean("sdkShutdownVerified"))
         assertTrue(transition.getBoolean("sdkRestartVerified"))
         assertEquals(0, transition.getInt("hostReloadRunCount"))
+        if (positive) {
+            assertEquals(oldOwner, transition.getString("oldOwnerIncarnationId"))
+            assertTrue(transition.getBoolean("oldPositiveBridge"))
+            assertTrue(transition.getBoolean("newPositiveBridge"))
+        }
         val oldPeer = transition.getString("oldPeerAlias")
         val newPeer = transition.getString("newPeerAlias")
         assertTrue(oldPeer.isNotEmpty() && newPeer.isNotEmpty())
@@ -248,6 +262,30 @@ class PagedEditorPeerReloadEndToEndTest {
         val freshQuestion = repository.state.value.questions.single { it.optionalText("kind") == "editor" && it.optionalText("id") != id }
         val freshId = freshQuestion.text("id")
         val freshGrant = freshQuestion.text("editorUploadGrantId")
+        val freshOwner = if (positive) PagedEditorWire.ownerIncarnationId(freshQuestion) else null
+        if (positive) {
+            assertNotNull(freshOwner)
+            assertNotEquals(oldOwner, freshOwner)
+            assertTrue(status().getJSONObject("peerReload").getBoolean("oldLedgerPending"))
+            val oldReceipt = PagedEditorWire.receipt(heldAttempt)
+            val mutated = JsonObject(oldReceipt + ("ownerIncarnationId" to JsonPrimitive(freshOwner)))
+            for (receipt in listOf(oldReceipt, mutated)) {
+                val ownerContactsBefore = status().getJSONObject("peerReload").getInt("ownerContactCount")
+                val requestId = gate.queryOutcome(receipt)
+                compose.waitUntil(45_000) { gate.outcomeResults.containsKey(requestId) }
+                val response = requireNotNull(gate.outcomeResults[requestId])
+                assertTrue(response.flag("ok"))
+                val data = response.obj("data")
+                assertEquals(setOf("kind", "status"), data.keys)
+                assertEquals("editor_outcome", data.text("kind"))
+                assertEquals("unknown", data.text("status"))
+                val afterQuery = status().getJSONObject("peerReload")
+                assertEquals(ownerContactsBefore, afterQuery.getInt("ownerContactCount"))
+                assertTrue(afterQuery.getBoolean("oldLedgerPending"))
+                assertEquals(attemptsBefore, persisted().attempts)
+                assertEquals(finalValue, persisted().drafts[key]?.text)
+            }
+        }
         assertNotEquals(id, freshId); assertNotEquals(grant, freshGrant)
         compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_load)).performScrollTo().assertIsEnabled().performClick()
         compose.waitUntil(120_000) { repository.state.value.pagedEditors[freshId]?.text != null }
@@ -263,8 +301,30 @@ class PagedEditorPeerReloadEndToEndTest {
         assertNotEquals(request.text("uploadId"), freshRequest.text("uploadId"))
         assertEquals(freshRequest.text("requestId"), freshResult.text("requestId"))
         assertTrue(freshResult.flag("ok")); assertEquals("accepted", freshResult.obj("data").text("kind"))
+        if (positive) {
+            assertEquals(freshOwner, freshRequest.text("ownerIncarnationId"))
+            compose.waitUntil(60_000) {
+                transport.positiveOutcomeReleaseReceipt.get()?.optionalText("uploadId") == freshRequest.text("uploadId") &&
+                    transport.positiveOutcomeReleased.get() &&
+                    statusOrNull()?.optJSONObject("peerReload")?.let { it.optBoolean("freshLedgerApplied") && it.optBoolean("freshReleaseConfirmed") } == true
+            }
+            val acceptedReleaseId = requireNotNull(transport.positiveReleaseAcceptedRequestId.get())
+            assertTrue(acceptedReleaseId in transport.positiveReleaseObservedRequestIds)
+            val receipt = requireNotNull(transport.positiveOutcomeReleaseReceipt.get())
+            assertEquals(setOf("sessionId", "questionId", "ownerIncarnationId", "grantId", "uploadId", "commitRequestId", "byteLength", "sha256"), receipt.keys)
+            assertEquals(newId, receipt.text("sessionId")); assertEquals(freshId, receipt.text("questionId"))
+            assertEquals(freshOwner, receipt.text("ownerIncarnationId")); assertEquals(freshGrant, receipt.text("grantId"))
+            assertEquals(freshRequest.text("uploadId"), receipt.text("uploadId")); assertEquals(freshRequest.text("requestId"), receipt.text("commitRequestId"))
+            assertEquals(freshValue.toByteArray(Charsets.UTF_8).size.toLong(), receipt.long("byteLength")); assertEquals(digest(freshValue), receipt.text("sha256"))
+        }
         val newStatus = status()
         val freshTakeover = newStatus.getJSONObject("peerReload")
+        if (positive) {
+            assertEquals(freshOwner, freshTakeover.getString("newOwnerIncarnationId"))
+            assertTrue(freshTakeover.getBoolean("freshLedgerApplied"))
+            assertTrue(freshTakeover.getBoolean("freshReleaseConfirmed"))
+            assertTrue(freshTakeover.getBoolean("oldLedgerPending"))
+        }
         assertTrue(freshTakeover.getBoolean("sameRuntime"))
         assertTrue(freshTakeover.getBoolean("freshLeaseDistinct"))
         assertTrue(freshTakeover.getBoolean("freshBeginVerified"))
@@ -323,6 +383,10 @@ class PagedEditorPeerReloadEndToEndTest {
             .put("newSessionId", newId).put("newQuestionId", freshId).put("newGrantId", freshGrant).put("newProbeNonce", freshNonce)
             .put("newCommitRequest", JSONObject(freshRequest.toString())).put("newCommitResult", JSONObject(freshResult.toString()))
             .put("newBytes", freshValue.toByteArray(Charsets.UTF_8).size).put("newSha256", digest(freshValue))
+            .put("positiveOutcomeProbes", org.json.JSONArray(gate.outcomeReceipts.entries.map { (requestId, receipt) ->
+                JSONObject().put("requestId", requestId).put("receipt", JSONObject(receipt.toString()))
+                    .put("result", gate.outcomeResults[requestId]?.let { JSONObject(it.toString()) } ?: JSONObject())
+            }))
             .put("attemptPreserved", true).put("draftRetained", true).put("recoveryUiObserved", true)
             .put("recoveryFirstLength", first.length).put("recoveryLastLength", last.length)
             .put("transport", org.json.JSONArray(gate.observations.map { JSONObject(it.toString()) }))
@@ -379,6 +443,16 @@ private class PeerReloadCommitObserver(private val delegate: RemoteTransport) : 
             }
         })
     }
+    val outcomeResults = java.util.concurrent.ConcurrentHashMap<String, JsonObject>()
+    val outcomeReceipts = java.util.concurrent.ConcurrentHashMap<String, JsonObject>()
+    private val outcomeProbes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    fun queryOutcome(receipt: JsonObject): String {
+        val id = Wire.random()
+        check(outcomeProbes.add(id))
+        outcomeReceipts[id] = receipt
+        send(Wire.objectOf("type" to "session.question.editor.outcome.get", "requestId" to id, "receipt" to receipt))
+        return id
+    }
     val request = AtomicReference<JsonObject?>(null)
     val result = AtomicReference<JsonObject?>(null)
     val secondRequest = AtomicReference<JsonObject?>(null)
@@ -390,6 +464,8 @@ private class PeerReloadCommitObserver(private val delegate: RemoteTransport) : 
         set(value) { delegate.listener = object : RemoteTransport.Listener by value {
             override fun message(payload: JsonObject) {
                 observe(payload, "in")
+                val probeId = payload.optionalText("requestId")
+                if (payload.optionalText("type") == "result" && probeId != null && outcomeProbes.remove(probeId)) outcomeResults[probeId] = payload
                 val original = request.get()
                 if (original != null && payload.optionalText("type") == "result" && payload.optionalText("requestId") == original.optionalText("requestId")) result.compareAndSet(null, payload)
                 val second = secondRequest.get()

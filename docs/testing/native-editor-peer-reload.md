@@ -94,3 +94,46 @@ receipt across replacement. Physical Samsung/DeX, independent authorized Linux,
 resource policy and the rest of the original acceptance contract remain distinct.
 No public capability, release, external push, Wear emulator or production host
 was enabled or changed.
+
+
+## Positive-outcome variant: replacement before Source commit
+
+`native-positive-peer-reload-01` passes in 38.187 seconds, with JUnit `OK (1 test)`
+and cleanup passed. It explicitly opts into private positive-outcome negotiation
+on both fixture and Android; public defaults remain off. The same real Native
+SDK reload, held final Source chunk ACK and 1-MiB old draft flow run with actual
+protocol owner-incarnation IDs. Old ID `294cdcc8-7f63-4692-91a0-d454c54d39c3`
+differs from fresh ID `115c3a5a-73b5-42e6-bfd0-e2a93d25d98a` under the same
+Pi PID 86459 and runtime `92381145-7b8e-4883-bb84-e87847bf71d6`.
+
+The old SDK returns `undefined`; no old Source commit occurs. After replacement,
+two real encrypted outcome queries use the full old tuple: its original owner ID,
+then only the fresh owner ID substituted. Both return exactly `unknown`; neither
+changes the retained old attempt/draft or adds an instrumented editor-owner
+contact. The exact old pending ledger reservation remains present. These pending
+queries do not prove mismatch handling against a stored applied record.
+
+Fresh explicit work receives a genuine positive Source receipt and exactly one
+32-byte SDK success. Before sending the accepted result to Android, the fixture
+observes the full applied ledger tuple, including the actual authenticated phone
+begin grant correlated through its successful upload-begin response. Android
+retires the fresh attempt, sends its full receipt, receives the correlated
+successful release response, and the fixture observes deletion of that specific
+applied tuple. The old pending record and encrypted recovery text remain intact.
+
+Scoped review closed missing ledger assertions, non-exact grant comparison and
+an outgoing-only release observation. Debug/test assembly, extension TypeScript,
+formatting and diff checks pass. Production sources are unchanged; no new full
+unit-suite result is claimed. App APK is unchanged above; test APK is
+`78cdcd4ec4b6c8c1a1a30535e8cb16a32c532142bcf26540d1ac279ebdc29b1e`.
+
+The independent `verify-pocketpi-positive-peer-reload.py` audit reports zero
+errors against 50 source snapshots and recorded APK/controller/helper pins.
+Ledger states, fresh Source receipt and full release equality are assertions in
+the pinned observers/test, rather than separately preserved raw ledger/receipt
+artifacts. Owner-contact counting covers the listed editor transport commands.
+A separate live process check confirms owned Host 86439, Pi 86459 and Android
+16329 absent. Physical Samsung and independent Linux acceptance remain untested.
+
+Post-applied owner replacement with a durable positive Host record, including
+qualified RPC, remains separate work; this precommit case does not close it.
