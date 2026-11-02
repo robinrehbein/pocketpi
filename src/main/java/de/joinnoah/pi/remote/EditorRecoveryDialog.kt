@@ -2,6 +2,9 @@ package de.joinnoah.pi.remote
 
 import android.content.ActivityNotFoundException
 import android.net.Uri
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -22,26 +25,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 /** Local-only dialog. The only saved state for an in-flight export is a marker, never its text. */
 @Composable
 internal fun EditorRecoveryDialog(
     load: suspend () -> EditorRecoveryLoad,
     onExportSaved: (Uri) -> Unit = {},
+    openExportOutput: ((Uri) -> java.io.OutputStream?)? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val activity = remember(context) { recoveryActivity(context) }
+    val exporter: EditorRecoveryExportViewModel = viewModel(viewModelStoreOwner = activity, key = "editorRecoveryExport")
+    val exportState by exporter.state.collectAsState()
+    val writing = exportState.phase == EditorRecoveryExportPhase.WRITING
+    val resolver = context.applicationContext.contentResolver
     var request by remember { mutableIntStateOf(0) }
     var result by remember { mutableStateOf<EditorRecoveryLoad?>(null) }
     var selected by remember { mutableStateOf<EditorRecoveryEntry?>(null) }
     val pending = remember { PendingEditorRecoveryExport() }
     var pendingMarker by rememberSaveable { mutableStateOf(false) }
     var status by remember { mutableStateOf<Int?>(null) }
-    var writing by remember { mutableStateOf(false) }
+    LaunchedEffect(exportState) {
+        exporter.claimSavedNotification()?.let(onExportSaved)
+    }
     LaunchedEffect(Unit) {
         if (pendingMarker && !pending.hasEntry()) {
             // Keep the outstanding picker fenced until its result is consumed. Otherwise
@@ -59,20 +67,7 @@ internal fun EditorRecoveryDialog(
         if (frozen == null) {
             status = R.string.editor_recovery_export_lost
         } else if (uri != null) {
-            writing = true
-            scope.launch {
-                val ok = try {
-                    withContext(Dispatchers.IO) {
-                        val format = editorRecoveryExportFormat(frozen.text)
-                        context.contentResolver.openOutputStream(uri, "w")?.use { writeEditorRecovery(frozen.text, format, it) }
-                            ?: error("No output stream")
-                    }
-                    true
-                } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
-                writing = false
-                if (ok) onExportSaved(uri)
-                status = if (ok) R.string.editor_recovery_export_saved else R.string.editor_recovery_export_failed
-            }
+            exporter.write(frozen, uri, openExportOutput ?: { resolver.openOutputStream(it, "w") })
         }
     }
     val textLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain"), ::complete)
@@ -84,7 +79,14 @@ internal fun EditorRecoveryDialog(
                     Text(stringResource(R.string.editor_recovery_title), style = MaterialTheme.typography.titleLarge)
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_recovery_close)) }
                 }
-                status?.let { Text(stringResource(it), modifier = Modifier.testTag("recoveryExportStatus")) }
+                val exportStatus = when (exportState.phase) {
+                    EditorRecoveryExportPhase.SAVED -> R.string.editor_recovery_export_saved
+                    EditorRecoveryExportPhase.FAILED -> R.string.editor_recovery_export_failed
+                    EditorRecoveryExportPhase.INTERRUPTED -> R.string.editor_recovery_export_interrupted
+                    else -> null
+                }
+                (status ?: exportStatus)?.let { Text(stringResource(it), modifier = Modifier.testTag("recoveryExportStatus")) }
+                if (writing) Text(stringResource(R.string.editor_recovery_export_writing))
                 if (pendingMarker) Text(stringResource(R.string.editor_recovery_export_pending))
                 when (val current = result) {
                     null -> Text(stringResource(R.string.editor_recovery_loading))
@@ -114,6 +116,7 @@ internal fun EditorRecoveryDialog(
                                         TextButton(onClick = { selected = null }, modifier = Modifier.testTag("recoveryBackToList")) { Text(stringResource(R.string.editor_recovery_back)) }
                                         key(entry.id) {
                                             RecoveryDetail(entry, enabled = !pendingMarker && !writing) {
+                                                exporter.clearOutcome()
                                                 pending.begin(entry)
                                                 pendingMarker = true
                                                 status = null
@@ -140,6 +143,12 @@ internal fun EditorRecoveryDialog(
             }
         }
     }
+}
+
+private tailrec fun recoveryActivity(context: Context): ComponentActivity = when (context) {
+    is ComponentActivity -> context
+    is ContextWrapper -> recoveryActivity(context.baseContext)
+    else -> error("Editor recovery requires an activity")
 }
 
 @Composable

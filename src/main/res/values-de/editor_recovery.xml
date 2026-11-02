@@ -28,4 +28,6 @@
     <string name="editor_recovery_export_failed">Datei konnte nicht gespeichert werden. Bitte erneut versuchen.</string>
     <string name="editor_recovery_export_lost">Der Export wurde unterbrochen. Bitte erneut versuchen.</string>
     <string name="editor_recovery_export_pending">Dateiauswahl ausstehend…</string>
+    <string name="editor_recovery_export_writing">Datei wird gespeichert…</string>
+    <string name="editor_recovery_export_interrupted">Der Export wurde unterbrochen. Die Datei ist möglicherweise unvollständig. Prüfe sie vor einem erneuten Export.</string>
 </resources>

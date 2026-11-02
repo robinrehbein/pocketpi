@@ -141,9 +141,52 @@ failures, errors or skips. The earlier successful-save and Pi reopen evidence
 above remains evidence for its recorded source/APK versions, not a rerun on this
 follow-up APK.
 
-Still open: an actual write/close failure after opening a destination, interruption
-while IO is already writing, real process death with a pending picker, physical
-Galaxy acceptance and the wider provider matrix. In particular, the current
-writing job is composition-owned and its writing indicator is not saved across
-recreation; its interrupted-destination feedback requires a separate regression
-and implementation. The lifecycle/error plan gate therefore remains unchecked.
+### Writing operation ownership
+
+The writing operation now belongs to an Activity-scoped
+`EditorRecoveryExportViewModel`, rather than the dialog composition. It retains
+only the current immutable entry while IO runs and uses the application resolver
+for normal exports. Closing the dialog or rotating the Activity does not cancel
+that operation. New exports stay disabled until the output stream has been
+written and closed. The result remains available when the dialog is reopened;
+the optional saved observer is notified at most once for that operation.
+
+`SavedStateHandle` contains only an advisory writing boolean, never the text or
+URI. Restoring that boolean yields an interrupted/possibly incomplete-file
+warning and no success notification or automatic retry. This is not a durable
+process-death journal: Android may retain a snapshot older than the write, so it
+does not prove recovery from arbitrary process loss.
+
+`export-io-red-03` reached an actual blocked injected stream, recreated the
+Activity and failed because Export was enabled too early. The two earlier RED
+attempts did not reach that boundary: the fixture initially blocked only bulk
+writes and then waited without advancing the Compose scheduler. They are
+preserved diagnostic runs, not lifecycle evidence.
+
+`export-io-green-01` passes eight instrumentation cases in 52.901 seconds, with
+cleanup passed: the previous four lifecycle cases plus injected write failure,
+injected close failure, actual Activity recreation during blocked IO and dialog
+close/reopen during blocked IO. Both blocked cases prove no premature saved
+notification, a retained fence, exact bytes after release and one success
+notification. Error cases retain the original preview, report failure and allow
+retry without a success notification. These streams are injected, not failures
+induced in a real document provider. Two unit cases separately verify idle and
+restored interrupted states, marker-only saved keys and clearing the warning.
+
+`export-io-real-saf-01` repeats successful actual-provider UTF-8/raw exports on
+identical final APKs, passing in 20.702 seconds with cleanup passed. The actual
+returned URIs contain the same independently expected 1,048,576 and 2,097,154
+bytes and hashes recorded above; unique test documents were deleted. The saved
+phone screenshot was inspected. Final app APK:
+`97fc0d099b0ced0a7ba63f1f620877948204887559be83d3e8b7cb451d484950`;
+final test APK:
+`c4d8e56d562da7dc345d9934a52cce9217fe46b117e9239215e855626b0e60af`.
+The full quick-check passes in 119 seconds: 3,653 app plus 34 Wear tests, no
+failures, errors or skips. A scoped independent review found no blocking race or
+Activity reference retention in this writing path. The default no-op saved
+observer also consumes the one-time notification; a later observer does not get
+a historical notification, while the visible result remains retained.
+
+Still open: real provider write/close failures, real process death with a pending
+picker or active write, physical Galaxy acceptance and the wider provider matrix.
+The lifecycle/error plan gate therefore remains unchecked.

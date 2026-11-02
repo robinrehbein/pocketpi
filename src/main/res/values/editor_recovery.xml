@@ -28,4 +28,6 @@
     <string name="editor_recovery_export_failed">File could not be saved. Please retry.</string>
     <string name="editor_recovery_export_lost">The export request was interrupted. Please retry.</string>
     <string name="editor_recovery_export_pending">Waiting for file selection…</string>
+    <string name="editor_recovery_export_writing">Saving file…</string>
+    <string name="editor_recovery_export_interrupted">The export was interrupted. The file may be incomplete. Check it before exporting again.</string>
 </resources>

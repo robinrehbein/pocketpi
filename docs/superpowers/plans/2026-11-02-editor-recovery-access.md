@@ -31,7 +31,7 @@ Owner: UI author. Files: new EditorRecoveryDialog.kt, EditorRecoveryExport.kt, R
 
 - [x] Establish failing tests/stubs for the missing UI/export behavior. Root runs focused RED before implementation.
 - [x] Implement offline Hosts entry, loading/error/empty/list/detail states, separate entries, bounded first/last/section navigation, uncertain warning, bounded copy and explicit export lifecycle. Root runs export tests and phone/tablet UI cases, inspects screenshots.
-- [ ] Complete real-device/lifecycle export-error qualification. Bounded UI, read-only journal access, stale pending-entry snapshot and invalid Unicode preservation pass their source/unit/emulator checks; real picker cancellation/recreation and controlled late-result/missing-provider cases now pass; write/close failure, interruption during IO and process death remain open.
+- [ ] Complete real-device/lifecycle export-error qualification. Bounded UI, read-only journal access, stale pending-entry snapshot and invalid Unicode preservation pass their source/unit/emulator checks; real picker cancellation/recreation, controlled late-result/missing-provider, injected write/close failures and actual rotation/dialog reopen during blocked IO now pass; real provider failure, process death and physical acceptance remain open.
 
 ## Task 3 — actual normal reopen path
 
