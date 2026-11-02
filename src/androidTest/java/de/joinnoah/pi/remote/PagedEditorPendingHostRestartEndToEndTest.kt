@@ -45,6 +45,7 @@ class PagedEditorPendingHostRestartEndToEndTest {
     private lateinit var fixture: JSONObject
     private lateinit var phase: String
     private lateinit var nonce: String
+    private lateinit var boundary: String
     private lateinit var directory: File
     private lateinit var stores: AppStores
     private lateinit var host: PairedHost
@@ -64,8 +65,11 @@ class PagedEditorPendingHostRestartEndToEndTest {
             assumeTrue("Explicit private pending Host fixture required", args.getString("pagedPendingHostExpected") == "true")
             phase = requireNotNull(args.getString("pagedPendingHostPhase"))
             nonce = requireNotNull(args.getString("pagedPendingHostNonce"))
+            boundary = args.getString("pagedPendingHostBoundaryExpected") ?: "before-owner"
+            require(boundary in setOf("before-owner", "after-owner-ack"))
             require(phase in setOf("A", "B") && nonce.matches(Regex("[a-f0-9]{32}")))
             fixture = JSONObject(readFixture(requireNotNull(args.getString("prStatusFixturePath"))).toString(Charsets.UTF_8))
+            require(fixture.optString("hostPendingBoundary", "before-owner") == boundary)
             val relay = fixture.getString("relayUrl").toHttpUrl()
             require(relay.scheme == "https" && relay.host == "10.0.2.2" && relay.encodedPath == "/")
             for ((field, path) in listOf("statusUrl" to "/fixture-status", "actionUrl" to "/fixture-action")) {
@@ -91,7 +95,7 @@ class PagedEditorPendingHostRestartEndToEndTest {
                 stores.pairings.save(listOf(host))
             } else {
                 val proof = JSONObject(proofFile.readText())
-                assertEquals(nonce, proof.getString("nonce")); assertEquals(identity(), proof.getString("identity"))
+                assertEquals(nonce, proof.getString("nonce")); assertEquals(identity(), proof.getString("identity")); assertEquals(boundary, proof.getString("boundary"))
                 assertNotEquals(proof.getInt("pid"), Process.myPid())
                 verifyJournal(proof)
             }
@@ -157,8 +161,15 @@ class PagedEditorPendingHostRestartEndToEndTest {
         compose.waitUntil(120_000) { statusOrNull()?.optJSONObject("hostPending")?.optBoolean("held") == true && persisted().attempts.size == 1 }
         val owner = status(); val pending = owner.getJSONObject("hostPending")
         assertTrue(owner.getInt("pagedSourceReadReplyCount") > 0)
-        assertTrue(pending.getBoolean("originalSDKStarted")); assertEquals(0, pending.getInt("sdkValueCount"))
-        for (field in listOf("sourceDispatchCount", "sourceBeginCount", "sourceChunkCount", "sourceCommitCount")) assertEquals(0, pending.getInt(field))
+        assertTrue(pending.getBoolean("originalSDKStarted"))
+        if (boundary == "before-owner") {
+            assertEquals(0, pending.getInt("sdkValueCount"))
+            for (field in listOf("sourceDispatchCount", "sourceBeginCount", "sourceChunkCount", "sourceCommitCount")) assertEquals(0, pending.getInt(field))
+        } else {
+            assertEquals("after-owner-ack", pending.getString("boundary"))
+            assertEquals(1, pending.getInt("sdkValueCount"))
+            assertEquals(1, pending.getInt("sourceBeginCount")); assertEquals(22, pending.getInt("sourceChunkCount")); assertEquals(1, pending.getInt("sourceCommitCount")); assertEquals(24, pending.getInt("sourceDispatchCount"))
+        }
         val attempt = persisted().attempts.values.single()
         val binding = requireNotNull(attempt.outcomeBinding)
         assertEquals(finalValue, attempt.text); assertEquals(finalValue, persisted().drafts[attempt.key]?.text)
@@ -169,13 +180,29 @@ class PagedEditorPendingHostRestartEndToEndTest {
         assertEquals(host.routeId, tuple.getString("routeId")); assertEquals(host.deviceId, tuple.getString("deviceId"))
         val wireTuple = JSONObject(tuple.toString()).apply { remove("routeId"); remove("deviceId") }
         assertJsonEquals(receipt.toString(), wireTuple.toString())
-        val proof = JSONObject().put("nonce", nonce).put("pid", Process.myPid()).put("identity", identity())
+        assertTrue(pending.getString("ledgerHash").matches(Regex("[a-f0-9]{64}")))
+        if (boundary == "after-owner-ack") {
+            val ack = pending.getJSONObject("sourceAck")
+            assertEquals(setOf("kind", "sessionId", "questionId", "transferId", "byteLength", "sha256", "outcome"), ack.keys().asSequence().toSet())
+            assertEquals("editor_owner_upload_committed", ack.getString("kind")); assertEquals(receipt.getString("sessionId"), ack.getString("sessionId")); assertEquals(receipt.getString("questionId"), ack.getString("questionId"))
+            assertTrue(ack.getString("transferId").isNotEmpty()); assertEquals(receipt.getInt("byteLength"), ack.getInt("byteLength")); assertEquals(receipt.getString("sha256"), ack.getString("sha256"))
+            val outcome = JSONObject().put("ownerIncarnationId", receipt.getString("ownerIncarnationId")).put("commitRequestId", receipt.getString("commitRequestId")).put("uploadId", receipt.getString("uploadId"))
+            assertJsonEquals(outcome.toString(), ack.getJSONObject("outcome").toString())
+            val sdk = pending.getJSONObject("sdkResult"); val sdkIdentity = pending.getJSONObject("originalSDKIdentity")
+            assertEquals("paged-sdk-result", sdk.getString("event")); assertEquals(fixture.getString("editorProbeNonce"), sdk.getString("nonce"))
+            assertEquals(pending.getInt("ownerPid"), sdk.getInt("pid")); assertEquals(sdkIdentity.getInt("pid"), sdk.getInt("pid"))
+            assertEquals(receipt.getString("sessionId"), sdk.getString("sessionId")); assertEquals(sdkIdentity.getString("sessionId"), sdk.getString("sessionId"))
+            assertEquals(if (native) "tui" else "rpc", sdk.getString("mode")); assertEquals(sdkIdentity.getString("mode"), sdk.getString("mode"))
+            assertEquals(finalValue.toByteArray(Charsets.UTF_8).size, sdk.getInt("bytes")); assertEquals(digest(finalValue), sdk.getString("sha256"))
+        }
+        val proof = JSONObject().put("nonce", nonce).put("pid", Process.myPid()).put("identity", identity()).put("boundary", boundary)
             .put("questionId", id).put("attemptId", attempt.attemptId).put("attemptGrant", attempt.grantId).put("attemptUpload", attempt.uploadId)
             .put("attemptCommit", attempt.commitRequestId).put("attemptCreatedAt", attempt.createdAt).put("receipt", receipt)
             .put("sourceBytes", source.toByteArray().size).put("sourceSha256", digest(source)).put("draftSha256", digest(finalValue))
             .put("draftEditedAt", requireNotNull(persisted().drafts[attempt.key]).editedAt).put("attemptBytes", attempt.text.toByteArray().size).put("attemptSha256", digest(attempt.text))
             .put("sdkIdentity", pending.getJSONObject("originalSDKIdentity")).put("ledgerTuple", tuple).put("deviceId", binding.deviceId).put("ledgerHash", pending.getString("ledgerHash"))
             .put("sourceReadReplyCount", owner.getInt("pagedSourceReadReplyCount"))
+        if (boundary == "after-owner-ack") proof.put("sourceAck", pending.getJSONObject("sourceAck")).put("sdkResult", pending.getJSONObject("sdkResult"))
         writeProof("phase-a.json", proof); report("A", id)
         while (true) SystemClock.sleep(1_000)
     }
@@ -201,7 +228,7 @@ class PagedEditorPendingHostRestartEndToEndTest {
         val matching = (0 until queries.length()).map { queries.getJSONObject(it) }.single { it.getString("requestId") == observed.first.text("requestId") }
         assertJsonEquals(proof.getJSONObject("receipt").toString(), matching.getJSONObject("receipt").toString())
         assertJsonEquals(data.toString(), matching.getJSONObject("result").toString())
-        val result = JSONObject().put("nonce", nonce).put("pid", Process.myPid()).put("identity", identity()).put("questionId", proof.getString("questionId"))
+        val result = JSONObject().put("nonce", nonce).put("pid", Process.myPid()).put("identity", identity()).put("boundary", boundary).put("questionId", proof.getString("questionId"))
             .put("receipt", proof.getJSONObject("receipt")).put("ledgerTuple", proof.getJSONObject("ledgerTuple")).put("deviceId", proof.getString("deviceId")).put("authenticatedQuery", matching).put("query", JSONObject(observed.first.toString())).put("queryResult", JSONObject(observed.second.toString()))
             .put("draftSha256", digest(persisted().drafts.values.single().text)).put("initialPendingCount", initial.getInt("initialPendingCount"))
             .put("pendingCount", final.getInt("pendingCount")).put("appliedCount", final.getInt("appliedCount")).put("ownerDispatchCalls", final.getInt("ownerDispatchCalls"))
