@@ -113,11 +113,14 @@ class PocketPiTestIme : InputMethodService() {
         service = this
     }
 
-    override fun onCreateInputView(): View = View(this).apply {
-        layoutParams = android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            (48 * resources.displayMetrics.density).toInt(),
-        )
+    override fun onCreateInputView(): View = object : View(this) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val desiredHeight = (48 * resources.displayMetrics.density).toInt()
+            setMeasuredDimension(
+                resolveSize(suggestedMinimumWidth, widthMeasureSpec),
+                resolveSize(desiredHeight, heightMeasureSpec),
+            )
+        }
     }
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {

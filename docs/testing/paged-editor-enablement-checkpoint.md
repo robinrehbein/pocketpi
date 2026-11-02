@@ -58,12 +58,18 @@ capacity cycles retain their distinct scope. Existing later applied/release case
 tests retain their exact scopes; physical Samsung/DeX and independent Linux stay
 separate full-goal boundaries.
 
-Next qualify the explicit actual IME composition/navigation and presence/timing
-gate; [actual system IME feasibility](real-ime-feasibility.md) now passes
-composition/selection/session-replacement on a small Compose field, but does not
-yet qualify the large paged editor/SDK chain or timing. Semantics SetText alone
-remains insufficient. Reconcile the complete original
-acceptance matrix using its recorded pins
-and current implementation. Only enable the separately negotiated capabilities
-when their actual mandatory criteria and resource policy are satisfied; do not
-turn a narrow passing case into a universal owner/device claim.
+The selected [Native and RPC actual IME production-chain cases](real-ime-window.md)
+now pass composition, selection, navigation, large paste, exact SDK delivery and
+sampled main-queue timing. Native heartbeat timing is verified within its lease;
+RPC records its own negotiated traffic without Native presence. The earlier
+[small-field feasibility proof](real-ime-feasibility.md) retains its narrower scope.
+These controlled injected inputs do not establish vendor-keyboard or human typing
+performance.
+
+Next reconcile the original owner replacement/wrong-authority acceptance cases
+against their exact operations, pins and changed production invariants. An exact
+wrong-incarnation outcome query is distinct from an unauthorized upload, and
+process loss is distinct from a live peer replacement. Identify only actual
+missing original cases; do not invent same-question revival or a blanket rerun.
+Only enable separately negotiated capabilities when their actual mandatory
+criteria, resource policy and reviewed production wiring are satisfied.
