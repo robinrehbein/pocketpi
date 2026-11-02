@@ -33,6 +33,48 @@ class EmulatorClientTest {
         scope.runCurrent()
         assertNull(client.view)
     }
+    private fun watchingClient(scope: TestScope, recovery: Boolean, closed: MutableList<Long>, watches: MutableList<Map<String, Any?>>): EmulatorClient {
+        val geometry = Wire.objectOf("width" to 2, "height" to 3, "rotation" to 0, "revision" to 1)
+        return EmulatorClient(scope.backgroundScope, { _, _ -> true }, { _, type, fields ->
+            when (type) {
+                "emulator.list" -> Wire.objectOf("kind" to "emulator.profiles", "profiles" to kotlinx.serialization.json.JsonArray(listOf(Wire.objectOf("id" to "p", "label" to "Phone"))))
+                "emulator.open" -> Wire.objectOf("kind" to "emulator.opened", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to 1, "geometry" to geometry)
+                "emulator.status" -> Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to 1, "geometry" to geometry)
+                "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to 1, "participants" to kotlinx.serialization.json.JsonArray(emptyList()))
+                "emulator.watch" -> { watches.add(fields.toMap()); Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to 1, "streamId" to "stream") }
+                "emulator.unwatch" -> Wire.objectOf("kind" to "emulator.unwatched", "emulatorId" to "e", "streamId" to "stream")
+                else -> error("unexpected $type")
+            }
+        }, {}, { "d" }, { true }, { closed.add(it) }, { recovery })
+    }
+    private fun waiting(streamId: String = "stream") = Wire.objectOf("type" to "host.event", "kind" to "emulator.frame.waiting", "emulatorId" to "e", "incarnation" to "i", "streamId" to streamId, "generation" to 1, "reason" to "capturing")
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aRecoveryWatchStaysOpenWhileTheHostSaysItIsCapturing() {
+        val scope = TestScope(); val closed = mutableListOf<Long>(); val watches = mutableListOf<Map<String, Any?>>()
+        val client = watchingClient(scope, true, closed, watches)
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertEquals("true", watches.single()["recovery"]?.toString())
+        repeat(4) { scope.testScheduler.advanceTimeBy(2_000); client.frame(waiting()); scope.runCurrent() }
+        assertEquals(emptyList<Long>(), closed)
+        // Without a frame or another waiting event, the deadline still fails closed.
+        scope.testScheduler.advanceTimeBy(5_600); scope.runCurrent()
+        assertEquals(listOf(1L), closed)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun waitingForAnotherStreamOrWithoutRecoveryDoesNotExtendTheDeadline() {
+        for (recovery in listOf(true, false)) {
+            val scope = TestScope(); val closed = mutableListOf<Long>(); val watches = mutableListOf<Map<String, Any?>>()
+            val client = watchingClient(scope, recovery, closed, watches)
+            assertTrue(client.open("session", 1)); scope.runCurrent()
+            assertTrue(client.selectProfile("p")); scope.runCurrent()
+            assertEquals(if (recovery) "true" else null, watches.single()["recovery"]?.toString())
+            scope.testScheduler.advanceTimeBy(4_000)
+            client.frame(if (recovery) waiting("other") else waiting()); scope.runCurrent()
+            scope.testScheduler.advanceTimeBy(1_600); scope.runCurrent()
+            assertEquals(listOf(1L), closed)
+        }
+    }
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun acquireRewatchesNewGenerationAndWaitsForFrameBeforeInput() {
         val scope = TestScope()

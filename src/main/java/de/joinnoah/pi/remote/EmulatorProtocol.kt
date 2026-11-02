@@ -3,6 +3,8 @@ package de.joinnoah.pi.remote
 import kotlinx.serialization.json.*
 
 internal const val SESSION_EMULATOR_CAPABILITY = "session.emulator.v1"
+/** A recovery watch gets emulator.frame.waiting while the Host's next capture is slow. */
+internal const val SESSION_EMULATOR_RECOVERY_CAPABILITY = "session.emulator.recovery.v1"
 internal const val EMULATOR_FRAME_CHUNK_BYTES = 49152
 internal const val EMULATOR_FRAME_MAX_BYTES = 1048576
 private const val EMULATOR_MAX_SAFE = 9007199254740991L
@@ -27,7 +29,7 @@ internal sealed interface EmulatorCommand {
     data class Release(override val requestId:String, override val sessionId:String,val emulatorId:String,val leaseId:String,val generation:Long):EmulatorCommand
     data class Stop(override val requestId:String, override val sessionId:String,val emulatorId:String,val leaseId:String,val generation:Long):EmulatorCommand
     data class Input(override val requestId:String, override val sessionId:String,val emulatorId:String,val leaseId:String,val generation:Long,val geometryRevision:Long,val sequence:Long,val input:EmulatorInput):EmulatorCommand
-    data class Watch(override val requestId:String, override val sessionId:String,val emulatorId:String,val generation:Long):EmulatorCommand
+    data class Watch(override val requestId:String, override val sessionId:String,val emulatorId:String,val generation:Long,val recovery:Boolean=false):EmulatorCommand
     data class Unwatch(override val requestId:String, override val sessionId:String,val emulatorId:String,val streamId:String):EmulatorCommand
     data class FrameAck(override val requestId:String, override val sessionId:String,val emulatorId:String,val streamId:String,val frameId:Long,val chunkIndex:Long):EmulatorCommand
 }
@@ -46,6 +48,7 @@ internal sealed interface EmulatorResult {
     data class Unwatched(val emulatorId:String,val streamId:String):EmulatorResult
 }
 internal data class EmulatorStateEvent(val sessionId:String,val emulatorId:String,val profileId:String,val label:String,val incarnation:String,val generation:Long,val geometry:EmulatorGeometry,val owner:EmulatorOwner?,val control:EmulatorControl?)
+internal data class EmulatorFrameWaitingEvent(val emulatorId:String,val incarnation:String,val streamId:String,val generation:Long)
 internal data class EmulatorFrameEvent(val emulatorId:String,val incarnation:String,val streamId:String,val generation:Long,val geometryRevision:Long,val frameId:Long,val chunkIndex:Long,val chunkCount:Long,val totalBytes:Long,val width:Long,val height:Long,val displayWidth:Long,val displayHeight:Long,val rotation:Long,val data:String)
 
 private fun eString(s:String,max:Int):String { require(s.isNotEmpty() && Wire.fitsUtf8(s,max)); var i=0; while(i<s.length){val c=s[i++];if(c.isHighSurrogate()){require(i<s.length && s[i].isLowSurrogate());i++} else require(!c.isLowSurrogate())};return s }
@@ -76,7 +79,7 @@ internal fun encodeEmulatorCommand(command:EmulatorCommand):JsonObject {
         is EmulatorCommand.Release -> lease("emulator.release",command.emulatorId,command.leaseId,command.generation)
         is EmulatorCommand.Stop -> lease("emulator.stop",command.emulatorId,command.leaseId,command.generation)
         is EmulatorCommand.Input -> {lease("emulator.input",command.emulatorId,command.leaseId,command.generation);require(command.geometryRevision in 1..EMULATOR_MAX_SAFE && command.sequence in 0..EMULATOR_MAX_SAFE);p.add("geometryRevision" to command.geometryRevision);p.add("sequence" to command.sequence);p.add("input" to eInput(command.input))}
-        is EmulatorCommand.Watch -> {context("emulator.watch",command.emulatorId);require(command.generation in 0..EMULATOR_MAX_SAFE);p.add("generation" to command.generation)}
+        is EmulatorCommand.Watch -> {context("emulator.watch",command.emulatorId);require(command.generation in 0..EMULATOR_MAX_SAFE);p.add("generation" to command.generation);if(command.recovery)p.add("recovery" to true)}
         is EmulatorCommand.Unwatch -> {context("emulator.unwatch",command.emulatorId);eValidateId(command.streamId);p.add("streamId" to command.streamId)}
         is EmulatorCommand.FrameAck -> {context("emulator.frame.ack",command.emulatorId);eValidateId(command.streamId);require(command.frameId in 1..EMULATOR_MAX_SAFE && command.chunkIndex in 0..21);p.add("streamId" to command.streamId);p.add("frameId" to command.frameId);p.add("chunkIndex" to command.chunkIndex)}
     }
@@ -112,4 +115,5 @@ internal fun parseEmulatorResult(o:JsonObject):EmulatorResult {
     }
 }
 internal fun parseEmulatorState(o:JsonObject):EmulatorStateEvent {Wire.keys(o,setOf("type","kind","sessionId")+eStatusKeys,setOf("owner","control"));require(o.text("type")=="host.event" && o.text("kind")=="emulator.state");val owner=if("owner" in o)eOwner(o.obj("owner")) else null;val control=if("control" in o)eControl(o.obj("control")) else null;require(control==null||owner!=null);return EmulatorStateEvent(o.eId("sessionId"),o.eId("emulatorId"),o.eId("profileId"),eString(o.text("label"),128),o.eId("incarnation"),o.eCount("generation"),eGeometry(o.obj("geometry")),owner,control)}
+internal fun parseEmulatorFrameWaiting(o:JsonObject):EmulatorFrameWaitingEvent {Wire.keys(o,setOf("type","kind","emulatorId","incarnation","streamId","generation","reason"));require(o.text("type")=="host.event" && o.text("kind")=="emulator.frame.waiting" && o.text("reason")=="capturing");return EmulatorFrameWaitingEvent(o.eId("emulatorId"),o.eId("incarnation"),o.eId("streamId"),o.eCount("generation"))}
 internal fun parseEmulatorFrame(o:JsonObject):EmulatorFrameEvent {Wire.keys(o,setOf("type","kind","emulatorId","incarnation","streamId","generation","geometryRevision","frameId","chunkIndex","chunkCount","totalBytes","width","height","displayWidth","displayHeight","rotation","data"));require(o.text("type")=="host.event" && o.text("kind")=="emulator.frame");val count=o.eCount("chunkCount",1,22);val index=o.eCount("chunkIndex",0,count-1);val total=o.eCount("totalBytes",1,EMULATOR_FRAME_MAX_BYTES.toLong());require(count==(total+EMULATOR_FRAME_CHUNK_BYTES-1)/EMULATOR_FRAME_CHUNK_BYTES);val w=o.eCount("width",1,16384);val h=o.eCount("height",1,16384);val dw=o.eCount("displayWidth",1,16384);val dh=o.eCount("displayHeight",1,16384);require(w*h<=8388608 && dw*dh<=8388608);val data=o.text("data");val bytes=if(index==count-1) total-index*EMULATOR_FRAME_CHUNK_BYTES else EMULATOR_FRAME_CHUNK_BYTES.toLong();Wire.decode(data,bytes.toInt());return EmulatorFrameEvent(o.eId("emulatorId"),o.eId("incarnation"),o.eId("streamId"),o.eCount("generation"),o.eCount("geometryRevision",1),o.eCount("frameId",1),index,count,total,w,h,dw,dh,o.eCount("rotation",0,3),data)}

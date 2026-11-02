@@ -14,7 +14,10 @@ public data class EmulatorView(val sessionId: String, val opening: Boolean = tru
 internal class EmulatorClient(private val scope: CoroutineScope, private val current: (String, Long) -> Boolean,
     private val request: suspend (Long, String, Array<out Pair<String, Any?>>) -> JsonObject,
     private val changed: (EmulatorView?) -> Unit, private val deviceId: () -> String? = { null },
-    private val connectionAlive: (Long) -> Boolean = { true }, private val closeConnection: (Long) -> Unit = {}) {
+    private val connectionAlive: (Long) -> Boolean = { true }, private val closeConnection: (Long) -> Unit = {},
+    private val recoveryEnabled: () -> Boolean = { false }) {
+    // Negotiated per open: a recovery watch keeps its deadline alive with emulator.frame.waiting.
+    private var recovery = false
     var view: EmulatorView? = null; private set
     private var connection = 0L; private var token = 0L; private var lease: String? = null; private var sequence = 0L
     private var visible = true; private var disconnected = false; private var pending = false
@@ -29,7 +32,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     }
     fun open(session: String, c: Long): Boolean {
         if (!current(session, c)) return false
-        close(); connection = c; visible = true; disconnected = false; val t = ++token
+        close(); connection = c; visible = true; disconnected = false; recovery = recoveryEnabled(); val t = ++token
         set(EmulatorView(session))
         scope.launch { try {
             val r = send(c, EmulatorCommand.List(Wire.random(), session)) as EmulatorResult.Profiles
@@ -70,7 +73,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     fun isDisconnectedFor(session: String?) = disconnected && session != null && view?.sessionId == session
     fun resumeIfDisconnected(session: String, c: Long): Boolean {
         if (!isDisconnectedFor(session) || !current(session, c)) return false
-        disconnected = false; connection = c; val t = ++token; val v = view ?: return false
+        disconnected = false; connection = c; recovery = recoveryEnabled(); val t = ++token; val v = view ?: return false
         val id = v.emulatorId ?: return open(session, c)
         val profile = v.profileId ?: return false
         set(v.copy(opening = true, ownsControl = false, inputPending = false, image = null))
@@ -159,7 +162,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         if (!visible || stream != null || watching || !current(v.sessionId,connection)) return
         val c = connection; val t = token; val w = ++watchToken; watching = true
         scope.launch { try {
-            val r = send(c, EmulatorCommand.Watch(Wire.random(),v.sessionId,id,v.generation)) as EmulatorResult.Watching
+            val r = send(c, EmulatorCommand.Watch(Wire.random(),v.sessionId,id,v.generation,recovery)) as EmulatorResult.Watching
             if (!valid(t,v.sessionId,c) || w != watchToken || r.emulatorId != id || r.generation != v.generation) {
                 if (connectionAlive(c)) try { send(c,EmulatorCommand.Unwatch(Wire.random(),v.sessionId,id,r.streamId)) } catch (_: Exception) {}; return@launch
             }
@@ -173,7 +176,18 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         deadline = scope.launch { delay(5500); if (stream == id && watchToken == w && valid(t, session, c)) fail("frame_deadline") }
     }
     fun frame(payload: JsonObject) {
-        val v = view ?: return; val chunk = try { parseEmulatorFrame(payload) } catch (_: Exception) {
+        val v = view ?: return
+        if (payload.optionalText("kind") == "emulator.frame.waiting") {
+            // The Host's capture is slow but the stream is alive: wait one more deadline. The Host
+            // ends a capture that stays slow, and the deadline then fails as before.
+            if (!recovery) return
+            val waiting = try { parseEmulatorFrameWaiting(payload) } catch (_: Exception) { return }
+            val id = stream ?: return
+            if (current(v.sessionId, connection) && waiting.emulatorId == v.emulatorId && waiting.incarnation == v.incarnation && waiting.streamId == id && waiting.generation == v.generation)
+                armDeadline(id, token, watchToken, v.sessionId, connection)
+            return
+        }
+        val chunk = try { parseEmulatorFrame(payload) } catch (_: Exception) {
             if (try { payload.optionalText("emulatorId") == v.emulatorId && payload.optionalText("streamId") == stream && stream != null } catch (_: Exception) { false }) fail("frame_parse")
             return
         }

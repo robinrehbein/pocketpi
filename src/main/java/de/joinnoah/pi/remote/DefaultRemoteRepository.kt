@@ -567,6 +567,7 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
     override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
@@ -2797,7 +2798,7 @@ class DefaultRemoteRepository(
                 "event" -> receiveEvent(payload)
                 "host.event" ->
                     try {
-                        if (payload.optionalText("kind") == "emulator.frame") emulatorClient.frame(payload)
+                        if (payload.optionalText("kind") in setOf("emulator.frame", "emulator.frame.waiting")) emulatorClient.frame(payload)
                         else if (payload.optionalText("kind") == "emulator.state") emulatorClient.state(payload)
                         else if (payload.optionalText("kind") in setOf("browser.frame", "browser.document", "browser.frame.waiting")) {
                             val browserId = payload.optionalText("browserId")
