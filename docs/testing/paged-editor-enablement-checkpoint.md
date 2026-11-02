@@ -41,12 +41,17 @@ corrected actual Native unchanged profile, default/legacy/independent negotiatio
 32/1,024 counts, >32 focused cleanup cycles and oversized-file refusal. It preserves
 the historical value matrix rather than claiming it absent or universally current.
 
-Next qualify the remaining semantic Host-persistence boundary after durable pending
-but before owner dispatch, then the owner-ACK/applied-durability gap. Existing actual
-post-applied restart/release cases and isolated filesystem crash tests remain valid
-in their respective scopes. Continuous full SDK edit loops remain distinct from
-focused ledger/journal capacity cycles. Physical Samsung/DeX and independent Linux
-retain separate full-goal acceptance boundaries.
+[Actual durable-pending Host death](host-pending-crash.md) now passes for Native
+and qualified RPC, including Host-first SIGKILL, unchanged raw pending bytes and
+exact encrypted Android unknown/fence retention with zero Source upload dispatch.
+The current applied-default v2 control also passes.
+
+Next qualify the genuine owner-ACK/applied-durability gap: a real SDK-accepted value
+without durable Host applied evidence must remain unknown after actual Host death.
+Continuous full SDK edit loops beyond 32 remain distinct from focused ledger/journal
+capacity cycles. Existing later applied/release cases and isolated filesystem crash
+tests retain their exact scopes; physical Samsung/DeX and independent Linux stay
+separate full-goal boundaries.
 
 Then reconcile the complete original acceptance matrix using its recorded pins
 and current implementation. Only enable the separately negotiated capabilities
