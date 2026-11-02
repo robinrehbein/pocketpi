@@ -511,6 +511,13 @@
     <string name="wear_advisor_share">Draft context-sharing request</string>
     <string name="wear_notifications">Watch notifications</string>
     <string name="wear_push_unconfigured">Push is unavailable in this build because Firebase is not configured. Reopen the app to refresh your sessions.</string>
+    <string name="wear_tile_label">PocketPi status</string>
+    <string name="wear_tile_description">Sessions that need you or are working, with their pull request checks.</string>
+    <string name="wear_tile_needs_you">needs you</string>
+    <string name="wear_tile_working">working</string>
+    <string name="wear_tile_age_now">now</string>
+    <string name="wear_tile_age_minutes">%d min</string>
+    <string name="wear_tile_age_hours">%d h</string>
     <string name="providers_title">Providers</string>
     <string name="providers_open">Providers and sign-in</string>
     <string name="providers_host_fallback">the Mac</string>
