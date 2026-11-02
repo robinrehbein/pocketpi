@@ -6038,6 +6038,7 @@ class DefaultRemoteRepository(
             return false
         }
         if (queued && (command != null || current.draft.trimStart().startsWith("/"))) return false
+        if (queued && shellDraft(current) != null) return false
         if (command != null) {
             if (current.quote != null || current.attachments.isNotEmpty()) {
                 reportError(R.string.remote_command_remove_context)

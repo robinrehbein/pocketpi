@@ -268,6 +268,16 @@ class PromptPredictionTest {
     }
 
     @Test
+    fun historyNeverStoresAPromptThatWouldComeBackAsAShellDraft() {
+        // " !ls" went to pi as a prompt, but trimmed it is "!ls", which the composer runs as a shell command.
+        assertNull(normalizePrompt(" !ls"))
+        assertNull(normalizePrompt("\n!! git status"))
+        val history = PromptHistory().record("k", " !ls -la", 1).record("k", " !ls -la", 2)
+        assertEquals(PromptHistory(), history)
+        assertEquals(emptyList<String>(), history.frequent("k"))
+    }
+
+    @Test
     fun historyIsCapped() {
         var history = PromptHistory()
         repeat(MAX_PROMPTS_PER_PROJECT + 10) { history = history.record("k", "Prompt number $it", it.toLong()) }

@@ -157,7 +157,7 @@ class ShellCommandTest {
         val runs = mutableListOf<Pair<String, Boolean>>()
         var cleared = 0
         val run = { command: String, exclude: Boolean -> runs += command to exclude; true }
-        assertTrue(runShellDraft(shellState(), "  !! git status ", run) { cleared++ })
+        assertTrue(runShellDraft(shellState(), "!! git status ", run) { cleared++ })
         assertTrue(runShellDraft(shellState(), "!ls", run) { cleared++ })
         assertEquals(listOf("git status" to true, "ls" to false), runs)
         assertEquals(2, cleared)
@@ -171,6 +171,10 @@ class ShellCommandTest {
             runShellDraft(shellState().copy(unavailableCapabilities = setOf(SESSION_BASH_CAPABILITY)), "!!x", run) {}
         )
         assertFalse(runShellDraft(shellState(), "hello !x", run) {})
+        // Only a `!` as the first character makes a shell command; whitespace before it makes a prompt.
+        assertFalse(runShellDraft(shellState(), " !ls", run) {})
+        assertFalse(runShellDraft(shellState(), "\n!ls", run) {})
+        assertFalse(runShellDraft(shellState(), " !!ls", run) {})
         assertEquals(2, runs.size)
         // An empty command, or one while another runs, is no prompt either, and keeps the draft.
         assertTrue(runShellDraft(shellState(), "!! ", run) { cleared++ })
@@ -227,13 +231,30 @@ class ShellCommandTest {
         assertTrue(recordsPrompt(shellState().copy(draft = "list the files")))
         // Without the gate `!ls` is refused, so it is not recorded as a prompt either.
         assertFalse(recordsPrompt(shellState(capable = false).copy(draft = "!ls")))
+        // A leading space makes it a prompt, with or without the gate, but the history still stores
+        // nothing: trimmed, it would come back as the shell draft `!ls`.
+        assertTrue(recordsPrompt(shellState().copy(draft = " !ls")))
+        assertTrue(recordsPrompt(shellState(capable = false).copy(draft = " !ls")))
+        assertNull(normalizePrompt(" !ls"))
+    }
+
+    @Test
+    fun onlyABangAsTheFirstCharacterMakesAShellDraft() {
+        assertEquals(ShellDraft("ls", false), shellDraft(shellState().copy(draft = "!ls")))
+        assertEquals(ShellDraft("ls", true), shellDraft(shellState().copy(draft = "!!ls")))
+        assertEquals(ShellDraft("git status", true), shellDraft(shellState().copy(draft = "!!  git status \n")))
+        for (draft in listOf(" !ls", "\n!ls", "\t!!ls")) {
+            assertNull(draft, shellDraft(shellState().copy(draft = draft)))
+            assertTrue(draft, canSendDraft(shellState().copy(draft = draft)))
+            assertTrue(draft, canSendDraft(shellState(capable = false).copy(draft = draft)))
+        }
     }
 
     @Test
     fun aBangDraftIsRefusedWhenTheSessionCannotRunShellCommands() {
         val noGate = shellState(capable = false)
         assertTrue(shellDraftRefused(noGate.copy(draft = "!ls")))
-        assertTrue(shellDraftRefused(noGate.copy(draft = "  !!ls")))
+        assertTrue(shellDraftRefused(noGate.copy(draft = "!!ls")))
         // A capability marked unavailable counts as missing.
         val off = shellState().copy(unavailableCapabilities = setOf(SESSION_BASH_CAPABILITY), draft = "!ls")
         assertTrue(shellDraftRefused(off))
@@ -241,6 +262,10 @@ class ShellCommandTest {
         // Prompts, a draft with a quote or attachment, and a capable session are not refused.
         assertFalse(shellDraftRefused(noGate.copy(draft = "list the files")))
         assertFalse(shellDraftRefused(noGate.copy(draft = "hello !ls")))
+        // Whitespace before the `!` makes the draft a prompt, which is how text starting with `!` reaches pi.
+        assertFalse(shellDraftRefused(noGate.copy(draft = " !ls")))
+        assertFalse(shellDraftRefused(noGate.copy(draft = "\n!ls")))
+        assertFalse(shellDraftRefused(noGate.copy(draft = "  !!ls")))
         assertFalse(shellDraftRefused(shellState().copy(draft = "!ls")))
     }
 }
