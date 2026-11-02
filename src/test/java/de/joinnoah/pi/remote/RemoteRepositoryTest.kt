@@ -360,6 +360,34 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun emulatorWatchAsksForRecoveryOnlyWhenTheHostAdvertisesIt() = runTest {
+        for (recovery in listOf(true, false)) {
+            val transport = Transport().also(::configure)
+            advertising(transport, JsonArray(listOfNotNull(JsonPrimitive(SESSION_EMULATOR_CAPABILITY), if (recovery) JsonPrimitive(SESSION_EMULATOR_RECOVERY_CAPABILITY) else null)))
+            val original = transport.response
+            val geometry = Wire.objectOf("width" to 2, "height" to 3, "rotation" to 0, "revision" to 1)
+            transport.response = { request ->
+                when (request.text("type")) {
+                    "emulator.list" -> Wire.objectOf("kind" to "emulator.profiles", "profiles" to JsonArray(listOf(Wire.objectOf("id" to "p", "label" to "Phone"))))
+                    "emulator.open" -> Wire.objectOf("kind" to "emulator.opened", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to 1, "geometry" to geometry)
+                    "emulator.status" -> Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to 1, "geometry" to geometry)
+                    "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to 1, "participants" to JsonArray(emptyList()))
+                    "emulator.watch" -> Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to 1, "streamId" to "stream")
+                    else -> original(request)
+                }
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+            repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+            assertTrue(repo.openEmulator()); runCurrent()
+            assertTrue(repo.selectEmulatorProfile("p")); runCurrent()
+            val watch = transport.sent.singleOrNull { it.text("type") == "emulator.watch" }
+                ?: error("no watch; sent " + transport.sent.map { it.text("type") } + ", view " + repo.state.value.emulator)
+            assertEquals(if (recovery) "true" else null, watch["recovery"]?.toString())
+        }
+    }
+
+    @Test
     fun previewOnlyCapabilityOpensExactPortAndReconnectsReadOnly() = runTest {
         val transport = Transport().also(::configure)
         advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_PREVIEW_CAPABILITY), JsonPrimitive(SESSION_BROWSER_RECOVERY_CAPABILITY))))

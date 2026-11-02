@@ -377,6 +377,7 @@ class DefaultRemoteRepository(
             // Browser commands additionally require a successfully negotiated v3 route.
             SESSION_PREVIEW_CAPABILITY,
             SESSION_EMULATOR_CAPABILITY,
+            SESSION_EMULATOR_RECOVERY_CAPABILITY,
             SESSION_BROWSER_CAPABILITY,
             SESSION_BROWSER_RECOVERY_CAPABILITY,
             // Capability routes v2 and later support focus, `after`, ping and acks.
