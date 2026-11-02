@@ -72,6 +72,8 @@ android {
     lint {
         // Same policy as the phone app: lint reports only findings missing from this baseline.
         baseline = file("lint-baseline.xml")
+        // Scopes WearMaterialTheme to wear/src; the shared phone screens keep phone Material 3.
+        lintConfig = file("lint.xml")
         checkDependencies = true
     }
 }
