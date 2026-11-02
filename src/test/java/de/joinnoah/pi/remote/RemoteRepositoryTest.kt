@@ -7018,6 +7018,32 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aShellDraftIsNeverQueuedAsAFollowUp() = runTest {
+        val transport =
+            Transport().also { bashing(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY, STEER_CAPABILITY) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        runCurrent()
+        assertTrue(canRunShellCommands(repository.state.value))
+        repository.draft("!ls")
+        runCurrent()
+        repository.followUp()
+        repository.steer()
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertTrue(transport.bashRequests().isEmpty())
+        assertEquals("!ls", repository.state.value.draft)
+        // A plain follow-up still goes out.
+        repository.draft("list the files")
+        runCurrent()
+        repository.followUp()
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
     fun aSpaceBeforeTheBangSendsTheDraftAsAPrompt() = runTest {
         val transport = Transport().also { bashing(it, advertise = false) }
         val repository = repository(transport)

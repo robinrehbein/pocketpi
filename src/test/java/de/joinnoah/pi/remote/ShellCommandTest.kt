@@ -231,9 +231,11 @@ class ShellCommandTest {
         assertTrue(recordsPrompt(shellState().copy(draft = "list the files")))
         // Without the gate `!ls` is refused, so it is not recorded as a prompt either.
         assertFalse(recordsPrompt(shellState(capable = false).copy(draft = "!ls")))
-        // A leading space makes it a prompt, with or without the gate.
+        // A leading space makes it a prompt, with or without the gate, but the history still stores
+        // nothing: trimmed, it would come back as the shell draft `!ls`.
         assertTrue(recordsPrompt(shellState().copy(draft = " !ls")))
         assertTrue(recordsPrompt(shellState(capable = false).copy(draft = " !ls")))
+        assertNull(normalizePrompt(" !ls"))
     }
 
     @Test

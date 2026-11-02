@@ -252,10 +252,15 @@ internal const val MAX_PLAN_APPROVALS = 20
 internal const val MAX_PROMPT_LENGTH = 160
 internal const val MIN_PROMPT_USES = 2
 
-/** The form a prompt is stored and compared in, or null when it is not worth remembering. */
+/**
+ * The form a prompt is stored and compared in, or null when it is not worth remembering. A value
+ * that starts with `/` or `!` once trimmed is never stored: put back in the composer, it would be a
+ * command or a shell draft.
+ */
 internal fun normalizePrompt(text: String): String? {
     val value = text.trim().replace(Regex("\\s+"), " ")
-    if (value.length < 3 || value.length > MAX_PROMPT_LENGTH || value.startsWith("/")) return null
+    if (value.length < 3 || value.length > MAX_PROMPT_LENGTH) return null
+    if (value.startsWith("/") || value.startsWith("!")) return null
     if (text.trim().contains('\n')) return null
     return value
 }
