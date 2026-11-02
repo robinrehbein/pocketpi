@@ -105,4 +105,45 @@ wider locale/font/IME combinations, independent remote Linux and same-ID live
 owner replacement remain separate acceptance requirements. No Wear emulator or
 iPhone work is included.
 
-Document-picker cancellation, unavailable-provider, interrupted-request and failed-write handling are implemented and source/unit inspected; the real provider run qualifies successful saves, not an exhaustive Android lifecycle/error matrix.
+### Export lifecycle follow-up
+
+`export-lifecycle-green-02` passes four instrumentation cases in 27.560 seconds,
+with cleanup passed on the dedicated emulator:
+
+- Real DocumentsUI cancellation, followed by another launch and cancellation.
+- Real Activity recreation while DocumentsUI is open, confirmed by a second
+  activity content creation, then cancellation and a successful retry launch.
+- Controlled saved-state restoration and late result delivery: new exports stay
+  disabled until the original result is consumed; lost pending text is reported
+  without a saved callback or destination creation.
+- A controlled URI with a nonexistent provider reports failure, retains the
+  original preview and permits retry without a saved callback. This is a provider
+  opening failure, not a failure after bytes were written.
+
+The late-result test was first observed failing on the enabled Export button in
+`export-lifecycle-red-01`. The production correction retains the restored pending
+marker until its callback arrives, preventing an old result from consuming a new
+selection. If the picker never returns, that dialog instance remains fenced.
+`export-lifecycle-green-01` passed the two controlled cases but failed the real
+cases because the test relied on the Back key return value and ActivityScenario
+required a resumed activity. The final tests observe the actual app return and
+invoke recreation on the original stopped activity; those diagnostic failures
+are not counted as product passes.
+
+The final app APK is
+`3af5fb3f669671d3f4c34e62a5fcbeafe08c29021ea36e6836a739f0307d03de`;
+the test APK is
+`505853d37011bcebee37d00ef79b686de202b04a8b145ad65c57ab9ad679e50b`.
+The controller preserves source/APK snapshots and verifies installed package
+hashes. No document is created by the real cancellation cases. The full local
+quick-check passes in 97 seconds, with 3,651 app and 34 Wear tests and zero
+failures, errors or skips. The earlier successful-save and Pi reopen evidence
+above remains evidence for its recorded source/APK versions, not a rerun on this
+follow-up APK.
+
+Still open: an actual write/close failure after opening a destination, interruption
+while IO is already writing, real process death with a pending picker, physical
+Galaxy acceptance and the wider provider matrix. In particular, the current
+writing job is composition-owned and its writing indicator is not saved across
+recreation; its interrupted-destination feedback requires a separate regression
+and implementation. The lifecycle/error plan gate therefore remains unchecked.

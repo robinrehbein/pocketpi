@@ -44,7 +44,8 @@ internal fun EditorRecoveryDialog(
     var writing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (pendingMarker && !pending.hasEntry()) {
-            pendingMarker = false
+            // Keep the outstanding picker fenced until its result is consumed. Otherwise
+            // a late result could take the immutable entry of a newer export request.
             status = R.string.editor_recovery_export_lost
         }
     }
