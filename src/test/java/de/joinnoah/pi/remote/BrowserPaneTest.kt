@@ -38,6 +38,28 @@ class BrowserPaneTest {
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out); bitmap.recycle()
         return BrowserImage(out.toByteArray(), 400, 200, 400, 200, 1.0, 0.0, 0.0, 1, 1)
     }
+    @Test fun goWithNoTabOpensTheAddressInANewTab() {
+        val opened = mutableListOf<String>(); var navigated = 0
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1)
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(newTab = { opened += it; true }, navigate = { navigated++; true }), {}) } }
+        compose.onNodeWithTag("browserAddress").performTextReplacement("https://example.com/a")
+        compose.onNodeWithTag("browserGo").performClick()
+        assertEquals(listOf("https://example.com/a"), opened); assertEquals(0, navigated)
+        compose.onAllNodesWithTag("browserGoRefused").assertCountEquals(0)
+    }
+    @Test fun refusedGoSaysSoAndASentOneClearsTheNotice() {
+        var accept = false; val navigated = mutableListOf<String>()
+        val tabs = listOf(BrowserTab("tab", "T", "https://example.com"))
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, tabs = tabs, selectedTabId = "tab")
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(navigate = { navigated += it; accept }), {}) } }
+        compose.onNodeWithTag("browserAddress").performTextReplacement("https://example.com/b")
+        compose.onNodeWithTag("browserGo").performClick()
+        compose.onNodeWithTag("browserGoRefused").assertIsDisplayed()
+        accept = true
+        compose.onNodeWithTag("browserGo").performClick()
+        compose.onAllNodesWithTag("browserGoRefused").assertCountEquals(0)
+        assertEquals(listOf("https://example.com/b", "https://example.com/b"), navigated)
+    }
     @Test fun paneCoversTheChatBeneathIt() {
         // A phone shows the pane over the chat: nothing beneath may show through or take a tap.
         var beneathClicks = 0

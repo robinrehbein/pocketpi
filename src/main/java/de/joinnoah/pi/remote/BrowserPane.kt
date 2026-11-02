@@ -72,6 +72,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var urlDirty by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf(false) }
     var draft by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf("") }
     var textSendRefused by remember(view?.sessionId) { mutableStateOf(false) }
+    var goRefused by remember(view?.sessionId) { mutableStateOf(false) }
     val queue = remember(view?.sessionId) { mutableStateListOf<PendingBrowserInput>() }
     var flight by remember(view?.sessionId) { mutableStateOf<BrowserFlight?>(null) }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -234,6 +235,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             BrowserNotice.FRAME_FAILED -> R.string.browser_frame_failed
         }), color = MaterialTheme.colorScheme.error)
         if (textSendRefused) Text(stringResource(R.string.browser_send_refused), Modifier.testTag("browserSendRefused"), color = MaterialTheme.colorScheme.error)
+        if (goRefused) Text(stringResource(R.string.browser_go_refused), Modifier.testTag("browserGoRefused"), color = MaterialTheme.colorScheme.error)
         Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
             view.tabs.forEach { tab ->
                 TextButton(onClick = { latestActions.selectTab(tab.id) }, enabled = held.isEmpty()) { Text(if (tab.title.isBlank()) tab.url else tab.title) }
@@ -246,7 +248,12 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(url, { url = it; urlDirty = true }, Modifier.weight(1f).testTag("browserAddress"), singleLine = true, enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_address)) })
-            TextButton(onClick = { if (latestActions.navigate(url)) urlDirty = false }, Modifier.testTag("browserGo"), enabled = view.ownsControl && held.isEmpty() && url.isNotBlank()) { Text(stringResource(R.string.browser_go)) }
+            TextButton(onClick = {
+                // With no tab open, the address opens in a new one instead of going nowhere.
+                val sent = if (view.selectedTabId == null) latestActions.newTab(url) else latestActions.navigate(url)
+                if (sent) urlDirty = false
+                goRefused = !sent
+            }, Modifier.testTag("browserGo"), enabled = view.ownsControl && held.isEmpty() && url.isNotBlank()) { Text(stringResource(R.string.browser_go)) }
         }
         Box(Modifier.weight(1f).fillMaxWidth().testTag("browserViewport").background(Color.Black).onSizeChanged { size = it }
             .onFocusChanged {
