@@ -59,7 +59,10 @@ tests retain their exact scopes; physical Samsung/DeX and independent Linux stay
 separate full-goal boundaries.
 
 Next qualify the explicit actual IME composition/navigation and presence/timing
-gate; semantics SetText is not an actual IME. Reconcile the complete original
+gate; [actual system IME feasibility](real-ime-feasibility.md) now passes
+composition/selection/session-replacement on a small Compose field, but does not
+yet qualify the large paged editor/SDK chain or timing. Semantics SetText alone
+remains insufficient. Reconcile the complete original
 acceptance matrix using its recorded pins
 and current implementation. Only enable the separately negotiated capabilities
 when their actual mandatory criteria and resource policy are satisfied; do not
