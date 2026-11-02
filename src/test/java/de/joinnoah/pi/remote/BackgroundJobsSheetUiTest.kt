@@ -4,6 +4,10 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,7 +23,13 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], qualifiers = "w320dp-h640dp")
-class BackgroundJobsPopoverUiTest {
+class BackgroundJobsSheetUiTest {
+    @Composable
+    private fun JobsHarness(jobs: JobsState, actions: JobsActions) {
+        var open by remember(jobs.sessionId) { mutableStateOf(false) }
+        BackgroundJobsChip(jobs, open) { open = true; actions.onRefresh() }
+        if (open) JobsInsightSheet(jobs, actions) { open = false }
+    }
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     /** A narrow job header keeps Ask in its overflow menu; the menu opens first. */
@@ -33,33 +43,29 @@ class BackgroundJobsPopoverUiTest {
     )
 
     @Test
-    fun overviewUsesAnchoredPopoverAndClosesBeforeOpeningDetails() {
+    fun overviewUsesInsightSheetAndClosesBeforeOpeningDetails() {
         val opened = mutableListOf<String>()
         var refreshed = 0
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
-                    BackgroundJobsChip(JobsState("session", listOf(job("one"))),
+                    JobsHarness(JobsState("session", listOf(job("one"))),
                         JobsActions({ refreshed++ }, { opened += it }, {}, {}, {}))
                 }
             }
         }
-        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
         compose.onNodeWithTag("jobsChip").performClick()
-        val panel = compose.onNodeWithTag("jobsPopover").fetchSemanticsNode().boundsInWindow
-        val chip = compose.onNodeWithTag("jobsChip").fetchSemanticsNode().boundsInWindow
-        assertTrue(panel.bottom < chip.top)
-        assertTrue(panel.width <= 320 * compose.activity.resources.displayMetrics.density)
         compose.onNodeWithTag("jobsScreen").assertDoesNotExist()
         assertEquals(1, refreshed)
         compose.onNodeWithTag("jobsRefresh").performClick()
         assertEquals(2, refreshed)
         compose.onNodeWithTag("job-one").performClick()
         assertEquals(listOf("one"), opened)
-        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
         compose.onNodeWithTag("jobsChip").performClick()
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_jobs_close)).performClick()
-        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.insight_sheet_close)).performClick()
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
         assertEquals(3, refreshed)
     }
 
@@ -67,7 +73,7 @@ class BackgroundJobsPopoverUiTest {
     fun chipShowsOnlyWhileAJobRunsAndKeepsAnOpenOverview() {
         val current = mutableStateOf(JobsState("session", listOf(job("one").copy(status = JobStatus.EXITED, exitCode = 0))))
         compose.setContent {
-            MaterialTheme { BackgroundJobsChip(current.value, JobsActions({}, {}, {}, {}, {})) }
+            MaterialTheme { JobsHarness(current.value, JobsActions({}, {}, {}, {}, {})) }
         }
         compose.onNodeWithTag("jobsChip").assertDoesNotExist()
         compose.runOnIdle { current.value = JobsState("session", current.value.jobs + job("two")) }
@@ -76,38 +82,23 @@ class BackgroundJobsPopoverUiTest {
         compose.runOnIdle {
             current.value = JobsState("session", current.value.jobs.map { it.copy(status = JobStatus.EXITED, exitCode = 0) })
         }
-        compose.onNodeWithTag("jobsPopover").assertExists()
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
         compose.onNodeWithTag("job-one").assertExists()
         compose.onNodeWithTag("job-two").assertExists()
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_jobs_close)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.insight_sheet_close)).performClick()
         compose.onNodeWithTag("jobsChip").assertDoesNotExist()
-    }
-
-    @Test
-    fun chipTogglesExpandedOverview() {
-        var refreshed = 0
-        compose.setContent {
-            MaterialTheme {
-                BackgroundJobsChip(JobsState("session", listOf(job("one"))), JobsActions({ refreshed++ }, {}, {}, {}, {}))
-            }
-        }
-        compose.onNodeWithTag("jobsChip").performClick()
-        compose.onNodeWithTag("jobsPopover").assertExists()
-        compose.onNodeWithTag("jobsChip").performClick()
-        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
-        assertEquals(1, refreshed)
     }
 
     @Test
     fun switchingSessionDiscardsExpandedStateAndPreviousJobs() {
         val current = mutableStateOf(JobsState("first", listOf(job("one"))))
         compose.setContent {
-            MaterialTheme { BackgroundJobsChip(current.value, JobsActions({}, {}, {}, {}, {})) }
+            MaterialTheme { JobsHarness(current.value, JobsActions({}, {}, {}, {}, {})) }
         }
         compose.onNodeWithTag("jobsChip").performClick()
         compose.onNodeWithTag("job-one").assertExists()
         compose.runOnIdle { current.value = JobsState("second", listOf(job("two"))) }
-        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
         compose.onNodeWithTag("job-one").assertDoesNotExist()
         compose.onNodeWithTag("jobsChip").performClick()
         compose.onNodeWithTag("job-two").assertExists()
@@ -184,10 +175,106 @@ class BackgroundJobsPopoverUiTest {
                 jobs = JobsState("session", listOf(job("one").copy(status = JobStatus.EXITED, exitCode = 0))),
             )
         }
-        compose.onNodeWithTag("jobsPopover").assertExists()
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_jobs_close)).performClick()
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.insight_sheet_close)).performClick()
         compose.onNodeWithTag("jobsChip").assertDoesNotExist()
         compose.onNodeWithTag("chatInsights").assertDoesNotExist()
+    }
+
+    @Test
+    fun chatSheetSurvivesEmptyLoadingFailureAndNewJobs() {
+        val repository = NavigationFakeRepository()
+        val selection = RemoteSelection("host", "project", "session")
+        repository.state.value = RemoteState(
+            selection = selection, connected = true, status = "idle",
+            session = Wire.objectOf("id" to "session", "origin" to "tui", "status" to "idle"),
+            sessions = listOf(Wire.objectOf("id" to "session", "title" to "Session", "origin" to "tui", "status" to "idle")),
+            capabilities = setOf(BACKGROUND_JOBS_CAPABILITY),
+            jobs = JobsState("session", listOf(job("one")), loaded = true),
+        )
+        repository.notificationLookup = { selection }
+        compose.setContent {
+            MaterialTheme { RemoteNavigation(repository, FakeSettingsRepository(), false, {}, RemoteNotification("host", "session", 1)) }
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("jobsChip").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("jobsChip").performClick()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = JobsState("session", loaded = true)) }
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
+        compose.onNodeWithTag("jobsMessage").assertTextEquals(compose.activity.getString(R.string.remote_jobs_empty))
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = JobsState("session", loading = true)) }
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
+        compose.onNodeWithTag("jobsRefresh").assertIsNotEnabled()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = JobsState("session", failure = JobsFailure.OFFLINE)) }
+        compose.onNodeWithTag("jobsMessage").assertTextEquals(compose.activity.getString(R.string.remote_jobs_failed))
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = JobsState("session", listOf(job("two")))) }
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
+        compose.onNodeWithTag("job-two").performClick()
+        assertEquals(listOf("two"), repository.jobOpens)
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+    }
+
+    @Test
+    fun chatSheetRejectsOldSnapshotsAndClosesOnCapabilityLoss() {
+        val repository = NavigationFakeRepository()
+        val selection = RemoteSelection("host", "project", "session")
+        val otherSelection = RemoteSelection("host", "project", "other")
+        val notification = mutableStateOf(RemoteNotification("host", "session", 1))
+        repository.state.value = RemoteState(
+            selection = selection, connected = true, status = "idle",
+            session = Wire.objectOf("id" to "session", "origin" to "tui", "status" to "idle"),
+            sessions = listOf(Wire.objectOf("id" to "session", "title" to "Session", "origin" to "tui", "status" to "idle")),
+            capabilities = setOf(BACKGROUND_JOBS_CAPABILITY),
+            jobs = JobsState("session", listOf(job("one"))),
+        )
+        repository.notificationLookup = {
+            if (notification.value.sessionId == "other") {
+                repository.state.value = repository.state.value.copy(
+                    selection = otherSelection,
+                    session = Wire.objectOf("id" to "other", "origin" to "tui", "status" to "idle"),
+                    jobs = JobsState("other", listOf(job("other"))),
+                )
+                otherSelection
+            } else selection
+        }
+        compose.setContent {
+            MaterialTheme { RemoteNavigation(repository, FakeSettingsRepository(), false, {}, notification.value) }
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("jobsChip").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("jobsChip").performClick()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = JobsState("old", listOf(job("old")))) }
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
+        compose.onNodeWithTag("job-old").assertDoesNotExist()
+        compose.onNodeWithTag("jobsRefresh").assertIsNotEnabled()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(capabilities = emptySet()) }
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(
+                capabilities = setOf(BACKGROUND_JOBS_CAPABILITY), jobs = JobsState("session", listOf(job("two"))),
+            )
+        }
+        compose.onNodeWithTag("jobsChip").assertExists()
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+        compose.onNodeWithTag("jobsChip").performClick()
+        // A repository selection alone does not navigate: the old chat retains its own snapshot.
+        compose.runOnIdle { notification.value = RemoteNotification("host", "other", 2) }
+        compose.waitUntil(5_000) {
+            repository.state.value.selection == otherSelection &&
+                compose.onAllNodesWithTag("jobsInsightSheet").fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithTag("jobsChip").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("session", listOf(job("late"))))
+        }
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+        compose.onNodeWithTag("job-late").assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("other", listOf(job("other"))))
+        }
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+        compose.onNodeWithTag("jobsChip").performClick()
+        compose.onNodeWithTag("job-other").assertExists()
+        compose.onNodeWithTag("job-late").assertDoesNotExist()
     }
 
     @Test
@@ -231,10 +318,30 @@ class BackgroundJobsPopoverUiTest {
     }
 
     @Test
+    fun openSheetKeepsEmptyAndFailedResultsVisibleAndDisablesRefreshWhileLoading() {
+        val current = mutableStateOf(JobsState("session", listOf(job("one"))))
+        var refreshes = 0
+        compose.setContent {
+            MaterialTheme { JobsHarness(current.value, JobsActions({ refreshes++ }, {}, {}, {}, {})) }
+        }
+        compose.onNodeWithTag("jobsChip").performClick()
+        assertEquals(1, refreshes)
+        compose.runOnIdle { current.value = JobsState("session", emptyList(), loading = true) }
+        compose.onNodeWithTag("jobsInsightSheet").assertExists()
+        compose.onNodeWithTag("jobsRefresh").assertIsNotEnabled()
+        compose.runOnIdle { current.value = JobsState("session", emptyList(), failure = JobsFailure.OFFLINE) }
+        compose.onNodeWithTag("jobsMessage").assertTextEquals(compose.activity.getString(R.string.remote_jobs_failed))
+        compose.onNodeWithTag("jobsRefresh").performClick()
+        assertEquals(2, refreshes)
+        compose.runOnIdle { current.value = JobsState("session", emptyList(), loaded = true) }
+        compose.onNodeWithTag("jobsMessage").assertTextEquals(compose.activity.getString(R.string.remote_jobs_empty))
+    }
+
+    @Test
     fun longOverviewScrollsAndRetainsFailureMessage() {
         compose.setContent {
             MaterialTheme {
-                BackgroundJobsChip(JobsState("session", (1..20).map { job("job-$it") }, failure = JobsFailure.OFFLINE),
+                JobsHarness(JobsState("session", (1..20).map { job("job-$it") }, failure = JobsFailure.OFFLINE),
                     JobsActions({}, {}, {}, {}, {}))
             }
         }
@@ -245,11 +352,11 @@ class BackgroundJobsPopoverUiTest {
     }
 
     @Test
-    fun openJobsInThePopoverOpensTheFullList() {
+    fun openJobsInTheSheetOpensTheFullList() {
         var listOpens = 0
         compose.setContent {
             MaterialTheme {
-                BackgroundJobsChip(
+                JobsHarness(
                     JobsState("session", listOf(job("one"))),
                     JobsActions({}, {}, {}, {}, {}, onOpenList = { listOpens++ }),
                 )
@@ -258,13 +365,13 @@ class BackgroundJobsPopoverUiTest {
         compose.onNodeWithTag("jobsChip").performClick()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_jobs_open_all)).performClick()
         assertEquals(1, listOpens)
-        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
+        compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
     }
 
     @Test
-    fun withoutAWayToTheListThePopoverOffersNone() {
+    fun withoutAWayToTheListTheSheetOffersNone() {
         compose.setContent {
-            MaterialTheme { BackgroundJobsChip(JobsState("session", listOf(job("one"))), JobsActions({}, {}, {}, {}, {})) }
+            MaterialTheme { JobsHarness(JobsState("session", listOf(job("one"))), JobsActions({}, {}, {}, {}, {})) }
         }
         compose.onNodeWithTag("jobsChip").performClick()
         compose.onNodeWithTag("jobsOpenAll").assertDoesNotExist()

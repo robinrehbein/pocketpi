@@ -383,7 +383,15 @@ internal fun RemoteScreen(
     LaunchedEffect(state.selection.sessionId, state.connected, state.loading, jobsAvailable, jobsLeasable) {
         if (state.connected && !state.loading && jobsAvailable) chatModel?.refreshJobs()
     }
-    val statusJobs = visibleJobs(state)?.takeIf { chatModel != null }
+    val statusJobs = visibleJobs(state)?.takeIf { chatModel != null && chatKey?.selection() == state.selection }
+    // An open sheet must survive empty results, but never display another session's snapshot.
+    val sheetJobsSession = state.selection.sessionId?.takeIf {
+        chatModel != null && chatKey?.selection() == state.selection && jobsAvailable &&
+            state.jobs?.let { jobs -> jobs.sessionId != it || !jobs.unsupported } != false
+    }
+    val sheetJobs = sheetJobsSession?.let { sessionId ->
+        state.jobs?.takeIf { it.sessionId == sessionId } ?: JobsState(sessionId, loading = true)
+    }
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
@@ -732,6 +740,9 @@ internal fun RemoteScreen(
     var insightSheet by remember(key, state.selection.sessionId) { mutableStateOf<InsightSheetKind?>(null) }
     LaunchedEffect(chatKey, strip.entries.isEmpty()) {
         if (strip.entries.isEmpty() && insightSheet == InsightSheetKind.SUBAGENTS) insightSheet = null
+    }
+    LaunchedEffect(sheetJobsSession) {
+        if (sheetJobsSession == null && insightSheet == InsightSheetKind.JOBS) insightSheet = null
     }
     fun openInsightSheet(sheet: InsightSheetKind) {
         if (!sideCapable) touchedSheet = false
@@ -3419,12 +3430,11 @@ internal fun RemoteScreen(
                             }
                         }
                     }
-                    // Held here so the row knows whether a chip shows; finished jobs stay behind the Jobs action.
-                    val jobsExpanded = rememberSaveable(statusJobs?.sessionId) { mutableStateOf(false) }
+                    val chipJobs = if (insightSheet == InsightSheetKind.JOBS) sheetJobs else statusJobs
                     val insightsShown =
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
                             subagentChipShown(strip, insightSheet == InsightSheetKind.SUBAGENTS) ||
-                            jobsChipShown(statusJobs, jobsExpanded.value) || state.pullRequest != null ||
+                            jobsChipShown(chipJobs, insightSheet == InsightSheetKind.JOBS) || state.pullRequest != null ||
                             taskInsightShown(state.tasks)
                     // The chips sit in their own row above the composer, never inside it. While the chat is
                     // compact the row also holds the status chip that stands in for the banners.
@@ -3439,17 +3449,10 @@ internal fun RemoteScreen(
                                 InsightChip.TASKS ->
                                     TaskInsightPill(state.tasks) { openInsightSheet(InsightSheetKind.TASKS) }
                                 InsightChip.JOBS ->
-                                    statusJobs?.let { jobs ->
-                                        key(jobs.sessionId) {
-                                            val chat = checkNotNull(chatModel)
-                                            val openJobs by rememberUpdatedState { openInspector(InspectorTab.JOBS) }
-                                            BackgroundJobsChip(jobs, remember(chat) {
-                                                JobsActions(
-                                                    chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs,
-                                                    chat::stopJob,
-                                                    onOpenList = { openJobs() },
-                                                )
-                                            }, jobsExpanded)
+                                    chipJobs?.let { jobs ->
+                                        BackgroundJobsChip(jobs, insightSheet == InsightSheetKind.JOBS) {
+                                            openInsightSheet(InsightSheetKind.JOBS)
+                                            checkNotNull(chatModel).refreshJobs()
                                         }
                                     }
                                 InsightChip.SUBAGENTS ->
@@ -3773,6 +3776,15 @@ internal fun RemoteScreen(
                 state.tasks, state.session?.optionalText("title")?.takeIf(String::isNotBlank),
                 onDismiss = { insightSheet = null },
             )
+            InsightSheetKind.JOBS -> sheetJobs?.let { jobs ->
+                val chat = checkNotNull(chatModel)
+                JobsInsightSheet(
+                    jobs,
+                    JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob,
+                        onOpenList = { openInspector(InspectorTab.JOBS) }),
+                    onDismiss = { insightSheet = null },
+                )
+            }
             InsightSheetKind.SUBAGENTS -> SubagentInsightSheet(
                 strip,
                 canAbort = { entry -> entry.sessionId?.let { canAbortSubagent(state, it) } == true },
@@ -4599,17 +4611,28 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
  * read out as it changes.
  */
 @Composable
-private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
-    AssistChip(
-        onClick = onClick,
-        label = { Text(stringResource(line), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        leadingIcon = {
+internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
+    FloatingSurface(shape = CircleShape) {
+        Row(
+            Modifier.clickable(role = Role.Button, onClick = onClick)
+                .testTag("chatStatusChip")
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .minimumInteractiveComponentSize()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (running && ValueAnimator.areAnimatorsEnabled())
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-            else Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
-        },
-        modifier = Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
-    )
+            else Icon(
+                Icons.Outlined.Info,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(stringResource(line), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 /** Whether TalkBack or another touch-exploration service is on; follows the setting while shown. */
@@ -4627,7 +4650,7 @@ private fun rememberTouchExploring(): State<Boolean> {
     return exploring
 }
 
-internal enum class InsightSheetKind { FILES, ERRORS, TASKS, SUBAGENTS }
+internal enum class InsightSheetKind { FILES, ERRORS, TASKS, JOBS, SUBAGENTS }
 
 internal fun taskInsightShown(tasks: SessionTasks): Boolean =
     tasks.items.isNotEmpty() && tasks.freshness in setOf(TaskFreshness.LIVE, TaskFreshness.STALE)
