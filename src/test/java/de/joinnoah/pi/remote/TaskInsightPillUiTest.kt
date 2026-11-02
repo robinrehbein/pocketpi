@@ -17,7 +17,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
@@ -106,10 +106,9 @@ class TaskInsightPillUiTest {
         var staleDescription = ""
         var completeDescription = ""
         compose.setContent {
-            val context = LocalContext.current
-            activeDescription = context.getString(R.string.task_insight_description, 0, 1, 1)
-            staleDescription = activeDescription + ", " + context.getString(R.string.task_insight_stale)
-            completeDescription = context.getString(R.string.task_insight_description, 1, 1, 0)
+            activeDescription = stringResource(R.string.task_insight_description, 0, 1, 1)
+            staleDescription = activeDescription + ", " + stringResource(R.string.task_insight_stale)
+            completeDescription = stringResource(R.string.task_insight_description, 1, 1, 0)
             MaterialTheme {
                 TaskInsightPill(SessionTasks(listOf(SessionTask(1, "Task", status.value)), freshness.value), onClick = {})
             }

@@ -3430,7 +3430,7 @@ internal fun RemoteScreen(
                     // compact the row also holds the status chip that stands in for the banners.
                     val pullRequest = state.pullRequest
                     val chipOrder =
-                        insightChipOrder(compact, pullRequest?.let { pullRequestChipModel(it).needsAttention } == true, includeTasks = true)
+                        insightChipOrder(compact, pullRequest?.let { pullRequestChipModel(it).needsAttention } == true)
                     val insightChips: @Composable RowScope.() -> Unit = {
                         for (chip in chipOrder)
                             when (chip) {
@@ -3499,6 +3499,7 @@ internal fun RemoteScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            TaskInsightPill(state.tasks) { openInsightSheet(InsightSheetKind.TASKS) }
                             statusChipLine?.let { line ->
                                 ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
                             }
@@ -4647,7 +4648,7 @@ internal fun insightChipOrder(compact: Boolean, pullRequestNeedsAttention: Boole
         if (pullRequestNeedsAttention) listOf(InsightChip.PULL_REQUEST) + attention + InsightChip.TOUCHED
         else attention + listOf(InsightChip.PULL_REQUEST, InsightChip.TOUCHED)
     } else listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.PULL_REQUEST)
-    return if (includeTasks) existing + InsightChip.TASKS else existing
+    return if (includeTasks) listOf(InsightChip.TASKS) + existing else existing
 }
 
 /**
