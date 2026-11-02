@@ -3907,11 +3907,11 @@ internal fun RemoteScreen(
     if (previewPortDialog) AlertDialog(
         onDismissRequest = { previewPortDialog = false },
         title = { Text(stringResource(R.string.preview_title)) },
-        text = { OutlinedTextField(previewPortText, { previewPortText = it }, label = { Text(stringResource(R.string.preview_port)) }, singleLine = true) },
+        text = { OutlinedTextField(previewPortText, { previewPortText = it }, Modifier.testTag("previewPortField"), label = { Text(stringResource(R.string.preview_port)) }, singleLine = true) },
         confirmButton = { TextButton(onClick = {
             val port = previewPortText.toIntOrNull()
             if (port != null && previewPortText.all { it in '0'..'9' } && port in 1..65535 && chatModel?.openPreview(port) == true) { previewPortDialog = false; previewInstance++; previewShown = true }
-        }, enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
+        }, Modifier.testTag("previewOpen"), enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
         dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
     )
     val currentEmulator = state.emulator

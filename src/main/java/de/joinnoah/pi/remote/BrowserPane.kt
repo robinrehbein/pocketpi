@@ -211,7 +211,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             Text(if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { latestActions.refresh() }) { Text(stringResource(R.string.browser_refresh)) }
             if (onHide != null) TextButton(onClick = onHide) { Text(stringResource(R.string.preview_hide)) }
-            TextButton(onClick = onClose) { Text(stringResource(R.string.browser_close)) }
+            TextButton(onClick = onClose, Modifier.testTag("browserClose")) { Text(stringResource(R.string.browser_close)) }
         }
         if (view == null || view.opening) {
             Text(stringResource(R.string.browser_opening)); return@Column
