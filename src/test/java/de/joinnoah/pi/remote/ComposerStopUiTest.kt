@@ -1,5 +1,11 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -74,15 +80,20 @@ class ComposerStopUiTest {
         initial: RemoteState,
         predictions: PromptPredictionSource? = null,
         hardwareKeyboard: Boolean = false,
+        widthDp: Int = 360,
+        fontScale: Float = 1f,
     ) {
         current.value = initial
         compose.setContent {
+            val density = LocalDensity.current
             CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale),
                 LocalChatKeyTarget provides keys,
                 LocalPromptPredictions provides predictions,
                 LocalHardwareKeyboard provides hardwareKeyboard,
             ) {
                 MaterialTheme {
+                    Box(Modifier.width(widthDp.dp)) {
                     ChatComposer(
                         state = current.value,
                         onDraft = {},
@@ -94,12 +105,34 @@ class ComposerStopUiTest {
                         onAbort = { aborts++ },
                         voicePermissionGrantedOverride = false,
                     )
+                    }
                 }
             }
         }
     }
 
     private val queued = listOf(PendingFollowUp("queued", "Also check the logs", "pending"))
+
+    @Test
+    fun sendModeSegmentsStayAlignedOnNarrowScreenWithLargeFonts() {
+        render(state(draft = "Next step"), widthDp = 280, fontScale = 2f)
+        val now = compose.onNodeWithTag("sendNow").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val later = compose.onNodeWithTag("sendWhenDone").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertEquals(now.top, later.top, 0.5f)
+        assertEquals(now.bottom, later.bottom, 0.5f)
+        compose.onNodeWithTag("sendWhenDone").performClick()
+        compose.onNodeWithTag("followUp").performClick()
+        assertEquals(1, followUps)
+    }
+
+    @Test
+    fun sendModeSegmentsShareHeightAndVerticalAlignment() {
+        render(state(draft = "Next step"))
+        val now = compose.onNodeWithTag("sendNow").fetchSemanticsNode().boundsInRoot
+        val later = compose.onNodeWithTag("sendWhenDone").fetchSemanticsNode().boundsInRoot
+        assertEquals(now.top, later.top, 0.5f)
+        assertEquals(now.bottom, later.bottom, 0.5f)
+    }
 
     @Test
     fun stopLivesOnlyInTheBusyRowAndSendNeverBecomesStop() {

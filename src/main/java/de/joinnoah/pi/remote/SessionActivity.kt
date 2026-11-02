@@ -20,6 +20,11 @@ import androidx.compose.ui.unit.dp
 /** One line of what the selected session is doing right now, shown above the composer. */
 internal data class SessionActivityLine(@StringRes val labelRes: Int, val detail: String? = null)
 
+internal fun sessionActivityAllowed(state: RemoteState, destination: RemoteSelection?): Boolean =
+    destination != null && state.selection == destination && destination.sessionId != null &&
+        state.connected && !state.loading && !state.stale && !state.preview &&
+        state.status == "running" && state.questions.isEmpty()
+
 /** A raw tool name is a safe detail only when it is short and free of anything command-like. */
 private fun toolNameDetail(name: String?): String? =
     name?.takeIf { it.length <= 64 && isOpaqueId(it) }
@@ -27,7 +32,7 @@ private fun toolNameDetail(name: String?): String? =
 /**
  * The compact activity line for the open chat, or null when nothing should show. The session must
  * genuinely run on the connection and be the chat's own destination: a live task list wins with
- * its first in-progress task, otherwise the newest streaming tool does, else a generic working
+ * its first in-progress task, otherwise the newest streaming tool does, else a generic waiting
  * text. Idle, waiting, loading, stale, offline and previewed sessions show nothing, and questions
  * hold the line back so the pending answer is the only call to act.
  */
@@ -36,10 +41,7 @@ internal fun sessionActivityLine(
     items: List<ConversationItem>,
     destination: RemoteSelection?,
 ): SessionActivityLine? {
-    if (destination == null || state.selection != destination) return null
-    if (!state.connected || state.loading || state.stale || state.preview) return null
-    if (state.status != "running" || state.selection.sessionId == null) return null
-    if (state.questions.isNotEmpty()) return null
+    if (!sessionActivityAllowed(state, destination)) return null
     val task = state.tasks.items.firstOrNull { it.status == TaskStatus.IN_PROGRESS }
     if (state.tasks.freshness == TaskFreshness.LIVE && task != null) {
         val text = task.activeForm?.takeIf(String::isNotBlank) ?: task.text
@@ -55,7 +57,13 @@ internal fun sessionActivityLine(
 }
 
 private fun genericLine(detail: String? = null) =
-    SessionActivityLine(R.string.remote_chat_activity_working, detail)
+    SessionActivityLine(if (detail == null) R.string.remote_waiting_for_output else R.string.remote_chat_activity_working, detail)
+
+internal fun waitingForOutputAllowed(
+    state: RemoteState,
+    destination: RemoteSelection?,
+    activity: SessionActivityLine?,
+): Boolean = sessionActivityAllowed(state, destination) && activity == null
 
 /** The one-line spinner and activity label immediately above the chat composer. */
 @Composable
@@ -73,7 +81,7 @@ internal fun ChatCurrentActivity(line: SessionActivityLine?) {
             text,
             Modifier.weight(1f),
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
     }

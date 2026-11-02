@@ -107,14 +107,14 @@
     <string name="remote_export_storage">The export could not be saved on this device.</string>
     <string name="remote_export_failed">The export failed. Try again.</string>
     <string name="remote_session_settings_title">Session settings</string>
-    <string name="remote_session_settings_busy">pi is working. You can change these settings when it is idle.</string>
+    <string name="remote_session_settings_busy">Pi is working. You can change these settings when it is idle.</string>
     <string name="remote_session_settings_disabled">Settings can be changed when the session is idle and connected.</string>
     <string name="remote_session_settings_auto_compact">Auto-compact</string>
     <string name="remote_session_settings_auto_compact_hint">Compacts the context automatically when it gets close to the model\'s limit.</string>
     <string name="remote_session_settings_steering">Messages sent now</string>
-    <string name="remote_session_settings_steering_hint">How messages you send now, while pi works, are delivered: one per step, or all together.</string>
+    <string name="remote_session_settings_steering_hint">How messages you send now, while Pi works, are delivered: one per step, or all together.</string>
     <string name="remote_session_settings_follow_up">Messages sent when done</string>
-    <string name="remote_session_settings_follow_up_hint">How messages you queued with Send when done are delivered once pi has finished its work.</string>
+    <string name="remote_session_settings_follow_up_hint">How messages you queued with Send later are delivered once Pi has finished its work.</string>
     <string name="remote_session_settings_one_at_a_time">One at a time</string>
     <string name="remote_session_settings_all_at_once">All at once</string>
     <string name="remote_session_settings_scope">Changes also apply to later sessions on this Mac.</string>
@@ -145,7 +145,7 @@
     <string name="remote_draft_uncertain">Delivery not confirmed. Check the session before sending your draft again.</string>
     <string name="remote_steer_accepted">Sending now, into the running step: %1$s</string>
     <string name="remote_tui_info_title">Mac terminal session</string>
-    <string name="remote_tui_info_body">While this session is busy, Send now and Send when done need a current pi Remote on the Mac and a reloaded pi. Until then, send a message when the session is ready, or stop pi to interrupt it.</string>
+    <string name="remote_tui_info_body">While this session is busy, Steer now and Send later need a current Pi Remote on the Mac and a reloaded Pi. Until then, send a message when the session is ready, or stop Pi to interrupt it.</string>
     <string name="remote_session_control_reload_pi">Reload pi on the Mac to use this here.</string>
     <string name="remote_tui_info_close">Got it</string>
     <string name="remote_follow_up_pending">Sends when pi is done: %1$s</string>
@@ -244,7 +244,7 @@
     <string name="remote_thinking_active">Thinking…</string>
     <string name="remote_thinking_processing">Processing…</string>
     <string name="remote_thinking_complete">Thought</string>
-    <string name="remote_waiting_for_output">Waiting for pi…</string>
+    <string name="remote_waiting_for_output">Waiting for Pi…</string>
     <string name="remote_scroll_to_bottom">Scroll to latest message</string>
     <string name="remote_subagent_title">Agents</string>
     <string name="remote_subagent_unavailable">Agent progress unavailable</string>
@@ -411,7 +411,7 @@
     <string name="wear_dictation_unavailable">No dictation service available.</string>
     <string name="wear_uncertain">Delivery is uncertain. Check the session before sending again.</string>
     <string name="wear_send">Send</string>
-    <string name="wear_follow_up">Send when done</string>
+    <string name="wear_follow_up">Send later</string>
     <string name="wear_stop">Stop pi</string>
     <string name="wear_model">Model</string>
     <string name="wear_thinking">Thinking level</string>
@@ -446,7 +446,7 @@
     <string name="wear_truncated">This result is incomplete. More detail may be available on your Mac.</string>
     <string name="wear_no_longer_available">This item is no longer available.</string>
     <string name="wear_remove_quote">Remove quote</string>
-    <string name="wear_steer">Send now</string>
+    <string name="wear_steer">Steer now</string>
     <string name="wear_resume_child">Resume subagent</string>
     <string name="wear_journal">Send journal</string>
     <string name="wear_phone_attachments">Add photos or files on phone</string>
