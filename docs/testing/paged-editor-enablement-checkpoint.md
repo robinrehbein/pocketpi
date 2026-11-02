@@ -82,3 +82,11 @@ RPC runs remain valid evidence of their tested scope, but new RPC parity and
 additional RPC-only scenarios are not Native release gates. Reconcile and close
 remaining Native authority/replacement cases and reviewed production wiring first;
 retain conservative, explicitly limited fallback behaviour.
+
+[Actual Native wrong-grant refusal](native-wrong-grant.md) now records the real
+forbidden reply before Source upload, unchanged encrypted draft/question identity,
+no automatic retry and one exact SDK result after an explicit valid retry. This
+addresses that Native authority operation; it is distinct from wrong-incarnation
+outcome queries and other historical replacement orderings. The next step is
+reviewed Native-only production wiring, preserving conservative bounded legacy
+fallback and independent receipt recovery.
