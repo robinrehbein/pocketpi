@@ -41,6 +41,7 @@ class EncryptedFileStore(
     private val alias: String,
     private val onReset: () -> Unit = {},
     private val preserveUnreadable: Boolean = false,
+    private val preserveIncompleteCommit: Boolean = false,
 ) {
     private val file = AtomicFile(File(context.noBackupFilesDir, name))
 
@@ -54,6 +55,7 @@ class EncryptedFileStore(
 
     fun read(): ByteArray? =
         synchronized(lock) {
+            if (preserveIncompleteCommit) checkNoPendingCommit()
             // AtomicFile.openRead restores a legacy backup, including when the base is absent.
             if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
             val bytes = file.readFully()
@@ -90,21 +92,40 @@ class EncryptedFileStore(
                     dropKey(alias)
                     seal(alias, value)
                 }
+            if (preserveIncompleteCommit) checkNoPendingCommit()
             val stream = file.startWrite()
+            var finishAttempted = false
             try {
                 stream.write(bytes)
                 // AtomicFile.finishWrite logs sync and rename failures instead of throwing them.
                 stream.fd.sync()
+                finishAttempted = true
                 file.finishWrite(stream)
+                if (preserveIncompleteCommit) checkNoPendingCommit()
                 val committed = file.readFully()
                 if (File(file.baseFile.path + ".bak").exists() || !committed.contentEquals(bytes)) {
                     throw IOException("Encrypted file commit failed")
                 }
             } catch (e: Exception) {
                 Diagnostics.caught("store.write", e)
-                file.failWrite(stream)
+                if (!preserveIncompleteCommit || !finishAttempted) {
+                    file.failWrite(stream)
+                } else {
+                    // The commit may have failed after touching disk; retain every artifact.
+                    try {
+                        stream.close()
+                    } catch (closeError: Exception) {
+                        e.addSuppressed(closeError)
+                    }
+                }
                 throw e
             }
+        }
+    }
+
+    private fun checkNoPendingCommit() {
+        if (File(file.baseFile.path + ".new").exists() || File(file.baseFile.path + ".bak").exists()) {
+            throw IOException("Unfinished encrypted file commit")
         }
     }
 
