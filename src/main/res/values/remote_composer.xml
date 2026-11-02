@@ -1,7 +1,7 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <string name="remote_send_now">Send now (interrupt step)</string>
-    <string name="remote_send_when_done">Send when done</string>
+    <string name="remote_send_now">Steer now</string>
+    <string name="remote_send_when_done">Send later</string>
     <string name="remote_send_mode">Send mode</string>
     <string name="remote_suggestion_use">Use suggestion: %1$s</string>
     <string name="remote_suggestion_take">Use suggestion</string>

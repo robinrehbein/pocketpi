@@ -352,12 +352,15 @@ internal fun RemoteScreen(
             state.pendingSend?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
         }
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: ThinkingDisplay.STATUS
-    val thinkingActive = state.connected && !state.loading && state.status == "running"
+    val chatKey = key as? RemoteNavKey.Chat
+    val thinkingActive = sessionActivityAllowed(state, chatKey?.selection())
     val visibleConversation =
         remember(conversation, thinkingDisplay, thinkingActive) {
             conversation.filter { conversationItemVisible(it, thinkingDisplay, thinkingActive) }
         }
-    val chatKey = key as? RemoteNavKey.Chat
+    val currentActivity = remember(chatKey, state, presentation) {
+        sessionActivityLine(state, presentation.items, chatKey?.selection())
+    }
     val chatModel = model as? ChatViewModel
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
@@ -3138,6 +3141,7 @@ internal fun RemoteScreen(
                                         item,
                                         thinkingDisplay,
                                         thinkingActive = thinkingActive,
+                                        hideThinkingStatus = currentActivity != null,
                                         onQuote = model::quote,
                                         onOpenTool = {
                                             openToolId = it.id
@@ -3159,6 +3163,7 @@ internal fun RemoteScreen(
                             }
                             if (
                                 !onlyErrorsShown && waitingForOutput && sessionActive &&
+                                    waitingForOutputAllowed(state, chatKey?.selection(), currentActivity) &&
                                     conversation.lastOrNull().let {
                                         it !is ConversationItem.Thinking || !it.streaming
                                     }
@@ -3577,11 +3582,7 @@ internal fun RemoteScreen(
                          connectionStatusLine(state),
                          draftDeliveryNotice(state.sending, state.uncertain, state.connected),
                      )
-                    ChatCurrentActivity(
-                        remember(chatKey, state, presentation) {
-                            sessionActivityLine(state, presentation.items, chatKey?.selection())
-                        },
-                    )
+                    ChatCurrentActivity(currentActivity)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,

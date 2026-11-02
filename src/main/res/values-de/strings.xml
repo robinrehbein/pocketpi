@@ -107,14 +107,14 @@
     <string name="remote_export_storage">Der Export konnte nicht auf diesem Gerät gespeichert werden.</string>
     <string name="remote_export_failed">Der Export ist fehlgeschlagen. Versuch es noch einmal.</string>
     <string name="remote_session_settings_title">Sitzungseinstellungen</string>
-    <string name="remote_session_settings_busy">pi arbeitet. Du kannst diese Einstellungen ändern, sobald pi wieder frei ist.</string>
+    <string name="remote_session_settings_busy">Pi arbeitet. Du kannst diese Einstellungen ändern, sobald Pi wieder frei ist.</string>
     <string name="remote_session_settings_disabled">Einstellungen lassen sich ändern, wenn die Sitzung frei und verbunden ist.</string>
     <string name="remote_session_settings_auto_compact">Automatisch komprimieren</string>
     <string name="remote_session_settings_auto_compact_hint">Komprimiert den Kontext automatisch, wenn er sich dem Limit des Modells nähert.</string>
     <string name="remote_session_settings_steering">Jetzt eingelenkte Nachrichten</string>
-    <string name="remote_session_settings_steering_hint">Wie Nachrichten zugestellt werden, die du einlenkst, während pi arbeitet: eine pro Schritt oder alle zusammen.</string>
+    <string name="remote_session_settings_steering_hint">Wie Nachrichten zugestellt werden, die du einlenkst, während Pi arbeitet: eine pro Schritt oder alle zusammen.</string>
     <string name="remote_session_settings_follow_up">Nach Abschluss gesendete Nachrichten</string>
-    <string name="remote_session_settings_follow_up_hint">Wie Nachrichten zugestellt werden, die du mit „Nach Abschluss senden“ vorgemerkt hast, sobald pi seine Arbeit beendet hat.</string>
+    <string name="remote_session_settings_follow_up_hint">Wie Nachrichten zugestellt werden, die du mit „Später senden“ vorgemerkt hast, sobald Pi seine Arbeit beendet hat.</string>
     <string name="remote_session_settings_one_at_a_time">Nacheinander</string>
     <string name="remote_session_settings_all_at_once">Alle auf einmal</string>
     <string name="remote_session_settings_scope">Änderungen gelten auch für spätere Sitzungen auf diesem Mac.</string>
@@ -144,7 +144,7 @@
     <string name="remote_draft_confirmation_pending">Warte auf Zustellbestätigung…</string>
     <string name="remote_draft_uncertain">Zustellung nicht bestätigt. Prüfe die Sitzung, bevor du deinen Entwurf erneut sendest.</string>
     <string name="remote_tui_info_title">Mac-Terminalsitzung</string>
-    <string name="remote_tui_info_body">Während diese Sitzung arbeitet, brauchen „Jetzt einlenken“ und „Nach Abschluss senden“ ein aktuelles pi Remote auf dem Mac und ein neu geladenes pi. Bis dahin sende eine Nachricht, sobald die Sitzung bereit ist, oder halte pi an, um sie zu unterbrechen.</string>
+    <string name="remote_tui_info_body">Während diese Sitzung arbeitet, brauchen „Jetzt steuern“ und „Später senden“ ein aktuelles Pi Remote auf dem Mac und ein neu geladenes Pi. Bis dahin sende eine Nachricht, sobald die Sitzung bereit ist, oder halte Pi an, um sie zu unterbrechen.</string>
     <string name="remote_session_control_reload_pi">Lade pi auf dem Mac neu, um das hier zu nutzen.</string>
     <string name="remote_tui_info_close">Verstanden</string>
     <string name="remote_steer_accepted">Wird an den laufenden Schritt übergeben: %1$s</string>
@@ -244,7 +244,7 @@
     <string name="remote_thinking_active">Denkt nach…</string>
     <string name="remote_thinking_processing">Verarbeitet…</string>
     <string name="remote_thinking_complete">Nachgedacht</string>
-    <string name="remote_waiting_for_output">Warte auf pi…</string>
+    <string name="remote_waiting_for_output">Warte auf Pi …</string>
     <string name="remote_scroll_to_bottom">Zur neuesten Nachricht</string>
     <string name="remote_subagent_title">Agenten</string>
     <string name="remote_subagent_unavailable">Agentenfortschritt nicht verfügbar</string>
@@ -411,7 +411,7 @@
     <string name="wear_dictation_unavailable">Kein Diktierdienst verfügbar.</string>
     <string name="wear_uncertain">Zustellung unklar. Prüfe die Sitzung, bevor du erneut sendest.</string>
     <string name="wear_send">Senden</string>
-    <string name="wear_follow_up">Nach Abschluss senden</string>
+    <string name="wear_follow_up">Später senden</string>
     <string name="wear_stop">pi anhalten</string>
     <string name="wear_model">Modell</string>
     <string name="wear_thinking">Denkstufe</string>
@@ -446,7 +446,7 @@
     <string name="wear_truncated">Dieses Ergebnis ist unvollständig. Weitere Details sind möglicherweise auf deinem Mac verfügbar.</string>
     <string name="wear_no_longer_available">Dieser Eintrag ist nicht mehr verfügbar.</string>
     <string name="wear_remove_quote">Zitat entfernen</string>
-    <string name="wear_steer">Jetzt einlenken</string>
+    <string name="wear_steer">Jetzt steuern</string>
     <string name="wear_resume_child">Subagent fortsetzen</string>
     <string name="wear_journal">Sendejournal</string>
     <string name="wear_phone_attachments">Fotos oder Dateien am Handy hinzufügen</string>

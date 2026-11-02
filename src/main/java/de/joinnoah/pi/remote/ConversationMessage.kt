@@ -298,6 +298,7 @@ internal fun ConversationMessage(
     onForkMenuRequestHandled: () -> Unit = {},
     /** Takes back the prompt that waits for the connection; the queued bubble offers it when set. */
     onCancelQueued: (() -> Unit)? = null,
+    hideThinkingStatus: Boolean = false,
 ) {
     // A bubble draws the outline along its own shape; other items get it around their box.
     Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
@@ -318,6 +319,7 @@ internal fun ConversationMessage(
             forkMenuRequested,
             onForkMenuRequestHandled,
             onCancelQueued,
+            hideThinkingStatus,
         )
     }
 }
@@ -341,6 +343,7 @@ private fun ConversationMessageContent(
     forkMenuRequested: Boolean,
     onForkMenuRequestHandled: () -> Unit,
     onCancelQueued: (() -> Unit)?,
+    hideThinkingStatus: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -686,7 +689,7 @@ private fun ConversationMessageContent(
                         }
                     }
                 }
-            else if (item.streaming && thinkingActive) ThinkingStatus(true)
+            else if (item.streaming && thinkingActive && !hideThinkingStatus) ThinkingStatus(true)
         }
         is ConversationItem.Activity -> {
             val planMarkdown = remember(item.name, item.arguments) {

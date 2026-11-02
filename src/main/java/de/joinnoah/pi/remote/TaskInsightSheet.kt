@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -26,10 +27,11 @@ internal fun TaskInsightPill(tasks: SessionTasks, onClick: () -> Unit) {
     ) else AssistChipDefaults.assistChipColors()
     AssistChip(
         onClick = onClick,
-        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag("taskInsightPill").semantics { contentDescription = description },
+        modifier = Modifier.minimumInteractiveComponentSize().heightIn(min = 32.dp).testTag("taskInsightPill").semantics { contentDescription = description },
         label = { Text(stringResource(R.string.task_insight_count, completed, tasks.items.size)) },
         leadingIcon = { Text(if (stale) "⚠" else if (active > 0) "◉" else "○") },
         colors = colors,
+        shape = CircleShape,
     )
 }
 

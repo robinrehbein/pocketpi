@@ -3,6 +3,8 @@ package de.joinnoah.pi.remote
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionActivityTest {
@@ -22,6 +24,48 @@ class SessionActivityTest {
 
     private fun tool(id: String, name: String?, arguments: String?, state: String = "complete") =
         ConversationItem.Activity(id, id, name, arguments, null, state, false)
+
+    @Test
+    fun allLiveIndicatorsRequireTheRunningChatsOwnFreshState() {
+        val other = RemoteSelection("host", "project", "other")
+        assertTrue(sessionActivityAllowed(running(), destination))
+        val blocked = listOf(
+            running().copy(stale = true),
+            running().copy(preview = true),
+            running().copy(connected = false),
+            running().copy(loading = true),
+            running().copy(status = "idle"),
+            running().copy(status = "waiting"),
+            running(questions = listOf(Wire.objectOf("id" to "q1"))),
+        )
+        for (state in blocked) {
+            assertFalse(sessionActivityAllowed(state, destination))
+            assertFalse(waitingForOutputAllowed(state, destination, null))
+            assertNull(sessionActivityLine(state, emptyList(), destination))
+        }
+        for (target in listOf(other, RemoteSelection("host", "project"), null)) {
+            assertFalse(sessionActivityAllowed(running(), target))
+            assertFalse(waitingForOutputAllowed(running(), target, null))
+            assertNull(sessionActivityLine(running(), emptyList(), target))
+        }
+    }
+
+    @Test
+    fun waitingFallbackRequiresFreshNonPreviewStateAndNoComposerActivity() {
+        assertTrue(waitingForOutputAllowed(running(), destination, null))
+        assertFalse(waitingForOutputAllowed(running().copy(stale = true), destination, null))
+        assertFalse(waitingForOutputAllowed(running().copy(preview = true), destination, null))
+        assertFalse(waitingForOutputAllowed(running(), destination, SessionActivityLine(R.string.remote_waiting_for_output)))
+    }
+
+    @Test
+    fun runningWithoutTasksOrToolsWaitsForPiAndFinishedRunHidesIt() {
+        assertEquals(
+            SessionActivityLine(R.string.remote_waiting_for_output),
+            sessionActivityLine(running(), emptyList(), destination),
+        )
+        assertNull(sessionActivityLine(running().copy(status = "idle"), emptyList(), destination))
+    }
 
     @Test
     fun liveTaskPrefersFirstInProgressAndItsActiveForm() {
@@ -107,7 +151,7 @@ class SessionActivityTest {
                 tool("b", "edit", """{"path":"failed.kt"}""", "error"),
             )
         assertEquals(
-            SessionActivityLine(R.string.remote_chat_activity_working, null),
+            SessionActivityLine(R.string.remote_waiting_for_output, null),
             sessionActivityLine(running(), items, destination),
         )
     }
@@ -130,7 +174,7 @@ class SessionActivityTest {
         )
         val long = listOf(tool("a", "x".repeat(65), null, "streaming"))
         assertEquals(
-            SessionActivityLine(R.string.remote_chat_activity_working, null),
+            SessionActivityLine(R.string.remote_waiting_for_output, null),
             sessionActivityLine(running(), long, destination),
         )
     }
