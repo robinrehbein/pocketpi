@@ -191,28 +191,30 @@ internal data class ShellDraft(val command: String, val excludeFromContext: Bool
 
 /**
  * The shell command the draft names, or null when Send prompts pi as usual: without
- * [canRunShellCommands], for a draft not starting with `!`, and for one with a quote or
- * attachments, which only a prompt carries. The command may be empty; it is then not sendable.
+ * [canRunShellCommands], for a draft whose first character is not `!`, and for one with a quote or
+ * attachments, which only a prompt carries. A draft that starts with whitespace before `!` is a
+ * prompt, which is how text that begins with `!` reaches pi. The command may be empty; it is then
+ * not sendable.
  */
 internal fun shellDraft(state: RemoteState): ShellDraft? {
     // A child that offers a resume takes the draft as the resume's text, `!` included.
     if (state.attachments.isNotEmpty() || state.quote != null || !canRunShellCommands(state) ||
         offersChildResume(state))
         return null
-    val text = state.draft.trimStart()
+    val text = state.draft
     if (!text.startsWith("!")) return null
     val exclude = text.startsWith("!!")
     return ShellDraft(text.substring(if (exclude) 2 else 1).trim(), exclude)
 }
 
 /**
- * The draft starts with `!` but the session cannot run shell commands, so Send must not turn it into
- * a prompt for pi. Drafts with a quote or attachments, which are prompts, and a child's resume text
- * are not shell drafts, as in [shellDraft].
+ * The draft's first character is `!` but the session cannot run shell commands, so Send must not turn
+ * it into a prompt for pi. Drafts with a quote or attachments, which are prompts, a child's resume
+ * text and a draft with whitespace before the `!` are not shell drafts, as in [shellDraft].
  */
 internal fun shellDraftRefused(state: RemoteState): Boolean =
     state.attachments.isEmpty() && state.quote == null && !offersChildResume(state) &&
-        state.draft.trimStart().startsWith("!") && !canRunShellCommands(state)
+        state.draft.startsWith("!") && !canRunShellCommands(state)
 
 /** The shell draft can run now: it names a command the host takes and no other one runs. */
 internal fun shellDraftSendable(shell: ShellDraft, state: RemoteState): Boolean =

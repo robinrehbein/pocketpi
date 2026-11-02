@@ -81,6 +81,10 @@ saved history retain the reference. It does not grant access to another session 
 Messages with a timestamp from pi show the device's local date and time. Older messages without a
 valid timestamp show no time.
 
+A draft whose first character is `!` runs as a shell command when the session allows it; `!!` keeps
+the command out of pi's context. To send a prompt that begins with `!` to pi instead, start it with a
+space.
+
 ## Dictation
 
 When the draft is empty, tap the microphone to dictate a short message. PocketPi puts the final

@@ -7018,6 +7018,21 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aSpaceBeforeTheBangSendsTheDraftAsAPrompt() = runTest {
+        val transport = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft(" !important: keep the tests")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(" !important: keep the tests", transport.sent.single { it.text("type") == "session.prompt" }.text("text"))
+        assertTrue(transport.bashRequests().isEmpty())
+    }
+
+    @Test
     fun runBashSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
         val old = Transport().also { bashing(it, advertise = false) }
         val repository = repository(old)

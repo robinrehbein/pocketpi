@@ -66,6 +66,10 @@ class DraftDeliveryPresentationTest {
         assertFalse(canQueuePrompt(chat.copy(draft = "/review")))
         assertFalse(canQueuePrompt(chat.copy(draft = " /review now")))
         assertFalse(canQueuePrompt(chat.copy(draft = "!ls")))
+        assertFalse(canQueuePrompt(chat.copy(draft = "!x")))
+        // Whitespace before the `!` makes it a plain prompt, which waits like any other.
+        assertTrue(canQueuePrompt(chat.copy(draft = " !x")))
+        assertTrue(canQueuePrompt(chat.copy(draft = "\n!x")))
         assertFalse(canQueuePrompt(chat.copy(attachments = listOf(LocalAttachment("a", "a.txt", "file", "text/plain", 1, "x")))))
         // Not loaded from this Mac, or not idle when the connection went.
         assertFalse(canQueuePrompt(chat.copy(stale = false)))
