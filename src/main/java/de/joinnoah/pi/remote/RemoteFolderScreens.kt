@@ -366,7 +366,7 @@ internal fun RemoteFolderList(
         folders.entries.isEmpty() ->
             PaneNotice(stringResource(R.string.remote_folders_empty), modifier.testTag("folderEmpty"), FolderNoticePadding)
         else ->
-            LazyColumn(modifier.fillMaxWidth().testTag("folderList"), contentPadding = contentPadding) {
+            LazyColumn(modifier.fillMaxWidth().testTag("folderList").glassSource(), contentPadding = contentPadding) {
                 items(folders.entries, key = { it.name }) { entry ->
                     FolderRow(entry, enabled) { onEnter(entry.name) }
                 }

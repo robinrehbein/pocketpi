@@ -1433,7 +1433,7 @@ internal fun RemoteScreen(
             val chatTicket = remember(state.tickets, state.connected, state.capabilities, state.unavailableCapabilities, chatSessionId) {
                 chatSessionId?.let { ticketForSession(state, it) }
             }
-            val headerColor = floatingHeaderColor()
+            val headerColor = MaterialTheme.colorScheme.surfaceContainer
             // History never competes for the pill's places: it would push Settings into the menu.
             fun actionLayout(withHistory: Boolean) =
                 chatActionLayout(
@@ -2262,10 +2262,10 @@ internal fun RemoteScreen(
         val list: @Composable () -> Unit = {
             LazyColumn(
                 if (key is RemoteNavKey.Chat)
-                    Modifier.fillMaxSize().testTag("conversationList").then(underlay)
+                    Modifier.fillMaxSize().testTag("conversationList").glassSource().then(underlay)
                         .nestedScroll(headerScroll)
                         .onFocusChanged { conversationFocused = it.hasFocus }
-                else Modifier.fillMaxSize().then(listRegion),
+                else Modifier.fillMaxSize().then(listRegion).glassSource(),
                 state = listState,
                 contentPadding =
                     PaddingValues(
@@ -4498,8 +4498,11 @@ private fun ScrollToLatestSlot(visible: Boolean, onClick: () -> Unit) {
             enter = if (motion) fadeIn() else EnterTransition.None,
             exit = if (motion) fadeOut() else ExitTransition.None,
         ) {
-            SmallFloatingActionButton(onClick = onClick) {
-                Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
+            // A floating glass button like the header pills, rather than Material's own FAB.
+            FloatingSurface(shape = CircleShape) {
+                IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
+                }
             }
         }
     }

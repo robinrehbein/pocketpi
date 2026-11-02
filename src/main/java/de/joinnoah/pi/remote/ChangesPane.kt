@@ -395,7 +395,7 @@ private fun ChangesFileList(state: ChangesState, actions: ChangesActions, header
     val label = stringResource(R.string.remote_review_file_list)
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     LazyColumn(
-        modifier.semantics { contentDescription = label }.testTag("changesFileList"),
+        modifier.semantics { contentDescription = label }.testTag("changesFileList").glassSource(),
         contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
     ) {
         itemsIndexed(files, key = { _, file -> file.path }) { _, file ->
@@ -523,7 +523,7 @@ private fun ChangesOverview(
         LazyVerticalGrid(
             columns = GridCells.Fixed(fileGridColumns(maxWidth)),
             state = gridState,
-            modifier = Modifier.fillMaxSize().testTag("changesList"),
+            modifier = Modifier.fillMaxSize().testTag("changesList").glassSource(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight + 8.dp, bottom = 8.dp),
@@ -918,6 +918,7 @@ private fun ChangesFileDiff(
     LazyColumn(
         Modifier.fillMaxSize()
             .testTag("changesDiff")
+            .glassSource()
             .onPlaced { gutterRows.coordinates = it }
             .focusRequester(focus)
             .onFocusChanged { paneFocused = it.hasFocus }

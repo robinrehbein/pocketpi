@@ -1013,7 +1013,7 @@ private fun JobListContent(state: JobsState, onOpenJob: (String) -> Unit, modifi
                 modifier,
             )
         else ->
-            LazyColumn(modifier.testTag("jobsList")) {
+            LazyColumn(modifier.testTag("jobsList").glassSource()) {
                 if (state.failure != null)
                     item { JobsMessage(stringResource(R.string.remote_jobs_failed), Modifier) }
                 itemsIndexed(state.jobs.sortedByDescending { it.startedAt }, key = { _, job -> job.id }) { _, job ->
@@ -1225,7 +1225,7 @@ internal fun JobOutput(lines: List<JobOutputLine>, firstLine: Long, modifier: Mo
         if (follow && items.isNotEmpty()) listState.scrollToItem(items.lastIndex, Int.MAX_VALUE / 2)
     }
     LazyColumn(
-        modifier.padding(horizontal = 12.dp).testTag("jobOutput"),
+        modifier.padding(horizontal = 12.dp).testTag("jobOutput").glassSource(),
         state = listState,
         contentPadding = PaddingValues(vertical = 8.dp),
     ) {

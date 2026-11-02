@@ -339,7 +339,7 @@ private fun ProviderListScreen(
                     }
                 else ->
                     LazyColumn(
-                        Modifier.weight(1f).testTag("providerList"),
+                        Modifier.weight(1f).testTag("providerList").glassSource(),
                         contentPadding = PaddingValues(bottom = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {

@@ -148,7 +148,7 @@ internal fun ProjectStrip(
         Spacer(Modifier.height(26.dp))
         CompositionLocalProvider(LocalFocusRegionChildren provides regionChildren) {
             LazyColumn(
-                Modifier.weight(1f, fill = false).testTag("projectStripList").then(region),
+                Modifier.weight(1f, fill = false).testTag("projectStripList").then(region).glassSource(),
                 state = listState,
                 // Each avatar's 2 dp focus margin keeps them 4 dp apart.
                 horizontalAlignment = Alignment.CenterHorizontally,
