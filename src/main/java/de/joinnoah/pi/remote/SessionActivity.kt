@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,7 +17,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /** One line of what the selected session is doing right now, shown above the composer. */
-internal data class SessionActivityLine(@StringRes val labelRes: Int, val detail: String? = null)
+internal data class SessionActivityLine(
+    @StringRes val labelRes: Int,
+    val detail: String? = null,
+    val glyphKind: StatusGlyphKind = StatusGlyphKind.SESSION_RUNNING,
+)
 
 internal fun sessionActivityAllowed(state: RemoteState, destination: RemoteSelection?): Boolean =
     destination != null && state.selection == destination && destination.sessionId != null &&
@@ -45,19 +48,23 @@ internal fun sessionActivityLine(
     val task = state.tasks.items.firstOrNull { it.status == TaskStatus.IN_PROGRESS }
     if (state.tasks.freshness == TaskFreshness.LIVE && task != null) {
         val text = task.activeForm?.takeIf(String::isNotBlank) ?: task.text
-        return SessionActivityLine(R.string.remote_chat_activity_working, text.takeIf(String::isNotBlank))
+        return SessionActivityLine(R.string.remote_chat_activity_working, text.takeIf(String::isNotBlank), StatusGlyphKind.TASK_RUNNING)
     }
     val tool = items.lastOrNull { it is ConversationItem.Activity && it.state == "streaming" }
         as? ConversationItem.Activity ?: return genericLine()
     val summary = tool.summary
-    if (summary.labelRes == null) return genericLine(toolNameDetail(tool.name))
+    if (summary.labelRes == null) return genericLine(toolNameDetail(tool.name), StatusGlyphKind.TOOL_RUNNING)
     // A shell command belongs to the tool card, not the compact line; path tools keep their file.
     val detail = summary.detail.takeUnless { tool.name in setOf("bash", "bash_bg", USER_BASH_TOOL) }
-    return SessionActivityLine(summary.labelRes, detail)
+    return SessionActivityLine(summary.labelRes, detail, StatusGlyphKind.TOOL_RUNNING)
 }
 
-private fun genericLine(detail: String? = null) =
-    SessionActivityLine(if (detail == null) R.string.remote_waiting_for_output else R.string.remote_chat_activity_working, detail)
+private fun genericLine(detail: String? = null, glyphKind: StatusGlyphKind = StatusGlyphKind.SESSION_RUNNING) =
+    SessionActivityLine(
+        if (detail == null) R.string.remote_waiting_for_output else R.string.remote_chat_activity_working,
+        detail,
+        glyphKind,
+    )
 
 internal fun waitingForOutputAllowed(
     state: RemoteState,
@@ -76,7 +83,7 @@ internal fun ChatCurrentActivity(line: SessionActivityLine?) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+        StatusGlyph(line.glyphKind, MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
         Text(
             text,
             Modifier.weight(1f),

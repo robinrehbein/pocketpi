@@ -431,11 +431,19 @@ private fun SubagentStripRow(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusDot(sessionStatusColor(when (entry.state) {
-                        "running" -> SessionAvailability.RUNNING
-                        "offline" -> SessionAvailability.OFFLINE
-                        else -> SessionAvailability.IDLE
-                    }))
+                    if (entry.state == "running") {
+                        // The strip has no freshness flag, so running state may be last-known.
+                        StatusGlyph(
+                            kind = StatusGlyphKind.SESSION_RUNNING,
+                            color = sessionStatusColor(SessionAvailability.RUNNING),
+                            modifier = Modifier.size(16.dp),
+                            animate = false,
+                        )
+                    } else {
+                        StatusDot(sessionStatusColor(
+                            if (entry.state == "offline") SessionAvailability.OFFLINE else SessionAvailability.IDLE
+                        ))
+                    }
                     Text(stringResource(subagentStateLabel(entry.state)), style = MaterialTheme.typography.labelMedium)
                 }
                 entry.activity?.takeIf(String::isNotBlank)?.let {
@@ -577,7 +585,17 @@ internal fun ChildSessionPickerSheet(
                     supportingContent = {
                         Text(listOfNotNull(status, updated).joinToString(" · "), maxLines = 1)
                     },
-                    leadingContent = { StatusDot(sessionStatusColor(session.availability)) },
+                    leadingContent = {
+                        if (session.availability == SessionAvailability.RUNNING && !session.lastKnown) {
+                            StatusGlyph(
+                                kind = StatusGlyphKind.SESSION_RUNNING,
+                                color = sessionStatusColor(session.availability),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        } else {
+                            StatusDot(sessionStatusColor(session.availability))
+                        }
+                    },
                     modifier =
                         Modifier.clickable(role = Role.Button) {
                                 onPick(session.id)
