@@ -43,6 +43,7 @@ class WatchGlanceTest {
         assertEquals("working", watchTileRowDetail(working, resources, now))
         val fresh = working.copy(pullRequest = pullRequestChipModel(pr()), pullRequestSeenAt = now - 10_000L)
         assertEquals("working · PR #189 · checks running · now", watchTileRowDetail(fresh, resources, now))
+        assertEquals("working · PR #189 · checks running · 1 min", watchTileRowDetail(fresh.copy(pullRequestSeenAt = now - 60_000L), resources, now))
         val old = fresh.copy(pullRequestSeenAt = now - 2 * 3_600_000L - 1)
         assertEquals("working · PR #189 · checks running · 2 h", watchTileRowDetail(old, resources, now))
     }
@@ -69,19 +70,25 @@ class WatchGlanceTest {
         val current = glance(row("a", "running"), row("x", "waiting", route = "elsewhere")).withPullRequest("elsewhere", "x", pr(5), now)
             .withPullRequest("route", "a", pr(1), now - 1)
         val read = WatchGlance(HomeSnapshot(true, listOf(row("b", "waiting"), row("x", "idle", route = "elsewhere")), now)).withPullRequest("route", "b", pr(2), now)
-        val next = current.withRoute("route", read)
+        val next = current.withRoute("route", read, now - 1)
         assertEquals(listOf("b", "x"), next.home.sessions.map { it.sessionId })
         assertEquals("waiting", next.home.sessions.single { it.sessionId == "x" }.status)
         assertEquals(now, next.home.refreshedAt)
         assertEquals(setOf(2L, 5L), next.pullRequests.map { it.pullRequest.number }.toSet())
     }
+    @Test fun `a pull request the app saw while a read ran is kept`() {
+        val read = WatchGlance(HomeSnapshot(true, listOf(row("a", "running"), row("b", "running")), now))
+        val current = glance(row("a", "running"), row("b", "running")).withPullRequest("route", "a", pr(3), now - 500).withPullRequest("route", "b", pr(4), now - 5_000)
+        assertEquals(listOf(3L), current.withRoute("route", read, now - 1_000).pullRequests.map { it.pullRequest.number })
+    }
     @Test fun `a push marks a known session waiting or idle`() {
         val base = glance(row("a", "running"))
-        assertEquals("waiting", base.withPush(PushPayload("route", "a", "e1", PushEvent.QUESTION), now).home.sessions.single().status)
-        assertEquals("idle", base.withPush(PushPayload("route", "a", "e2", PushEvent.COMPLETE), now).home.sessions.single().status)
-        assertEquals(now, base.withPush(PushPayload("route", "a", "e3", PushEvent.COMPLETE), now).home.refreshedAt)
-        assertEquals(base, base.withPush(PushPayload("route", "x", "e4", PushEvent.QUESTION), now))
-        assertEquals(base, base.withPush(PushPayload("route", "a", "e5", PushEvent.JOB_DONE), now))
+        assertEquals("waiting", base.withPush(PushPayload("route", "a", "e1", PushEvent.QUESTION)).home.sessions.single().status)
+        assertEquals("idle", base.withPush(PushPayload("route", "a", "e2", PushEvent.COMPLETE)).home.sessions.single().status)
+        // A push confirms no other row, so the time stays and a swipe right after it still refreshes.
+        assertEquals(base.home.refreshedAt, base.withPush(PushPayload("route", "a", "e3", PushEvent.COMPLETE)).home.refreshedAt)
+        assertEquals(base, base.withPush(PushPayload("route", "x", "e4", PushEvent.QUESTION)))
+        assertEquals(base, base.withPush(PushPayload("route", "a", "e5", PushEvent.JOB_DONE)))
     }
     @Test fun `refresh is due only when the snapshot is old and none runs`() {
         val base = glance(row("a", "running"))
@@ -126,6 +133,12 @@ class WatchGlanceTest {
         assertEquals(42L, next.pullRequests.single().pullRequest.number)
         assertEquals(setOf("projects.list", "sessions.listp", "sessions.listq", "session.snapshotc"), requests.toSet())
         assertEquals(4, requests.size)
+    }
+    @Test fun `a Mac without projects still counts as refreshed`() = runBlocking {
+        val commands = RemoteCommands { type, _ -> if (type == "projects.list") Wire.objectOf("items" to JsonArray(emptyList())) else error(type) }
+        val next = commands.readWatchGlance("route", setOf("route"), glance(row("a", "running")), now)
+        assertEquals(now, next.home.refreshedAt)
+        assertTrue(next.home.sessions.isEmpty())
     }
     @Test fun `a refresh without a pull request clears the top session's memory`() = runBlocking {
         val commands = RemoteCommands { type, fields ->
@@ -173,5 +186,8 @@ class WatchTileTest {
         assertNull(WatchTileTarget.target(android.os.Bundle().apply { putString("tileRouteId", "bad id"); putString("tileSessionId", "a") }))
         assertNull(WearNotifications.target(WatchTileTarget.forward(context, null)))
         assertEquals(WearActivity::class.java.name, WatchTileTarget.forward(context, null).component?.className)
+        val flags = android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+        assertEquals(flags, WatchTileTarget.forward(context, extras).flags and flags)
+        assertEquals(flags, WatchTileTarget.forward(context, null).flags and flags)
     }
 }

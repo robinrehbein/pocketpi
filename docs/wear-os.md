@@ -77,23 +77,25 @@ with that Mac. Files selected there belong to the phone's draft and are sent the
 ## Status tile
 
 The **PocketPi status** tile, to the right of the watch face, answers "what is the
-agent doing" without opening the app. It shows how many sessions need you, when the
-rows were last confirmed, and up to two sessions that wait for you or are working,
+agent doing" without opening the app. It shows how many sessions need you, when a
+paired Mac last confirmed the rows (one time for all paired Macs), and up to two sessions that wait for you or are working,
 waiting ones first. Each row names the session and, when the watch has seen one,
 its pull request with the checks state and the age of that information, for example
 `needs you · PR #189 · 2 failing · 5 min`. A tap opens that session through the same
 validated path as a notification; the hint texts open the app.
 
 The rows come from the app's own state while it runs and from push events (a question
-marks a session waiting, a completion idle). Because the Mac lists sessions without
+marks a session waiting, a completion idle; subagent and job pushes change no row,
+and no push changes the rows' time). Because the Mac lists sessions without
 their pull requests, the watch remembers the pull request status it last saw for each
 session, from an open chat or a tile refresh, and drops it after 24 hours. Every row
 shows its age; no push carries pull request data.
 
 Unlike the phone widget, which never asks the network itself, the tile refreshes when
-the system asks to draw it and its snapshot is older than 30 seconds. The refresh
-opens a short-lived encrypted connection of its own to each paired Mac, reads the
-project and session lists and the top session's snapshot for its pull request, and is
+the system asks to draw it and its snapshot is older than 30 seconds. For each paired
+Mac the refresh uses the app's connection when it is open and healthy, and otherwise
+a short-lived encrypted connection of its own. It reads the project and session lists
+(up to 24 projects) and the top session's snapshot for its pull request, and is
 bounded to ten seconds per Mac. It never changes the app's selection. Until it ends,
 the tile shows the stored rows with their time; a failure leaves them as they were.
 The tile sets no update interval, so nothing refreshes on a schedule.

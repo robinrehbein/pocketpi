@@ -19,7 +19,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".WatchTileActivity" android:exported="true" android:excludeFromRecents="true"
-            android:noHistory="true" android:taskAffinity="" android:theme="@android:style/Theme.NoDisplay" />
+            android:noHistory="true" android:theme="@android:style/Theme.NoDisplay" />
         <service android:name=".WatchTileService" android:exported="true" android:label="@string/wear_tile_label"
             android:description="@string/wear_tile_description"
             android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">

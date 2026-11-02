@@ -516,8 +516,14 @@
     <string name="wear_tile_needs_you">braucht dich</string>
     <string name="wear_tile_working">arbeitet</string>
     <string name="wear_tile_age_now">jetzt</string>
-    <string name="wear_tile_age_minutes">%d Min.</string>
-    <string name="wear_tile_age_hours">%d Std.</string>
+    <plurals name="wear_tile_age_minutes">
+        <item quantity="one">%d Min.</item>
+        <item quantity="other">%d Min.</item>
+    </plurals>
+    <plurals name="wear_tile_age_hours">
+        <item quantity="one">%d Std.</item>
+        <item quantity="other">%d Std.</item>
+    </plurals>
     <string name="providers_title">Anbieter</string>
     <string name="providers_open">Anbieter und Anmeldung</string>
     <string name="providers_host_fallback">dem Mac</string>

@@ -57,8 +57,8 @@ internal fun watchTileRowDetail(row: WatchTileRow, resources: Resources, now: Lo
 
 private fun watchAge(resources: Resources, millis: Long): String = when {
     millis < 60_000L -> resources.getString(R.string.wear_tile_age_now)
-    millis < 3_600_000L -> resources.getString(R.string.wear_tile_age_minutes, millis / 60_000L)
-    else -> resources.getString(R.string.wear_tile_age_hours, millis / 3_600_000L)
+    millis < 3_600_000L -> (millis / 60_000L).toInt().let { resources.getQuantityString(R.plurals.wear_tile_age_minutes, it, it) }
+    else -> (millis / 3_600_000L).toInt().let { resources.getQuantityString(R.plurals.wear_tile_age_hours, it, it) }
 }
 
 internal fun WatchGlance.withPullRequest(routeId: String, sessionId: String, pullRequest: PullRequestStatus?, now: Long): WatchGlance {
@@ -79,20 +79,26 @@ internal fun WatchGlance.withoutRoute(routeId: String): WatchGlance = withHome(
 
 /**
  * [read]'s rows and pull requests of [routeId] in place of this glance's, with its time. Other Macs'
- * rows, and anything the app or a push changed for them while the read ran, stay as they are.
+ * rows stay as they are, and so does a pull request of [routeId] the app saw at or after [since],
+ * when the read started, for a session the read found none for: the app's is the newer news.
  */
-internal fun WatchGlance.withRoute(routeId: String, read: WatchGlance): WatchGlance = WatchGlance(
-    home.copy(
-        sessions = (read.home.sessions.filter { it.routeId == routeId } + home.sessions.filter { it.routeId != routeId }).take(MAX_HOME_SESSIONS),
-        refreshedAt = read.home.refreshedAt ?: home.refreshedAt,
-    ),
-    read.pullRequests.filter { it.routeId == routeId } + pullRequests.filter { it.routeId != routeId },
-)
+internal fun WatchGlance.withRoute(routeId: String, read: WatchGlance, since: Long): WatchGlance {
+    val fromRead = read.pullRequests.filter { it.routeId == routeId }
+    val readSessions = fromRead.map { it.sessionId }.toSet()
+    val sessions = (read.home.sessions.filter { it.routeId == routeId } + home.sessions.filter { it.routeId != routeId }).take(MAX_HOME_SESSIONS)
+    val rows = sessions.map { it.routeId to it.sessionId }.toSet()
+    return WatchGlance(
+        home.copy(sessions = sessions, refreshedAt = read.home.refreshedAt ?: home.refreshedAt),
+        (fromRead + pullRequests.filter { it.routeId != routeId || (it.seenAt >= since && it.sessionId !in readSessions) })
+            .filter { (it.routeId to it.sessionId) in rows },
+    )
+}
 
 /** A question makes its session wait for the user, a completion makes it idle; other pushes say nothing about the session. */
-internal fun WatchGlance.withPush(payload: PushPayload, now: Long): WatchGlance = when (payload.event) {
-    PushEvent.QUESTION -> withHome(home.withPush(payload.routeId, payload.sessionId, "waiting", now))
-    PushEvent.COMPLETE -> withHome(home.withPush(payload.routeId, payload.sessionId, "idle", now))
+internal fun WatchGlance.withPush(payload: PushPayload): WatchGlance = when (payload.event) {
+    // The rows' time stays: a push is no confirmation of the other rows, and must not hold off a refresh.
+    PushEvent.QUESTION -> withHome(home.withStatus(payload.routeId, payload.sessionId, "waiting"))
+    PushEvent.COMPLETE -> withHome(home.withStatus(payload.routeId, payload.sessionId, "idle"))
     else -> this
 }
 
@@ -142,7 +148,8 @@ internal suspend fun RemoteCommands.readWatchGlance(routeId: String, pairedRoute
         val listed = projects.map { it.text("id") }.toSet()
         home = home.copy(sessions = home.sessions.filter { it.routeId != routeId || it.projectId in listed })
     }
-    if (lists.isNotEmpty() && home.refreshedAt != now) home = home.copy(refreshedAt = now)
+    // The Mac answered, so a refresh is done even when it has no projects or every list failed.
+    home = home.copy(refreshedAt = now)
     var next = previous.withHome(home)
     val top = watchTileRows(next, now).firstOrNull { it.routeId == routeId } ?: return next
     try {

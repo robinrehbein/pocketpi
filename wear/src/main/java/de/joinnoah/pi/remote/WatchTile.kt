@@ -54,7 +54,10 @@ internal class WatchGlanceStore(
         scope.launch {
             delay(HOME_UPDATE_INTERVAL_MS)
             homeUpdates(state).collect { inputs ->
-                val routes = inputs.hostRoutes.toSet() - forgotten
+                // Pairing the same Mac again makes it known again.
+                forgotten.removeAll(inputs.hostRoutes.toSet())
+                // Until the app has read its pairings, the stored ones say which Macs are paired.
+                val routes = (inputs.hostRoutes.toSet().ifEmpty { storedRoutes() ?: return@collect }) - forgotten
                 launchUpdate { mergeHomeSnapshot(it.home, inputs, routes.isNotEmpty(), routes, System.currentTimeMillis()).let(it::withHome) }
             }
         }
@@ -65,7 +68,7 @@ internal class WatchGlanceStore(
         }
     }
 
-    fun onPush(payload: PushPayload) = launchUpdate { it.withPush(payload, System.currentTimeMillis()) }
+    fun onPush(payload: PushPayload) = launchUpdate { it.withPush(payload) }
 
     fun forgetRoute(routeId: String) {
         forgotten += routeId
@@ -82,11 +85,12 @@ internal class WatchGlanceStore(
             val routes = hosts.map { it.routeId }.toSet()
             hosts.forEach { host ->
                 try {
+                    val since = System.currentTimeMillis()
                     val next = withTimeoutOrNull(WATCH_GLANCE_REFRESH_TIMEOUT_MILLIS) {
                         val previous = load()
                         usingPushConnection(repository, host, wait = false) { it.readWatchGlance(host.routeId, routes, previous, System.currentTimeMillis()) }
                     } ?: return@forEach
-                    update { current -> if (host.routeId in forgotten) current else current.withRoute(host.routeId, next) }
+                    update { current -> if (host.routeId in forgotten) current else current.withRoute(host.routeId, next, since) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (swallowed: Exception) {
@@ -119,12 +123,15 @@ internal class WatchGlanceStore(
         if (changed) try { redraw() } catch (swallowed: Exception) { Diagnostics.caught("watchGlance.redraw", swallowed) }
     }
 
+    private suspend fun storedRoutes(): Set<String>? =
+        try { withContext(Dispatchers.IO) { pairings.load() }.map { it.routeId }.toSet() } catch (_: Exception) { null }
+
     private suspend fun ensureLoaded() {
         if (loaded) return
         val stored = withContext(Dispatchers.IO) {
             try { file.read()?.let { watchGlance(Wire.parse(Wire.utf8(it), 1024 * 1024)) } } catch (_: Exception) { null }
         } ?: WatchGlance()
-        val routes = try { withContext(Dispatchers.IO) { pairings.load() }.map { it.routeId }.toSet() - forgotten } catch (_: Exception) { null }
+        val routes = storedRoutes()?.minus(forgotten)
         mutable.value = if (routes == null) stored else stored.home.let { home ->
             stored.withHome(home.copy(paired = routes.isNotEmpty(), sessions = home.sessions.filter { it.routeId in routes },
                 notified = home.notified.filter { it.routeId in routes }))
@@ -178,7 +185,7 @@ internal fun watchTileContent(context: Context, glance: WatchGlance, now: Long):
 
 internal fun watchTileLayout(context: Context, content: WatchTileContent, device: DeviceParameters): LayoutElementBuilders.LayoutElement {
     fun caption(text: String) = Text.Builder(context, text).setTypography(Typography.TYPOGRAPHY_CAPTION1).setMaxLines(1).build()
-    val layout = PrimaryLayout.Builder(device).setPrimaryLabelTextContent(caption(content.title))
+    val layout = PrimaryLayout.Builder(device).setResponsiveContentInsetEnabled(true).setPrimaryLabelTextContent(caption(content.title))
     content.updated?.let { layout.setSecondaryLabelTextContent(caption(it)) }
     content.hint?.let { hint ->
         return layout.setContent(Text.Builder(context, hint).setTypography(Typography.TYPOGRAPHY_BODY2).setMaxLines(3)
@@ -211,6 +218,9 @@ internal object WatchTileTarget {
         val session = extras.getString(SESSION)?.takeIf { isOpaqueId(it as String?) } ?: return null
         return NotificationTarget(route, session)
     }
+    // Like a tapped notification: the trampoline runs in the app's task, so CLEAR_TOP and SINGLE_TOP
+    // reach a WearActivity that is already open there instead of stacking a second one.
+    @android.annotation.SuppressLint("WearRecents")
     fun forward(context: Context, extras: Bundle?): Intent = target(extras)?.let { WearNotifications.intent(context, it) }
         ?: Intent(context, WearActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 }
