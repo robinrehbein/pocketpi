@@ -91,6 +91,9 @@ no automatic retry and one exact SDK result after an explicit valid retry. This
 addresses that Native authority operation; it is distinct from wrong-incarnation
 outcome queries and other historical replacement orderings. The local Native-only production wiring and its direct-repository and application
 factory runs are recorded in [Native production editor](native-production-editor.md).
-Combined review and remaining qualification are still open; the factory run uses
-debug transport and a valid grant, while wrong-grant refusal is proven in the
-separate direct-repository run.
+Combined App, Host and cross-layer review and the scoped regressions recorded in
+that qualification have completed; broader workflow qualification remains open.
+The factory run uses debug transport and a valid grant, while wrong-grant refusal
+is proven in the separate direct-repository run. The candidate is committed locally
+at App `8e7f4f408b11cdcf9894c813227fe1f156accb60` and Host
+`ba7329bbec6fbed450fd72228390ec50cdb5e3dc`.

@@ -15,8 +15,9 @@ checking exited 0. Android Repository, Journal and Wire suites passed 645, 22
 and 11 tests respectively (678 total), with no failures or skips. Independent
 App, Host and cross-layer reviews reported no concrete defect. The factory audit
 was strengthened to check response capabilities and installed APK hashes and
-passed. These checks qualify the local candidate and their tested scopes; local
-commits remain open. Full Biome cleanliness is not claimed: `run.ts:80` has a
+passed. These checks qualify the local candidate and their tested scopes. The
+candidate is committed locally on App `8e7f4f408b11cdcf9894c813227fe1f156accb60`
+and Host `ba7329bbec6fbed450fd72228390ec50cdb5e3dc`. Full Biome cleanliness is not claimed: `run.ts:80` has a
 pre-existing `noControlCharactersInRegex` finding.
 
 ## Evidence
@@ -52,5 +53,6 @@ These runs establish the stated local paths and payload, not Release transport,
 physical Galaxy S25 or Tab S11, vendor IME behaviour, or an independent Linux host.
 They do not complete the broader remote-development goal. Earlier tests retain
 their own fixture, ordering and source-pin limitations; see the
-[enablement checkpoint](paged-editor-enablement-checkpoint.md). Combined code
-review and remaining regression and workflow qualification remain separate work.
+[enablement checkpoint](paged-editor-enablement-checkpoint.md). Combined App, Host
+and cross-layer review and the scoped regressions described above have completed;
+broader workflow qualification remains separate work.

@@ -22,19 +22,20 @@ this map links the newer recovery evidence that supersedes their open items.
 | Continue after Pi loss | [Saved editor access](testing/editor-recovery-access.md): offline text viewer/export, actual Native/RPC session-copy reopening and fresh work with old uncertainty preserved | Physical devices, broader picker/lifecycle failure matrix and live same-ID replacement |
 | Same-session owner replacement after exit | [Same-session resumption](testing/paged-editor-same-session-resume.md): reproduced missing replacement-status notification fixed; actual Native/RPC same file/ID, new owner, automatic Android snapshot and fresh work, old uncertainty preserved | Replacement while old owner lives, lease-only revocation, positive-outcome incarnation and physical devices |
 | Native paged claim qualification | [Observer/profile checks](testing/native-claim-observer.md): lost optional observer argument reproduced and fixed; actual empty-prefill and large-prefill profiles, including Android process recovery, pass | Local takeover/revocation at a held ACK and wider coverage still open; historical large-prefill runs do not prove paged-specific reader coverage |
-| Local takeover during large input | [Native local takeover](testing/native-editor-local-takeover.md): real Ctrl-], immediate active-to-inactive paged lease, same live Pi, old upload fenced/journal preserved, local cancel then fresh Android work | Silent Host-only lease revocation, same-question reacquisition, live peer replacement and physical devices |
-| Source peer reload with live Pi | [SDK peer reload](testing/native-editor-peer-reload.md): normal Host busy guard, genuine SDK shutdown/start and new peer in same process, old upload fenced and fresh work succeeds | Positive-outcome original-owner binding remains open; see [enablement checkpoint](testing/paged-editor-enablement-checkpoint.md) for mandatory versus broader gates |
-| Large editor recovery | [Positive outcomes](testing/paged-editor-positive-outcomes.md): exact original-owner receipts, durable release queue, Native/RPC App death, actual Host restart and release-ACK/local-cleanup death cases | Remaining owner/lease/settlement/resource/IME gates; public paged/outcome capabilities stay OFF |
+| Local takeover during large input | [Native local takeover](testing/native-editor-local-takeover.md): real Ctrl-], immediate active-to-inactive paged lease, same live Pi, old upload fenced/journal preserved, local cancel then fresh Android work | Silent Host-only lease revocation and physical devices remain outside this proof; same-question reacquisition is not a required UX prerequisite |
+| Source peer reload with live Pi | [SDK peer reload](testing/native-editor-peer-reload.md) and [post-applied reload](testing/paged-editor-post-applied-reload.md): precommit replacement retains uncertainty; idle reload preserves the exact applied receipt | Other owner-loss and late Source-ACK orderings remain outside those scoped proofs |
+| Large editor recovery | [Positive outcomes](testing/paged-editor-positive-outcomes.md) and [Native production editor](testing/native-production-editor.md): original-owner receipts and recovery cases, plus separately negotiated Native paged/outcome support in the local development-branch candidate | Broader authority and lifecycle orderings, vendor IME, physical devices and independent Linux remain outside the recorded production-candidate proofs |
 | Phone/tablet application lifecycle | [MainActivity recovery](testing/mainactivity-process-recovery-qualification.md) and [fresh client](testing/fresh-client-handoff-qualification.md) record local emulator workflows | Real Samsung, prolonged background/Doze and network transitions |
 | Development workflow | [Native ticket workflow](testing/ticket-workflow-qualification.md) and [development workflow](testing/development-workflow-qualification.md) record isolated local Pi/tool/Git/PR/CI chains | Physical devices, live external provider/GitHub/CI qualification |
 | Linux and devcontainers | [Packaged Linux evidence](testing/linux-host-qualification.md) records local container/worker/supervisor checks | Independent authorized remote Linux host remains unavailable |
 
 The compact-terminal increment is locally qualified in the linked scope. The
-[native editor lease/upload callback integration](testing/paged-editor-positive-outcomes.md#native-lease-callbacks-and-upload-reservations)
-passes its scoped daemon/LocalPeer checks; actual original-owner/resource gates
-remain open and public paged/outcome capabilities stay OFF. Physical Samsung
-devices and an independent SSH host remain unavailable; do not substitute emulator
-or local container evidence for those acceptance gates.
+[Native production editor](testing/native-production-editor.md) candidate enables
+separately negotiated paged and positive-outcome capabilities locally; its direct
+repository and application-factory proofs retain their distinct emulator and debug
+transport limits. Physical Samsung devices and an independent SSH host remain
+unavailable; do not substitute emulator or local container evidence for those
+acceptance gates.
 
 ## Durable paged-editor Android checkpoint, 2026-11-01
 
