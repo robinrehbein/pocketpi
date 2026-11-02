@@ -82,3 +82,8 @@ remain unqualified. Native graceful termination is not included in this matrix.
 ## Continuing afterward
 
 [Saved editor access and normal reopen](editor-recovery-access.md) now qualify the actual Android history-row flow into a new Native/RPC session copy and fresh owner, while the old encrypted attempt and draft remain unchanged. A local offline viewer and explicit document export make retained text accessible without sending or settling it. This does not turn the old uncertain attempt into a safe automatic retry.
+
+Same-ID/file resumption in a new owner after that exit is qualified separately in
+[same-session resumption](paged-editor-same-session-resume.md), including the
+replacement-status notification correction. It does not qualify simultaneous
+writers or replacement while the original process remains alive.
