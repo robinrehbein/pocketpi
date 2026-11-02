@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import android.view.MotionEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +20,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -201,7 +203,10 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         return true
     }
     val latestRepeatKey by rememberUpdatedState<(BrowserInput.Key) -> Boolean>({ repeatKey(it) })
-    Column(Modifier.fillMaxSize()) {
+    // On a phone the pane overlays the chat: its background hides the chat and taps on empty
+    // parts of the pane stop here instead of reaching it.
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
+        .pointerInput(Unit) { detectTapGestures {} }.testTag("browserPane")) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { latestActions.refresh() }) { Text(stringResource(R.string.browser_refresh)) }
@@ -237,11 +242,11 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                     TextButton(onClick = { latestActions.closeTab(tab.id) }, enabled = held.isEmpty(), modifier = Modifier.semantics { contentDescription = closeLabel }) { Text("×") }
                 }
             }
-            if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
+            if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, Modifier.testTag("browserNewTab"), enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
         }
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(url, { url = it; urlDirty = true }, Modifier.weight(1f), singleLine = true, enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_address)) })
-            TextButton(onClick = { if (latestActions.navigate(url)) urlDirty = false }, enabled = view.ownsControl && held.isEmpty() && url.isNotBlank()) { Text(stringResource(R.string.browser_go)) }
+            OutlinedTextField(url, { url = it; urlDirty = true }, Modifier.weight(1f).testTag("browserAddress"), singleLine = true, enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_address)) })
+            TextButton(onClick = { if (latestActions.navigate(url)) urlDirty = false }, Modifier.testTag("browserGo"), enabled = view.ownsControl && held.isEmpty() && url.isNotBlank()) { Text(stringResource(R.string.browser_go)) }
         }
         Box(Modifier.weight(1f).fillMaxWidth().testTag("browserViewport").background(Color.Black).onSizeChanged { size = it }
             .onFocusChanged {

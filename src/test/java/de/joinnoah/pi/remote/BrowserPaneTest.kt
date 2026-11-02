@@ -7,6 +7,13 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
@@ -31,6 +38,26 @@ class BrowserPaneTest {
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out); bitmap.recycle()
         return BrowserImage(out.toByteArray(), 400, 200, 400, 200, 1.0, 0.0, 0.0, 1, 1)
     }
+    @Test fun paneCoversTheChatBeneathIt() {
+        // A phone shows the pane over the chat: nothing beneath may show through or take a tap.
+        var beneathClicks = 0
+        val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize()
+                        .background(Color.Red).clickable { beneathClicks++ })
+                    BrowserPane(view, BrowserPaneActions(), {})
+                }
+            }
+        }
+        compose.onNodeWithTag("browserPane").performTouchInput { click(percentOffset(0.98f, 0.99f)) }
+        compose.runOnIdle { assertEquals(0, beneathClicks) }
+        val pixels = compose.onNodeWithTag("browserPane").captureToImage().asAndroidBitmap()
+        val corner = pixels.getPixel(pixels.width - 2, pixels.height - 2)
+        assertFalse("chat shows through the pane", android.graphics.Color.red(corner) > 200 && android.graphics.Color.green(corner) < 50)
+    }
+
     @Test fun pendingDecodeWaitsAndSuccessfulDecodeDisplaysImage() {
         val pending = CompletableDeferred<Bitmap?>()
         val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = image())
