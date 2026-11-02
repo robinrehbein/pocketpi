@@ -21,7 +21,7 @@
     <string name="browser_text">Text senden</string>
     <string name="browser_send">Senden</string>
     <string name="browser_send_refused">Der Text wurde nicht gesendet. Dein Entwurf bleibt erhalten; versuche es erneut, wenn du bereit bist.</string>
-    <string name="browser_go_refused">Die Adresse wurde nicht geöffnet. Der Browser ist gerade beschäftigt; versuche es gleich noch einmal.</string>
+    <string name="browser_go_refused">Die Adresse wurde nicht geöffnet. Prüfe, ob sie mit http:// oder https:// beginnt und die Verbindung steht, und versuche es erneut.</string>
     <string name="browser_discard_title">Browsereingabe verwerfen?</string>
     <string name="browser_discard_body">Die noch nicht gesendete Adresse oder Texteingabe wird verworfen.</string>
     <string name="browser_close_tab">Tab %1$s schließen</string>

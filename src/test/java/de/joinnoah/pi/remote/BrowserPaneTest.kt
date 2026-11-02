@@ -60,6 +60,16 @@ class BrowserPaneTest {
         compose.onAllNodesWithTag("browserGoRefused").assertCountEquals(0)
         assertEquals(listOf("https://example.com/b", "https://example.com/b"), navigated)
     }
+    @Test fun refusedNewTabSaysSoKeepsTheAddressAndEditingClearsTheNotice() {
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1)
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(newTab = { false }), {}) } }
+        compose.onNodeWithTag("browserAddress").performTextReplacement("example.com")
+        compose.onNodeWithTag("browserGo").performClick()
+        compose.onNodeWithTag("browserGoRefused").assertIsDisplayed()
+        compose.onNodeWithTag("browserAddress").assertTextContains("example.com")
+        compose.onNodeWithTag("browserAddress").performTextReplacement("https://example.com")
+        compose.onAllNodesWithTag("browserGoRefused").assertCountEquals(0)
+    }
     @Test fun paneCoversTheChatBeneathIt() {
         // A phone shows the pane over the chat: nothing beneath may show through or take a tap.
         var beneathClicks = 0

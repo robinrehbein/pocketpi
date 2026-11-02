@@ -72,7 +72,6 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var urlDirty by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf(false) }
     var draft by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf("") }
     var textSendRefused by remember(view?.sessionId) { mutableStateOf(false) }
-    var goRefused by remember(view?.sessionId) { mutableStateOf(false) }
     val queue = remember(view?.sessionId) { mutableStateListOf<PendingBrowserInput>() }
     var flight by remember(view?.sessionId) { mutableStateOf<BrowserFlight?>(null) }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -80,6 +79,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var resizeRevision by remember(view?.sessionId, view?.generation, view?.selectedTabId) { mutableStateOf<Long?>(null) }
     val density = LocalDensity.current.density
     val selected = view?.tabs?.firstOrNull { it.id == view.selectedTabId }
+    var goRefused by remember(view?.sessionId, view?.previewPort, view?.selectedTabId, view?.ownsControl) { mutableStateOf(false) }
     LaunchedEffect(selected?.id, selected?.url) { if (!urlDirty) url = selected?.url.orEmpty() }
     LaunchedEffect(view?.generation, view?.ownsControl, active, view?.sessionId, view?.documentEpoch) {
         queue.clear(); flight = null; held.clear(); heldKeys.clear(); releasing.clear(); pointerPosition = null; heldRevision = null
@@ -247,7 +247,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, Modifier.testTag("browserNewTab"), enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
         }
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(url, { url = it; urlDirty = true }, Modifier.weight(1f).testTag("browserAddress"), singleLine = true, enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_address)) })
+            OutlinedTextField(url, { url = it; urlDirty = true; goRefused = false }, Modifier.weight(1f).testTag("browserAddress"), singleLine = true, enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_address)) })
             TextButton(onClick = {
                 // With no tab open, the address opens in a new one instead of going nowhere.
                 val sent = if (view.selectedTabId == null) latestActions.newTab(url) else latestActions.navigate(url)
