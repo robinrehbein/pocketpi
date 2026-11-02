@@ -49,3 +49,16 @@ SDK-only feasibility is not production qualification. Before enablement, exercis
 ## Safe staged implementation
 
 Schema support alone must not expose an unfinished editor. During Task 1, keep editorSource questions and unimplemented editorUploadGrantId metadata projected to local_required, reject their direct positive answers (cancel still allowed), and explicitly refuse all new upload commands until the gated implementation exists. Do not allow an unhandled upload commit to fall through to generic accepted. Android bounded rendering also rejects editorSource or editorUploadGrantId until the paged renderer/capability is implemented. These controls are covered by focused negative tests and remain default-deny when new capability is absent.
+
+## Runtime scope clarification, 2026-11-02
+
+The binding product decision in `docs/remote-development-goal.md` remains: native
+workers are the one regular session runtime. RPC is only the compatibility
+fallback for hosts without node-pty, not an equal product target. Existing private
+RPC qualification is retained as historical compatibility evidence; additional
+RPC parity or RPC-only acceptance must not block Native-worker delivery. The
+both-owner wording below records the earlier qualification scope, not a mandate
+to keep expanding two product runtimes. Prioritize remaining Native owner,
+authority and Android production-enablement criteria. Future capability wiring
+must keep fallback behaviour explicit and must not advertise unqualified new
+features merely because global switches were enabled for Native workers.

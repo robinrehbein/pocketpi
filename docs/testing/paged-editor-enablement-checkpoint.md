@@ -73,3 +73,12 @@ process loss is distinct from a live peer replacement. Identify only actual
 missing original cases; do not invent same-question revival or a blanket rerun.
 Only enable separately negotiated capabilities when their actual mandatory
 criteria, resource policy and reviewed production wiring are satisfied.
+
+## Product runtime scope correction, 2026-11-02
+
+Native Host workers are the regular delivery path. RPC remains only the existing
+no-node-pty compatibility fallback, as decided in the main goal document. Saved
+RPC runs remain valid evidence of their tested scope, but new RPC parity and
+additional RPC-only scenarios are not Native release gates. Reconcile and close
+remaining Native authority/replacement cases and reviewed production wiring first;
+retain conservative, explicitly limited fallback behaviour.

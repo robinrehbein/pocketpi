@@ -5,6 +5,9 @@
 
 Android on Galaxy S25 and Galaxy Tab S11 remains the delivery priority. Wear uses
 watch-appropriate interactions; iPhone is deferred. The full goal remains active.
+Native Host workers are the sole regular session runtime. RPC remains only the
+existing fallback for hosts without node-pty; further RPC parity is not a separate
+product target or a gate for Native delivery.
 The chronological checkpoints below retain their historical source/test scope;
 this map links the newer recovery evidence that supersedes their open items.
 
