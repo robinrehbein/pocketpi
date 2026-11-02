@@ -23,6 +23,8 @@ class WearApplication : Application() {
         private set
     lateinit var settings: SettingsRepository
         private set
+    internal lateinit var glance: WatchGlanceStore
+        private set
     private var validated: String? = null
     @Volatile private var foreground = false
     private var pushRegistration: PushRegistration? = null
@@ -30,6 +32,8 @@ class WearApplication : Application() {
     internal fun deliverPush(payload: PushPayload) {
         scope.launch {
             if (payload.routeId in forgottenRoutes && repository.state.value.hosts.none { it.routeId == payload.routeId }) return@launch
+            // The tile shows what a push says even with watch notifications off.
+            glance.onPush(payload)
             if (!pushConfigured || !settings.state.value.pushEnabled || isShowing(payload.routeId, payload.sessionId)) return@launch
             WearNotifications.post(this@WearApplication, payload)
         }
@@ -95,8 +99,10 @@ class WearApplication : Application() {
             PairingStore(this), DraftStore(this), SecureRemoteTransport(scope), scope,
             navigationStorage = NavigationSnapshotStore(this),
             onRecoverySignal = { pushRegistration?.onRecovery() },
-            onUnpaired = { forgottenRoutes += it; WearNotifications.forget(this, it) },
+            onUnpaired = { forgottenRoutes += it; WearNotifications.forget(this, it); glance.forgetRoute(it) },
         )
+        glance = WatchGlanceStore(this, scope, repository, PairingStore(this))
+        glance.observe(repository.state)
         // Persisted opt-out must re-establish the repository's null-token intent on every start,
         // so an offline unregister is still sent when this process next connects to a host.
         if (!pushConfigured || !settings.state.value.pushEnabled) repository.setPushToken(null)

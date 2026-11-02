@@ -6806,15 +6806,17 @@ class DefaultRemoteRepository(
             return false
         }
         if (queued && (command != null || current.draft.trimStart().startsWith("/"))) return false
+        if (queued && shellDraft(current) != null) return false
         if (command != null) {
             if (current.quote != null || current.attachments.isNotEmpty()) {
                 reportError(R.string.remote_command_remove_context)
                 return false
             }
+            // The catalog is this session's. A revalidation in flight (one follows every turn)
+            // does not block the send, matching canSendDraft; the host still checks the command.
             if (
                 COMMANDS_CAPABILITY !in current.capabilities ||
                     COMMANDS_CAPABILITY in current.unavailableCapabilities ||
-                    current.commandsLoading ||
                     current.commands.none { it.name == command }
             ) {
                 reportError(R.string.remote_command_unknown)

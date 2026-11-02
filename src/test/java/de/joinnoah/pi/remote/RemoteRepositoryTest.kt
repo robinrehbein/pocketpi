@@ -2311,6 +2311,50 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun knownCommandIsSentWhileTheCatalogRevalidates() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.state.value.commands.any { it.name == "review" })
+        // A turn's end revalidates the catalog; the send button stays enabled meanwhile.
+        val answering = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.commands.get" -> null
+                "session.command" -> Wire.objectOf("kind" to "command", "sessionId" to "session", "status" to "dispatched")
+                else -> answering(it)
+            }
+        }
+        repository.refreshCommands()
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        repository.draft("/review  now")
+        repository.prompt()
+        runCurrent()
+        assertEquals("/review  now", transport.sent.last { it.text("type") == "session.command" }.text("text"))
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun unknownCommandIsRefusedWhileTheCatalogRevalidates() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val answering = transport.response
+        transport.response = { if (it.text("type") == "session.commands.get") null else answering(it) }
+        repository.refreshCommands()
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        repository.draft("/unknown")
+        repository.prompt()
+        runCurrent()
+        assertEquals(R.string.remote_command_unknown, repository.state.value.error)
+        assertFalse(transport.sent.any { it.text("type") == "session.command" })
+    }
+
+    @Test
     fun quotedCommandIsRetainedAndNotDispatched() = runTest {
         val transport = Transport().also(::capable)
         val repository = repository(transport)
@@ -7578,6 +7622,47 @@ class RemoteRepositoryTest {
         repository.prompt()
         runCurrent()
         assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aShellDraftIsNeverQueuedAsAFollowUp() = runTest {
+        val transport =
+            Transport().also { bashing(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY, STEER_CAPABILITY) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        runCurrent()
+        assertTrue(canRunShellCommands(repository.state.value))
+        repository.draft("!ls")
+        runCurrent()
+        repository.followUp()
+        repository.steer()
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertTrue(transport.bashRequests().isEmpty())
+        assertEquals("!ls", repository.state.value.draft)
+        // A plain follow-up still goes out.
+        repository.draft("list the files")
+        runCurrent()
+        repository.followUp()
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aSpaceBeforeTheBangSendsTheDraftAsAPrompt() = runTest {
+        val transport = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft(" !important: keep the tests")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(" !important: keep the tests", transport.sent.single { it.text("type") == "session.prompt" }.text("text"))
+        assertTrue(transport.bashRequests().isEmpty())
     }
 
     @Test
