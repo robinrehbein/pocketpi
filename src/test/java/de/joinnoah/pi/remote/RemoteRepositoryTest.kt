@@ -178,6 +178,8 @@ class RemoteRepositoryTest {
         pagedEditorTestGate: Boolean = false,
         pagedEditorStorage: PagedEditorStorage? = null,
         positiveOutcomeTestGate: Boolean = false,
+        nativePagedEditorEnabled: Boolean = false,
+        nativePositiveOutcomeEnabled: Boolean = false,
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
@@ -197,6 +199,8 @@ class RemoteRepositoryTest {
             pagedEditorTestGate = pagedEditorTestGate,
             pagedEditorStorage = pagedEditorStorage,
             positiveOutcomeTestGate = positiveOutcomeTestGate,
+            nativePagedEditorEnabled = nativePagedEditorEnabled,
+            nativePositiveOutcomeEnabled = nativePositiveOutcomeEnabled,
         )
 
     private fun modelData(id: String = "model") =
@@ -9664,6 +9668,161 @@ class RemoteRepositoryTest {
         repo.submitPagedEditor(b, "second"); runCurrent()
         assertEquals("A's finalizer must not permit a second concurrent B upload", 2,
             transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    private val productionEditorCaps = setOf(
+        QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY,
+        QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY,
+    )
+
+    private suspend fun TestScope.productionPagedFixture(
+        marker: JsonElement?,
+        caps: Set<String> = productionEditorCaps,
+        version: Int = 3,
+        paged: Boolean = true,
+        positive: Boolean = true,
+        storage: PagedEditorStorage? = PagedMemoryStorage(),
+    ): Pair<DefaultRemoteRepository, Transport> {
+        val baseQuestion = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "grant")
+        val question = if (marker == null) baseQuestion else JsonObject(baseQuestion + ("native" to marker))
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> {
+                val result = checkNotNull(normal(request))
+                if (request.text("requestId").startsWith("capabilities.v$version:"))
+                    JsonObject(result + ("capabilities" to JsonArray(caps.map(::JsonPrimitive))))
+                else result
+            }
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            "session.question.editor.upload.chunk" -> Wire.objectOf("kind" to "editor_upload_ack", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 5)
+            "session.question.editor.upload.commit" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorStorage = storage, nativePagedEditorEnabled = paged, nativePositiveOutcomeEnabled = positive)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        return repo to transport
+    }
+
+    @Test fun productionNativePagedEditorLoadsAndUploadsWithDurableJournal() = runTest {
+        val storage = PagedMemoryStorage()
+        val (repo, transport) = productionPagedFixture(JsonPrimitive(true), storage = storage)
+        val request = transport.sent.first { it.text("type") == "projects.list" }.text("requestId")
+        assertTrue(request.contains(QUESTION_PAGED_EDITOR_OPT_IN)); assertTrue(request.contains(QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN))
+        val question = repo.state.value.questions.single()
+        repo.loadPagedEditor(question); runCurrent()
+        assertEquals("hello", repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(question, "hello"); runCurrent()
+        assertEquals(listOf("session.question.editor.upload.begin", "session.question.editor.upload.chunk", "session.question.editor.upload.commit"),
+            transport.sent.map { it.text("type") }.filter { it.startsWith("session.question.editor.upload.") })
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+    }
+
+    @Test fun productionPagedEditorRequiresStrictBooleanNativeQuestion() = runTest {
+        for (marker in listOf(null, JsonPrimitive(false), JsonPrimitive("true"), JsonNull)) {
+            val (repo, transport) = productionPagedFixture(marker)
+            val question = repo.state.value.questions.single()
+            repo.loadPagedEditor(question); repo.submitPagedEditor(question, "hello"); runCurrent()
+            assertTrue("marker=$marker", repo.state.value.pagedEditors.isEmpty())
+            assertTrue("marker=$marker", transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+        }
+    }
+
+    @Test fun productionPagedEditorRequiresV3NativeBasePagedAndDurableStore() = runTest {
+        val cases = listOf(
+            Triple(2, productionEditorCaps, true),
+            Triple(3, productionEditorCaps - QUESTION_EDITOR_CAPABILITY, true),
+            Triple(3, productionEditorCaps - NATIVE_EDITOR_CAPABILITY, true),
+            Triple(3, productionEditorCaps - QUESTION_PAGED_EDITOR_CAPABILITY, true),
+            Triple(3, productionEditorCaps, false),
+        )
+        for ((version, caps, durable) in cases) {
+            val (repo, transport) = productionPagedFixture(JsonPrimitive(true), caps, version, storage = if (durable) PagedMemoryStorage() else null)
+            val question = repo.state.value.questions.single()
+            repo.loadPagedEditor(question); repo.submitPagedEditor(question, "hello"); runCurrent()
+            assertTrue("version=$version caps=$caps durable=$durable", repo.state.value.pagedEditors.isEmpty())
+            assertTrue(transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+        }
+    }
+
+    @Test fun productionPagedAndPositiveOptInsAreIndependentAndRequireJournal() = runTest {
+        for ((paged, positive, durable, expectedPaged, expectedPositive) in listOf(
+            listOf(false, false, true, false, false), listOf(false, true, true, false, false),
+            listOf(true, false, true, true, false), listOf(true, true, true, true, true),
+            listOf(true, true, false, false, false),
+        )) {
+            val (repo, transport) = productionPagedFixture(JsonPrimitive(true), paged = paged, positive = positive, storage = if (durable) PagedMemoryStorage() else null)
+            val request = transport.sent.first { it.text("type") == "projects.list" }.text("requestId")
+            assertEquals(expectedPaged, request.contains(QUESTION_PAGED_EDITOR_OPT_IN))
+            assertEquals(expectedPositive, request.contains(QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN))
+            repo.loadPagedEditor(repo.state.value.questions.single()); runCurrent()
+            assertEquals(expectedPaged, repo.state.value.pagedEditors["e"]?.text == "hello")
+            assertEquals(expectedPositive, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in repo.state.value.capabilities)
+        }
+    }
+
+    @Test fun productionStaleOutcomeAfterDisconnectKeepsFenceUntilFreshScopedQuery() = runTest {
+        val hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1,
+            StoredPagedOutcomeBinding("device", "owner", 0, hash))
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        var firstQuery: JsonObject? = null
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(productionEditorCaps.map(::JsonPrimitive))))
+            "session.question.editor.outcome.get" -> if (firstQuery == null) {
+                firstQuery = request
+                null // The real request was sent; its applied response is delayed until after disconnect.
+            } else Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorStorage = storage, nativePagedEditorEnabled = true, nativePositiveOutcomeEnabled = true)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi")
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        val stale = checkNotNull(firstQuery)
+        assertEquals(attempt, storage.saved.attempts["a"])
+        transport.listener.failed(true, R.string.remote_connection_error); runCurrent()
+        assertFalse(repo.state.value.connected)
+        transport.result(stale, Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to stale.obj("receipt"))); runCurrent()
+        assertEquals(attempt, storage.saved.attempts["a"])
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" || it.text("type").startsWith("session.question.editor.upload.") })
+
+        advanceTimeBy(1_000); runCurrent()
+        val queries = transport.sent.filter { it.text("type") == "session.question.editor.outcome.get" }
+        assertEquals(2, queries.size)
+        assertNotEquals(stale.text("requestId"), queries[1].text("requestId"))
+        assertEquals(stale.obj("receipt"), queries[1].obj("receipt"))
+        assertEquals(stale.obj("receipt"), transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }.obj("receipt"))
+        assertTrue(storage.saved.attempts.isEmpty()); assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun productionRecoversAndReleasesStoredNativeOutcomeWithoutLiveQuestion() = runTest {
+        val hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1,
+            StoredPagedOutcomeBinding("device", "owner", 0, hash))
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(productionEditorCaps.map(::JsonPrimitive))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorStorage = storage, nativePagedEditorEnabled = true, nativePositiveOutcomeEnabled = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertTrue(repo.state.value.questions.isEmpty())
+        val receipt = Wire.parse("""{"sessionId":"session","questionId":"e","ownerIncarnationId":"owner","grantId":"g","uploadId":"u","commitRequestId":"c","byteLength":0,"sha256":"$hash"}""")
+        assertEquals(receipt, transport.sent.single { it.text("type") == "session.question.editor.outcome.get" }.obj("receipt"))
+        assertEquals(receipt, transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }.obj("receipt"))
+        assertTrue(storage.saved.attempts.isEmpty()); assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
     }
 
     @Test fun defaultGateDoesNotAdvertiseOrLoadPagedEditor() = runTest {

@@ -4,6 +4,8 @@ import android.app.Application
 import android.app.Activity
 import android.os.SystemClock
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import androidx.test.platform.app.InstrumentationRegistry
 import android.content.pm.ApplicationInfo
 import android.util.Base64
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -137,6 +139,19 @@ internal object ProductionEntryBootstrap {
             }
         }
         val mode = args.getString("productionEntryMode") ?: "seed"
+        // The factory test can obtain its ephemeral secret from the already staged
+        // private fixture rather than exposing it in instrumentation arguments.
+        val deviceSecret = if (args.getString("productionEntrySecretFromFixture") == "true") {
+            check(mode == "seed" && args.getString("productionEntryDeviceSecret") == null)
+            val path = requireNotNull(args.getString("productionEntryFixturePath"))
+            require(path.matches(Regex("/data/local/tmp/[A-Za-z0-9._/-]+")) && !path.contains(".."))
+            val fixture = JSONObject(ParcelFileDescriptor.AutoCloseInputStream(
+                InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")
+            ).use { it.readBytes().toString(Charsets.UTF_8) })
+            check(fixture.getString("routeId") == route && fixture.getString("deviceId") == args.getString("productionEntryDeviceId"))
+            check(fixture.getString("relayUrl").toHttpUrl() == url)
+            fixture.getString("deviceSecret").also { require(it.isNotEmpty() && !it.contains('\n') && !it.contains('\r')) }
+        } else args.getString("productionEntryDeviceSecret")
         require(mode in setOf("seed", "restore", "unpaired"))
         val fileRecovery = args.getString("productionEntryFileDraftRecovery") == "true"
         val recovery = args.getString("productionEntryProcessRecovery") == "true" || fileRecovery
@@ -172,7 +187,7 @@ internal object ProductionEntryBootstrap {
             check(preflight.renameTo(marker)) { "Unable to consume preflight marker" }
             if (mode == "seed") application.stores.pairings.save(listOf(PairedHost(route, url.toString().removeSuffix("/"),
                 requireNotNull(args.getString("productionEntryDeviceId")),
-                requireNotNull(args.getString("productionEntryDeviceSecret")), "Isolated fixture")))
+                requireNotNull(deviceSecret), "Isolated fixture")))
         }
         this.application = application
         application.registerActivityLifecycleCallbacks(callbacks)

@@ -88,6 +88,8 @@ class RemoteApplication : Application() {
                 navigationStorage = stores.navigation,
                 fileDraftStorage = stores.fileDrafts,
                 pagedEditorStorage = stores.pagedEditor,
+                nativePagedEditorEnabled = true,
+                nativePositiveOutcomeEnabled = true,
                 attachmentStorage = attachments,
                 attachmentImporter = { uri, photo ->
                     importer.import(android.net.Uri.parse(uri), photo)

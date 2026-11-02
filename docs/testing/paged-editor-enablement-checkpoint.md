@@ -3,7 +3,9 @@
 This inventory preserves the full environment goal and the original binding
 [paged contract](../plans/2026-11-01-paged-editor-contract.md), especially Original
 owner transport. Later qualification documents' limitation lists do not by
-themselves create new mandatory product semantics. Public gates remain off.
+themselves create new mandatory product semantics. The current local development-branch
+Native production candidate enables the separately negotiated gates; it has not
+been externally deployed. See [local production qualification](native-production-editor.md).
 
 | Contract area | Recorded evidence | Next boundary |
 | --- | --- | --- |
@@ -87,6 +89,8 @@ retain conservative, explicitly limited fallback behaviour.
 forbidden reply before Source upload, unchanged encrypted draft/question identity,
 no automatic retry and one exact SDK result after an explicit valid retry. This
 addresses that Native authority operation; it is distinct from wrong-incarnation
-outcome queries and other historical replacement orderings. The next step is
-reviewed Native-only production wiring, preserving conservative bounded legacy
-fallback and independent receipt recovery.
+outcome queries and other historical replacement orderings. The local Native-only production wiring and its direct-repository and application
+factory runs are recorded in [Native production editor](native-production-editor.md).
+Combined review and remaining qualification are still open; the factory run uses
+debug transport and a valid grant, while wrong-grant refusal is proven in the
+separate direct-repository run.

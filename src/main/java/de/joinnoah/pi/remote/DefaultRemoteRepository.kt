@@ -303,6 +303,8 @@ class DefaultRemoteRepository(
     private val fileDraftStorage: FileDraftStorage? = null,
     private val pagedEditorStorage: PagedEditorStorage? = null,
     private val positiveOutcomeTestGate: Boolean = false,
+    private val nativePagedEditorEnabled: Boolean = false,
+    private val nativePositiveOutcomeEnabled: Boolean = false,
 ) : RemoteRepository {
     override suspend fun loadEditorRecovery(): EditorRecoveryLoad {
         val journal = pagedJournal ?: return EditorRecoveryLoad.Unavailable
@@ -644,6 +646,10 @@ class DefaultRemoteRepository(
     }
     private data class PagedReceipt(val route: String, val session: String, val id: String, val question: JsonObject, val grant: String, val connection: Long, val attemptId: String? = null)
     private val pagedJournal = pagedEditorStorage?.let { PagedEditorJournal(it, io) }
+    private val nativePagedConfigured: Boolean get() = nativePagedEditorEnabled && pagedJournal != null
+    private val pagedConfigured: Boolean get() = pagedEditorTestGate || nativePagedConfigured
+    private val positiveConfigured: Boolean get() = pagedJournal != null &&
+        (pagedEditorTestGate && positiveOutcomeTestGate || nativePagedConfigured && nativePositiveOutcomeEnabled)
     private val pagedProjectionMutex = Mutex()
     private var pagedJournalSnapshot = PagedJournalSnapshot()
     private var pagedStoragePending = pagedJournal != null
@@ -2391,8 +2397,8 @@ class DefaultRemoteRepository(
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
         val optIn = if (capabilityRevision(capabilityRoute) == 3) {
-            if (pagedEditorTestGate) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN" +
-                (if (positiveOutcomeTestGate && pagedJournal != null) "+$QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN" else "") + ":" else QUESTION_DETAILS_OPT_IN
+            if (pagedConfigured) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN" +
+                (if (positiveConfigured) "+$QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN" else "") + ":" else QUESTION_DETAILS_OPT_IN
         } else ""
         val id = if (type == "projects.list") "$capabilityRoute$optIn$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
@@ -2480,8 +2486,13 @@ class DefaultRemoteRepository(
                     promptDeliveryGeneration = if (revision == 3 && PROMPT_DELIVERY_CAPABILITY in advertised) connection else null
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
+                // Fixture capabilities keep their historical behavior; production requires the
+                // independently negotiated base and Native capabilities as well.
+                val pagedEligible = revision == 3 && pagedConfigured &&
+                    (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
+                val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || pagedEditorTestGate && positiveOutcomeTestGate && pagedJournal != null && revision == 3 && QUESTION_PAGED_EDITOR_CAPABILITY in advertised) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEditorTestGate && revision == 3) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
                     update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
@@ -8798,7 +8809,10 @@ class DefaultRemoteRepository(
     }
 
     private fun positiveOutcomeAvailable(current: RemoteState, allowCapacityBlocked: Boolean = false): Boolean =
-        pagedEditorTestGate && positiveOutcomeTestGate && pagedJournal != null && !pagedStoragePending && (!pagedStorageFailed || allowCapacityBlocked && pagedReleaseCapacityBlocked) &&
+        positiveConfigured && !pagedStoragePending && (!pagedStorageFailed || allowCapacityBlocked && pagedReleaseCapacityBlocked) &&
+            (pagedEditorTestGate && positiveOutcomeTestGate ||
+                QUESTION_EDITOR_CAPABILITY in current.capabilities && QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
+                NATIVE_EDITOR_CAPABILITY in current.capabilities && NATIVE_EDITOR_CAPABILITY !in current.unavailableCapabilities) &&
             current.connected && current.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 &&
             QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
             QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in current.capabilities && QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY !in current.unavailableCapabilities
@@ -8890,7 +8904,8 @@ class DefaultRemoteRepository(
     }
 
     private fun pagedAvailable(question: JsonObject, current: RemoteState): Boolean =
-        pagedEditorTestGate && current.connected && !current.loading && current.questions.any { it === question } &&
+        (pagedEditorTestGate || nativePagedConfigured && question["native"] == JsonPrimitive(true)) &&
+            current.connected && !current.loading && current.questions.any { it === question } &&
             current.questions.count { it.optionalText("id") == question.optionalText("id") } == 1 &&
             editorCapabilityAvailable(question, current) && QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities &&
             QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities && capabilityRevision(capabilityRoute) == 3
