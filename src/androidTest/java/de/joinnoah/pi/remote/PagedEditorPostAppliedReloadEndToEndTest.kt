@@ -66,8 +66,10 @@ class PagedEditorPostAppliedReloadEndToEndTest {
             require(nonce.matches(Regex("[a-f0-9]{32}")))
             fixture = JSONObject(readFixture(requireNotNull(args.getString("prStatusFixturePath"))).toString(Charsets.UTF_8))
             require(args.getString("prStatusFixtureExpected") == "true" && fixture.getBoolean("prStatusFixture") && fixture.getString("sessionKind") == "actual-pi")
-            native = args.getString("prStatusNativeExpected") == "true"
-            require(native && fixture.getBoolean("nativeWorker") && fixture.getBoolean("pagedEditorFixture"))
+            val expectedNative = requireNotNull(args.getString("prStatusNativeExpected"))
+            require(expectedNative == "true" || expectedNative == "false")
+            native = expectedNative == "true"
+            require(fixture.getBoolean("nativeWorker") == native && fixture.getBoolean("pagedEditorFixture"))
             require(fixture.getBoolean("pagedEditorPostAppliedReloadProof"))
             require(fixture.getString("pagedEditorCase") == "restart-lost-ack")
             positive = true
@@ -118,7 +120,7 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         activate(RemoteSelection(host.routeId, selection.projectId))
         compose.waitUntil(60_000) { repository.state.value.sessions.any { it.optionalText("id") == selection.sessionId } }
         compose.runOnIdle { showNavigation.value = true }
-        compose.waitUntil(60_000) { repository.state.value.let { it.selection == selection && it.connected && !it.loading && QUESTION_PAGED_EDITOR_CAPABILITY in it.capabilities && transport.pagedV3Accepted.get() && transport.presenceAccepted.get() } }
+        compose.waitUntil(60_000) { repository.state.value.let { it.selection == selection && it.connected && !it.loading && QUESTION_PAGED_EDITOR_CAPABILITY in it.capabilities && transport.pagedV3Accepted.get() && (!native || transport.presenceAccepted.get()) } }
         val command = fixture.getString("editorProbeCommand")
         val name = requireNotNull(commandName(command))
         fun openQuestion(probe: String, except: String? = null): JsonObject {
@@ -181,17 +183,42 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         assertEquals(attempt, persisted().attempts.values.single())
         val countsBeforeReload = transport.uploadCounts()
         compose.waitUntil(60_000) { statusOrNull()?.optJSONObject("postAppliedReload")?.let { check(it.optString("phase") != "failed") { "Fixture failed: $it" }; it.optString("phase") == "ready" } == true }
+        val ready = status()
+        val readyTransition = ready.getJSONObject("postAppliedReload")
         action("post-applied-reload")
         compose.waitUntil(60_000) { statusOrNull()?.optJSONObject("postAppliedReload")?.let { check(it.optString("phase") != "failed") { "Reload failed: $it" }; it.optString("phase") == "reloaded" } == true }
         val reloaded = status()
         val transition = reloaded.getJSONObject("postAppliedReload")
         assertTrue(transition.getBoolean("oldSdkVerified")); assertTrue(transition.getBoolean("oldQuestionClosed"))
-        assertTrue(transition.getBoolean("sameRuntime")); assertTrue(transition.getBoolean("newPeerRegistered")); assertTrue(transition.getBoolean("newPositiveBridge"))
+        assertEquals(if (native) "native" else "rpc", transition.getString("mode"))
+        if (native) {
+            assertTrue(transition.getBoolean("sameRuntime"))
+        } else {
+            assertTrue(transition.getBoolean("sameRpc"))
+            assertTrue(transition.getLong("rpcPid") > 0L)
+            assertEquals(transition.getLong("ownerPid"), transition.getLong("rpcPid"))
+            assertEquals(selection.sessionId, transition.getString("sessionId"))
+            assertTrue(transition.getString("sessionFile").isNotEmpty())
+            for (field in listOf("rpcPid", "sessionId", "sessionFile")) assertEquals(readyTransition.get(field), transition.get(field))
+            val prompt = transition.getJSONObject("reloadRpcPrompt")
+            val reloadStatus = transition.getJSONObject("reloadStatus")
+            val reloadNonce = prompt.getString("nonce")
+            assertTrue(reloadNonce.isNotEmpty())
+            assertEquals("/pocketpi-reload $reloadNonce", prompt.getString("message"))
+            assertEquals(1, reloadStatus.getInt("v")); assertEquals(selection.sessionId, reloadStatus.getString("sessionId"))
+            assertEquals(reloadNonce, reloadStatus.getString("nonce")); assertEquals("done", reloadStatus.getString("status"))
+            val reloadResult = transition.getJSONObject("reloadResult")
+            assertEquals("reloaded", reloadResult.getString("kind")); assertEquals(selection.sessionId, reloadResult.getString("sessionId"))
+            assertTrue(transition.isNull("reloadReply"))
+        }
+        assertTrue(transition.getBoolean("newPeerRegistered")); assertTrue(transition.getBoolean("newPositiveBridge"))
         assertEquals(1, transition.getInt("reloadRunCount"))
         assertTrue(transition.getBoolean("oldLedgerPresent"))
         assertEquals(receipt, Json.parseToJsonElement(transition.getJSONObject("oldReceipt").toString()).jsonObject)
+        assertSourceAck(transition.getJSONObject("oldSourceAck"), receipt)
         val oldTuple = Json.parseToJsonElement(transition.getJSONObject("oldTuple").toString()).jsonObject
         assertEquals(JsonObject(receipt + ("routeId" to JsonPrimitive(host.routeId)) + ("deviceId" to JsonPrimitive(host.deviceId))), oldTuple)
+        assertTrue(transition.getString("oldPeerAlias").isNotEmpty()); assertTrue(transition.getString("newPeerAlias").isNotEmpty())
         assertNotEquals(transition.getString("oldPeerAlias"), transition.getString("newPeerAlias"))
         assertEquals(attempt, persisted().attempts.values.single())
         assertEquals(countsBeforeReload, transport.uploadCounts())
@@ -240,7 +267,9 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         val final = status()
         val finalTransition = final.getJSONObject("postAppliedReload")
         assertTrue(finalTransition.getBoolean("freshSdkVerified")); assertEquals(1, finalTransition.getInt("freshSdkCount"))
-        for (field in listOf("ownerPid", "runtimeId", "sessionFile")) assertEquals(transition.get(field), finalTransition.get(field))
+        val identityFields = if (native) listOf("ownerPid", "runtimeId", "sessionFile") else listOf("rpcPid", "sessionFile")
+        for (field in identityFields) assertEquals(transition.get(field), finalTransition.get(field))
+        assertEquals(selection.sessionId, finalTransition.getJSONObject("freshTuple").getString("sessionId"))
         val freshCommit = gate.commits.values.single { it.optionalText("questionId") == freshId }
         val freshCommitId = freshCommit.text("requestId")
         compose.waitUntil(60_000) { gate.results.containsKey(freshCommitId) && gate.releases.values.any { it.obj("receipt").optionalText("questionId") == freshId && gate.results.containsKey(it.text("requestId")) } }
@@ -249,6 +278,9 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         val freshRelease = gate.releases.values.single { it.obj("receipt").optionalText("questionId") == freshId }
         val freshReceipt = freshRelease.obj("receipt")
         assertEquals(freshReceipt, Json.parseToJsonElement(finalTransition.getJSONObject("freshReceipt").toString()).jsonObject)
+        assertSourceAck(finalTransition.getJSONObject("freshSourceAck"), freshReceipt)
+        val freshTuple = Json.parseToJsonElement(finalTransition.getJSONObject("freshTuple").toString()).jsonObject
+        assertEquals(JsonObject(freshReceipt + ("routeId" to JsonPrimitive(host.routeId)) + ("deviceId" to JsonPrimitive(host.deviceId))), freshTuple)
         assertEquals(freshOwner, freshReceipt.text("ownerIncarnationId")); assertEquals(freshId, freshReceipt.text("questionId"))
         assertEquals(freshCommitId, freshReceipt.text("commitRequestId")); assertEquals(freshCommit.text("uploadId"), freshReceipt.text("uploadId"))
         assertEquals(32L, freshReceipt.long("byteLength")); assertEquals(digest(freshValue), freshReceipt.text("sha256"))
@@ -256,7 +288,7 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         assertTrue(freshReleaseResult.flag("ok")); assertEquals("editor_outcome_released", freshReleaseResult.obj("data").text("kind"))
         assertEquals(2, transport.uploadCounts().third)
         assertTrue(persisted().attempts.isEmpty()); assertTrue(persisted().pendingReleases.isEmpty())
-        val proof = JSONObject().put("nonce", nonce).put("pid", Process.myPid()).put("before", before).put("applied", applied).put("reloaded", reloaded).put("beforeNegative", beforeNegative).put("afterNegative", afterNegative).put("afterRelease", afterRelease).put("final", final)
+        val proof = JSONObject().put("nonce", nonce).put("mode", if (native) "native" else "rpc").put("pid", Process.myPid()).put("before", before).put("applied", applied).put("ready", ready).put("reloaded", reloaded).put("beforeNegative", beforeNegative).put("afterNegative", afterNegative).put("afterRelease", afterRelease).put("final", final)
             .put("uploadCountsBeforeReload", org.json.JSONArray(listOf(countsBeforeReload.first, countsBeforeReload.second, countsBeforeReload.third)))
             .put("uploadCountsAfterOldSettlement", org.json.JSONArray(listOf(countsAfterOldSettlement.first, countsAfterOldSettlement.second, countsAfterOldSettlement.third)))
             .put("oldReceipt", JSONObject(receipt.toString())).put("mutatedReceipt", JSONObject(mutated.toString()))
@@ -269,6 +301,18 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         File(directory, "proof.json").outputStream().use { it.write(proof.toString().toByteArray()); it.fd.sync() }
     }
 
+    private fun assertSourceAck(ack: JSONObject, receipt: JsonObject) {
+        assertEquals("editor_owner_upload_committed", ack.getString("kind"))
+        assertEquals(receipt.text("sessionId"), ack.getString("sessionId"))
+        assertEquals(receipt.text("questionId"), ack.getString("questionId"))
+        assertTrue(ack.getString("transferId").isNotEmpty())
+        assertEquals(receipt.long("byteLength"), ack.getLong("byteLength"))
+        assertEquals(receipt.text("sha256"), ack.getString("sha256"))
+        val outcome = ack.getJSONObject("outcome")
+        assertEquals(receipt.text("ownerIncarnationId"), outcome.getString("ownerIncarnationId"))
+        assertEquals(receipt.text("uploadId"), outcome.getString("uploadId"))
+        assertEquals(receipt.text("commitRequestId"), outcome.getString("commitRequestId"))
+    }
     private fun activate(target: RemoteSelection) {
         compose.runOnIdle { scope.launch { repository.activate(target, ActivationMode.USER_OPEN) } }
         compose.waitUntil(60_000) { repository.state.value.selection == target && !repository.state.value.loading && repository.state.value.connected }

@@ -26,7 +26,8 @@ its actual Source receipt, SDK result, applied entry and release.
 
 This proves no late Source ACK acceptance across a peer switch: the old positive
 Host record is durable before replacement. Normal reload during an open question
-remains guarded. Qualified RPC and resource/retention policy remain separate work.
+remains guarded. The qualified RPC variant is recorded below; resource/retention
+policy remains separate work.
 Public capabilities stay off. Physical Samsung and independent Linux are untested.
 
 ## Diagnostics retained
@@ -105,3 +106,53 @@ trace/status-route and reconnect/command-input changes. Only private fixture,
 instrumentation and documentation changed; no new full production unit-suite
 result or public feature enablement is claimed. The reconnect in this case is an
 explicit test operation, not evidence for every mobile lifecycle transition.
+
+
+## Qualified RPC variant
+
+The private case also supports an explicitly selected Host-owned RPC process. It
+binds the live RPC object, running child PID, saved file and SID. Normal domain
+reload sends an actual `/pocketpi-reload <nonce>` RPC prompt and consumes the actual
+version-1 report with that SID/nonce and `done` status. It does not require Native
+`session.reload.run`, its `reloading` reply, a Native runtime ID or Native leases.
+Source capture and the negotiated positive bridge bind actual RPC authority.
+
+The complete old/fresh Source ACK fields are compared to their respective
+receipts. Prompt/status are recorded by transparent observers preserving the
+original receiver, all arguments and result. During review, the report wrapper
+was corrected to use its own rest arguments rather than outer request arguments;
+the correction was verified on the actual formatted source before runtime.
+Prompt/status snapshots are pinned fixture observations, rather than a separately
+exported raw transport history. Same-process normal RPC reload is distinct from
+stopping a child and reopening its saved SID in a different process.
+
+
+`rpc-post-applied-reload-01` passes in 32.684 seconds, with cleanup passed and
+JUnit `OK (1 test)`. It performs one actual RPC reload with matching prompt/status,
+keeps the same live RPC object and Pi child PID 93574, and registers a new Source
+peer. The full original applied tuple remains present across the wrong-owner query;
+the exact original repository query then settles and releases it without replaying
+the upload. Fresh work produces one actual 32-byte SDK result and an exact positive
+receipt, applied tuple and release. No attempts or pending releases remain.
+
+The independent RPC verifier reports PASS against 50 source snapshots, full
+receipts/Source ACKs, correlated request/results, SDK/reload lifecycle traces and
+APK/controller/helper pins. App APK is unchanged. Test APK SHA-256 is
+`dc4c980c11306f68758f730ac731476da6c0fcf94571024b9f835cb06e26f2e4`.
+A separate live process check confirms Host 93551, Pi 93574 and Android 18521
+absent after cleanup. This is the local seeded Host-owned RPC path, not arbitrary
+remote Linux or physical Samsung acceptance.
+
+
+The same combined source/APK set also passes the Native regression
+`native-post-applied-rpc-regression-01` in 32.838 seconds, with cleanup passed and
+an independent Native-verifier PASS. Its real Native dispatch, durable old outcome,
+wrong-owner query, exact cleanup/release and fresh SDK path still pass. Host 93730,
+Pi 93758 and Android 18854 were separately confirmed absent. This current regression
+supersedes no historical pins; the earlier Native case remains its own evidence.
+
+The combined change passes Android debug/test assembly, extension TypeScript,
+formatting and diff checks. A first post-review TypeScript check caught an untyped
+observer receiver before any RPC run; the final observer correction and third
+TypeScript check pass. No full production unit-suite rerun is claimed because
+production code is unchanged. Public paged/outcome defaults remain off.

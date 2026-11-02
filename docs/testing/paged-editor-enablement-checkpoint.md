@@ -10,9 +10,9 @@ themselves create new mandatory product semantics. Public gates remain off.
 | Real owner transport and values | [Original qualification](paged-editor-qualification.md) records 14 Native/RPC cases, including 1-MiB values, Unicode/escapes, expansion, empty, Cancel, lost ACK and tablet edits | Preserve source/APK scope; historical large-prefill Native cases used the subsequently corrected claim observer |
 | Actual Native claim profile | [Observer qualification](native-claim-observer.md) behavior-tests the actual wrapper and repeats empty-prefill resumption plus large-prefill Android recovery | Do not confuse a large final upload with an initially paged Source lease; choose targeted current-profile repetitions if needed, not a blanket missing-matrix claim |
 | Concurrent actions/resources | [Quota](paged-editor-quota-recovery.md) and [settlement](paged-editor-shared-settlement.md) record real byte/slot exhaustion and ordered paired-device Cancel/commit cases | Match each proof to its ordering and owner profile; deterministic source/authority contracts remain required |
-| Owner/process/peer changes | [Owner loss](paged-editor-owner-loss.md), [same-session resume](paged-editor-same-session-resume.md), [local takeover](native-editor-local-takeover.md) and [SDK peer reload](native-editor-peer-reload.md) cover distinct actual boundaries | The SDK reload document also records a private positive precommit replacement case; [Post-applied Native reload](paged-editor-post-applied-reload.md) now proves exact stored applied settlement across normal idle reload; qualified RPC remains open |
+| Owner/process/peer changes | [Owner loss](paged-editor-owner-loss.md), [same-session resume](paged-editor-same-session-resume.md), [local takeover](native-editor-local-takeover.md) and [SDK peer reload](native-editor-peer-reload.md) cover distinct actual boundaries | The SDK reload document also records a private positive precommit replacement case; [Post-applied Native reload](paged-editor-post-applied-reload.md) now proves exact stored applied settlement across normal idle reload; qualified RPC has a separately recorded passing local case |
 | Visible local recovery | [Recovery access](editor-recovery-access.md) preserves/view/exports retained text; normal reopening and fresh work are qualified separately | Real provider/process-loss edge cases retain their own scope; no automatic replay or silent clearing |
-| Positive receipt durability/release | [Positive outcomes](paged-editor-positive-outcomes.md) records Native/RPC Android death, actual Host restart, receipt/release ACK cuts and ledger crash points | Target actual replacement with outcome negotiation enabled: original positive evidence must remain valid for its exact tuple; absent/mismatched evidence stays unknown and fenced |
+| Positive receipt durability/release | [Positive outcomes](paged-editor-positive-outcomes.md) records Native/RPC Android death, actual Host restart, receipt/release ACK cuts and ledger crash points | [Native and qualified RPC idle reload](paged-editor-post-applied-reload.md) now preserve exact stored applied evidence across real replacement; the precommit positive case retains unknown. Resource policy and original acceptance matrix remain to reconcile |
 | Outcome resource policy | [Outcome contract](../plans/2026-11-01-paged-editor-positive-outcomes.md) bounds pending/applied metadata and permits exact authenticated release after durable local cleanup | Current pending/unreleased entries can retain capacity indefinitely. Resolve and qualify the resource/recovery policy before outcome enablement; automatic 30-day expiry is a proposed option, not the only safe design |
 | Broader environment acceptance | Existing Galaxy-layout emulators/local container evidence | Physical Samsung/DeX and independent authorized Linux remain unavailable separate full-goal gates, not proof that the local editor transport never worked |
 
@@ -22,17 +22,20 @@ not survival of a closed remote question. Likewise the guarded Host reload being
 busy is deliberate; the SDK-triggered compatibility test does not promise a
 successful Host reload during an open editor.
 
-The next focused work should verify actual positive-outcome owner-incarnation
-binding during Native and qualified RPC replacement. Separate two causal cases:
-a genuine original Source ACK after an applied write versus replacement before
-any positive Source evidence. Never accept a new owner's receipt for an old
-question or use missing evidence as a negative result. Determine the real supported
-reload/resume path and instrument its actual dispatch boundary first. The current
-Native SDK reload additionally proves pre-Source-commit replacement with private
-positive negotiation: old pending remains unknown and fresh work is positively
-settled and released. [Post-applied Native reload](paged-editor-post-applied-reload.md) additionally
-proves durable old applied reconciliation, wrong-incarnation unknown against a
-present applied record, exact release and fresh success. Qualified RPC remains open.
+Actual owner-incarnation qualification now distinguishes the private Native
+precommit SDK reload from post-applied normal idle reload for Native and the
+qualified local RPC path. The first retains unknown; the latter two reconcile a
+full old applied receipt, reject a fresh incarnation against a present applied
+record, release the exact old tuple and complete fresh work. Each retains its
+recorded source/APK/process/transport scope; this is not every possible owner-loss
+or late Source-ACK ordering.
+
+Next resolve and qualify the remaining resource/recovery policy. Unresolved
+pending or unreleased entries can currently hold bounded capacity indefinitely.
+The proposed retention/expiry design requires trustworthy elapsed retention and
+must never infer non-application or erase the Android fence from missing evidence.
+Automatic expiry is not the only permissible policy; qualify an explicit safe
+maintenance path if that is the selected implementation.
 
 Then reconcile the complete original acceptance matrix using its recorded pins
 and current implementation. Only enable the separately negotiated capabilities
