@@ -1824,6 +1824,8 @@ internal fun RemoteScreen(
         if (tabs.open.isEmpty()) null
         else {
             {
+                // The inspector beside the chat blurs its own panes only.
+                ProvideGlass(MaterialTheme.colorScheme.surface) {
                 InspectorHost(
                     tabs,
                     content = ::tabContent,
@@ -1839,6 +1841,7 @@ internal fun RemoteScreen(
                     // An unsaved edit closes through its own prompt in the pane.
                     closable = { tab -> tab != InspectorTab.FILES || filesOpen?.editor?.changed != true },
                 )
+                }
             }
         }
     val focusManager = LocalFocusManager.current
@@ -2358,6 +2361,8 @@ internal fun RemoteScreen(
                                 FloatingSurface(
                                     modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT).padding(end = 8.dp),
                                     shape = CircleShape,
+                                    // Part of the list it would blur.
+                                    blur = false,
                                 ) {
                                     IconButton(
                                         onClick = {
@@ -2397,6 +2402,7 @@ internal fun RemoteScreen(
                                     FloatingSurface(
                                         modifier = Modifier.testTag("sessionsFilterPill"),
                                         shape = CircleShape,
+                                        blur = false,
                                     ) {
                                         IconButton(
                                             onClick = { filterSheet = true },
@@ -3705,10 +3711,13 @@ internal fun RemoteScreen(
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
-            if (!panesBeside) changesContent?.invoke()
-            if (!panesBeside) filesContent?.invoke()
-            if (!panesBeside) jobsContent?.invoke()
-            if (!panesBeside) toolContent?.invoke()
+            // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
+            // One call each, so a pane keeps its state while another comes or goes.
+            val paneSurface = MaterialTheme.colorScheme.surface
+            if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
+            if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
+            if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
+            if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
             }
             }
             if (dropHovered) DropScrim()
@@ -4603,16 +4612,28 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
  */
 @Composable
 private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
-    AssistChip(
-        onClick = onClick,
-        label = { Text(stringResource(line), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        leadingIcon = {
+    // A glass pill like the other chips of the insights row.
+    FloatingSurface(shape = CircleShape) {
+        Row(
+            Modifier.testTag("chatStatusChip")
+                .clickable(role = Role.Button, onClick = onClick)
+                .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+                .minimumInteractiveComponentSize()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (running && ValueAnimator.areAnimatorsEnabled())
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             else Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
-        },
-        modifier = Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
-    )
+            Text(
+                stringResource(line),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 /** Whether TalkBack or another touch-exploration service is on; follows the setting while shown. */
