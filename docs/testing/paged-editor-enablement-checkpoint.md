@@ -13,7 +13,7 @@ themselves create new mandatory product semantics. Public gates remain off.
 | Owner/process/peer changes | [Owner loss](paged-editor-owner-loss.md), [same-session resume](paged-editor-same-session-resume.md), [local takeover](native-editor-local-takeover.md) and [SDK peer reload](native-editor-peer-reload.md) cover distinct actual boundaries | The SDK reload document also records a private positive precommit replacement case; [Post-applied Native reload](paged-editor-post-applied-reload.md) now proves exact stored applied settlement across normal idle reload; qualified RPC has a separately recorded passing local case |
 | Visible local recovery | [Recovery access](editor-recovery-access.md) preserves/view/exports retained text; normal reopening and fresh work are qualified separately | Real provider/process-loss edge cases retain their own scope; no automatic replay or silent clearing |
 | Positive receipt durability/release | [Positive outcomes](paged-editor-positive-outcomes.md) records Native/RPC Android death, actual Host restart, receipt/release ACK cuts and ledger crash points | [Native and qualified RPC idle reload](paged-editor-post-applied-reload.md) now preserve exact stored applied evidence across real replacement; the precommit positive case retains unknown. Resource policy and original acceptance matrix remain to reconcile |
-| Outcome resource policy | [Outcome contract](../plans/2026-11-01-paged-editor-positive-outcomes.md) bounds pending/applied metadata and permits exact authenticated release after durable local cleanup | [Retention foundation](outcome-retention-maintenance.md) adds explicit internal expiry only after observed monotonic retention, with v1 zero-credit migration and active-delivery protection. [Local admin preview/confirmation](outcome-maintenance-admin.md) now qualifies actual IPC capacity recovery; genuine Source/Android-after-expiry behavior remains to prove, and no scheduler is wired |
+| Outcome resource policy | [Outcome contract](../plans/2026-11-01-paged-editor-positive-outcomes.md) bounds pending/applied metadata and permits exact authenticated release after durable local cleanup | [Retention foundation](outcome-retention-maintenance.md) adds explicit internal expiry only after observed monotonic retention, with v1 zero-credit migration and active-delivery protection. [Local admin preview/confirmation](outcome-maintenance-admin.md) now qualifies actual IPC capacity recovery; [Genuine Native/RPC expiry](genuine-outcome-expiry.md) now preserves Android unknown fences through real maintenance, and no scheduler is wired |
 | Broader environment acceptance | Existing Galaxy-layout emulators/local container evidence | Physical Samsung/DeX and independent authorized Linux remain unavailable separate full-goal gates, not proof that the local editor transport never worked |
 
 Do not require same-question reacquisition as a newly invented UX prerequisite:
@@ -30,12 +30,19 @@ record, release the exact old tuple and complete fresh work. Each retains its
 recorded source/APK/process/transport scope; this is not every possible owner-loss
 or late Source-ACK ordering.
 
-Next qualify the complete genuine Source/Android-after-expiry path through the
-[local-admin maintenance entry point](outcome-maintenance-admin.md). Its real IPC
-capacity recovery, snapshot confirmation and active reservation protection are
-recorded; its injected prepared-data test does not prove the mobile fence behavior
-after expiry of a real Source receipt. Missing evidence must remain unknown, with
-exact local text/fence retained and no upload replay. Automatic cleanup stays off.
+[Genuine Native/RPC expiry](genuine-outcome-expiry.md) now records the complete
+real-Source → durable applied → actual maintenance → exact Android unknown and
+retained attempt/draft → fresh success path. It uses a private injected retention
+clock and explicitly metadata-only capacity padding, with no automatic cleanup.
+The recorded resource boundary is therefore covered in those exact local scopes.
+
+Next reconcile original owner-transport and positive/default/legacy criteria with
+current source/APK evidence. Preserve the historical 14-case matrix and its pins;
+the corrected Native claim observer and later durable-journal implementation make
+a targeted current max-unchanged Native paged-profile check particularly useful.
+Inventory existing deterministic global limits and legacy-negotiation tests before
+calling them missing or repeating the whole matrix blindly. Every broader physical
+Samsung and independent Linux boundary remains separate.
 
 Then reconcile the complete original acceptance matrix using its recorded pins
 and current implementation. Only enable the separately negotiated capabilities

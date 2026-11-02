@@ -55,6 +55,7 @@ class PagedEditorPostAppliedReloadEndToEndTest {
     private lateinit var repository: DefaultRemoteRepository
     private var native = false
     private var positive = false
+    private var maintenance = false
     private val source = "😀".repeat(262_144)
     private val finalValue = "é\\\n".repeat(1_024) + "😀".repeat(261_120)
 
@@ -71,6 +72,10 @@ class PagedEditorPostAppliedReloadEndToEndTest {
             native = expectedNative == "true"
             require(fixture.getBoolean("nativeWorker") == native && fixture.getBoolean("pagedEditorFixture"))
             require(fixture.getBoolean("pagedEditorPostAppliedReloadProof"))
+            val maintenanceExpected = args.getString("pagedMaintenanceExpected") ?: "false"
+            require(maintenanceExpected == "true" || maintenanceExpected == "false")
+            maintenance = maintenanceExpected == "true"
+            require(fixture.optBoolean("pagedEditorMaintenanceProof", false) == maintenance)
             require(fixture.getString("pagedEditorCase") == "restart-lost-ack")
             positive = true
             require(fixture.optBoolean("pagedEditorPositiveOutcomes") == positive)
@@ -163,6 +168,8 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         val applied = status()
         val attempt = persisted().attempts.values.single()
         val receipt = PagedEditorWire.receipt(attempt)
+        val oldDraft = requireNotNull(persisted().drafts[key])
+        assertEquals(finalValue, oldDraft.text)
         assertEquals(oldOwner, attempt.outcomeBinding?.ownerIncarnationId)
         assertEquals(host.deviceId, attempt.outcomeBinding?.deviceId)
         assertEquals(finalValue, attempt.text)
@@ -240,21 +247,64 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         val afterNegative = status()
         assertTrue(afterNegative.getJSONObject("postAppliedReload").getBoolean("oldLedgerPresent"))
         assertEquals(ownerContactsBefore, afterNegative.getJSONObject("postAppliedReload").getInt("ownerContactCount"))
+        var maintenanceStatus: JSONObject? = null
+        if (maintenance) {
+            action("expire-editor-outcomes")
+            compose.waitUntil(60_000) {
+                statusOrNull()?.optJSONObject("pagedEditorMaintenance")?.let {
+                    check(it.optString("phase") != "failed") { "Maintenance failed: $it" }
+                    it.optString("phase") == "complete"
+                } == true
+            }
+            val maintenanceSnapshot = status()
+            maintenanceStatus = maintenanceSnapshot
+            val proof = maintenanceSnapshot.getJSONObject("pagedEditorMaintenance")
+            assertEquals(31, proof.getInt("paddingReserved"))
+            assertTrue(proof.getBoolean("reserveRefused"))
+            assertEquals(32, proof.getInt("beforeCount")); assertEquals(0, proof.getInt("afterCount"))
+            assertTrue(proof.getLong("clockAdvanceMs") > TimeUnit.DAYS.toMillis(30))
+            val summary = proof.getJSONObject("preview").getJSONObject("summary")
+            assertEquals(32, summary.getInt("total")); assertEquals(31, summary.getInt("pending"))
+            assertEquals(1, summary.getInt("applied")); assertEquals(32, summary.getInt("eligible"))
+            assertEquals(0, summary.getInt("active")); assertTrue(summary.getBoolean("clockTrusted"))
+            assertEquals(32, proof.getJSONObject("commit").getInt("expired"))
+            assertEquals(receipt, Json.parseToJsonElement(proof.getJSONObject("oldReceipt").toString()).jsonObject)
+            assertFalse(proof.getBoolean("oldTuplePresent"))
+            assertEquals(oldTuple, Json.parseToJsonElement(proof.getJSONObject("oldTuple").toString()).jsonObject)
+        }
         gate.allowQuery.complete(Unit)
-        compose.waitUntil(60_000) { gate.results.containsKey(originalQuery.text("requestId")) && persisted().attempts.isEmpty() && gate.heldRelease.get() != null }
+        compose.waitUntil(60_000) { gate.results.containsKey(originalQuery.text("requestId")) }
         val outcome = requireNotNull(gate.results[originalQuery.text("requestId")])
-        assertTrue(outcome.flag("ok")); assertEquals("applied", outcome.obj("data").text("status")); assertEquals(receipt, outcome.obj("data").obj("receipt"))
-        val release = requireNotNull(gate.heldRelease.get())
-        assertEquals(receipt, release.obj("receipt")); assertEquals(1, persisted().pendingReleases.size)
-        gate.allowRelease.complete(Unit)
-        compose.waitUntil(60_000) { gate.results.containsKey(release.text("requestId")) && persisted().pendingReleases.isEmpty() }
-        val released = requireNotNull(gate.results[release.text("requestId")])
-        assertTrue(released.flag("ok")); assertEquals("editor_outcome_released", released.obj("data").text("kind"))
+        assertTrue(outcome.flag("ok")); assertEquals("editor_outcome", outcome.obj("data").text("kind"))
+        var release: JsonObject? = null
+        var released: JsonObject? = null
+        val afterRelease: JSONObject
+        if (maintenance) {
+            assertEquals(setOf("kind", "status"), outcome.obj("data").keys)
+            assertEquals("unknown", outcome.obj("data").text("status"))
+            assertEquals(attempt, persisted().attempts.values.single())
+            assertEquals(oldDraft, persisted().drafts[key])
+            assertTrue(persisted().pendingReleases.isEmpty())
+            assertNull(gate.heldRelease.get())
+            assertTrue(gate.releases.values.none { it.obj("receipt").optionalText("ownerIncarnationId") == oldOwner })
+            afterRelease = status()
+        } else {
+            compose.waitUntil(60_000) { persisted().attempts.isEmpty() && gate.heldRelease.get() != null }
+            assertEquals("applied", outcome.obj("data").text("status")); assertEquals(receipt, outcome.obj("data").obj("receipt"))
+            val oldRelease = requireNotNull(gate.heldRelease.get())
+            release = oldRelease
+            assertEquals(receipt, oldRelease.obj("receipt")); assertEquals(1, persisted().pendingReleases.size)
+            gate.allowRelease.complete(Unit)
+            compose.waitUntil(60_000) { gate.results.containsKey(oldRelease.text("requestId")) && persisted().pendingReleases.isEmpty() }
+            val oldReleased = requireNotNull(gate.results[oldRelease.text("requestId")])
+            released = oldReleased
+            assertTrue(oldReleased.flag("ok")); assertEquals("editor_outcome_released", oldReleased.obj("data").text("kind"))
+            afterRelease = status()
+            assertFalse(afterRelease.getJSONObject("postAppliedReload").getBoolean("oldLedgerPresent"))
+            assertFalse(afterRelease.getJSONObject("postAppliedReload").getBoolean("oldTuplePresent"))
+        }
         assertEquals(countsBeforeReload, transport.uploadCounts())
         val countsAfterOldSettlement = transport.uploadCounts()
-        val afterRelease = status()
-        assertFalse(afterRelease.getJSONObject("postAppliedReload").getBoolean("oldLedgerPresent"))
-        assertFalse(afterRelease.getJSONObject("postAppliedReload").getBoolean("oldTuplePresent"))
         val freshValue = fixture.getString("postAppliedReloadExpectedValue")
         assertEquals(32, freshValue.toByteArray(Charsets.UTF_8).size)
         compose.onNodeWithText(compose.activity.getString(R.string.remote_paged_editor_load)).performScrollTo().assertIsEnabled().performClick()
@@ -287,14 +337,34 @@ class PagedEditorPostAppliedReloadEndToEndTest {
         val freshReleaseResult = requireNotNull(gate.results[freshRelease.text("requestId")])
         assertTrue(freshReleaseResult.flag("ok")); assertEquals("editor_outcome_released", freshReleaseResult.obj("data").text("kind"))
         assertEquals(2, transport.uploadCounts().third)
-        assertTrue(persisted().attempts.isEmpty()); assertTrue(persisted().pendingReleases.isEmpty())
+        if (maintenance) {
+            assertEquals(attempt, persisted().attempts.values.single())
+            assertEquals(oldDraft, persisted().drafts[key])
+            assertNull(gate.heldRelease.get())
+            assertTrue(gate.releases.values.none { it.obj("receipt").optionalText("ownerIncarnationId") == oldOwner })
+        } else assertTrue(persisted().attempts.isEmpty())
+        assertTrue(persisted().pendingReleases.isEmpty())
+        val finalUploadCounts = transport.uploadCounts()
+        val oldReleaseRequestCount = gate.releases.values.count { it.obj("receipt").optionalText("ownerIncarnationId") == oldOwner }
         val proof = JSONObject().put("nonce", nonce).put("mode", if (native) "native" else "rpc").put("pid", Process.myPid()).put("before", before).put("applied", applied).put("ready", ready).put("reloaded", reloaded).put("beforeNegative", beforeNegative).put("afterNegative", afterNegative).put("afterRelease", afterRelease).put("final", final)
             .put("uploadCountsBeforeReload", org.json.JSONArray(listOf(countsBeforeReload.first, countsBeforeReload.second, countsBeforeReload.third)))
             .put("uploadCountsAfterOldSettlement", org.json.JSONArray(listOf(countsAfterOldSettlement.first, countsAfterOldSettlement.second, countsAfterOldSettlement.third)))
+            .put("finalUploadCounts", org.json.JSONArray(listOf(finalUploadCounts.first, finalUploadCounts.second, finalUploadCounts.third)))
+            .put("oldReleaseRequestCount", oldReleaseRequestCount)
             .put("oldReceipt", JSONObject(receipt.toString())).put("mutatedReceipt", JSONObject(mutated.toString()))
             .put("negativeRequest", JSONObject(requireNotNull(gate.probeRequest.get()).toString())).put("negativeResult", JSONObject(negative.toString()))
             .put("outcomeRequest", JSONObject(originalQuery.toString())).put("outcomeResult", JSONObject(outcome.toString()))
-            .put("releaseRequest", JSONObject(release.toString())).put("releaseResult", JSONObject(released.toString()))
+            .put("maintenanceExpected", maintenance).put("maintenanceStatus", maintenanceStatus)
+            .put("finalAttemptCount", persisted().attempts.size).put("finalPendingReleaseCount", persisted().pendingReleases.size)
+            .put("finalOldDraftSha256", persisted().drafts[key]?.text?.let(::digest))
+            .put("finalOldAttemptRetained", persisted().attempts[attempt.attemptId] == attempt)
+            .put("oldAttempt", JSONObject().put("attemptId", attempt.attemptId).put("grantId", attempt.grantId)
+                .put("uploadId", attempt.uploadId).put("commitRequestId", attempt.commitRequestId).put("createdAt", attempt.createdAt)
+                .put("routeId", key.routeId).put("sessionId", key.sessionId).put("questionId", key.questionId)
+                .put("deviceId", attempt.outcomeBinding?.deviceId).put("ownerIncarnationId", attempt.outcomeBinding?.ownerIncarnationId)
+                .put("byteLength", attempt.outcomeBinding?.byteLength).put("sha256", attempt.outcomeBinding?.sha256)
+                .put("draftEditedAt", oldDraft.editedAt).put("draftSha256", digest(oldDraft.text)))
+            .put("releaseRequest", release?.let { JSONObject(it.toString()) }).put("releaseResult", released?.let { JSONObject(it.toString()) })
             .put("freshCommitRequest", JSONObject(freshCommit.toString())).put("freshCommitResult", JSONObject(freshResult.toString()))
             .put("freshReceipt", JSONObject(freshReceipt.toString())).put("freshReleaseRequest", JSONObject(freshRelease.toString())).put("freshReleaseResult", JSONObject(freshReleaseResult.toString()))
             .put("freshQuestionId", freshId).put("freshOwnerIncarnationId", freshOwner).put("freshBytes", freshValue.toByteArray(Charsets.UTF_8).size).put("freshSha256", digest(freshValue))

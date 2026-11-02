@@ -47,7 +47,8 @@ read-only preview, active async callbacks/error cleanup, eligible quota recovery
 malformed records and storage failure. This is deterministic injected time, not
 30 real calendar days of runtime acceptance. The subsequent [admin qualification](outcome-maintenance-admin.md) records local
 authorization, confirmation/snapshot semantics and real IPC capacity recovery.
-Genuine Source/Android-after-expiry resource qualification remains open.
+[Genuine Source/Android-after-expiry qualification](genuine-outcome-expiry.md)
+now records passing Native and qualified RPC cases; broader enablement remains open.
 
 
 ## Actual positive transport regressions

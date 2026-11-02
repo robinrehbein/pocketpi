@@ -34,6 +34,6 @@ and reserve/ACK ordering unchanged. No preview/confirmation lock across user tim
 - [x] Production service/ledger snapshot binding + local IPC and local-only command.
 - [x] Root focused checks/types/review and isolated actual local IPC proof of
   preview, commit, capacity relief and expired lookup unknown.
-- [ ] Follow-up: retain Android fence after expiry of a genuine Source receipt
+- [x] Follow-up: retain Android fence after expiry of a genuine Source receipt
   through the actual private fixture before calling resource gate closed.
 - [x] Precise docs and local commits after verification. No live host mutation.

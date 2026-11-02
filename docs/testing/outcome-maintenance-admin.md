@@ -48,6 +48,7 @@ confirmation removes it and the exact lookup becomes unknown.
 These are actual socket/ledger operations with injected time and prepared data.
 They are not rendered Pi-TUI interaction, thirty calendar days of operation, or an
 Android-after-expiry qualification. Scoped review explicitly preserves those
-boundaries. No personal or live Host ledger was used. The next resource proof must
-perform maintenance on a genuine Source-written record and verify Android keeps
-its exact unknown attempt, text and no-replay fence; public enablement remains open.
+boundaries. No personal or live Host ledger was used. The subsequent [genuine expiry qualification](genuine-outcome-expiry.md) now
+performs maintenance on actual Source-written evidence and verifies the retained
+Android attempt/text/fence for Native and qualified RPC. Public enablement remains
+open pending reconciliation of the rest of the original requirements.
