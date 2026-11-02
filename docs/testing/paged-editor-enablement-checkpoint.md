@@ -36,13 +36,17 @@ retained attempt/draft → fresh success path. It uses a private injected retent
 clock and explicitly metadata-only capacity padding, with no automatic cleanup.
 The recorded resource boundary is therefore covered in those exact local scopes.
 
-Next reconcile original owner-transport and positive/default/legacy criteria with
-current source/APK evidence. Preserve the historical 14-case matrix and its pins;
-the corrected Native claim observer and later durable-journal implementation make
-a targeted current max-unchanged Native paged-profile check particularly useful.
-Inventory existing deterministic global limits and legacy-negotiation tests before
-calling them missing or repeating the whole matrix blindly. Every broader physical
-Samsung and independent Linux boundary remains separate.
+[Current compatibility mapping](current-editor-compatibility.md) now records the
+corrected actual Native unchanged profile, default/legacy/independent negotiation,
+32/1,024 counts, >32 focused cleanup cycles and oversized-file refusal. It preserves
+the historical value matrix rather than claiming it absent or universally current.
+
+Next qualify the remaining semantic Host-persistence boundary after durable pending
+but before owner dispatch, then the owner-ACK/applied-durability gap. Existing actual
+post-applied restart/release cases and isolated filesystem crash tests remain valid
+in their respective scopes. Continuous full SDK edit loops remain distinct from
+focused ledger/journal capacity cycles. Physical Samsung/DeX and independent Linux
+retain separate full-goal acceptance boundaries.
 
 Then reconcile the complete original acceptance matrix using its recorded pins
 and current implementation. Only enable the separately negotiated capabilities
