@@ -224,7 +224,7 @@ class PagedEditorJournalTest {
         journal.retireApplied(bound)
         val restored = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
         assertTrue(restored.attempts.isEmpty())
-        assertEquals("abc", restored.drafts.getValue(key).text)
+        assertFalse(restored.drafts.containsKey(key))
         assertEquals(expected, restored.pendingReleases["attempt"])
         journal.retireApplied(bound)
         journal.removeRelease(expected.copy(ownerIncarnationId = "other"))
@@ -285,7 +285,45 @@ class PagedEditorJournalTest {
         val restored = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
         assertTrue(restored.attempts.isEmpty())
         assertTrue(restored.pendingReleases.isEmpty())
-        assertEquals("abc", restored.drafts.getValue(key).text)
+        assertTrue(restored.drafts.isEmpty())
+    }
+
+    @Test fun appliedRetirementReclaimsMatchingDraftForFortyDistinctQuestions() = runBlocking {
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val journal = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined)
+        repeat(40) { n ->
+            val bound = attempt.copy(key = key.copy(questionId = "q$n"), attemptId = "a$n", text = "abc",
+                outcomeBinding = StoredPagedOutcomeBinding("device", "owner", 3, hash))
+            journal.reserve(bound)
+            assertEquals(StoredPagedDraft(bound.text, bound.createdAt), journal.snapshot().drafts[bound.key])
+            journal.retireApplied(bound)
+            val retired = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
+            assertFalse("Applied draft must be retired in the same save", retired.drafts.containsKey(bound.key))
+            assertFalse(retired.attempts.containsKey(bound.attemptId))
+            val release = retired.pendingReleases.getValue(bound.attemptId)
+            assertEquals(bound.key, release.key)
+            journal.removeRelease(release)
+        }
+        val final = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
+        assertTrue(final.drafts.isEmpty())
+        assertTrue(final.attempts.isEmpty())
+        assertTrue(final.pendingReleases.isEmpty())
+    }
+
+    @Test fun appliedRetirementPreservesChangedOrNewerDraft() = runBlocking {
+        val hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val journal = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined)
+        listOf(StoredPagedDraft("new text", 43), StoredPagedDraft("abc", 43), StoredPagedDraft("new text", 42)).forEachIndexed { n, newer ->
+            val bound = attempt.copy(key = key.copy(questionId = "q$n"), attemptId = "a$n", text = "abc",
+                outcomeBinding = StoredPagedOutcomeBinding("device", "owner", 3, hash))
+            journal.reserve(bound)
+            journal.putDraft(bound.key, newer)
+            journal.retireApplied(bound)
+            val restored = PagedEditorJournal(PagedEditorStore(context), Dispatchers.Unconfined).snapshot()
+            assertEquals(newer, restored.drafts[bound.key])
+            assertFalse(restored.attempts.containsKey(bound.attemptId))
+            journal.removeRelease(restored.pendingReleases.getValue(bound.attemptId))
+        }
     }
 
     @Test fun readsLiteralVersionThreeAndRejectsMalformedAndDuplicateReleaseRecords() {

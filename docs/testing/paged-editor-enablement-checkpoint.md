@@ -46,14 +46,21 @@ and qualified RPC, including Host-first SIGKILL, unchanged raw pending bytes and
 exact encrypted Android unknown/fence retention with zero Source upload dispatch.
 The current applied-default v2 control also passes.
 
-Next qualify the genuine owner-ACK/applied-durability gap: a real SDK-accepted value
-without durable Host applied evidence must remain unknown after actual Host death.
-Continuous full SDK edit loops beyond 32 remain distinct from focused ledger/journal
-capacity cycles. Existing later applied/release cases and isolated filesystem crash
+[Genuine owner ACK before durable applied](../superpowers/plans/2026-11-02-host-ack-before-applied.md)
+now qualifies Native and RPC Host-first death after real SDK acceptance but before
+the applied write: pending remains unknown and Android retains its fence/text,
+with zero replay. The earlier before-owner regression also passes.
+[Continuous genuine SDK edits](continuous-sdk-edits.md) now records 40 actual
+Native and 40 RPC successes on stable per-run identities, with encrypted atomic
+cleanup and exact Host release. It also fixes the completed-draft leak found at
+the 33rd editor; newer/changed drafts remain protected. Focused ledger/journal
+capacity cycles retain their distinct scope. Existing later applied/release cases and isolated filesystem crash
 tests retain their exact scopes; physical Samsung/DeX and independent Linux stay
 separate full-goal boundaries.
 
-Then reconcile the complete original acceptance matrix using its recorded pins
+Next qualify the explicit actual IME composition/navigation and presence/timing
+gate; semantics SetText is not an actual IME. Reconcile the complete original
+acceptance matrix using its recorded pins
 and current implementation. Only enable the separately negotiated capabilities
 when their actual mandatory criteria and resource policy are satisfied; do not
 turn a narrow passing case into a universal owner/device claim.

@@ -127,8 +127,12 @@ class PagedEditorJournal(
                 .toString().toByteArray(Charsets.UTF_8).size
             if (state.pendingReleases.size >= 128 || sameScope >= 32 || encodedBytes > 512 * 1024)
                 throw PagedReleaseCapacityException()
-            persist(state.copy(attempts = state.attempts - attempt.attemptId,
-                pendingReleases = state.pendingReleases + (release.releaseId to release)))
+            val matchingDraft = StoredPagedDraft(attempt.text, attempt.createdAt)
+            persist(state.copy(
+                drafts = if (state.drafts[attempt.key] == matchingDraft) state.drafts - attempt.key else state.drafts,
+                attempts = state.attempts - attempt.attemptId,
+                pendingReleases = state.pendingReleases + (release.releaseId to release),
+            ))
         }
     }
 
