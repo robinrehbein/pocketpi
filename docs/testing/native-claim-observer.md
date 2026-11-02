@@ -81,3 +81,7 @@ reacquisition and the other public enablement gates remain open. The concrete
 [local takeover plan](../superpowers/plans/2026-11-02-native-editor-local-takeover.md)
 distinguishes local question closure from a silent Host-only lease revocation.
 Public paged/outcome gates remain off; no release or production host changed.
+
+The subsequent [local takeover case](native-editor-local-takeover.md) exercises
+a real paged-lease revocation during the held upload with that worker still alive.
+Its limits remain distinct from silent Host-only revocation and reacquisition.

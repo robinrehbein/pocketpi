@@ -37,33 +37,35 @@ that local action, not a phone Cancel or a replay of the old submitted value.
 
 ## Implementation and evidence
 
-- [ ] Add a separate Native-only private takeover flag/action/status. Exclude
+- [x] Add a separate Native-only private takeover flag/action/status. Exclude
       process-loss/resume modes; no manual registry/map/grant mutation.
-- [ ] Hold the last genuine Source chunk ACK after the actual original handler
+- [x] Hold the last genuine Source chunk ACK after the actual original handler
       accepted the complete old 1-MiB upload. Preserve exact ACK offset/hash and
       actual owner, peer, runtime, question and lease bindings.
-- [ ] Verify a live active lease using the actual previously authorized reader
+- [x] Verify a live active lease using the actual previously authorized reader
       proof. Send Ctrl-] only through the verified owned PTY handle. Observe real
       Source question closure/local fallback, invalid original capture and a real
       active-to-inactive lease transition through original forget/release calls.
       A historical `forget` log by itself is insufficient. Bound the transition
       below lease/reader expiry and prove the owner identity stays unchanged.
-- [ ] Return the original unchanged ACK. Observe a correlated old request error,
+- [x] Return the original unchanged ACK. Observe a correlated old request error,
       zero old Source commits, no old remote value result, quota cleanup before
       expiry and exact preserved encrypted draft/uncertain attempt. Separately
       record whether Android received question invalidation; do not claim its
       local guard can detect an unannounced Host-only lease change.
-- [ ] Explicitly finish/cancel the genuine local editor after proving no premature
+- [x] Explicitly finish/cancel the genuine local editor after proving no premature
       SDK return. Capture its actual result separately from the old Android
       submission. Then enter a fresh probe/value through Android UI, requiring
       a fresh question/grant/lease/upload/request and genuine Source receipt/SDK
       success under the same worker/session/peer.
-- [ ] Observe no replay for a stated window, inspect retained recovery text and
+- [x] Observe no replay for a stated window, inspect retained recovery text and
       preserve source/APK/runner/trace evidence with owned cleanup.
-- [ ] Scoped independent review, applicable checks, actual Native run, audit and
+- [x] Scoped independent review, applicable checks, actual Native run, audit and
       local commits with limits. No release/public capability enablement.
 
 This is local takeover with lease invalidation and remote question closure. A
 lease-only Host revocation with no Source notification, same-question
 reacquisition, live peer replacement, positive-outcome incarnation, physical
 Samsung/DeX and independent authorized Linux remain separate requirements.
+
+Qualified scope and exact remaining limits: [local takeover evidence](../../testing/native-editor-local-takeover.md). Fresh explicit work uses a real empty Source prefill/unpaged lease; the old revoked lease is genuinely paged.
