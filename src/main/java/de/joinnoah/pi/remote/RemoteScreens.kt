@@ -349,11 +349,11 @@ internal fun RemoteScreen(
     // The prompt the timeline does not show yet goes at the tail, where the reply will follow it.
     val pendingKeys = remember(key) { PendingBubbleKeys() }
     val conversation =
-        remember(presentation, state.pendingSend) {
-            val pendingItem = state.pendingSend?.let(::pendingSendItem)
-            val items = pendingItem?.let { presentation.items + it } ?: presentation.items
+        remember(presentation, state.pendingSend, state.messages) {
+            val shown = shownPendingSend(state.pendingSend, state.messages)
+            val items = shown?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
             // The host's copy keeps the pending bubble's list key, so the swap does not animate.
-            items.also { pendingKeys.update(it, pendingItem) }
+            items.also { pendingKeys.update(it, shown, state.messages) }
         }
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: ThinkingDisplay.STATUS
     val chatKey = key as? RemoteNavKey.Chat

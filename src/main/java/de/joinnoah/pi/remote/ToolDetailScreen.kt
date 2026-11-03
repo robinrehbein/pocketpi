@@ -296,13 +296,20 @@ internal const val FORMATTED_OUTPUT_MAX_CHARS = 20_000
 internal fun formattedOutputAllowed(name: String?, output: String?): Boolean {
     if (output.isNullOrBlank() || name in CODE_OUTPUT_TOOLS || output.length > FORMATTED_OUTPUT_MAX_CHARS) return false
     val first = output.trimStart().first()
-    return first != '{' && first != '['
+    // Markdown may open with a bracket too (`[Title](url)`, `[INFO]`): only real JSON stays rows.
+    return (first != '{' && first != '[') || runCatching { Json.parseToJsonElement(output) }.isFailure
 }
 
 /** One argument of a tool call as a labelled value; [structured] values are indented JSON. */
 internal data class ArgumentField(val key: String, val value: String, val structured: Boolean)
 
 private const val MAX_ARGUMENT_FIELDS = 24
+
+/** Longer string values keep the arguments one bounded JSON block, as before the fields. */
+private const val MAX_ARGUMENT_FIELD_CHARS = 20_000
+
+/** Lines of a field's value shown before the user asks for all of it. */
+private const val ARGUMENT_FIELD_PREVIEW_LINES = 8
 
 /**
  * The arguments of a tool without a view of its own as labelled fields, or null when they are not
@@ -311,6 +318,7 @@ private const val MAX_ARGUMENT_FIELDS = 24
 internal fun argumentFields(arguments: String?): List<ArgumentField>? {
     val parsed = arguments?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() } as? JsonObject ?: return null
     if (parsed.isEmpty() || parsed.size > MAX_ARGUMENT_FIELDS) return null
+    if (parsed.values.any { it is JsonPrimitive && it.isString && it.content.length > MAX_ARGUMENT_FIELD_CHARS }) return null
     return parsed.map { (key, value) ->
         when {
             value is JsonPrimitive && value.isString -> ArgumentField(key, value.content, structured = false)
@@ -462,7 +470,8 @@ private fun ToolDetailContent(
                         onLoadFullOutput = onLoadFullOutput,
                         onCancelFullOutput = onCancelFullOutput,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        formatted = if (canFormat) formatted else null,
+                        // A search shows the rows, so the switch stays away while one runs.
+                        formatted = if (canFormat && query.isEmpty()) formatted else null,
                         onFormatted = { formatted = it },
                     )
                 }
@@ -547,7 +556,7 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
     Column(Modifier.fillMaxWidth()) {
         PaneHeader(
             title = item.summary.labelRes?.let { stringResource(it) } ?: item.name ?: stringResource(R.string.remote_tool),
-            // The detail is the list's first item, the arguments; the header keeps the title and the state.
+            // The overview card below carries the state and what the call worked on.
             subtitle = null,
             nested = false,
             busy = false,
@@ -581,29 +590,20 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
 @Composable
 private fun ToolOverview(item: ConversationItem.Activity, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
-    FloatingSurface(modifier.fillMaxWidth().testTag("toolDetailOverview"), shape = RoundedCornerShape(24.dp), blur = false) {
-        Row(
-            Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlassAvatar(size = 48.dp) { Icon(toolIcon(item.name), null, tint = colors.primary) }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                item.summary.detail?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StateChip(item.state)
-                    item.name?.takeIf { item.summary.labelRes != null || item.summary.detail != null }?.let {
-                        Text(it, style = monoTextStyle(), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+    OverviewCard(toolIcon(item.name), modifier.testTag("toolDetailOverview")) {
+        item.summary.detail?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            StateChip(item.state)
+            item.name?.takeIf { item.summary.labelRes != null }?.let {
+                Text(it, style = monoTextStyle(), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -632,29 +632,12 @@ private fun StateChip(state: String) {
             else -> Triple(R.string.remote_tool_complete, colors.secondaryContainer, colors.onSecondaryContainer)
         }
     // A tinted pill inside the overview card, with a dot in the state's colour.
-    Surface(Modifier.testTag("toolDetailState"), shape = CircleShape, color = container, contentColor = content) {
-        Row(
-            Modifier.padding(start = 10.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(6.dp).background(content, CircleShape))
-            Text(stringResource(label), style = MaterialTheme.typography.labelMedium, maxLines = 1)
-        }
-    }
+    StatusPill(stringResource(label), container, content, Modifier.testTag("toolDetailState"))
 }
 
 @Composable
 private fun SectionLabel(text: String, trailing: (@Composable () -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text,
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        trailing?.invoke()
-    }
+    SectionHeading(text, trailing = trailing)
 }
 
 @Composable
@@ -887,11 +870,36 @@ private fun ArgumentFieldsCard(fields: List<ArgumentField>) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(field.key, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
                     if (field.structured) CodeBlock(field.value, numbered = false, container = colors.surfaceContainer)
-                    else SelectionContainer { Text(field.value, style = MaterialTheme.typography.bodyMedium) }
+                    else FieldValue(field)
                 }
             }
         }
     }
+}
+
+/** A string value, cut to a preview of a few lines until the user asks for all of it. */
+@Composable
+private fun FieldValue(field: ArgumentField) {
+    var open by rememberSaveable(field.key) { mutableStateOf(false) }
+    var overflows by remember(field.value) { mutableStateOf(false) }
+    SelectionContainer {
+        Text(
+            field.value,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = if (open) Int.MAX_VALUE else ARGUMENT_FIELD_PREVIEW_LINES,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { if (!open) overflows = it.hasVisualOverflow },
+        )
+    }
+    if (open || overflows)
+        TextButton(onClick = { open = !open }, Modifier.testTag("toolDetailFieldToggle")) {
+            Text(
+                stringResource(
+                    if (open) R.string.remote_tool_detail_arguments_show_less
+                    else R.string.remote_tool_detail_arguments_show_all
+                )
+            )
+        }
 }
 
 @Composable

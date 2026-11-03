@@ -949,29 +949,45 @@ class ConversationPresenterTest {
     @Test fun hostCopyOfAPendingPromptKeepsThePendingBubblesListKey() {
         val keys = PendingBubbleKeys()
         val earlier = Wire.objectOf("id" to "a0", "role" to "assistant", "text" to "Hi", "state" to "complete")
+        val pending = PendingSend("m1", "Hello pi", null, emptyList(), PendingSendState.SENDING, afterMessageId = "a0")
         val before = ConversationPresenter().present(listOf(earlier), false).items
-        val pendingItem = pendingSendItem(PendingSend("m1", "Hello pi", null, emptyList(), PendingSendState.CONFIRMED))
-        keys.update(before + pendingItem, pendingItem)
-        assertEquals("pending-m1", keys.keyOf(pendingItem))
+        assertEquals(pending, shownPendingSend(pending, listOf(earlier)))
+        keys.update(before + pendingSendItem(pending), pending, listOf(earlier))
 
+        // The copy arrives before the acknowledgement: the pending bubble goes at once.
         val copy = Wire.objectOf("id" to "u1", "role" to "user", "text" to "Hello pi\n", "state" to "complete")
-        val after = ConversationPresenter().present(listOf(earlier, copy), false).items
-        keys.update(after, null)
+        val messages = listOf(earlier, copy)
+        assertNull(shownPendingSend(pending, messages))
+        val after = ConversationPresenter().present(messages, false).items
+        keys.update(after, null, messages)
         val hostBubble = after.last()
         assertEquals("pending-m1", keys.keyOf(hostBubble))
         assertEquals(hostBubble.id, keys.idOf("pending-m1"))
         assertEquals(before.first().id, keys.keyOf(after.first()))
-        // Every key stays unique.
+        assertEquals(after.size, after.map(keys::keyOf).toSet().size)
+    }
+
+    @Test fun aMultiPartCopyGivesItsFirstRowThePendingKey() {
+        val keys = PendingBubbleKeys()
+        val pending = PendingSend("m1", "One\nTwo", null, emptyList(), PendingSendState.CONFIRMED)
+        keys.update(listOf(pendingSendItem(pending)), pending, emptyList())
+        val copy = Wire.objectOf(
+            "id" to "u2", "role" to "user", "state" to "complete",
+            "parts" to JsonArray(listOf(Wire.objectOf("type" to "text", "text" to "One"), Wire.objectOf("type" to "text", "text" to "Two"))),
+        )
+        val after = ConversationPresenter().present(listOf(copy), false).items
+        keys.update(after, null, listOf(copy))
+        assertEquals("pending-m1", keys.keyOf(after.first { it.sourceId == "u2" }))
         assertEquals(after.size, after.map(keys::keyOf).toSet().size)
     }
 
     @Test fun aDifferentNewPromptDoesNotTakeThePendingBubblesKey() {
         val keys = PendingBubbleKeys()
-        val pendingItem = pendingSendItem(PendingSend("m1", "Hello pi", null, emptyList(), PendingSendState.CONFIRMED))
-        keys.update(listOf(pendingItem), pendingItem)
+        val pending = PendingSend("m1", "Hello pi", null, emptyList(), PendingSendState.CONFIRMED)
+        keys.update(listOf(pendingSendItem(pending)), pending, emptyList())
         val other = Wire.objectOf("id" to "u9", "role" to "user", "text" to "Something else", "state" to "complete")
         val after = ConversationPresenter().present(listOf(other), false).items
-        keys.update(after, null)
+        keys.update(after, null, listOf(other))
         assertEquals(after.single().id, keys.keyOf(after.single()))
     }
 }

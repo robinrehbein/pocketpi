@@ -734,6 +734,28 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
     }
 }
 
+/** Prompt text as the host and the phone compare it: line endings and surrounding whitespace aside. */
+internal fun promptKey(text: String): String = text.replace("\r\n", "\n").replace('\r', '\n').trim()
+
+/**
+ * The ID of the host's copy of [pending] in [messages], or null while the timeline lacks it. Only
+ * messages after [PendingSend.afterMessageId] count; a baseline the timeline no longer holds
+ * leaves every message a candidate.
+ */
+internal fun pendingSendCopyId(pending: PendingSend, messages: List<JsonObject>): String? {
+    val baseline = pending.afterMessageId?.let { id -> messages.indexOfFirst { it.optionalText("id") == id } }
+    val sentSince = messages.drop(if (baseline == null || baseline < 0) 0 else baseline + 1)
+    val wanted = promptKey(pending.text)
+    return sentSince.firstOrNull { it.text("role") == "user" && promptKey(userMessageBody(it)) == wanted }?.optionalText("id")
+}
+
+/**
+ * The pending prompt the chat shows at its tail: none once the host's copy is in the timeline,
+ * whether or not the host acknowledged the send yet, so the prompt never shows twice.
+ */
+internal fun shownPendingSend(pending: PendingSend?, messages: List<JsonObject>): PendingSend? =
+    pending?.takeIf { pendingSendCopyId(it, messages) == null }
+
 /**
  * Carries the chat list's key of a pending prompt's bubble over to the host's copy of that prompt
  * when the copy replaces it. The list then sees one row whose content changes, rather than one row
@@ -743,27 +765,30 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
 internal class PendingBubbleKeys {
     /** Host message item ID to the key of the pending bubble it replaced. */
     private val adopted = HashMap<String, String>()
-    private var pending: ConversationItem.Bubble? = null
+    private var pending: PendingSend? = null
     private var knownIds: Set<String> = emptySet()
 
-    /** Call with each new list of [items] and the pending bubble at its tail, if any. */
-    fun update(items: List<ConversationItem>, pendingItem: ConversationItem.Bubble?) {
+    /**
+     * Call with each new list of [items], the [shown] pending prompt at its tail (if any) and the
+     * timeline's [messages].
+     */
+    fun update(items: List<ConversationItem>, shown: PendingSend?, messages: List<JsonObject>) {
         val previous = pending
         val before = knownIds
-        pending = pendingItem
+        pending = shown
         knownIds = items.mapTo(HashSet()) { it.id }
-        if (pendingItem != null || previous == null) return
-        val wanted = bubbleKey(previous.text)
-        items.lastOrNull {
-            it is ConversationItem.Bubble && it.role == "user" && it.id !in before &&
-                it.id !in adopted && bubbleKey(it.text) == wanted
-        }?.let { adopted[it.id] = previous.id }
+        // A key in use by a pending bubble again is never also a host row's.
+        shown?.let { current -> adopted.values.removeAll { it == pendingSendItem(current).id } }
+        if (shown != null || previous == null) return
+        val copy = pendingSendCopyId(previous, messages) ?: return
+        // The first row of the host's copy takes the key, whatever its text: one prompt may show as
+        // several rows (one per text part) or as attachments alone.
+        items.firstOrNull { it.sourceId == copy && it.id !in before && it.id !in adopted }
+            ?.let { adopted[it.id] = pendingSendItem(previous).id }
     }
 
     fun keyOf(item: ConversationItem): String = adopted[item.id] ?: item.id
 
     /** The item ID behind a list [key], for a key read back from the list's layout. */
     fun idOf(key: String): String = adopted.entries.firstOrNull { it.value == key }?.key ?: key
-
-    private fun bubbleKey(text: String) = text.replace("\r\n", "\n").replace('\r', '\n').trim()
 }

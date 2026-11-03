@@ -194,6 +194,8 @@ class ToolDetailTextTest {
         assertFalse(formattedOutputAllowed("read", "Plain answer"))
         assertFalse(formattedOutputAllowed("advisor", "  {\"ok\": true}"))
         assertFalse(formattedOutputAllowed("advisor", "[1, 2]"))
+        assertTrue(formattedOutputAllowed("web_search", "[Kotlin](https://kotlinlang.org) is a language."))
+        assertTrue(formattedOutputAllowed("advisor", "{not json} but prose"))
         assertFalse(formattedOutputAllowed("advisor", "   "))
         assertFalse(formattedOutputAllowed("advisor", null))
         assertFalse(formattedOutputAllowed("advisor", "a".repeat(FORMATTED_OUTPUT_MAX_CHARS + 1)))
