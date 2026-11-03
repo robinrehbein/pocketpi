@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -131,7 +134,7 @@ internal fun NewSessionSheet(
     var prompt by rememberSaveable { mutableStateOf("") }
     val issue = newSessionPromptIssue(prompt)
     val chosen = models.firstOrNull { "${it.provider}/${it.id}" == modelKey }
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("newSessionSheet")) {
+    GlassSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("newSessionSheet")) {
         Column(
             Modifier.fillMaxWidth()
                 .padding(horizontal = 16.dp)
@@ -139,23 +142,17 @@ internal fun NewSessionSheet(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
+            SheetHeader(
                 stringResource(R.string.remote_new_session),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.semantics { heading() },
+                subtitle = projectName?.let { stringResource(R.string.remote_new_session_project, it) },
+                padding = PaddingValues(start = 8.dp),
             )
-            projectName?.let {
-                Text(
-                    stringResource(R.string.remote_new_session_project, it),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
             if (models.isNotEmpty()) {
                 Text(stringResource(R.string.remote_new_session_model), style = MaterialTheme.typography.titleSmall)
-                Column(Modifier.fillMaxWidth().selectableGroup().testTag("newSessionModels")) {
+                Column(
+                    Modifier.fillMaxWidth().selectableGroup().testTag("newSessionModels"),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     ModelChoiceRow(
                         label = stringResource(R.string.remote_new_session_model_default),
                         selected = chosen == null,
@@ -182,11 +179,12 @@ internal fun NewSessionSheet(
                 },
                 minLines = 2,
                 maxLines = 6,
+                shape = SHEET_OPTION_SHAPE,
             )
-            Button(
+            SheetPrimaryButton(
                 onClick = { onStart(NewSessionChoice(chosen, prompt.trim())) },
                 enabled = issue == null && !busy,
-                modifier = Modifier.align(Alignment.End).testTag("newSessionStart"),
+                modifier = Modifier.testTag("newSessionStart"),
             ) {
                 Text(
                     stringResource(
@@ -201,15 +199,24 @@ internal fun NewSessionSheet(
 
 @Composable
 private fun ModelChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
+    // A choice is a pill; the chosen one is tinted, as in the model picker.
     Row(
         Modifier.fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
+            .clip(SHEET_OPTION_SHAPE)
+            .background(sheetOptionColor(selected))
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .heightIn(min = 52.dp)
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = null)
         Spacer(Modifier.width(8.dp))
-        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 

@@ -7750,6 +7750,22 @@ class RemoteRepositoryTest {
         }
     }
 
+    @Test
+    fun aChildSessionNeitherReadsNorSetsAnAdvisorOfItsOwn() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, capabilities = setOf(SUBAGENT_CONTROL_CAPABILITY, ADVISOR_CAPABILITY))
+        runCurrent()
+        assertTrue(isChildSession(repository.state.value))
+        val before = transport.sent.size
+        repository.refreshAdvisor()
+        repository.setAdvisor(null, null, null)
+        runCurrent()
+        val sent = transport.sent.drop(before).map { it.text("type") }
+        assertFalse("session.advisor.get" in sent)
+        assertFalse("session.command" in sent)
+        assertFalse(advisorControlAvailable(repository.state.value))
+    }
+
     private fun controlResult(status: String, vararg extra: Pair<String, Any?>) =
         Wire.objectOf("kind" to "subagent.control", "sessionId" to "child", "status" to status, *extra)
 

@@ -209,7 +209,10 @@ internal fun SessionControls(
             (available && confirmed == null && state.configurationLoading)
     val loadingContext = state.loading || (usage == null && state.contextLoading)
     val advisorAvailable = advisorControlAvailable(state)
+    // A subagent consults the main chat's advisor; the chip says so instead of "unavailable".
+    val childAdvisor = isChildSession(state)
     val advisorUnavailableReason = when {
+        childAdvisor -> stringResource(R.string.remote_advisor_from_parent_explanation)
         !state.connected -> stringResource(R.string.remote_advisor_disconnected)
         ADVISOR_CAPABILITY !in state.capabilities -> stringResource(R.string.remote_advisor_host_unsupported)
         !advisorAvailable -> stringResource(R.string.remote_advisor_extension_required)
@@ -312,7 +315,7 @@ internal fun SessionControls(
                         } ?: "high"
                         advisorDraftDirty = false
                         showAdvisor = true
-                        refreshAdvisor()
+                        if (!childAdvisor) refreshAdvisor()
                     },
                     // Keep the entry actionable even when unsupported: the sheet explains why.
                     enabled = true,
@@ -325,7 +328,8 @@ internal fun SessionControls(
                     },
                     label = {
                         Text(
-                            if (!state.connected || !advisorAvailable) stringResource(R.string.remote_advisor_unavailable_label)
+                            if (childAdvisor) stringResource(R.string.remote_advisor_from_parent)
+                            else if (!state.connected || !advisorAvailable) stringResource(R.string.remote_advisor_unavailable_label)
                             else if (sessionAdvisor == null) stringResource(R.string.remote_advisor_title)
                             else if (!sessionAdvisor.enabled) stringResource(R.string.remote_advisor_off)
                             else if (sessionAdvisor.pending) stringResource(R.string.remote_advisor_busy)
@@ -474,7 +478,7 @@ internal fun SessionControls(
                 sessionId = state.selection.sessionId,
             )
         }
-    if (showContext) ModalBottomSheet(onDismissRequest = { showContext = false }) {
+    if (showContext) GlassSheet(onDismissRequest = { showContext = false }) {
         ContextSheetBody(
             usage = usage,
             info = sessionInfo,
@@ -490,7 +494,7 @@ internal fun SessionControls(
     }
     val sessionSettings = confirmed?.settings
     if (showSettings && sessionSettings != null && settingsVisible)
-        ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+        GlassSheet(onDismissRequest = { showSettings = false }) {
             SessionSettingsSheetBody(
                 settings = sessionSettings,
                 enabled = canChange,
@@ -500,10 +504,10 @@ internal fun SessionControls(
             )
         }
     if (showAdvisor) AdvisorPickerSheet(
-        onManageProviders = manageProviders?.let { manage -> { showAdvisor = false; manage() } },
+        onManageProviders = manageProviders?.takeIf { !childAdvisor }?.let { manage -> { showAdvisor = false; manage() } },
         advisor = sessionAdvisor.takeIf { advisorUnavailableReason == null },
         unavailableReason = advisorUnavailableReason,
-        onRetry = if (state.connected && ADVISOR_CAPABILITY in state.capabilities) refreshAdvisor else null,
+        onRetry = if (state.connected && ADVISOR_CAPABILITY in state.capabilities && !childAdvisor) refreshAdvisor else null,
         selectedChoice = advisorChoice,
         selectedLevel = advisorLevel,
         loading = state.advisorLoading || state.advisorChanging,
@@ -527,7 +531,7 @@ internal fun SessionControls(
         onDismiss = { showAdvisor = false },
     )
     if (picker != null && available)
-        ModalBottomSheet(onDismissRequest = { picker = null }, sheetState = pickerSheet) {
+        GlassSheet(onDismissRequest = { picker = null }, sheetState = pickerSheet) {
             val busy = !canChange && state.connected && state.status in setOf("running", "waiting")
             val selectModel = { provider: String, id: String ->
                 setModel(provider, id)
@@ -537,23 +541,18 @@ internal fun SessionControls(
                 setThinking(level)
                 closePicker()
             }
-            Text(
+            SheetHeader(
                 stringResource(
                     if (picker == "model") R.string.remote_choose_model
                     else R.string.remote_choose_thinking
-                ),
-                Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                style = MaterialTheme.typography.titleLarge,
+                )
             )
             if (busy)
                 Row(
                     Modifier.fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceContainerHigh,
-                            MaterialTheme.shapes.small,
-                        )
-                        .padding(12.dp),
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, SHEET_OPTION_SHAPE)
+                        .padding(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -649,29 +648,39 @@ internal fun ContextSheetBody(
         Modifier.fillMaxWidth()
             .heightIn(max = 480.dp)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 16.dp)
             .navigationBarsPadding()
             .testTag("contextSheet"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.remote_session_info_title), style = MaterialTheme.typography.titleLarge)
-        if (info != null) SessionInfoSection(info)
-        Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleMedium)
-        if (unavailable || usage == null) {
-            Text(stringResource(R.string.remote_context_unavailable))
-        } else {
-            Text(stringResource(R.string.remote_context_window, usage.contextWindow))
-            if (usage.usedTokens != null && usage.percent != null) {
-                Text(stringResource(R.string.remote_context_used, usage.usedTokens, usage.percent.toInt()))
-                Text(stringResource(R.string.remote_context_remaining, (usage.contextWindow - usage.usedTokens).coerceAtLeast(0)))
-            } else Text(stringResource(R.string.remote_context_unknown))
-            usage.totals?.let { UsageSummary(it) }
+        SheetHeader(stringResource(R.string.remote_session_info_title), padding = PaddingValues(start = 8.dp))
+        if (info != null) SheetSection { Box(Modifier.padding(16.dp)) { SessionInfoSection(info) } }
+        SheetSection {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleMedium)
+                if (unavailable || usage == null) {
+                    Text(stringResource(R.string.remote_context_unavailable))
+                } else {
+                    Text(stringResource(R.string.remote_context_window, usage.contextWindow))
+                    if (usage.usedTokens != null && usage.percent != null) {
+                        LinearProgressIndicator(
+                            progress = { (usage.percent / 100.0).toFloat().coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+                        )
+                        Text(stringResource(R.string.remote_context_used, usage.usedTokens, usage.percent.toInt()))
+                        Text(stringResource(R.string.remote_context_remaining, (usage.contextWindow - usage.usedTokens).coerceAtLeast(0)))
+                    } else Text(stringResource(R.string.remote_context_unknown))
+                }
+            }
+        }
+        if (!unavailable) usage?.totals?.let { totals ->
+            SheetSection { Box(Modifier.padding(16.dp)) { UsageSummary(totals) } }
         }
         if (showCompact)
-            Button(
+            SheetPrimaryButton(
                 onClick = onCompact,
                 enabled = canCompact,
-                modifier = Modifier.fillMaxWidth().testTag("compactContextButton"),
+                modifier = Modifier.testTag("compactContextButton"),
             ) {
                 Text(stringResource(if (compacting) R.string.remote_context_compacting else R.string.remote_context_compact))
             }
@@ -753,14 +762,14 @@ internal fun SessionSettingsSheetBody(
         Modifier.fillMaxWidth()
             .heightIn(max = 560.dp)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 16.dp)
             .navigationBarsPadding()
             .testTag("sessionSettingsSheet"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         // Under the title: what this sheet changes is read before any control is used.
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+            SheetHeader(stringResource(R.string.remote_session_settings_title), padding = PaddingValues(start = 8.dp))
             Text(
                 stringResource(R.string.remote_session_settings_scope),
                 style = MaterialTheme.typography.bodyMedium,
@@ -777,7 +786,8 @@ internal fun SessionSettingsSheetBody(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        SheetSection {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(stringResource(R.string.remote_session_settings_auto_compact), style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -792,6 +802,7 @@ internal fun SessionSettingsSheetBody(
                 enabled = enabled,
                 modifier = Modifier.testTag("settingsAutoCompaction"),
             )
+        }
         }
         QueueModeChoice(
             title = R.string.remote_session_settings_steering,
@@ -827,7 +838,8 @@ private fun QueueModeChoice(
             QUEUE_MODE_ONE_AT_A_TIME to R.string.remote_session_settings_one_at_a_time,
             QUEUE_MODE_ALL to R.string.remote_session_settings_all_at_once,
         )
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    SheetSection {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
         Text(
             stringResource(hint),
@@ -849,6 +861,7 @@ private fun QueueModeChoice(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -869,20 +882,14 @@ private fun PickerRow(
     content: @Composable () -> Unit,
 ) {
     val contentColor =
-        if (chosen) MaterialTheme.colorScheme.onPrimaryContainer
+        if (chosen) MaterialTheme.colorScheme.onSecondaryContainer
         else MaterialTheme.colorScheme.onSurface
+    // Every choice is a pill on the sheet; the chosen one is tinted, as in the other sheets.
     Row(
         Modifier.fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(MaterialTheme.shapes.small)
-            .then(
-                if (chosen)
-                    Modifier.background(
-                        MaterialTheme.colorScheme.primaryContainer,
-                        MaterialTheme.shapes.small,
-                    )
-                else Modifier
-            )
+            .padding(horizontal = 16.dp, vertical = 3.dp)
+            .clip(SHEET_OPTION_SHAPE)
+            .background(sheetOptionColor(chosen))
             .selectable(
                 selected = chosen,
                 enabled = enabled,

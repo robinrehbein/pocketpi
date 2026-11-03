@@ -24,6 +24,8 @@
     <string name="remote_advisor_error">Advisor error</string>
     <string name="remote_advisor_off">Advisor off</string>
     <string name="remote_advisor_unavailable_label">Advisor unavailable</string>
+    <string name="remote_advisor_from_parent">Advisor from main chat</string>
+    <string name="remote_advisor_from_parent_explanation">This subagent uses the advisor of its main chat. Change it there.</string>
     <string name="remote_advisor_disconnected">Connect to your Mac to configure the advisor.</string>
     <string name="remote_advisor_host_unsupported">Your Mac does not offer the advisor yet. Update pi Remote on your Mac, then reconnect.</string>
     <string name="remote_advisor_extension_required">This session has no advisor. Load the advisor extension in pi on your Mac, then check again.</string>
