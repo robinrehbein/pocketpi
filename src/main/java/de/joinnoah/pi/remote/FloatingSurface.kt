@@ -211,9 +211,9 @@ internal fun FloatingSurface(
 }
 
 /** The hairline rim that lifts glass off content of its own colour. */
-private val GLASS_RIM_WIDTH = 0.5.dp
+internal val GLASS_RIM_WIDTH = 0.5.dp
 
-private fun glassRimColor(scheme: ColorScheme): Color =
+internal fun glassRimColor(scheme: ColorScheme): Color =
     if (scheme.surface.luminance() < 0.5f) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.6f)
 
 /**
