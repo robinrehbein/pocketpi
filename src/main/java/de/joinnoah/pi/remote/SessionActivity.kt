@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.LayoutDirection
@@ -205,7 +206,7 @@ internal fun ActivityMarquee(text: String, modifier: Modifier = Modifier, motion
             (if (scrolling) Modifier.wrapContentSize(Alignment.CenterStart, unbounded = true)
                 .requiredWidth(with(density) { textWidth.toDp() })
                 .graphicsLayer { translationX = offset.value }
-            else Modifier.fillMaxWidth()).clearAndSetSemantics { }.testTag("activityMarqueeText"),
+            else Modifier.fillMaxWidth()).clearAndSetSemantics { testTag = "activityMarqueeText" },
             style = style,
             maxLines = 1,
             softWrap = false,
