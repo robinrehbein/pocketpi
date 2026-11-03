@@ -394,6 +394,20 @@
       }
     },
     {
+      "name": "branch-unavailable-lfs_scan_limit",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "lfs_scan_limit"
+        }
+      }
+    },
+    {
       "name": "commit-committed",
       "payload": {
         "type": "result",
@@ -783,6 +797,20 @@
           "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
           "pushed": false,
           "reason": "lfs_unsupported"
+        }
+      }
+    },
+    {
+      "name": "push-refused-lfs_scan_limit",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "lfs_scan_limit"
         }
       }
     },

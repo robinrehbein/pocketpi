@@ -38,6 +38,7 @@
     <string name="remote_push_reason_no_origin">Das Repository hat kein origin-Ziel.</string>
     <string name="remote_push_reason_unsupported_remote">Dieses entfernte Ziel wird nicht unterstützt.</string>
     <string name="remote_push_reason_lfs_unsupported">Git LFS wird bei dieser Übertragung nicht unterstützt.</string>
+    <string name="remote_push_reason_lfs_scan_limit">Zu viel unveröffentlichter Verlauf für die Prüfung auf Git LFS. Übertrage die Änderungen direkt am Rechner.</string>
     <string name="remote_push_reason_local_transport_config">Lokale Repository-Einstellungen verhindern diese Übertragung.</string>
     <string name="remote_push_reason_up_to_date">Der entfernte Branch ist bereits aktuell.</string>
     <string name="remote_push_reason_auth_failed">Die Anmeldung beim entfernten Rechner ist fehlgeschlagen.</string>
