@@ -51,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -68,6 +69,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** A snapshot older than this, or any snapshot while the Mac is away, gets the "updated … ago" line. */
 private const val TICKETS_STALE_MILLIS = 10 * 60_000L
+
+private val TicketsHorizontalPadding = 20.dp
 
 private val ticketSectionOrder = listOf(TicketSection.ACCEPTANCE, TicketSection.WORKING, TicketSection.TODO)
 
@@ -174,7 +177,7 @@ internal fun TicketsContent(
         // Keep sticky group headers below the floating navigation controls.
         LazyColumn(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
+            contentPadding = PaddingValues(start = TicketsHorizontalPadding, end = TicketsHorizontalPadding, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (hasWriteNotice(tickets))
@@ -272,7 +275,19 @@ private fun androidx.compose.foundation.lazy.LazyListScope.ticketsBody(
             if (sections.size > 1) {
                 item("filters") {
                     Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp).testTag("ticketsFilter"),
+                        Modifier.fillMaxWidth()
+                            // Let chips scroll to the screen edges, keeping their initial inset aligned with the cards.
+                            .layout { measurable, constraints ->
+                                val inset = TicketsHorizontalPadding.roundToPx()
+                                val width = constraints.maxWidth + 2 * inset
+                                val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+                                layout(constraints.maxWidth, placeable.height) {
+                                    placeable.placeRelative(-inset, 0)
+                                }
+                            }
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = TicketsHorizontalPadding, vertical = 6.dp)
+                            .testTag("ticketsFilter"),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         TicketFilter(stringResource(R.string.remote_tickets_filter_all), page.items.size, effectiveFilter == "all", "all") { onFilter("all") }
