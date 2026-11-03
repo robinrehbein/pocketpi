@@ -10,6 +10,14 @@ import android.view.PixelCopy
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import kotlinx.coroutines.launch
+import androidx.compose.ui.semantics.expand
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.SheetValue
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -119,13 +127,18 @@ internal fun GlassSheet(
         contentColor = scheme.onBackground,
         tonalElevation = 0.dp,
         scrimColor = glass.scrim,
-        // The handle and the content each draw their part of the backdrop, so it moves with the sheet.
-        dragHandle = { SheetHandle(backdrop, glass, rim = if (backdrop != null) glassRimColor(scheme) else null) },
+        // The handle and the window insets live inside the content, so one backdrop layer covers the
+        // whole sheet: no seam between handle and content, and no opaque strip over the insets.
+        dragHandle = null,
+        contentWindowInsets = { WindowInsets(0) },
     ) {
         // The same structure with or without the backdrop, so its arrival keeps the content's state.
         Box(Modifier.fillMaxWidth()) {
             if (backdrop != null) SheetBackdropLayer(backdrop, glass)
-            Column(Modifier.fillMaxWidth()) { content() }
+            Column(Modifier.fillMaxWidth().windowInsetsPadding(BottomSheetDefaults.windowInsets)) {
+                SheetHandle(sheetState, onDismissRequest, rim = if (backdrop != null) glassRimColor(scheme) else null)
+                content()
+            }
         }
     }
 }
@@ -229,16 +242,15 @@ private tailrec fun Context.sheetActivity(): Activity? =
     }
 
 /**
- * The blurred app copy under one part of the sheet, lined up with the screen, with the scrim and
- * the glass tint over it. Each part reads its own place on the screen, so the parts join up and
- * follow a drag; the copy is blurred already, so a frame only moves it.
+ * The blurred app copy under the whole sheet, lined up with the screen, with the scrim and the
+ * glass tint over it. It reads the sheet's place on the screen, so it follows a drag; the copy is
+ * blurred already, so a frame only moves it.
  */
 @Composable
 private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     Box(
-        // The copy is drawn at the whole window's size; clipping keeps it to this part, or the
-        // content's copy would paint over the handle above it without the tint.
+        // The copy is drawn at the whole window's size; clipping keeps it inside the sheet's layer.
         Modifier.matchParentSize()
             .clipToBounds()
             .onGloballyPositioned { origin = it.positionOnScreen() }
@@ -257,15 +269,43 @@ private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass
     )
 }
 
+/**
+ * The sheet's handle, with the click and TalkBack actions Material gives its own handle: dismiss,
+ * and expand or collapse when the sheet has a half-open state.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SheetHandle(backdrop: AppBackdrop?, glass: SheetGlass, rim: Color?) {
-    Box(Modifier.fillMaxWidth()) {
-        if (backdrop != null) SheetBackdropLayer(backdrop, glass)
+private fun SheetHandle(sheetState: SheetState, onDismissRequest: () -> Unit, rim: Color?) {
+    val scope = rememberCoroutineScope()
+    val dismissLabel = stringResource(R.string.sheet_handle_dismiss)
+    val expandLabel = stringResource(R.string.sheet_handle_expand)
+    val collapseLabel = stringResource(R.string.sheet_handle_collapse)
+    val hideAndDismiss: () -> Unit = {
+        scope.launch { sheetState.hide() }.invokeOnCompletion { if (!sheetState.isVisible) onDismissRequest() }
+    }
+    Box(
+        Modifier.fillMaxWidth()
+            .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
+            .padding(top = 12.dp, bottom = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Box(
-            Modifier.fillMaxWidth()
-                .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
-                .padding(top = 12.dp, bottom = 16.dp),
-            contentAlignment = Alignment.Center,
+            Modifier.clickable {
+                when (sheetState.currentValue) {
+                    SheetValue.Expanded -> hideAndDismiss()
+                    SheetValue.PartiallyExpanded -> scope.launch { sheetState.expand() }
+                    SheetValue.Hidden -> scope.launch { sheetState.show() }
+                }
+            }
+                .semantics(mergeDescendants = true) {
+                    dismiss(dismissLabel) { hideAndDismiss(); true }
+                    if (sheetState.currentValue == SheetValue.PartiallyExpanded) {
+                        expand(expandLabel) { scope.launch { sheetState.expand() }; true }
+                    } else if (sheetState.hasPartiallyExpandedState) {
+                        collapse(collapseLabel) { scope.launch { sheetState.partialExpand() }; true }
+                    }
+                }
+                .padding(horizontal = 24.dp, vertical = 8.dp),
         ) {
             Box(
                 Modifier.size(width = 36.dp, height = 4.dp)

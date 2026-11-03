@@ -3,4 +3,7 @@
     <string name="insight_files_view_changes">View changes</string>
     <string name="insight_errors_title">Errors</string>
     <string name="insight_errors_filter">Show only errors</string>
+    <string name="sheet_handle_dismiss">Dismiss sheet</string>
+    <string name="sheet_handle_expand">Expand sheet</string>
+    <string name="sheet_handle_collapse">Collapse sheet</string>
 </resources>
