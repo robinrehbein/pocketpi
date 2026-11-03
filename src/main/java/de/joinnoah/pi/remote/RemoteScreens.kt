@@ -3342,7 +3342,7 @@ internal fun RemoteScreen(
                 // The list's end padding lane, between the header and the composer.
                 modifier =
                     Modifier.align(Alignment.TopEnd)
-                        .padding(end = laneInset, top = headerHeight + 8.dp, bottom = composerHeight + 8.dp)
+                        .padding(end = laneInset, top = headerHeight + 8.dp, bottom = composerHeight + 64.dp)
                         .then(underlay),
                 // A drag is the user's own scroll: follow new output only when it ends at the bottom.
                 onSeek = { atEnd ->
@@ -3352,11 +3352,11 @@ internal fun RemoteScreen(
             )
         }
         if (key is RemoteNavKey.Chat)
-            // Floats above the composer, left of the scrollbar lane, and only fades: neither the
+            // Floats above the composer, below the scrollbar lane, and only fades: neither the
             // composer nor the list changes size when it comes and goes.
             Box(
                 Modifier.align(Alignment.BottomEnd)
-                    .padding(end = laneInset + CHAT_SCROLLBAR_LANE + 4.dp, bottom = composerHeight + 8.dp)
+                    .padding(end = ((maxWidth - (PROSE_READING_WIDTH + 32.dp)).coerceAtLeast(0.dp) / 2) + 12.dp, bottom = composerHeight + 8.dp)
                     .then(underlay),
             ) {
                 ScrollToLatestSlot(!autoFollow, ::scrollToLatestItem)
@@ -3364,17 +3364,17 @@ internal fun RemoteScreen(
         if (key is RemoteNavKey.Chat) {
             Box(
                 Modifier.align(Alignment.BottomCenter)
-                    .widthIn(max = PROSE_READING_WIDTH + 32.dp)
                     .fillMaxWidth()
                     .onSizeChanged { composerSize = it }.testTag("floatingComposer")
                     .then(underlay)
-                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .padding(bottom = 16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.error?.let { error ->
                         // Floats over the chat with the composer, so it is tinted glass like it.
                         FloatingSurface(
-                            modifier = Modifier.fillMaxWidth().testTag("errorCard"),
+                            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                                .fillMaxWidth().padding(horizontal = 16.dp).testTag("errorCard"),
                             shape = MaterialTheme.shapes.medium,
                             color = MaterialTheme.colorScheme.errorContainer,
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -3502,9 +3502,15 @@ internal fun RemoteScreen(
                                     }
                             }
                     }
+                    if (currentActivity != null)
+                        Box(Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                            .fillMaxWidth().padding(horizontal = 16.dp)) {
+                            ChatCurrentActivity(currentActivity)
+                        }
                     if (insightsShown || statusChipLine != null)
                         Row(
-                            Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
+                            Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -3514,6 +3520,11 @@ internal fun RemoteScreen(
                             }
                             if (insightsShown) insightChips()
                         }
+                    Column(
+                        Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                            .fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                     val treeSessionId = state.selection.sessionId
                     val treeChat = model as? ChatViewModel
                     if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
@@ -3592,7 +3603,6 @@ internal fun RemoteScreen(
                          connectionStatusLine(state),
                          draftDeliveryNotice(state.sending, state.uncertain, state.connected),
                      )
-                    ChatCurrentActivity(currentActivity)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
@@ -3704,6 +3714,7 @@ internal fun RemoteScreen(
                         editorExpanded = compact && editorExpanded,
                         onEditorExpanded = if (compact) ({ expanded -> editorExpanded = expanded }) else null,
                     )
+                    }
                 }
             }
             SnackbarHost(
@@ -4512,7 +4523,7 @@ private suspend fun LazyListState.scrollToLatest() {
 /** "Scroll to latest" in a slot of fixed size: it only fades, so the composer keeps its size. */
 @Composable
 private fun ScrollToLatestSlot(visible: Boolean, onClick: () -> Unit) {
-    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(48.dp).testTag("scrollToLatestSlot"), contentAlignment = Alignment.Center) {
         val motion = ValueAnimator.areAnimatorsEnabled()
         AnimatedVisibility(
             visible,
