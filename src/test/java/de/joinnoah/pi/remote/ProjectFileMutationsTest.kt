@@ -5,9 +5,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * The file mutation wire against `files-mutations-v1.json`. The fixture is replaced by the Host's
- * copy byte for byte, so the tests walk its `valid` group by type and kind and need no particular
- * entry; negative cases live here.
+ * The file mutation wire against `files-mutations-v1.json`, the Host's fixture copied byte for
+ * byte: every valid command is built exactly by the app and every valid result parses; every invalid
+ * command is one the app would never build and every invalid result is rejected. Further negative
+ * cases live here.
  */
 class ProjectFileMutationsTest {
     private val sessionId = "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
@@ -78,6 +79,75 @@ class ProjectFileMutationsTest {
             )
             assertEquals(data.text("state"), record.state.wire)
             assertEquals(data.optionalText("reason"), record.reason?.wire)
+        }
+    }
+
+    private val invalid by lazy { fixture.getValue("invalid").jsonArray.map { it.jsonObject } }
+
+    /** Whether the app could have sent [command]: exactly the contract's keys, valid values. */
+    private fun commandAccepted(command: JsonObject): Boolean = runCatching {
+        val type = command.text("type")
+        val base = setOf("type", "requestId", "sessionId")
+        when (type) {
+            in mutationCommands -> {
+                val kind = FileMutationKind.entries.single { it.command == type }
+                val keys = base + setOf("operationId", "epoch", "path") + when (kind) {
+                    FileMutationKind.CREATE -> emptySet()
+                    FileMutationKind.RENAME -> setOf("destinationPath", "baseVersion")
+                    FileMutationKind.DELETE -> setOf("baseVersion")
+                }
+                require(command.keys == keys)
+                val request = request(command)
+                require(validMutationRequest(request))
+                require(JsonObject(command - "type" - "requestId") == Wire.objectOf(*fileMutationCommand(request).second.toTypedArray()))
+            }
+            "session.files.mutation.status", "session.files.mutation.acknowledge" -> {
+                require(command.keys == base + setOf("operationId", "epoch"))
+                require(canonicalMutationId(command.text("operationId")) && canonicalMutationId(command.text("epoch")))
+            }
+            "session.files.mutation.list" -> {
+                require(command.keys == base || command.keys == base + "after")
+                command.optionalText("after")?.let { require(canonicalMutationId(it)) }
+            }
+            else -> error("not a mutation command")
+        }
+    }.isSuccess
+
+    private fun resultParses(data: JsonObject): Boolean = runCatching {
+        when (data.text("kind")) {
+            "files.mutation" -> parseFileMutationRecord(
+                data, sessionId, data.text("operationId"),
+                FileMutationKind.entries.single { it.wire == data.text("operation") },
+                data.text("path"), data.optionalText("destinationPath"),
+            )
+            "files.mutation.list" -> parseFileMutationList(data, sessionId)
+            else -> error("not a mutation result")
+        }
+    }.isSuccess
+
+    @Test
+    fun everyValidFixtureCommandIsOneTheAppSends() {
+        val commands = payloads.filter { it.text("type") != "result" }
+        assertTrue(commands.isNotEmpty())
+        commands.forEach { assertTrue(it.text("type"), commandAccepted(it)) }
+    }
+
+    @Test
+    fun everyInvalidFixturePayloadIsRejected() {
+        assertTrue(invalid.isNotEmpty())
+        for (entry in invalid) {
+            val payload = entry.obj("payload")
+            val name = entry.text("name")
+            if (payload.text("type") == "result") assertFalse(name, resultParses(payload.obj("data")))
+            else assertFalse(name, commandAccepted(payload))
+        }
+    }
+
+    @Test
+    fun theFixtureAdvertisesTheCapabilitiesOnTheV3Route() {
+        val routes = payloads.filter { it.text("type") == "result" && it.flag("ok") && it.obj("data").optionalText("kind") == "projects" }
+        for (route in routes) {
+            assertTrue(route.text("requestId").startsWith("capabilities.v3:"))
         }
     }
 
