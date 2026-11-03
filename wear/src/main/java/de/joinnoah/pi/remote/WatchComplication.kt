@@ -17,6 +17,7 @@ import androidx.wear.watchface.complications.datasource.SuspendingComplicationDa
 // The watch-face complication: the status tile's answer in one or two lines. It reads the tile's
 // stored snapshot only and never asks the Mac itself, because watch faces draw it far more often
 // than the system asks for the tile; the app, pushes and tile refreshes keep that snapshot current.
+// The manifest's five-minute period only re-reads the stored snapshot, so ages and expiry move on.
 
 /** What the complication says, before it becomes [ComplicationData]. [target] is the session a tap opens, or null for the app. */
 internal data class WatchComplicationContent(
@@ -34,6 +35,8 @@ internal fun watchComplicationContent(glance: WatchGlance, resources: Resources,
     val working = glance.home.sessions.count { it.status == "running" }
     val summary = if (waiting == 0) resources.getString(R.string.remote_widget_none_waiting)
         else resources.getQuantityString(R.plurals.remote_widget_waiting, waiting, waiting)
+    // TalkBack leads with what the short text shows.
+    val spoken = if (waiting == 0 && working > 0) resources.getQuantityString(R.plurals.wear_complication_working_description, working, working) else summary
     // Waiting sessions come first: a count of them is the one thing worth a glance.
     val (count, title) = if (waiting == 0 && working > 0) working to resources.getQuantityString(R.plurals.wear_complication_working, working)
         else waiting to resources.getQuantityString(R.plurals.wear_complication_waiting, waiting)
@@ -42,7 +45,7 @@ internal fun watchComplicationContent(glance: WatchGlance, resources: Resources,
     val longText = top?.let { it.title.ifBlank { untitled } } ?: summary
     val longTitle = top?.let { watchTileRowDetail(it, resources, now) }
     return WatchComplicationContent(count.toString(), title, longText, longTitle,
-        listOfNotNull(summary, top?.let { "${it.title.ifBlank { untitled }}, $longTitle" }).joinToString(". "), top)
+        listOfNotNull(spoken, top?.let { "${it.title.ifBlank { untitled }}, $longTitle" }).joinToString(". "), top)
 }
 
 internal fun watchComplicationData(type: ComplicationType, content: WatchComplicationContent, tap: PendingIntent?): ComplicationData? {

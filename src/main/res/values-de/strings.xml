@@ -546,6 +546,10 @@
         <item quantity="one">arbeitet</item>
         <item quantity="other">arbeiten</item>
     </plurals>
+    <plurals name="wear_complication_working_description">
+        <item quantity="one">%d Sitzung arbeitet</item>
+        <item quantity="other">%d Sitzungen arbeiten</item>
+    </plurals>
     <string name="wear_tile_label">PocketPi-Status</string>
     <string name="wear_tile_description">Sitzungen, die dich brauchen oder arbeiten, mit den Checks ihres Pull Requests.</string>
     <string name="wear_tile_needs_you">braucht dich</string>

@@ -42,7 +42,7 @@ What a watch adds to a mobile agentic development environment, and where each li
 | Question, completion, subagent and job notifications | Existing | Opt-in push, routed to the session |
 | Failed-run notifications | Not applicable | The protocol has no failure event; `*.stuck` is the closest. Host change first |
 | Answer questions, confirm prompts, approve plans | Existing | Questions screen, one question at a time |
-| Short replies, dictated prompts | Existing | Composer with dictation; Send, Send now or Send when done |
+| Short replies, dictated prompts | Existing | Composer with dictation; Send, Steer now or Send later |
 | Stop or interrupt a run | Existing | Controls, with confirmation; subagents and background jobs too |
 | Pull request and CI checks | Existing (tile), added (chat) | Tile row detail; chat shows `PR #189 · 2 failing` |
 | Model, thinking, commands | Existing | Controls |
@@ -56,7 +56,7 @@ Not on the watch, and why:
 - **Code editing, terminal, browser and preview panes, emulator control.** They need a keyboard,
   a pointer or a spatial canvas far larger than a round 1.5-inch display; the watch offers phone
   handoff instead.
-- **Photos, documents, camera capture and starting ticket tasks.** See below; both need context or
+- **Photos, documents, camera capture and starting ticket tasks.** See below; these need context or
   input the watch cannot show.
 - **Glass/frosted surfaces.** The phone's haze treatment stays on the phone. The watch uses dark Wear
   Compose Material chips and ProtoLayout Material, which read better on OLED and save power.
@@ -162,12 +162,13 @@ and is not part of this client.
 The **PocketPi status** complication puts the tile's answer on the watch face. Short text shows
 how many sessions wait for you (`2 waiting`), or, when none wait, how many are working; long
 text names the top session with the tile's row detail, for example
-`needs you · PR #189 · 2 failing · 5 min`. Unpaired, it reads `Pair`. A tap opens that session
+`needs you · PR #189 · 2 failing · 5 min`. Unpaired, it reads `Pair` (long text: `Not paired`). A tap opens that session
 through the tile's validated trampoline, or the app when no session is active.
 
 The complication reads only the tile's stored snapshot and never asks the Mac itself: watch faces
-request it far more often than the tile. It sets no update period; every change of the snapshot
-(app state, pushes, tile refreshes) asks watch faces to read it again.
+request it far more often than the tile. Every change of the snapshot (app state, pushes, tile
+refreshes) asks watch faces to read it again, and a five-minute update period re-reads the stored
+snapshot without any network use, so the shown age and the 24-hour pull request expiry move on.
 
 ## Pairing
 
@@ -301,7 +302,7 @@ until performed; a testing release does not establish device acceptance.
   battery cost), stale rows after a failed refresh, and push-driven row changes.
 - Complication: add short and long text to a Samsung watch face, clipping at large font scale,
   TalkBack, tap routing to a session and to the app, update after a push and after a tile refresh,
-  and ambient/always-on display.
+  ambient/always-on display, and whether the German titles `arbeitet`/`arbeiten` fit.
 - Chat pull request line: appears with an open session that has a pull request.
 
 Do not treat a built APK or a round Robolectric test as evidence that these Samsung

@@ -48,6 +48,7 @@ class WatchComplicationTest {
         assertEquals(resources.getString(R.string.remote_widget_untitled), content.longText)
         assertEquals("working", content.longTitle)
         assertEquals("a", content.target?.sessionId)
+        assertTrue(content.description.startsWith("1 session is working"))
     }
     @Test fun `an idle Mac shows zero waiting and opens the app`() {
         val content = watchComplicationContent(glance(row("a", "idle")), resources, now)
