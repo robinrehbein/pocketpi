@@ -3913,30 +3913,10 @@ internal fun RemoteScreen(
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
-            // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
-            // One call each, so a pane keeps its state while another comes or goes. The panes draw
-            // on the page background, which also fills the gaps of their blurred lists.
-            val paneSurface = MaterialTheme.colorScheme.background
-            if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
-            if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
-            if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
-            if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
-            if (!panesBeside && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
-            if (!panesBeside && tabs.active == InspectorTab.BROWSER && browserContent != null) ProvideGlass(paneSurface) { browserContent() }
-            if (browserContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && tabs.active != InspectorTab.BROWSER))) {
-                Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints)
-                    layout(placeable.width, placeable.height) { }
-                }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { browserContent() } }
-            }
-            // The inspector may be hidden while its tab remains open. Measure the terminal at
-            // a real size without placing it, so it receives neither input nor semantics.
-            if (panesBeside && !inspectorShown && terminalContent != null) {
-                Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints)
-                    layout(placeable.width, placeable.height) { }
-                }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { terminalContent() } }
-            }
+            PaneOverlays(
+                panesBeside, inspectorShown, tabs.active == InspectorTab.BROWSER,
+                changesContent, filesContent, jobsContent, toolContent, terminalContent, browserContent,
+            )
             }
             }
             if (dropHovered) DropScrim()
@@ -4994,5 +4974,48 @@ internal class HeaderHideConnection(
         if (current == 0 to 0) setHidden(false)
         else if (source == NestedScrollSource.UserInput && active()) setHidden(headerHiddenAfterScroll(hidden(), before, current))
         return Offset.Zero
+    }
+}
+
+/**
+ * The panes laid over the chat on a narrow screen, and the hidden ones still measured beside it.
+ * Kept out of [RemoteScreen]'s content lambda: R8 miscompiled that lambda once it grew this block
+ * (ART rejected it with a VerifyError at startup in the minified build).
+ */
+@Composable
+private fun PaneOverlays(
+    panesBeside: Boolean,
+    inspectorShown: Boolean,
+    browserActive: Boolean,
+    changesContent: (@Composable () -> Unit)?,
+    filesContent: (@Composable () -> Unit)?,
+    jobsContent: (@Composable () -> Unit)?,
+    toolContent: (@Composable () -> Unit)?,
+    terminalContent: (@Composable () -> Unit)?,
+    browserContent: (@Composable () -> Unit)?,
+) {
+    // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
+    // One call each, so a pane keeps its state while another comes or goes. The panes draw
+    // on the page background, which also fills the gaps of their blurred lists.
+    val paneSurface = MaterialTheme.colorScheme.background
+    if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
+    if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
+    if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
+    if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
+    if (!panesBeside && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
+    if (!panesBeside && browserActive && browserContent != null) ProvideGlass(paneSurface) { browserContent() }
+    if (browserContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && !browserActive))) {
+        Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { }
+        }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { browserContent() } }
+    }
+    // The inspector may be hidden while its tab remains open. Measure the terminal at
+    // a real size without placing it, so it receives neither input nor semantics.
+    if (panesBeside && !inspectorShown && terminalContent != null) {
+        Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { }
+        }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { terminalContent() } }
     }
 }
