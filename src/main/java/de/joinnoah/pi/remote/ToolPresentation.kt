@@ -510,14 +510,18 @@ private fun historyText(item: ConversationItem, kind: TimelineMarkerKind): Strin
                 TimelineMarkerKind.QUESTION -> historyLine(questionnaireTitle(item.arguments))
                 TimelineMarkerKind.PLAN -> historyLine(planTitle(item.arguments))
                 TimelineMarkerKind.EDIT -> historyLine(item.summary.detail?.let(::fileName))
-                TimelineMarkerKind.ERROR ->
-                    historyLine(
-                        listOfNotNull(item.name, item.summary.detail ?: item.output?.lineSequence()?.firstOrNull { it.isNotBlank() })
-                            .joinToString(": ")
-                    )
+                TimelineMarkerKind.ERROR -> {
+                    val firstOutput = item.output?.lineSequence()?.firstOrNull { it.isNotBlank() }
+                    // A failed query (a search pattern, URL or question) says more through its error.
+                    val reason =
+                        if (item.name in QUERY_TOOLS) firstOutput ?: item.summary.detail else item.summary.detail ?: firstOutput
+                    historyLine(listOfNotNull(item.name, reason).joinToString(": "))
+                }
                 TimelineMarkerKind.USER -> null
             }
     }
+
+private val QUERY_TOOLS = setOf("grep", "find", "web_search", "web_fetch", "fetch", "advisor", "consult_advisor")
 
 private fun fileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
 

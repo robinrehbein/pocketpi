@@ -447,10 +447,10 @@ class LiveRunNotificationTest {
 
     @Test
     fun anUntitledSessionAndAnUnknownToolStillReadWell() {
-        val content = LiveRunContent(null, null, null, waiting = false, tool = LiveRunTool("grep", null, null), startedAt = STARTED_AT)
+        val content = LiveRunContent(null, null, null, waiting = false, tool = LiveRunTool("submit_plan", null, null), startedAt = STARTED_AT)
         val notification = RemoteNotifications.liveRun(context, content, actions = false)
         assertEquals("pi is working", notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
-        assertEquals("Tool: grep", notification.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
+        assertEquals("Tool: submit_plan", notification.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
         assertEquals(RemoteNotifications.LIVE_RUN_CHANNEL, notification.channelId)
     }
 }

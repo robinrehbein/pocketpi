@@ -363,6 +363,16 @@ class ToolPresentationTest {
     }
 
     @Test
+    fun aFailedQueryToolsHistoryLineShowsItsErrorBeforeItsQuery() {
+        val failedGrep = activity("g", "grep", """{"pattern":"TODO"}""", state = "error").copy(output = "\nrg: src: No such file")
+        val noOutput = activity("f", "web_fetch", """{"url":"https://x.dev"}""", state = "error")
+        assertEquals(
+            listOf("grep: rg: src: No such file", "web_fetch: https://x.dev"),
+            chatHistory(listOf(failedGrep, noOutput)).map { it.text },
+        )
+    }
+
+    @Test
     fun chatHistoryListsEveryMarkedItemWithOneLineOfText() {
         val items =
             listOf(

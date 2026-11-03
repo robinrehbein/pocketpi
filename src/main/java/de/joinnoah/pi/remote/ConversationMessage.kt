@@ -630,68 +630,16 @@ private fun ConversationMessageContent(
                     } else {
                         val openAgentLabel = stringResource(R.string.remote_card_open_subagent)
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        for ((index, agent) in item.agents.withIndex()) {
-                            val state = when (agent.state) {
-                                "queued" -> R.string.remote_subagent_queued
-                                "running" -> R.string.remote_subagent_running
-                                "succeeded" -> R.string.remote_subagent_succeeded
-                                "failed" -> R.string.remote_subagent_failed
-                                else -> R.string.remote_subagent_cancelled
+                            for ((index, agent) in item.agents.withIndex()) {
+                                SubagentAgentRow(
+                                    agent,
+                                    first = index == 0,
+                                    last = index == item.agents.lastIndex,
+                                    showPreview = !expanded || item.output == null,
+                                    openLabel = openAgentLabel,
+                                    onOpen = onOpenAgent?.let { open -> { open(item, index) } },
+                                )
                             }
-                            // One row per agent; together they read as one card.
-                            Surface(
-                                shape = groupedRowShape(index == 0, index == item.agents.lastIndex, corner = 16.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            ) {
-                            Row(
-                                (if (onOpenAgent != null)
-                                    Modifier.fillMaxWidth()
-                                        .testTag("subagentAgent")
-                                        .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable(onClickLabel = openAgentLabel, role = Role.Button) { onOpenAgent(item, index) }
-                                        .heightIn(min = 48.dp)
-                                else Modifier.fillMaxWidth())
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                // The card carries no freshness of its own, so its state may be last known: never animate.
-                                val glyph = subagentStateGlyph(agent.state)
-                                val color = subagentStateColor(agent.state)
-                                Box(Modifier.padding(top = 2.dp)) {
-                                    if (glyph != null) StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp), animate = false)
-                                    else StatusDot(color)
-                                }
-                            Column(
-                                Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                Text("${agent.name} · ${stringResource(state)}", style = MaterialTheme.typography.labelLarge)
-                                agent.task?.let {
-                                    Text(
-                                        it,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                agent.usage?.let { AgentUsageLine(it) }
-                                agent.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                                if (!expanded || item.output == null)
-                                    agent.preview?.let {
-                                        Text(
-                                            inlineMarkdown(
-                                                subagentPreviewText(it),
-                                                MaterialTheme.colorScheme.primary,
-                                            ),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            maxLines = 3,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                            }
-                            }
-                            }
-                        }
                         }
                     }
                     if (expanded) {
@@ -1130,3 +1078,64 @@ private fun ThinkingStatus(active: Boolean) {
 @Composable
 private fun expandStateDescription(expanded: Boolean): String =
     stringResource(if (expanded) R.string.remote_chat_a11y_expanded else R.string.remote_chat_a11y_collapsed)
+
+/** One agent of a subagent card: its state glyph, name and state, task, usage, activity and preview. */
+@Composable
+private fun SubagentAgentRow(
+    agent: AgentProgress,
+    first: Boolean,
+    last: Boolean,
+    showPreview: Boolean,
+    openLabel: String,
+    onOpen: (() -> Unit)?,
+) {
+    val state = when (agent.state) {
+        "queued" -> R.string.remote_subagent_queued
+        "running" -> R.string.remote_subagent_running
+        "succeeded" -> R.string.remote_subagent_succeeded
+        "failed" -> R.string.remote_subagent_failed
+        else -> R.string.remote_subagent_cancelled
+    }
+    // One row per agent; together they read as one card.
+    Surface(
+        shape = groupedRowShape(first, last, corner = 16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Row(
+            (if (onOpen != null)
+                Modifier.fillMaxWidth()
+                    .testTag("subagentAgent")
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClickLabel = openLabel, role = Role.Button, onClick = onOpen)
+                    .heightIn(min = 48.dp)
+            else Modifier.fillMaxWidth())
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // The card carries no freshness of its own, so its state may be last known: never animate.
+            val glyph = subagentStateGlyph(agent.state)
+            val color = subagentStateColor(agent.state)
+            Box(Modifier.padding(top = 2.dp)) {
+                if (glyph != null) StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp), animate = false)
+                else StatusDot(color)
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("${agent.name} · ${stringResource(state)}", style = MaterialTheme.typography.labelLarge)
+                agent.task?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                agent.usage?.let { AgentUsageLine(it) }
+                agent.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                if (showPreview)
+                    agent.preview?.let {
+                        Text(
+                            inlineMarkdown(subagentPreviewText(it), MaterialTheme.colorScheme.primary),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+            }
+        }
+    }
+}

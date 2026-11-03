@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -137,6 +138,8 @@ internal fun GlassCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     FloatingSurface(modifier, shape = RoundedCornerShape(24.dp), color = tint, contentColor = contentColor, blur = false) {
-        Column(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier, content = content)
+        // FloatingSurface's Box does not pass a minimum width down, so the card fills its width here.
+        val click = if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier
+        Column(Modifier.fillMaxWidth().then(click), content = content)
     }
 }
