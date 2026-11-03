@@ -218,6 +218,10 @@
     <string name="remote_notification_subagent_stuck">Subagent looks stuck</string>
     <string name="remote_notification_job_done">Background job finished</string>
     <string name="remote_notification_job_stuck">Background job looks stuck</string>
+    <plurals name="remote_changes_overview_files">
+        <item quantity="one">%1$d file</item>
+        <item quantity="other">%1$d files</item>
+    </plurals>
     <plurals name="remote_notification_subagents_done">
         <item quantity="one">%d subagent finished</item>
         <item quantity="other">%d subagents finished</item>
@@ -337,6 +341,10 @@
     <string name="remote_child_quote_unsupported">Quotes cannot be sent to a subagent. Remove the quote to resume it.</string>
     <string name="remote_child_command_unsupported">Commands cannot resume a subagent. Send a plain message instead.</string>
     <string name="remote_jobs_title">Background jobs</string>
+    <string name="remote_jobs_group_running">Running</string>
+    <string name="remote_jobs_group_finished">Finished</string>
+    <string name="remote_activity_all_clear">All quiet</string>
+    <string name="remote_changes_no_branch">No branch</string>
     <plurals name="remote_jobs_running_count">
         <item quantity="one">%d job running</item>
         <item quantity="other">%d jobs running</item>

@@ -218,6 +218,10 @@
     <string name="remote_notification_subagent_stuck">Subagent scheint zu hängen</string>
     <string name="remote_notification_job_done">Hintergrundjob ist fertig</string>
     <string name="remote_notification_job_stuck">Hintergrundjob scheint zu hängen</string>
+    <plurals name="remote_changes_overview_files">
+        <item quantity="one">%1$d Datei</item>
+        <item quantity="other">%1$d Dateien</item>
+    </plurals>
     <plurals name="remote_notification_subagents_done">
         <item quantity="one">%d Subagent ist fertig</item>
         <item quantity="other">%d Subagenten sind fertig</item>
@@ -337,6 +341,10 @@
     <string name="remote_child_quote_unsupported">Zitate können nicht an einen Subagenten gesendet werden. Entferne das Zitat, um ihn fortzusetzen.</string>
     <string name="remote_child_command_unsupported">Befehle können keinen Subagenten fortsetzen. Sende stattdessen eine normale Nachricht.</string>
     <string name="remote_jobs_title">Hintergrundjobs</string>
+    <string name="remote_jobs_group_running">Läuft</string>
+    <string name="remote_jobs_group_finished">Beendet</string>
+    <string name="remote_activity_all_clear">Alles ruhig</string>
+    <string name="remote_changes_no_branch">Kein Branch</string>
     <plurals name="remote_jobs_running_count">
         <item quantity="one">%d Job läuft</item>
         <item quantity="other">%d Jobs laufen</item>

@@ -1,7 +1,17 @@
 package de.joinnoah.pi.remote
 
 import android.text.format.DateUtils
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -243,6 +253,19 @@ internal fun ActivityBoardContent(
             modifier = Modifier.padding(vertical = 8.dp),
         )
     }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    // A summary tile jumps to its group: the summary, the note and the groups before come first.
+    val jumpTo = { group: ActivityGroup ->
+        var index = 1 + (if (lastKnown) 1 else 0)
+        for ((g, items) in groups) {
+            if (g == group) break
+            if (items.isNotEmpty()) index += 1 + items.size
+        }
+        scope.launch { if (wide) gridState.animateScrollToItem(index) else listState.animateScrollToItem(index) }
+        Unit
+    }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         // Composed first, so Tab reaches Back before the cards; zIndex keeps it drawn on top.
         PageHeader(
@@ -255,22 +278,22 @@ internal fun ActivityBoardContent(
         if (empty)
             Column(Modifier.fillMaxSize().padding(top = headerHeight).padding(horizontal = 16.dp)) {
                 if (lastKnown) lastKnownNote()
-                Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        stringResource(R.string.remote_activity_empty),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                EmptyState(
+                    icon = Icons.Outlined.TaskAlt,
+                    title = stringResource(R.string.remote_activity_all_clear),
+                    body = stringResource(R.string.remote_activity_empty),
+                )
             }
         else if (wide)
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 260.dp),
+                state = gridState,
                 modifier = Modifier.fillMaxSize().glassSource(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = bottom),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item(key = "summary", span = { GridItemSpan(maxLineSpan) }) { ActivitySummary(groups, jumpTo) }
                 if (lastKnown) item(key = "lastKnown", span = { GridItemSpan(maxLineSpan) }) { lastKnownNote() }
                 groups.forEach { (group, items) ->
                     if (items.isNotEmpty()) {
@@ -290,9 +313,11 @@ internal fun ActivityBoardContent(
                     .wrapContentWidth(Alignment.CenterHorizontally)
                     .widthIn(max = MAX_PAGE_WIDTH)
                     .fillMaxWidth(),
+                state = listState,
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = bottom),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item(key = "summary") { ActivitySummary(groups, jumpTo) }
                 if (lastKnown) item(key = "lastKnown") { lastKnownNote() }
                 groups.forEach { (group, items) ->
                     if (items.isNotEmpty()) {
@@ -306,29 +331,55 @@ internal fun ActivityBoardContent(
     }
 }
 
+/** One tile per group with its count, tinted in the group's colour; a tap jumps to the group. */
 @Composable
-private fun ActivityHeading(group: ActivityGroup, count: Int) {
-    Row(
-        // One heading node, "Waiting 3", so heading navigation reads the count with its group.
-        Modifier.fillMaxWidth().padding(top = 12.dp).semantics(mergeDescendants = true) { heading() },
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            stringResource(group.labelRes),
-            style = MaterialTheme.typography.titleSmall,
-            color = sessionStatusColor(group.availability),
-        )
-        Text(
-            count.toString(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+private fun ActivitySummary(groups: Map<ActivityGroup, List<ActivityCard>>, onJump: (ActivityGroup) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ActivityGroup.entries.forEach { group ->
+            val count = groups[group].orEmpty().size
+            val color = sessionStatusColor(group.availability)
+            val label = stringResource(group.cardLabelRes)
+            Surface(
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(PAGE_CARD_CORNER))
+                    .clickable(enabled = count > 0, role = Role.Button) { onJump(group) }
+                    .testTag("activitySummary_${group.name}"),
+                shape = RoundedCornerShape(PAGE_CARD_CORNER),
+                color = color.copy(alpha = .12f),
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        count.toString(),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (count > 0) color else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
     }
 }
 
 @Composable
+private fun ActivityHeading(group: ActivityGroup, count: Int) {
+    SectionHeading(
+        stringResource(group.labelRes),
+        Modifier.padding(top = 12.dp),
+        count = count,
+        color = sessionStatusColor(group.availability),
+    )
+}
+
+@Composable
 private fun ActivityCardView(card: ActivityCard, group: ActivityGroup, now: Long, onOpen: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
     val title = card.title.ifBlank { stringResource(R.string.remote_new_session) }
     val status = stringResource(group.cardLabelRes)
     val pinned = stringResource(R.string.remote_activity_pinned)
@@ -341,63 +392,64 @@ private fun ActivityCardView(card: ActivityCard, group: ActivityGroup, now: Long
         listOfNotNull(card.projectName, title, card.preview, status, elapsed,
             pinned.takeIf { card.pinned }, unread.takeIf { card.unread })
             .joinToString(", ")
+    val statusColor = sessionStatusColor(group.availability)
+    val shape = RoundedCornerShape(PAGE_CARD_CORNER)
     Surface(
         modifier =
             Modifier.fillMaxWidth()
+                .clip(shape)
                 .semantics {
                     role = Role.Button
                     contentDescription = description
                 }
                 .clickable(onClick = onOpen),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = shape,
+        color = colors.surfaceContainerLow,
+        // What waits for the user stands out from what only runs or finished.
+        border = if (group == ActivityGroup.NEEDS_YOU) BorderStroke(1.dp, statusColor.copy(alpha = .55f)) else null,
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    card.projectName,
-                    Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+        Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box {
+                GlassAvatar(size = 44.dp) {
+                    Text("π", style = MaterialTheme.typography.titleMedium, color = colors.primary)
+                }
+                Box(
+                    Modifier.align(Alignment.BottomEnd).size(12.dp)
+                        .background(colors.surfaceContainerLow, CircleShape)
+                        .padding(2.dp)
+                        .background(statusColor, CircleShape)
                 )
-                if (card.pinned)
-                    Icon(
-                        Icons.Default.PushPin,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        title,
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (card.unread) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                if (card.unread)
-                    Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
-            }
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            card.preview?.let {
+                    if (card.pinned)
+                        Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(14.dp), tint = colors.onSurfaceVariant)
+                    if (card.unread) Box(Modifier.size(8.dp).background(colors.primary, CircleShape))
+                }
                 Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    status,
-                    Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = sessionStatusColor(group.availability),
+                    listOfNotNull(card.projectName.takeIf { it.isNotBlank() }, elapsed).joinToString(" · "),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                elapsed?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                card.preview?.let {
+                    Text(
+                        it,
+                        Modifier.padding(top = 2.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }

@@ -65,7 +65,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +72,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -550,39 +558,12 @@ private fun ChangesOverview(
                 }
             }
             item(key = "bases", span = { GridItemSpan(maxLineSpan) }) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    // A repository without a branch to compare against loses that choice, unless it is the one shown.
-                    val noDevBase = state.devBase?.ref == null && state.devBase != null
-                    GitBase.entries.filter { it != GitBase.DEV || !noDevBase || it == shownBase || it == state.base }.forEach { base ->
-                        FilterChip(
-                            selected = base == shownBase,
-                            onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
-                            label = { Text(baseLabel(base, state.devBase)) },
-                            modifier = Modifier.testTag("changesBase_${base.wire}"),
-                        )
-                    }
-                }
+                ChangesOverviewCard(state, status, shownBase, actions)
             }
             if (state.sessionUnavailable != null)
                 item(key = "fallback", span = { GridItemSpan(maxLineSpan) }) {
                     GridNotice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
                 }
-            status?.since?.let { since ->
-                item(key = "since", span = { GridItemSpan(maxLineSpan) }) {
-                    val time = formatTime(context, since.at)
-                    GridNotice(
-                        stringResource(
-                            if (since.firstContact) R.string.remote_changes_since_first_contact
-                            else R.string.remote_changes_since_session_start,
-                            time,
-                        ),
-                        Modifier.testTag("changesSince"),
-                    )
-                }
-            }
             status?.takeIf { it.base == GitBase.DEV }?.let { it.devBase?.ref ?: it.devRef }?.let { ref ->
                 item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_dev_ref, ref)) }
             }
@@ -604,11 +585,12 @@ private fun ChangesOverview(
                 else -> {
                     if (status.files.isNotEmpty() || subagents.isNotEmpty())
                         item(key = "filesHeader", span = { GridItemSpan(maxLineSpan) }) {
-                            Text(
+                            SectionHeading(
                                 stringResource(
                                     if (subagents.isEmpty()) R.string.remote_files_title else R.string.remote_changes_this_session
                                 ),
-                                style = MaterialTheme.typography.titleSmall,
+                                Modifier.padding(top = 8.dp),
+                                count = status.files.size.takeIf { it > 0 },
                             )
                         }
                     if (status.files.isEmpty())
@@ -670,10 +652,10 @@ private fun LazyGridScope.subagentGroup(sub: SubagentChanges, actions: ChangesAc
 private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry: () -> Unit) {
     if (state.status?.base == GitBase.HEAD) return
     item(key = "commitsHeader", span = { GridItemSpan(maxLineSpan) }) {
-        Text(
+        SectionHeading(
             stringResource(R.string.remote_changes_commits),
-            Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
-            style = MaterialTheme.typography.titleSmall,
+            Modifier.padding(top = 16.dp),
+            count = state.log?.commits?.size?.takeIf { it > 0 },
         )
     }
     val log = state.log
@@ -689,29 +671,131 @@ private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry
                 item(key = "commitsEmpty", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_commits_empty)) }
             items(log.commits.size, key = { "commit:" + log.commits[it].sha }, span = { GridItemSpan(maxLineSpan) }) { index ->
                 val commit = log.commits[index]
-                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp).testTag("changesCommit")) {
-                    Text(
-                        commit.subject.ifEmpty { stringResource(R.string.remote_changes_commit_no_subject) },
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        stringResource(
-                            R.string.remote_changes_commit_meta,
-                            commit.sha.take(7),
-                            commit.author,
-                            formatTime(context, commit.time),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                CommitRow(commit, context, first = index == 0, last = index == log.commits.lastIndex)
             }
             if (log.truncated)
                 item(key = "commitsTruncated", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_commits_truncated)) }
+        }
+    }
+}
+
+/**
+ * The page's overview: the branch, how much changed and against what, with the base to compare
+ * against chosen right here, and since when the session's changes count.
+ */
+@Composable
+private fun ChangesOverviewCard(state: ChangesState, status: GitStatus?, shownBase: GitBase, actions: ChangesActions) {
+    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    val files = status?.files.orEmpty()
+    val added = files.sumOf { it.additions ?: 0 }
+    val removed = files.sumOf { it.deletions ?: 0 }
+    FloatingSurface(Modifier.fillMaxWidth().testTag("changesOverview"), shape = RoundedCornerShape(24.dp), blur = false) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassAvatar(size = 48.dp) { Icon(Icons.Outlined.AccountTree, null, tint = colors.primary) }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        status?.branch ?: stringResource(R.string.remote_changes_no_branch),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (status?.available == true)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                pluralStringResource(R.plurals.remote_changes_overview_files, files.size, files.size),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = colors.onSurfaceVariant,
+                            )
+                            if (added > 0 || removed > 0) {
+                                val counts = stringResource(R.string.remote_changes_line_counts, added, removed)
+                                Row(
+                                    Modifier.semantics(mergeDescendants = true) { contentDescription = counts },
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text("+$added", style = MaterialTheme.typography.labelLarge, color = colors.primary)
+                                    Text("−$removed", style = MaterialTheme.typography.labelLarge, color = colors.error)
+                                }
+                            }
+                        }
+                }
+            }
+            // A repository without a branch to compare against loses that choice, unless it is the one shown.
+            val noDevBase = state.devBase?.ref == null && state.devBase != null
+            val bases = GitBase.entries.filter { it != GitBase.DEV || !noDevBase || it == shownBase || it == state.base }
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                bases.forEachIndexed { index, base ->
+                    SegmentedButton(
+                        selected = base == shownBase,
+                        onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
+                        shape = SegmentedButtonDefaults.itemShape(index, bases.size),
+                        icon = {},
+                        modifier = Modifier.testTag("changesBase_${base.wire}"),
+                    ) {
+                        Text(baseLabel(base, state.devBase), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            status?.since?.let { since ->
+                Text(
+                    stringResource(
+                        if (since.firstContact) R.string.remote_changes_since_first_contact
+                        else R.string.remote_changes_since_session_start,
+                        formatTime(context, since.at),
+                    ),
+                    Modifier.testTag("changesSince"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** One commit as a row of the commits card: its short hash in a pill, subject and author. */
+@Composable
+private fun CommitRow(commit: GitCommit, context: Context, first: Boolean, last: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().clip(groupedRowShape(first, last)).background(colors.surfaceContainerLow)) {
+        if (!first) HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = colors.outlineVariant.copy(alpha = .4f))
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp).testTag("changesCommit"),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Surface(shape = RoundedCornerShape(8.dp), color = colors.surfaceContainerHigh) {
+                Text(
+                    commit.sha.take(7),
+                    Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    commit.subject.ifEmpty { stringResource(R.string.remote_changes_commit_no_subject) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(
+                        R.string.remote_changes_commit_meta,
+                        commit.sha.take(7),
+                        commit.author,
+                        formatTime(context, commit.time),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
