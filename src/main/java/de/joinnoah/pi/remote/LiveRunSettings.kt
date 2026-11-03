@@ -113,14 +113,10 @@ private fun PromotedNotificationsNotice() {
         )
         TextButton(
             onClick = {
-                // Some builds have no screen for it; then nothing happens.
-                runCatching {
-                    context.startActivity(
-                        Intent(Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS)
-                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }
+                // The system's own Live Updates screen where it has one, else the app's
+                // notification settings, which hold the same switch.
+                val opened = runCatching { context.startActivity(appSettingsIntent(context, PROMOTED_NOTIFICATIONS_ACTION)) }.isSuccess
+                if (!opened) runCatching { context.startActivity(appSettingsIntent(context, Settings.ACTION_APP_NOTIFICATION_SETTINGS)) }
             },
             modifier = Modifier.testTag("liveUpdatesEnable"),
         ) {
@@ -128,3 +124,11 @@ private fun PromotedNotificationsNotice() {
         }
     }
 }
+
+/** The action of Android 16's per-app Live Updates settings screen. */
+private const val PROMOTED_NOTIFICATIONS_ACTION = "android.settings.MANAGE_APP_PROMOTED_NOTIFICATIONS"
+
+private fun appSettingsIntent(context: Context, action: String): Intent =
+    Intent(action)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
