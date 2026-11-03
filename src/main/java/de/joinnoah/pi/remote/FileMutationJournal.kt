@@ -14,6 +14,8 @@ data class FileMutationRequest(
     val deviceId: String,
     val sessionId: String,
     val operationId: String,
+    /** The host's journal epoch the operation was issued in, from `session.files.mutation.list`. */
+    val epoch: String,
     val kind: FileMutationKind,
     val path: String,
     val destinationPath: String? = null,
@@ -22,7 +24,17 @@ data class FileMutationRequest(
 
 data class FileMutationKey(val deviceId: String, val operationId: String)
 
-enum class FileMutationState { RESERVED, UNKNOWN, ACKNOWLEDGED_UNKNOWN, TERMINAL }
+enum class FileMutationState {
+    /** Persisted before sending; the host may or may not have it. Only its status is asked for. */
+    RESERVED,
+    /** The host recorded the outcome as unknown. */
+    UNKNOWN,
+    /** The host's journal epoch changed since the request: its journal was lost, the outcome is unknown. */
+    LOST,
+    /** The user acknowledged an unknown or lost outcome; the identity stays as a tombstone. */
+    ACKNOWLEDGED_UNKNOWN,
+    TERMINAL,
+}
 
 sealed class FileMutationResult {
     data object Applied : FileMutationResult()
@@ -105,7 +117,7 @@ class FileMutationJournal(
                 entries().values.filter { entry ->
                     entry.request.routeId == routeId && entry.request.deviceId == deviceId &&
                         entry.request.sessionId == sessionId &&
-                        (entry.state == FileMutationState.RESERVED || entry.state == FileMutationState.UNKNOWN)
+                        entry.state in UNRESOLVED
                 }
             }
         }
@@ -120,12 +132,39 @@ class FileMutationJournal(
         }
     }
 
+    /**
+     * Marks a reservation whose host journal epoch is no longer the host's: the host lost its
+     * journal, so the outcome can never be learned. Nothing is resent.
+     */
+    suspend fun markLost(key: FileMutationKey): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val current = entries()
+            val entry = checkNotNull(current[key]) { "Mutation is not reserved" }
+            if (entry.state == FileMutationState.RESERVED || entry.state == FileMutationState.UNKNOWN) {
+                persist(current + (key to entry.copy(state = FileMutationState.LOST)))
+            }
+        }
+    }
+
+    /**
+     * Drops a terminal receipt once its outcome was shown. Operation IDs are random, so a terminal
+     * entry is no replay evidence on this device; unknown and acknowledged entries are kept.
+     */
+    suspend fun forget(key: FileMutationKey): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val current = entries()
+            val entry = current[key] ?: return@withLock
+            check(entry.state == FileMutationState.TERMINAL) { "Only terminal receipts can be forgotten" }
+            persist(current - key)
+        }
+    }
+
     suspend fun acknowledgeUnknown(key: FileMutationKey): Unit = withContext(dispatcher) {
         mutex.withLock {
             val current = entries()
             val entry = checkNotNull(current[key]) { "Mutation is not reserved" }
             check(entry.state != FileMutationState.RESERVED) { "Mutation outcome is not marked unknown" }
-            if (entry.state == FileMutationState.UNKNOWN) {
+            if (entry.state == FileMutationState.UNKNOWN || entry.state == FileMutationState.LOST) {
                 persist(current + (key to entry.copy(state = FileMutationState.ACKNOWLEDGED_UNKNOWN)))
             }
         }
@@ -148,6 +187,9 @@ class FileMutationJournal(
     }
 
     companion object {
+        /** States whose outcome is not settled yet: shown for recovery and kept. */
+        val UNRESOLVED = setOf(FileMutationState.RESERVED, FileMutationState.UNKNOWN, FileMutationState.LOST)
+
         private val locks = mutableMapOf<Any, WeakReference<Mutex>>()
 
         private fun mutexFor(identity: Any): Mutex = synchronized(locks) {
@@ -181,7 +223,7 @@ class FileMutationJournal(
         }
 
         private fun validate(request: FileMutationRequest) {
-            require(listOf(request.routeId, request.deviceId, request.sessionId, request.operationId)
+            require(listOf(request.routeId, request.deviceId, request.sessionId, request.operationId, request.epoch)
                 .all { validText(it, 1024) })
             require(validPath(request.path))
             request.destinationPath?.let { require(validPath(it)) }

@@ -13,7 +13,7 @@ import org.junit.Test
 class FileMutationJournalTest {
     private val request = FileMutationRequest(
         routeId = "route-a", deviceId = "device-a", sessionId = "session-a",
-        operationId = "operation-a", kind = FileMutationKind.CREATE, path = "folder/new.txt",
+        operationId = "operation-a", epoch = "epoch-a", kind = FileMutationKind.CREATE, path = "folder/new.txt",
     )
     private val key = FileMutationKey("device-a", "operation-a")
 
@@ -46,6 +46,7 @@ class FileMutationJournalTest {
             request.copy(routeId = "route-b"), request.copy(sessionId = "session-b"),
             request.copy(kind = FileMutationKind.DELETE), request.copy(path = "another.txt"),
             request.copy(destinationPath = "other.txt"), request.copy(baseVersion = "version-b"),
+            request.copy(epoch = "epoch-b"),
         )
         for (other in changed) {
             expectFailure { journal.reserve(other) }
@@ -309,6 +310,31 @@ class FileMutationJournalTest {
         expectFailure { journal.pending("route-a", "device-a", "session-a") }
         assertEquals(original, storage.entries)
         assertEquals(0, storage.saveCalls)
+    }
+
+    @Test fun lostEpochStaysUnresolvedUntilAcknowledgedAndNeverBecomesTerminal() = runBlocking {
+        val storage = MemoryStorage()
+        val journal = journal(storage)
+        journal.reserve(request)
+        journal.markLost(key)
+        assertEquals(listOf(FileMutationEntry(request, FileMutationState.LOST)), journal.pending("route-a", "device-a", "session-a"))
+        // A lost outcome is not terminal evidence; forgetting it is refused.
+        expectFailure { journal.forget(key) }
+        journal.acknowledgeUnknown(key)
+        assertEquals(FileMutationState.ACKNOWLEDGED_UNKNOWN, storage.entries.getValue(key).state)
+        assertTrue(journal.pending("route-a", "device-a", "session-a").isEmpty())
+        expectFailure { journal.reserve(request.copy(path = "another.txt")) }
+    }
+
+    @Test fun onlyTerminalReceiptsAreForgotten() = runBlocking {
+        val storage = MemoryStorage()
+        val journal = journal(storage)
+        journal.reserve(request)
+        expectFailure { journal.forget(key) }
+        journal.complete(request, FileMutationResult.Applied)
+        journal.forget(key)
+        assertTrue(storage.entries.isEmpty())
+        journal.forget(key)
     }
 
     private suspend fun expectFailure(block: suspend () -> Unit) {
