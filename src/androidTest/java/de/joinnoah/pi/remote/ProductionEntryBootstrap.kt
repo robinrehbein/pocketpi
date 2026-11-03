@@ -56,6 +56,10 @@ internal object ProductionEntryBootstrap {
     val factoryRequests = AtomicInteger()
     val socketOpens = AtomicInteger()
     val socketFailures = AtomicInteger()
+    // The relay socket opened last, so a test can drop the connection the way a network loss does.
+    @Volatile private var openSocket: WebSocket? = null
+    /** Cancels the open relay socket abruptly; the app sees a transport failure and reconnects. */
+    fun dropOpenSocket() { checkNotNull(openSocket) { "No open relay socket" }.cancel() }
     @Volatile var lastFailureType: String? = null
         private set
     @Volatile var lastEndpointAllowed: Boolean? = null
@@ -122,7 +126,7 @@ internal object ProductionEntryBootstrap {
             try {
                 require(allowed) { "Unexpected fixture relay endpoint" }
                 http.newWebSocket(request, object : WebSocketListener() {
-                    override fun onOpen(webSocket: WebSocket, response: Response) { socketOpens.incrementAndGet(); listener.onOpen(webSocket, response) }
+                    override fun onOpen(webSocket: WebSocket, response: Response) { openSocket = webSocket; socketOpens.incrementAndGet(); listener.onOpen(webSocket, response) }
                     override fun onMessage(webSocket: WebSocket, text: String) = listener.onMessage(webSocket, text)
                     override fun onMessage(webSocket: WebSocket, bytes: ByteString) = listener.onMessage(webSocket, bytes)
                     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = listener.onClosing(webSocket, code, reason)
@@ -203,5 +207,6 @@ internal object ProductionEntryBootstrap {
         application = null
         client?.let { it.dispatcher.cancelAll(); it.connectionPool.evictAll(); it.dispatcher.executorService.shutdown() }
         client = null
+        openSocket = null
     }
 }
