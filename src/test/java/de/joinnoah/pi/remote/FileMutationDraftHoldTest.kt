@@ -82,4 +82,20 @@ class FileMutationDraftHoldTest {
         assertEquals("changed", editor.latestText)
         assertEquals(FilesFailure.NOT_FOUND, editor.saveFailure)
     }
+
+    @Test
+    fun anEditorWithAnUnconfirmedSaveClosesOnRenameAndKeepsItsDraftAtTheOldPath() = runTest {
+        val busy = clean.copy(text = "changed", unconfirmed = PendingWrite("request", "version", "changed"))
+        val stored = StoredFileDraft("version", "text", "changed", listOf(PendingWrite("request", "version", "changed")))
+        val drafts = Drafts(mapOf(FileDraftKey("host", "session", "a.txt") to stored))
+        var state = RemoteState(connected = true, selection = RemoteSelection("host", "project", "session"),
+            files = FilesState("session", editor = busy, file = OpenFile("a.txt", loading = false, version = "version")))
+        val loader = ProjectFilesLoader(backgroundScope, source, { state }, journal = FileDraftJournal(drafts, kotlinx.coroutines.Dispatchers.Unconfined)) { state = it(state) }
+        loader.mutationApplied(request(FileMutationKind.RENAME, "b.txt"))
+        runCurrent()
+        // The unconfirmed write belongs to a.txt: nothing of it moves to b.txt.
+        assertNull(state.files!!.editor)
+        assertEquals("b.txt", state.files!!.file!!.path)
+        assertEquals(mapOf(FileDraftKey("host", "session", "a.txt") to stored), drafts.drafts)
+    }
 }
