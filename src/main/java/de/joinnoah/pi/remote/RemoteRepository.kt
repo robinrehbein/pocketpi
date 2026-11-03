@@ -882,6 +882,17 @@ interface RemoteRepository {
 
     fun cancelFileMutationReset() {}
 
+    /** Offers creating the missing file a kept draft belongs to; its editor then offers the draft. */
+    fun openOrphanFileDraft(path: String) {}
+
+    /** Discards the kept draft of a missing file, after the user chose to. */
+    fun discardOrphanFileDraft(path: String) {}
+
+    /** Discards the draft asked about, if its file is still missing on a fresh read. */
+    fun confirmDiscardOrphanFileDraft() {}
+
+    fun cancelDiscardOrphanFileDraft() {}
+
     /** Discards the unsaved edit and runs the action that waited for it ([FileEditor.leaveRequest]). */
     fun confirmFileEditorLeave() {}
 

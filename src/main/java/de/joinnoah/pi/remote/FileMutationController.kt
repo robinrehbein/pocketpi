@@ -29,6 +29,8 @@ data class FileMutationDialog(
     /** A rename name, or a create name, the host already lists in the folder. */
     val nameTaken: Boolean = false,
     val sending: Boolean = false,
+    /** The name a create starts with: a kept draft's file name. */
+    val name: String? = null,
 ) {
     /** Whether the confirm action may run: rename and delete only after a successful fresh read. */
     val confirmable: Boolean
@@ -77,8 +79,11 @@ data class FileMutationRecoveryItem(
     val checking: Boolean = false,
     /** This device's journal holds it; an operation only the host lists is false. */
     val local: Boolean = true,
-    /** The host's current journal never held it although its epoch is current: it never arrived, nothing ran. */
-    val neverReceived: Boolean = false,
+    /**
+     * The host's current journal holds no record of it (`not_found`). That does not prove it never
+     * ran (an epoch rotation, or a frame in flight on a dropped connection), so it stays unknown.
+     */
+    val noRecord: Boolean = false,
 )
 
 data class FileMutationsState(
@@ -100,6 +105,11 @@ data class FileMutationsState(
     val journalFull: Boolean = false,
     val journalEntries: Int = 0,
     val journalCapacity: Int = 0,
+    /** Kept drafts of files the computer no longer has: offered to open as a new file or to discard. */
+    val orphanDrafts: List<String> = emptyList(),
+    /** The missing file whose kept draft the user is asked to confirm discarding. */
+    val orphanDiscard: String? = null,
+    val orphanDiscarding: Boolean = false,
 )
 
 /** Whether [kind] can be offered: its capability, recovery, a connected session and this client's journal. */
@@ -165,17 +175,23 @@ internal class FileMutationController(
     private val journal: FileMutationJournal,
     private val current: () -> RemoteState,
     /** True when an edit, a pending save or a kept draft holds one of the paths. */
-    private val draftsHold: suspend (routeId: String, sessionId: String, paths: List<String>) -> Boolean,
-    private val applied: (FileMutationRequest) -> Unit,
+    private val draftsHold: suspend (routeId: String, sessionId: String, paths: List<String>, keptDraftsHold: Boolean) -> Boolean,
+    /** Applied: the browser follows; true opens the editor on a kept draft of a created file. */
+    private val applied: (FileMutationRequest, Boolean) -> Unit,
     private val update: ((RemoteState) -> RemoteState) -> Unit,
     private val pollDelayMillis: Long = 1_000,
     /** The connection a request goes out on; one confirmed on another is not sent. */
     private val connection: () -> Long = { 0L },
+    /** The paths of the session's kept drafts, and discarding one the user chose to drop. */
+    private val keptDrafts: suspend (routeId: String, sessionId: String) -> List<String> = { _, _ -> emptyList() },
+    private val discardDraft: suspend (routeId: String, sessionId: String, path: String) -> Boolean = { _, _, _ -> false },
 ) {
     private val work = Mutex()
     private var dialogVersion = 0L
     /** At most one status poll per operation ID. */
     private val polls = mutableMapOf<String, Job>()
+    /** Paths of creates confirmed for a kept draft of a missing file, so its editor opens after. */
+    private val keptDraftCreates = mutableSetOf<Pair<String, String>>()
     /** The host's journal epoch as last listed, by route and session. */
     private val knownEpochs = mutableMapOf<Pair<String, String>, String>()
 
@@ -219,6 +235,8 @@ internal class FileMutationController(
             val readable = work.withLock { readable(target) }
             if (readable) write(target) { it.copy(journalUnreadable = false, storageFailed = false) }
             reconcile()
+            // Outside the lock: a few reads, only when the browser opens and after a rename or delete.
+            if (current().connected) refreshOrphans(target)
         }
     }
 
@@ -236,12 +254,92 @@ internal class FileMutationController(
 
     // ---- Dialogs -----------------------------------------------------------------------------
 
-    fun prepareCreate(folder: String) {
+    fun prepareCreate(folder: String, name: String? = null) {
         val state = current()
         val target = scopeOf(state) ?: return
         if (!canMutateFiles(state, FileMutationKind.CREATE) || fileMutationsOf(state)?.dialog?.sending == true) return
         dialogVersion++
-        write(target) { it.copy(dialog = FileMutationDialog(FileMutationKind.CREATE, folder)) }
+        write(target) { it.copy(dialog = FileMutationDialog(FileMutationKind.CREATE, folder, name = name)) }
+    }
+
+    /** Offers creating the missing file of a kept draft; once created, its editor offers the draft. */
+    fun openOrphan(path: String) {
+        if (path !in fileMutationsOf(current())?.orphanDrafts.orEmpty()) return
+        prepareCreate(parentPath(path), path.substringAfterLast('/'))
+    }
+
+    /** Asks to confirm discarding the kept draft of a missing file. */
+    fun discardOrphan(path: String) {
+        val target = scopeOf() ?: return
+        if (path !in fileMutationsOf(current())?.orphanDrafts.orEmpty()) return
+        write(target) { it.copy(orphanDiscard = path) }
+    }
+
+    fun cancelDiscardOrphan() {
+        val target = scopeOf() ?: return
+        write(target) { it.copy(orphanDiscard = null) }
+    }
+
+    /**
+     * Discards the confirmed kept draft, after reading its file once more: a file that exists again
+     * (after a branch switch, say) keeps its draft and leaves the list.
+     */
+    fun confirmDiscardOrphan() {
+        val target = scopeOf() ?: return
+        val mutations = fileMutationsOf(current()) ?: return
+        val path = mutations.orphanDiscard ?: return
+        if (mutations.orphanDiscarding) return
+        write(target) { it.copy(orphanDiscarding = true) }
+        scope.launch {
+            val missing = try {
+                source.read(target.sessionId, path)
+                false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e.hostCode == "not_found") true else null
+            }
+            val discarded = missing == true && try {
+                discardDraft(target.routeId, target.sessionId, path)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Diagnostics.caught("files.mutation.discardDraft", e)
+                write(target) { it.copy(storageFailed = true) }
+                false
+            }
+            write(target) {
+                it.copy(
+                    orphanDiscard = null,
+                    orphanDiscarding = false,
+                    // Gone, or not missing any more: either way no longer offered here.
+                    orphanDrafts = if (discarded || missing == false) it.orphanDrafts - path else it.orphanDrafts,
+                )
+            }
+        }
+    }
+
+    /** Finds kept drafts whose file the computer no longer has (`not_found` on a fresh read). */
+    private suspend fun refreshOrphans(target: Scope) {
+        val paths = try {
+            keptDrafts(target.routeId, target.sessionId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diagnostics.caught("files.mutation.keptDrafts", e)
+            return
+        }
+        val orphans = paths.filter { path ->
+            try {
+                source.read(target.sessionId, path)
+                false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e.hostCode == "not_found"
+            }
+        }
+        write(target) { it.copy(orphanDrafts = orphans) }
     }
 
     /** Opens the rename or delete prompt for [path] and reads the file afresh for its version. */
@@ -277,9 +375,9 @@ internal class FileMutationController(
     }
 
     /** Whether a draft or an unresolved operation holds any of [paths]; a failed check holds them. */
-    private suspend fun holds(target: Scope, paths: List<String>): Boolean {
+    private suspend fun holds(target: Scope, paths: List<String>, create: Boolean = false): Boolean {
         val drafts = try {
-            draftsHold(target.routeId, target.sessionId, paths)
+            draftsHold(target.routeId, target.sessionId, paths, !create)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -312,7 +410,7 @@ internal class FileMutationController(
         else {
             val version = dialogVersion
             scope.launch {
-                val blocked = holds(target, listOf(dialog.path))
+                val blocked = holds(target, listOf(dialog.path), create = true)
                 if (version == dialogVersion) write(target) { it.copy(dialog = it.dialog?.copy(blocked = blocked)) }
             }
         }
@@ -363,6 +461,8 @@ internal class FileMutationController(
         }
         val version = ++dialogVersion
         val link = connection()
+        if (dialog.kind == FileMutationKind.CREATE && path in fileMutationsOf(state)?.orphanDrafts.orEmpty())
+            keptDraftCreates += target.sessionId to path
         write(target) { it.copy(dialog = dialog.copy(sending = true, nameTaken = false, changed = false)) }
         scope.launch {
             work.withLock { submit(target, link, version, dialog, path, destination) }
@@ -378,7 +478,7 @@ internal class FileMutationController(
     private fun still(target: Scope, link: Long) = scopeOf() == target && connection() == link && current().connected
 
     private suspend fun submit(target: Scope, link: Long, version: Long, dialog: FileMutationDialog, path: String, destination: String?) {
-        if (holds(target, listOfNotNull(path, destination))) {
+        if (holds(target, listOfNotNull(path, destination), create = dialog.kind == FileMutationKind.CREATE)) {
             reopen(target, version) { it.copy(blocked = true) }
             return
         }
@@ -410,7 +510,7 @@ internal class FileMutationController(
             return
         }
         // Reconciling may have found an unresolved operation on one of these paths.
-        if (holds(target, listOfNotNull(path, destination))) {
+        if (holds(target, listOfNotNull(path, destination), create = dialog.kind == FileMutationKind.CREATE)) {
             reopen(target, version) { it.copy(blocked = true) }
             return
         }
@@ -514,7 +614,8 @@ internal class FileMutationController(
             throw e
         } catch (e: Exception) {
             Diagnostics.caught("files.mutation.settle", e)
-            write(target) { it.copy(journalUnreadable = true) }
+            // Possibly transient: a confirmed unreadable journal is found by the next read.
+            write(target) { it.copy(storageFailed = true) }
             return
         }
         if (entry == null || entry.state !in FileMutationJournal.UNRESOLVED) return
@@ -546,7 +647,12 @@ internal class FileMutationController(
             FileMutationHostState.APPLIED -> {
                 removeRecovery(target, request.operationId)
                 showOutcome(target, request, FileMutationStatus.APPLIED)
-                if (scopeOf() == target) applied(request)
+                if (scopeOf() == target) {
+                    val kept = request.kind == FileMutationKind.CREATE && keptDraftCreates.remove(request.sessionId to request.path)
+                    if (kept) write(target) { it.copy(orphanDrafts = it.orphanDrafts - request.path) }
+                    applied(request, kept)
+                    if (request.kind != FileMutationKind.CREATE) scope.launch { refreshOrphans(target) }
+                }
             }
             FileMutationHostState.REFUSED -> {
                 removeRecovery(target, request.operationId)
@@ -594,8 +700,7 @@ internal class FileMutationController(
                 write(target) { it.copy(storageFailed = true) }
             }
             stopPoll(request.operationId)
-            val never = knownEpochs[target.routeId to target.sessionId] == request.epoch
-            addRecovery(target, item(request, lost = true).copy(neverReceived = never))
+            addRecovery(target, item(request, lost = true).copy(noRecord = true))
             showOutcome(target, request, FileMutationStatus.UNKNOWN)
             null
         }
@@ -713,7 +818,7 @@ internal class FileMutationController(
                 FileMutationState.RESERVED -> {
                     val record = statusOf(target, request)
                     if (record == null) {
-                        recovery += item(request, lost = true).copy(neverReceived = true)
+                        recovery += item(request, lost = true).copy(noRecord = true)
                         continue
                     }
                     // A pending one is asked about again shortly, and stays listed until then.
@@ -732,7 +837,7 @@ internal class FileMutationController(
                     } else recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, epoch = epoch)
                 FileMutationState.LOST ->
                     recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, lost = true, epoch = request.epoch,
-                        neverReceived = request.epoch == epoch)
+                        noRecord = request.epoch == epoch)
                 else -> Unit
             }
         }

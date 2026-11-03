@@ -47,9 +47,9 @@ private fun operationText(kind: FileMutationKind, path: String, destination: Str
  * or Cancel sends nothing, and Delete is enabled only once a fresh read found the file free.
  */
 @Composable
-internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesActions, journalFull: Boolean = false) {
+internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesActions, journalFull: Boolean = false, orphanDrafts: List<String> = emptyList()) {
     val original = if (dialog.kind == FileMutationKind.RENAME) dialog.path.substringAfterLast('/') else ""
-    var name by rememberSaveable(dialog.kind, dialog.path) { mutableStateOf(original) }
+    var name by rememberSaveable(dialog.kind, dialog.path) { mutableStateOf(dialog.name ?: original) }
     val named = dialog.kind == FileMutationKind.DELETE || (validMutationName(name) && name != original)
     val dismiss = { actions.onCancelMutation() }
     AlertDialog(
@@ -86,6 +86,14 @@ internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesAction
                         )
                         if (name.isNotEmpty() && !validMutationName(name))
                             Text(stringResource(R.string.remote_files_mutation_name_invalid), color = MaterialTheme.colorScheme.error)
+                        val kept = childPath(dialog.path, name).takeIf { dialog.kind == FileMutationKind.CREATE && validMutationName(name) && it in orphanDrafts }
+                        if (kept != null)
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesMutationKeptDraft")) {
+                                Text(stringResource(R.string.remote_files_mutation_create_draft), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = { actions.onDiscardOrphanDraft(kept) }, enabled = !dialog.sending, modifier = Modifier.testTag("filesMutationDiscardKeptDraft")) {
+                                    Text(stringResource(R.string.remote_files_mutation_orphan_discard))
+                                }
+                            }
                     }
                 }
                 if (dialog.checking || dialog.sending)
@@ -132,7 +140,8 @@ internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesAction
 @Composable
 internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesActions, modifier: Modifier = Modifier) {
     val outcome = mutations.outcome
-    if (outcome == null && mutations.recovery.isEmpty() && !mutations.storageFailed && !mutations.journalUnreadable && !mutations.journalFull) return
+    if (outcome == null && mutations.recovery.isEmpty() && !mutations.storageFailed && !mutations.journalUnreadable && !mutations.journalFull &&
+        mutations.orphanDrafts.isEmpty()) return
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesMutationNotices")) {
         if (mutations.journalUnreadable)
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesMutationJournalLost")) {
@@ -191,6 +200,21 @@ internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesAc
                     }
             }
         }
+        if (mutations.orphanDrafts.isNotEmpty()) {
+            Text(stringResource(R.string.remote_files_mutation_orphans_title), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Text(stringResource(R.string.remote_files_mutation_orphans_text), style = MaterialTheme.typography.bodySmall)
+            mutations.orphanDrafts.forEach { path ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesOrphanDraft:$path")) {
+                    Text(path, Modifier.weight(1f), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { actions.onOpenOrphanDraft(path) }, modifier = Modifier.testTag("filesOrphanOpen:$path")) {
+                        Text(stringResource(R.string.remote_files_mutation_orphan_open))
+                    }
+                    TextButton(onClick = { actions.onDiscardOrphanDraft(path) }, modifier = Modifier.testTag("filesOrphanDiscard:$path")) {
+                        Text(stringResource(R.string.remote_files_mutation_orphan_discard))
+                    }
+                }
+            }
+        }
         if (mutations.recovery.isNotEmpty()) {
             Text(stringResource(R.string.remote_files_mutation_recovery_title), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             Text(stringResource(R.string.remote_files_mutation_recovery_text), style = MaterialTheme.typography.bodySmall)
@@ -200,7 +224,7 @@ internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesAc
                         Text(operationText(item.kind, item.path, item.destinationPath), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
                         if (item.lost)
                             Text(
-                                stringResource(if (item.neverReceived) R.string.remote_files_mutation_never_received else R.string.remote_files_mutation_lost),
+                                stringResource(if (item.noRecord) R.string.remote_files_mutation_no_record else R.string.remote_files_mutation_lost),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         if (item.pending) Text(stringResource(R.string.remote_files_mutation_recovery_pending), style = MaterialTheme.typography.bodySmall)
@@ -250,6 +274,27 @@ internal fun FileMutationResetPrompt(mutations: FileMutationsState, actions: Fil
         },
         dismissButton = {
             TextButton(onClick = actions.onCancelMutationReset, modifier = Modifier.testTag("filesMutationResetCancel")) {
+                Text(stringResource(R.string.remote_files_mutation_cancel))
+            }
+        },
+    )
+}
+
+/** Confirms discarding the kept draft of [path]; dismissing it keeps the draft. */
+@Composable
+internal fun FileOrphanDiscardPrompt(path: String, discarding: Boolean, actions: FilesActions) {
+    AlertDialog(
+        onDismissRequest = actions.onCancelDiscardOrphanDraft,
+        modifier = Modifier.testTag("filesOrphanDiscardDialog"),
+        title = { Text(stringResource(R.string.remote_files_mutation_orphan_discard_title)) },
+        text = { Text(stringResource(R.string.remote_files_mutation_orphan_discard_text, path), Modifier.testTag("filesOrphanDiscardPath")) },
+        confirmButton = {
+            TextButton(onClick = actions.onConfirmDiscardOrphanDraft, enabled = !discarding, modifier = Modifier.testTag("filesOrphanDiscardConfirm")) {
+                Text(stringResource(R.string.remote_files_mutation_orphan_discard), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = actions.onCancelDiscardOrphanDraft, modifier = Modifier.testTag("filesOrphanDiscardCancel")) {
                 Text(stringResource(R.string.remote_files_mutation_cancel))
             }
         },

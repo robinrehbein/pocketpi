@@ -162,6 +162,12 @@ internal class FilesActions(
     val onRequestMutationReset: () -> Unit = {},
     val onConfirmMutationReset: () -> Unit = {},
     val onCancelMutationReset: () -> Unit = {},
+    /** A kept draft of a missing file: create the file and edit it, or discard the draft. */
+    val onOpenOrphanDraft: (String) -> Unit = {},
+    /** Asks to confirm discarding a kept draft; confirming re-reads the file first. */
+    val onDiscardOrphanDraft: (String) -> Unit = {},
+    val onConfirmDiscardOrphanDraft: () -> Unit = {},
+    val onCancelDiscardOrphanDraft: () -> Unit = {},
 )
 
 /**
@@ -234,8 +240,9 @@ internal fun FilesPane(
             dismissButton = { TextButton(onClick = { searchOpen = false }) { Text(stringResource(R.string.remote_files_search_close)) } },
         )
     }
-    mutations?.dialog?.let { FileMutationPrompt(it, actions, mutations.journalFull) }
+    mutations?.dialog?.let { FileMutationPrompt(it, actions, mutations.journalFull, mutations.orphanDrafts) }
     if (mutations?.resetConfirming == true) FileMutationResetPrompt(mutations, actions)
+    mutations?.orphanDiscard?.let { FileOrphanDiscardPrompt(it, mutations.orphanDiscarding, actions) }
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
         val editor = state.editor
@@ -255,7 +262,7 @@ internal fun FilesPane(
                         color = MaterialTheme.colorScheme.error,
                     )
                 val notices = mutations != null &&
-                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable || mutations.journalFull)
+                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable || mutations.journalFull || mutations.orphanDrafts.isNotEmpty())
                 if (mutations != null && notices)
                     FileMutationNotices(mutations, actions, Modifier.padding(top = if (prefillFailed) 0.dp else headerHeight))
                 // Backspace, or Left at the edge, goes up a folder or back from a file.
