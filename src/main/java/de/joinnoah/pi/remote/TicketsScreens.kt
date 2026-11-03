@@ -4,7 +4,6 @@ import android.text.format.DateUtils
 import androidx.annotation.StringRes
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -181,13 +181,13 @@ internal fun TicketsContent(
                 item("notice") { TicketWriteNotice(tickets, onDismissNotice) }
             if (tickets.projects.size > 1)
                 item("chooser") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Vertical room so the chips' glass shadow is not clipped by the scrolling row.
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         tickets.projects.forEach { candidate ->
-                            FilterChip(
-                                selected = candidate.projectId == project?.projectId,
-                                onClick = { chosen = candidate.projectId },
-                                label = { Text(candidate.name) },
-                            )
+                            GlassChip(candidate.name, candidate.projectId == project?.projectId, { chosen = candidate.projectId })
                         }
                     }
                 }
@@ -272,7 +272,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.ticketsBody(
             if (sections.size > 1) {
                 item("filters") {
                     Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("ticketsFilter"),
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp).testTag("ticketsFilter"),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         TicketFilter(stringResource(R.string.remote_tickets_filter_all), page.items.size, effectiveFilter == "all", "all") { onFilter("all") }
@@ -315,12 +315,7 @@ private fun sectionTitle(section: TicketSection): Int =
 
 @Composable
 private fun TicketFilter(label: String, count: Int, selected: Boolean, tag: String, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text("$label · $count") },
-        modifier = Modifier.defaultMinSize(minHeight = 48.dp).testTag("ticketsFilter:$tag"),
-    )
+    GlassChip("$label · $count", selected, onClick, Modifier.testTag("ticketsFilter:$tag"))
 }
 
 @Composable
@@ -349,21 +344,22 @@ private fun TicketGroupHeader(section: TicketSection, count: Int, expanded: Bool
 @Composable
 private fun TicketRow(ticket: Ticket, onClick: () -> Unit) {
     val caption = ticketCaption(ticket)
-    Column(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.shapes.medium)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
-            .defaultMinSize(minHeight = 48.dp)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) {}
-            .testTag("ticketCard:${ticket.ref}")
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(ticket.title, style = MaterialTheme.typography.bodyLarge)
-        Text(ticket.ref, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (caption != null)
-            Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    // The same glass card as the rest of the app; the tag sits on the clickable, merged node.
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable(role = Role.Button, onClick = onClick)
+                .semantics(mergeDescendants = true) {}
+                .testTag("ticketCard:${ticket.ref}")
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(ticket.title, style = MaterialTheme.typography.titleMedium)
+            Text(ticket.ref, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (caption != null)
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -396,7 +392,7 @@ private fun TicketsSkeleton() {
         repeat(3) { index ->
             Column(
                 Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(24.dp))
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -701,7 +697,7 @@ private fun TicketActions(
 
 @Composable
 private fun Pill(text: String) {
-    Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,

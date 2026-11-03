@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -141,5 +143,28 @@ internal fun GlassCard(
         // FloatingSurface's Box does not pass a minimum width down, so the card fills its width here.
         val click = if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier
         Column(Modifier.fillMaxWidth().then(click), content = content)
+    }
+}
+
+/**
+ * A filter or tab chip in the floating-glass design, in place of Material's FilterChip: a glass
+ * pill that turns the accent colour when selected. [modifier] lands on the selectable node, so a
+ * test tag there carries the selected state.
+ */
+@Composable
+internal fun GlassChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FloatingSurface(
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        blur = false,
+    ) {
+        Box(
+            modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick)
+                .defaultMinSize(minHeight = 48.dp)
+                .padding(horizontal = 18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
     }
 }
