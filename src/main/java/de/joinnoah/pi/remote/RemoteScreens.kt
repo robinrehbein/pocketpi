@@ -4397,7 +4397,7 @@ private fun MacOverflow(
         IconButton(onClick = { open = true }, modifier = Modifier.size(48.dp).testTag("macOverflow")) {
             Icon(Icons.Default.MoreVert, label)
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        GlassDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             refresh?.let { action ->
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.remote_refresh)) },
@@ -4493,7 +4493,7 @@ private fun LazyListScope.acceptanceSection(
 }
 
 @Composable
-private fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Unit, onAccept: () -> Unit) {
+internal fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Unit, onAccept: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().testTag("acceptanceRow"),
         verticalAlignment = Alignment.CenterVertically,
@@ -4505,12 +4505,21 @@ private fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Unit
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Icon(Icons.Outlined.Verified, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                "${ticket.ref} · ${ticket.title}",
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column {
+                Text(
+                    ticket.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    ticket.ref,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         if (canAccept) {
             // "Accept" alone does not say which of the rows it accepts.

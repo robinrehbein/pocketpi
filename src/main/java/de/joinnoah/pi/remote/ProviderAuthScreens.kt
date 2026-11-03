@@ -279,6 +279,7 @@ private fun NoticeCard(text: String, onDismiss: (() -> Unit)?, modifier: Modifie
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProviderListScreen(
     auth: ProviderAuthState,
@@ -401,10 +402,12 @@ private fun ProviderListScreen(
         }
     }
     picking?.let { provider ->
-        AlertDialog(
-            onDismissRequest = { picking = null },
-            title = { Text(stringResource(R.string.providers_method_title, provider.name)) },
-            text = {
+        GlassSheet(onDismissRequest = { picking = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SheetHeader(stringResource(R.string.providers_method_title, provider.name), padding = PaddingValues(start = 8.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     provider.methods.forEach { method ->
                         OutlinedButton(
@@ -423,10 +426,9 @@ private fun ProviderListScreen(
                         }
                     }
                 }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { picking = null }) { Text(stringResource(R.string.remote_cancel)) } },
-        )
+                SheetSecondaryButton(onClick = { picking = null }) { Text(stringResource(R.string.remote_cancel)) }
+            }
+        }
     }
     replacing?.let { (provider, method) ->
         AlertDialog(

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
@@ -21,6 +22,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -150,54 +153,59 @@ internal fun ArtifactViewerBody(
     Surface(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().then(insets)) {
             Row(
-                Modifier.fillMaxWidth().padding(start = if (onClose != null) 4.dp else 16.dp, end = 4.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (onClose != null)
-                    IconButton(onClick = onClose, modifier = Modifier.testTag("artifactViewerClose")) {
-                        Icon(Icons.Default.Close, stringResource(R.string.remote_artifact_close))
-                    }
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        path,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (reload != null)
-                    IconButton(
-                        enabled = state.idle,
-                        modifier = Modifier.testTag("artifactViewerReload"),
-                        onClick = {
-                            scope.launch {
-                                if (state.reload(reload)) onReloaded()
-                                else Toast.makeText(context, reloadFailed, Toast.LENGTH_SHORT).show()
+                FloatingSurface(Modifier.weight(1f, fill = false).testTag("artifactViewerHeaderPill"), shape = CircleShape) {
+                    Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (onClose != null)
+                            IconButton(onClick = onClose, modifier = Modifier.size(48.dp).testTag("artifactViewerClose")) {
+                                Icon(Icons.Default.Close, stringResource(R.string.remote_artifact_close))
                             }
-                        },
-                    ) { Icon(Icons.Default.Refresh, stringResource(R.string.remote_artifact_reload)) }
-                IconButton(
-                    enabled = state.idle,
-                    modifier = Modifier.testTag("artifactViewerShare"),
-                    onClick = {
-                        scope.launch {
-                            state.busy = true
-                            try {
-                                val uri = export()
-                                if (uri == null) Toast.makeText(context, exportFailed, Toast.LENGTH_SHORT).show()
-                                else context.startActivity(artifactShareIntent(uri, mime, shareTitle))
-                            } finally {
-                                state.busy = false
-                            }
+                        Column(Modifier.weight(1f, fill = false).padding(horizontal = 4.dp)) {
+                            Text(title, Modifier.testTag("artifactViewerTitle").semantics { heading() }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(path, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                    },
-                ) { Icon(Icons.Default.Share, stringResource(R.string.remote_artifact_share)) }
-                if (onPopOut != null)
-                    IconButton(onClick = onPopOut, modifier = Modifier.testTag("artifactPopOut")) {
-                        Icon(Icons.Default.Fullscreen, stringResource(R.string.remote_inspector_pop_out))
                     }
+                }
+                FloatingSurface(shape = CircleShape) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (reload != null)
+                            IconButton(
+                                enabled = state.idle,
+                                modifier = Modifier.testTag("artifactViewerReload"),
+                                onClick = {
+                                    scope.launch {
+                                        if (state.reload(reload)) onReloaded()
+                                        else Toast.makeText(context, reloadFailed, Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                            ) { Icon(Icons.Default.Refresh, stringResource(R.string.remote_artifact_reload)) }
+                        IconButton(
+                            enabled = state.idle,
+                            modifier = Modifier.testTag("artifactViewerShare"),
+                            onClick = {
+                                scope.launch {
+                                    state.busy = true
+                                    try {
+                                        val uri = export()
+                                        if (uri == null) Toast.makeText(context, exportFailed, Toast.LENGTH_SHORT).show()
+                                        else context.startActivity(artifactShareIntent(uri, mime, shareTitle))
+                                    } finally {
+                                        state.busy = false
+                                    }
+                                }
+                            },
+                        ) { Icon(Icons.Default.Share, stringResource(R.string.remote_artifact_share)) }
+                        if (onPopOut != null)
+                            IconButton(onClick = onPopOut, modifier = Modifier.testTag("artifactPopOut")) {
+                                Icon(Icons.Default.Fullscreen, stringResource(R.string.remote_inspector_pop_out))
+                            }
+                    }
+                }
             }
             notice?.invoke()
             Row(

@@ -327,7 +327,7 @@ internal fun FileRowActions(name: String, actions: List<MenuItem>) {
         IconButton(onClick = { open = true }, modifier = Modifier.size(32.dp).testTag("fileActions:$name")) {
             Icon(androidx.compose.material.icons.Icons.Default.MoreVert, contentDescription = stringResource(R.string.remote_files_mutation_more, name))
         }
-        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        GlassDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             actions.forEach { action ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Text(stringResource(action.label)) },

@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,9 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -33,6 +32,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -129,12 +130,15 @@ internal fun NewSessionSheet(
     /** True while another session is being created or forked: Start waits for it. */
     busy: Boolean = false,
 ) {
-    // The model's "provider/id", or null for the host's default; saved so a rotation keeps the choice.
-    var modelKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // Keep both parts of the identity across rotation; null means the host's default.
+    var modelProvider by rememberSaveable { mutableStateOf<String?>(null) }
+    var modelId by rememberSaveable { mutableStateOf<String?>(null) }
     var prompt by rememberSaveable { mutableStateOf("") }
+    var choosingModel by rememberSaveable { mutableStateOf(false) }
     val issue = newSessionPromptIssue(prompt)
-    val chosen = models.firstOrNull { "${it.provider}/${it.id}" == modelKey }
+    val chosen = models.firstOrNull { it.provider == modelProvider && it.id == modelId }
     GlassSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("newSessionSheet")) {
+        BackHandler(enabled = choosingModel) { choosingModel = false }
         Column(
             Modifier.fillMaxWidth()
                 .padding(horizontal = 16.dp)
@@ -148,18 +152,41 @@ internal fun NewSessionSheet(
                 padding = PaddingValues(start = 8.dp),
             )
             if (models.isNotEmpty()) {
-                Text(stringResource(R.string.remote_new_session_model), style = MaterialTheme.typography.titleSmall)
-                Column(
-                    Modifier.fillMaxWidth().selectableGroup().testTag("newSessionModels"),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                val modelLabel = stringResource(R.string.remote_new_session_model)
+                val selectedModelLabel = chosen?.let { "${it.name.ifBlank { it.id }} · ${it.provider}" }
+                    ?: stringResource(R.string.remote_new_session_model_default)
+                val pickerState = stringResource(
+                    if (choosingModel) R.string.remote_chat_a11y_expanded else R.string.remote_chat_a11y_collapsed,
+                )
+                Text(modelLabel, style = MaterialTheme.typography.titleSmall)
+                SheetSecondaryButton(
+                    onClick = { choosingModel = !choosingModel },
+                    modifier = Modifier.testTag("newSessionModelPicker").semantics {
+                        contentDescription = "$modelLabel: $selectedModelLabel"
+                        stateDescription = pickerState
+                    },
                 ) {
-                    ModelChoiceRow(
-                        label = stringResource(R.string.remote_new_session_model_default),
-                        selected = chosen == null,
-                    ) { modelKey = null }
-                    models.forEach { model ->
-                        ModelChoiceRow(label = model.name.ifBlank { model.id }, selected = chosen == model) {
-                            modelKey = "${model.provider}/${model.id}"
+                    Text(selectedModelLabel)
+                }
+                if (choosingModel) {
+                    Column(
+                        Modifier.fillMaxWidth().heightIn(max = 240.dp)
+                            .verticalScroll(rememberScrollState()).selectableGroup().testTag("newSessionModels"),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        ModelChoiceRow(
+                            label = stringResource(R.string.remote_new_session_model_default),
+                            selected = chosen == null,
+                        ) { modelProvider = null; modelId = null; choosingModel = false }
+                        models.forEach { model ->
+                            ModelChoiceRow(
+                                label = "${model.name.ifBlank { model.id }} · ${model.provider}",
+                                selected = chosen?.provider == model.provider && chosen.id == model.id,
+                            ) {
+                                modelProvider = model.provider
+                                modelId = model.id
+                                choosingModel = false
+                            }
                         }
                     }
                 }

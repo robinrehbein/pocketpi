@@ -19,7 +19,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,6 +39,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
@@ -116,7 +116,7 @@ internal fun PaneHeader(
                             title,
                             Modifier.widthIn(min = minOf(48.dp, textWidth))
                                 .then(if (titleFocus == null) Modifier else Modifier.focusRequester(titleFocus).focusable())
-                                .testTag("${tag}Title"),
+                                .testTag("${tag}Title").semantics { heading() },
                             style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (subtitle != null)
                             Text(subtitle, Modifier.testTag("${tag}Subtitle"), style = MaterialTheme.typography.bodySmall,
@@ -125,7 +125,7 @@ internal fun PaneHeader(
                     }
                     if (nested)
                         ShortcutTooltip(closeLabel) {
-                            IconButton(onClick = onClose, Modifier.size(48.dp).testTag("${tag}Close")) {
+                            IconButton(onClick = onClose, modifier = Modifier.size(48.dp).testTag("${tag}Close"), enabled = leaveEnabled) {
                                 Icon(Icons.Default.Close, closeLabel)
                             }
                         }
@@ -168,7 +168,7 @@ private fun InlineAction(action: PaneAction) {
                 }
         }
         if (action.items.isNotEmpty())
-            DropdownMenu(menu, onDismissRequest = { menu = false }) {
+            GlassDropdownMenu(menu, onDismissRequest = { menu = false }) {
                 action.items.forEach { item -> MenuEntry(item) { menu = false } }
             }
     }
@@ -202,7 +202,7 @@ private fun OverflowActions(actions: List<PaneAction>, tag: String) {
                 Icon(Icons.Default.MoreVert, label)
             }
         }
-        DropdownMenu(open, onDismissRequest = ::dismiss) {
+        GlassDropdownMenu(open, onDismissRequest = ::dismiss) {
             val shown = submenu
             if (shown != null) {
                 DropdownMenuItem(

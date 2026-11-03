@@ -324,7 +324,7 @@ private fun NewSessionRow(project: ShareProject, projects: List<ShareProject>, o
                         IconButton(onClick = { menu = true }, modifier = Modifier.testTag("shareChangeProject")) {
                             Icon(Icons.Default.ArrowDropDown, stringResource(R.string.remote_share_change_project))
                         }
-                        DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                        GlassDropdownMenu(menu, onDismissRequest = { menu = false }) {
                             projects.forEach { candidate ->
                                 DropdownMenuItem(
                                     text = { Text(label(candidate)) },

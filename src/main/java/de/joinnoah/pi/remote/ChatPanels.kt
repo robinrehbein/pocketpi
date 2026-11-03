@@ -431,8 +431,10 @@ internal fun StatusPopover(
                 )
                 Text(
                     summary,
+                    modifier = Modifier.weight(1f, fill = false),
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -443,6 +445,7 @@ internal fun StatusPopover(
                 )
             }
         }
+        val backdrop = rememberAppBackdrop(expanded)
         if (expanded) {
             val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
             Popup(
@@ -450,13 +453,17 @@ internal fun StatusPopover(
                 onDismissRequest = { onExpandedChange(false) },
                 properties = PopupProperties(focusable = true),
             ) {
-                // The same floating surface as the pill it opens from; a popup's own window has
-                // nothing of the chat to blur, so it shows the tint alone.
-                FloatingSurface(
+                val scheme = MaterialTheme.colorScheme
+                val shape = MaterialTheme.shapes.medium
+                Surface(
                     modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag(popoverTag),
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = shape,
+                    color = Color.Transparent,
+                    contentColor = scheme.onSurface,
+                    shadowElevation = 8.dp,
+                    border = androidx.compose.foundation.BorderStroke(GLASS_RIM_WIDTH, glassRimColor(scheme)),
                 ) {
+                    Box(Modifier.snapshotBackdrop(backdrop, scheme.surfaceContainerHigh.copy(alpha = GLASS_TINT_ALPHA), scheme.surfaceContainerHigh)) {
                     Column {
                         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
@@ -466,6 +473,7 @@ internal fun StatusPopover(
                             }
                         }
                         content()
+                    }
                     }
                 }
             }

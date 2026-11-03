@@ -5,7 +5,6 @@ import android.view.View
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -111,7 +110,7 @@ internal fun PointerMenuHost(content: @Composable () -> Unit) {
             val local = coordinates.windowToLocal(open.position)
             // A zero-size anchor at the pointer: the dropdown opens below it, or flips to fit.
             Box(Modifier.offset { IntOffset(local.x.roundToInt(), local.y.roundToInt()) }) {
-                DropdownMenu(
+                GlassDropdownMenu(
                     expanded = true,
                     onDismissRequest = menus::dismiss,
                     modifier = Modifier.testTag("pointerMenu"),

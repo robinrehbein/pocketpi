@@ -223,7 +223,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             if (view.ownsControl && view.participants.any { it != view.owner }) {
                 var expanded by remember { mutableStateOf(false) }
                 Box { TextButton(onClick = { expanded = true }) { Text(stringResource(R.string.browser_handoff)) }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    GlassDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         view.participants.filter { it != view.owner }.forEach { participant -> DropdownMenuItem(text = { Text("${participant.kind}: ${participant.id}") }, onClick = { expanded = false; latestActions.handoff(participant.id) }) }
                     }
                 }

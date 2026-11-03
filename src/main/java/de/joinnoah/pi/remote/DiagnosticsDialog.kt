@@ -2,12 +2,14 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -25,24 +27,25 @@ import java.util.Date
  * what the run before the last restart saved. "Copy report" copies the same
  * data as plain text, which holds no messages, IDs or keys.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun DiagnosticsDialog(onDismiss: () -> Unit) {
     val report = remember { Diagnostics.report() }
     val copy = rememberCopyToClipboard(stringResource(R.string.remote_diagnostics_clip_label))
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.remote_diagnostics_title)) },
-        text = { DiagnosticsReport(report, Modifier.verticalScroll(rememberScrollState())) },
-        confirmButton = {
-            TextButton(
+    GlassSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetHeader(stringResource(R.string.remote_diagnostics_title))
+            SheetSection { DiagnosticsReport(report, Modifier.padding(16.dp)) }
+            SheetPrimaryButton(
                 onClick = { copy(Diagnostics.export()) },
                 modifier = Modifier.testTag("copyDiagnostics"),
             ) { Text(stringResource(R.string.remote_diagnostics_copy)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_diagnostics_close)) }
-        },
-    )
+            SheetSecondaryButton(onClick = onDismiss) { Text(stringResource(R.string.remote_diagnostics_close)) }
+        }
+    }
 }
 
 @Composable

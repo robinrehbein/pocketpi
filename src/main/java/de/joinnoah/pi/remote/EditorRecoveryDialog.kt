@@ -9,11 +9,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -74,63 +78,79 @@ internal fun EditorRecoveryDialog(
     val binaryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream"), ::complete)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.fillMaxSize().padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(stringResource(R.string.editor_recovery_title), style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_recovery_close)) }
-                }
-                val exportStatus = when (exportState.phase) {
-                    EditorRecoveryExportPhase.SAVED -> R.string.editor_recovery_export_saved
-                    EditorRecoveryExportPhase.FAILED -> R.string.editor_recovery_export_failed
-                    EditorRecoveryExportPhase.INTERRUPTED -> R.string.editor_recovery_export_interrupted
-                    else -> null
-                }
-                (status ?: exportStatus)?.let { Text(stringResource(it), modifier = Modifier.testTag("recoveryExportStatus")) }
-                if (writing) Text(stringResource(R.string.editor_recovery_export_writing))
-                if (pendingMarker) Text(stringResource(R.string.editor_recovery_export_pending))
-                when (val current = result) {
-                    null -> Text(stringResource(R.string.editor_recovery_loading))
-                    EditorRecoveryLoad.Failed, EditorRecoveryLoad.Unavailable -> {
-                        Text(stringResource(if (current == EditorRecoveryLoad.Failed) R.string.editor_recovery_error else R.string.editor_recovery_unavailable), Modifier.testTag("recoveryError"))
-                        TextButton(onClick = { request++ }, modifier = Modifier.testTag("recoveryRetry")) { Text(stringResource(R.string.editor_recovery_retry)) }
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FloatingSurface(Modifier.weight(1f), shape = CircleShape) {
+                        Text(
+                            stringResource(R.string.editor_recovery_title),
+                            Modifier.padding(horizontal = 20.dp, vertical = 16.dp).semantics { heading() },
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
                     }
-                    is EditorRecoveryLoad.Ready -> {
-                        if (current.entries.isEmpty()) Text(stringResource(R.string.editor_recovery_empty), Modifier.testTag("recoveryEmpty"))
-                        else BoxWithConstraints(Modifier.weight(1f)) {
-                            val wide = maxWidth >= 720.dp
-                            Row(Modifier.fillMaxSize()) {
-                                if (wide || selected == null) {
-                                    Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                                        current.entries.forEach { entry ->
-                                            TextButton(onClick = { selected = entry }, modifier = Modifier.fillMaxWidth().testTag(if (entry.kind == EditorRecoveryKind.DRAFT) "recoveryEntryDraft" else "recoveryEntryUncertain")) {
-                                                Column(Modifier.fillMaxWidth()) {
-                                                    Text(stringResource(if (entry.kind == EditorRecoveryKind.DRAFT) R.string.editor_recovery_draft else R.string.editor_recovery_uncertain))
-                                                    RecoveryLabels(entry)
+                    FloatingSurface(shape = CircleShape) {
+                        TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_recovery_close)) }
+                    }
+                }
+                Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                    val exportStatus = when (exportState.phase) {
+                        EditorRecoveryExportPhase.SAVED -> R.string.editor_recovery_export_saved
+                        EditorRecoveryExportPhase.FAILED -> R.string.editor_recovery_export_failed
+                        EditorRecoveryExportPhase.INTERRUPTED -> R.string.editor_recovery_export_interrupted
+                        else -> null
+                    }
+                    (status ?: exportStatus)?.let { Text(stringResource(it), modifier = Modifier.testTag("recoveryExportStatus")) }
+                    if (writing) Text(stringResource(R.string.editor_recovery_export_writing))
+                    if (pendingMarker) Text(stringResource(R.string.editor_recovery_export_pending))
+                    when (val current = result) {
+                        null -> Text(stringResource(R.string.editor_recovery_loading))
+                        EditorRecoveryLoad.Failed, EditorRecoveryLoad.Unavailable -> {
+                            Text(stringResource(if (current == EditorRecoveryLoad.Failed) R.string.editor_recovery_error else R.string.editor_recovery_unavailable), Modifier.testTag("recoveryError"))
+                            TextButton(onClick = { request++ }, modifier = Modifier.testTag("recoveryRetry")) { Text(stringResource(R.string.editor_recovery_retry)) }
+                        }
+                        is EditorRecoveryLoad.Ready -> {
+                            if (current.entries.isEmpty()) Text(stringResource(R.string.editor_recovery_empty), Modifier.testTag("recoveryEmpty"))
+                            else BoxWithConstraints(Modifier.weight(1f)) {
+                                val wide = maxWidth >= 720.dp
+                                Row(Modifier.fillMaxSize()) {
+                                    if (wide || selected == null) {
+                                        Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                                            current.entries.forEach { entry ->
+                                                TextButton(onClick = { selected = entry }, modifier = Modifier.fillMaxWidth().testTag(if (entry.kind == EditorRecoveryKind.DRAFT) "recoveryEntryDraft" else "recoveryEntryUncertain")) {
+                                                    Column(Modifier.fillMaxWidth()) {
+                                                        Text(stringResource(if (entry.kind == EditorRecoveryKind.DRAFT) R.string.editor_recovery_draft else R.string.editor_recovery_uncertain))
+                                                        RecoveryLabels(entry)
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
-                                selected?.let { entry ->
-                                    Column(Modifier.weight(if (wide) 2f else 1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                                        TextButton(onClick = { selected = null }, modifier = Modifier.testTag("recoveryBackToList")) { Text(stringResource(R.string.editor_recovery_back)) }
-                                        key(entry.id) {
-                                            RecoveryDetail(entry, enabled = !pendingMarker && !writing) {
-                                                exporter.clearOutcome()
-                                                pending.begin(entry)
-                                                pendingMarker = true
-                                                status = null
-                                                val format = editorRecoveryExportFormat(entry.text)
-                                                try {
-                                                    if (format.extension == "txt") textLauncher.launch("editor-recovery.txt") else binaryLauncher.launch("editor-recovery.utf16")
-                                                } catch (_: ActivityNotFoundException) {
-                                                    pending.take()
-                                                    pendingMarker = false
-                                                    status = R.string.editor_recovery_export_failed
-                                                } catch (_: SecurityException) {
-                                                    pending.take()
-                                                    pendingMarker = false
-                                                    status = R.string.editor_recovery_export_failed
+                                    selected?.let { entry ->
+                                        Column(Modifier.weight(if (wide) 2f else 1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                                            TextButton(onClick = { selected = null }, modifier = Modifier.testTag("recoveryBackToList")) { Text(stringResource(R.string.editor_recovery_back)) }
+                                            key(entry.id) {
+                                                RecoveryDetail(entry, enabled = !pendingMarker && !writing) {
+                                                    exporter.clearOutcome()
+                                                    pending.begin(entry)
+                                                    pendingMarker = true
+                                                    status = null
+                                                    val format = editorRecoveryExportFormat(entry.text)
+                                                    try {
+                                                        if (format.extension == "txt") textLauncher.launch("editor-recovery.txt") else binaryLauncher.launch("editor-recovery.utf16")
+                                                    } catch (_: ActivityNotFoundException) {
+                                                        pending.take()
+                                                        pendingMarker = false
+                                                        status = R.string.editor_recovery_export_failed
+                                                    } catch (_: SecurityException) {
+                                                        pending.take()
+                                                        pendingMarker = false
+                                                        status = R.string.editor_recovery_export_failed
+                                                    }
                                                 }
                                             }
                                         }

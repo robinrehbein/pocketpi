@@ -18,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -327,7 +326,7 @@ private fun StartProgress(job: TicketStart?, onOpenChat: (String) -> Unit, onDis
         }
         val sessionId = job.sessionId
         if (failed && sessionId != null)
-            Button(onClick = { onOpenChat(sessionId); onDismiss() }, modifier = Modifier.fillMaxWidth()) {
+            SheetPrimaryButton(onClick = { onOpenChat(sessionId); onDismiss() }, modifier = Modifier.fillMaxWidth().testTag("ticketStartOpenChat")) {
                 Text(stringResource(R.string.remote_tickets_start_open_chat))
             }
         SheetSecondaryButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {

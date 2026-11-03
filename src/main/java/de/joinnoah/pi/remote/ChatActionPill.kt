@@ -25,7 +25,6 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -175,7 +174,7 @@ private fun ChatActionMenu(
     onDismiss: () -> Unit,
     onAction: (ChatAction) -> Unit,
 ) {
-    DropdownMenu(expanded = open, onDismissRequest = onDismiss, modifier = Modifier.testTag("chatActionsMenu")) {
+    GlassDropdownMenu(expanded = open, onDismissRequest = onDismiss, modifier = Modifier.testTag("chatActionsMenu")) {
         for (action in actions) {
             val destructive = action == ChatAction.CLOSE
             if (destructive && actions.size > 1) HorizontalDivider()
