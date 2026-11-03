@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -222,13 +223,13 @@ internal fun FolderBrowserContent(
     ) { insets ->
         // The folder list alone scrolls under the floating header; a notice, a clone or a state
         // message above it keeps the page below the header.
-        val headerTop = insets.calculateTopPadding()
+        val headerTop = insets.floatingHeaderOverlap()
         val listUnderHeader =
             connected && available && folders.notice == null && folders.clone == null &&
                 folders.error == null && folders.loaded && folders.entries.isNotEmpty()
         Column(
             Modifier.fillMaxSize()
-                .padding(insets.withoutTop())
+                .padding(insets.underFloatingHeader())
                 .consumeWindowInsets(insets)
                 .padding(top = if (listUnderHeader) 0.dp else headerTop)
                 .padding(horizontal = 20.dp),
@@ -312,8 +313,10 @@ internal fun FolderBreadcrumb(
             segments.mapIndexed { index, name -> name to segments.take(index + 1).joinToString("/") }
     val scroll = rememberScrollState()
     LaunchedEffect(path) { scroll.animateScrollTo(scroll.maxValue) }
+    // The folder list scrolls under it, so it floats on glass like the header pills above it.
+    FloatingSurface(modifier.fillMaxWidth(), shape = CircleShape) {
     Row(
-        modifier.fillMaxWidth().horizontalScroll(scroll).testTag("folderBreadcrumb"),
+        Modifier.fillMaxWidth().horizontalScroll(scroll).padding(horizontal = 8.dp).testTag("folderBreadcrumb"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         crumbs.forEachIndexed { index, (label, target) ->
@@ -337,12 +340,15 @@ internal fun FolderBreadcrumb(
                 Text(
                     label,
                     maxLines = 1,
+                    // Not primary for the links: on the translucent glass it would fall below 4.5:1.
                     color =
                         if (current) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.primary,
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (current) FontWeight.SemiBold else null,
                 )
             }
         }
+    }
     }
 }
 

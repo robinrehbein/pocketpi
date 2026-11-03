@@ -5,6 +5,10 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -36,6 +40,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
@@ -56,7 +61,8 @@ import dev.chrisbanes.haze.rememberHazeState
  * opaque as the pills were before glass, so text keeps its contrast over the sharp content.
  *
  * A page's content scrolls under its floating header rather than stopping below it, so the header
- * pills have something to blur: a Scaffold page pads its content's top itself, see [withoutTop].
+ * pills have something to blur: a Scaffold page pads its content's top itself, see
+ * [underFloatingHeader].
  */
 
 /**
@@ -230,7 +236,8 @@ internal fun GlassSnackbar(data: SnackbarData, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val visuals = data.visuals
     FloatingSurface(
-        modifier.padding(12.dp),
+        // As wide as the composer at most, rather than the whole chat of a wide window.
+        modifier.padding(12.dp).widthIn(max = PROSE_READING_WIDTH + 32.dp),
         shape = MaterialTheme.shapes.small,
         color = scheme.inverseSurface,
         contentColor = scheme.inverseOnSurface,
@@ -259,15 +266,22 @@ internal fun GlassSnackbar(data: SnackbarData, modifier: Modifier = Modifier) {
 }
 
 /**
- * Scaffold content padding without its top, for content that scrolls under the floating header
- * and pads its own top instead (with the top this drops).
+ * The Scaffold content padding of a page whose content scrolls under its floating header: the top
+ * keeps only the status bar, which stays clear as on the other pages, and the content pads the
+ * rest of the header itself with [floatingHeaderOverlap].
  */
 @Composable
-internal fun PaddingValues.withoutTop(): PaddingValues {
+internal fun PaddingValues.underFloatingHeader(): PaddingValues {
     val direction = LocalLayoutDirection.current
     return PaddingValues(
         start = calculateStartPadding(direction),
+        top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
         end = calculateEndPadding(direction),
         bottom = calculateBottomPadding(),
     )
 }
+
+/** How far the floating header reaches below the status bar, for content under it to pad. */
+@Composable
+internal fun PaddingValues.floatingHeaderOverlap(): Dp =
+    (calculateTopPadding() - WindowInsets.statusBars.asPaddingValues().calculateTopPadding()).coerceAtLeast(0.dp)

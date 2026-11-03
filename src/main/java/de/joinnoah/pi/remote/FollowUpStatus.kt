@@ -28,7 +28,7 @@ internal fun FollowUpStatus(state: RemoteState, onDismissFollowUp: (String) -> U
                 Column(
                     Modifier.fillMaxWidth().heightIn(max = 112.dp)
                         .verticalScroll(rememberScrollState())
-                        .padding(start = 16.dp, end = 4.dp)
+                        .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp)
                         .testTag("followUpJournal"),
                 ) {
                     visible.forEach { entry ->

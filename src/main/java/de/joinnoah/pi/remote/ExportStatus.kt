@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -73,6 +74,13 @@ internal fun ExportStatus(
 ) {
     if (state == null) return
     val failed = state is ExportState.Failed
+    // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
+    val labelColors =
+        ButtonDefaults.textButtonColors(
+            contentColor =
+                if (failed) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSecondaryContainer,
+        )
     BannerSurface(
         floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("exportStatus").semantics { liveRegion = LiveRegionMode.Polite },
@@ -102,7 +110,7 @@ internal fun ExportStatus(
                             modifier = Modifier.padding(vertical = 8.dp),
                         )
                     }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_export_dismiss)) }
+                    TextButton(onClick = onDismiss, colors = labelColors) { Text(stringResource(R.string.remote_export_dismiss)) }
                 }
                 is ExportState.Done -> {
                     Text(
@@ -110,8 +118,8 @@ internal fun ExportStatus(
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
-                    TextButton(onClick = { onShare(state.uri) }) { Text(stringResource(R.string.remote_export_share)) }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_export_dismiss)) }
+                    TextButton(onClick = { onShare(state.uri) }, colors = labelColors) { Text(stringResource(R.string.remote_export_share)) }
+                    TextButton(onClick = onDismiss, colors = labelColors) { Text(stringResource(R.string.remote_export_dismiss)) }
                 }
             }
         }
