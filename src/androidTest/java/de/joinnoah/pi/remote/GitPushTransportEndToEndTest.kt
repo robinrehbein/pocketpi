@@ -122,7 +122,7 @@ class GitPushTransportEndToEndTest {
             observed = PushAttemptObserver(SecureRemoteTransport(scope, client))
             repository = DefaultRemoteRepository(pairings, drafts, observed, scope)
             val selection = RemoteSelection(host.routeId, fixture.getString("projectId"), fixture.getString("sessionId"))
-            controller = GitPushReviewController(repository, scope, selection)
+            controller = GitPushReviewController(repository, scope, selection, android.os.SystemClock::elapsedRealtime)
             NavigationTestActivity.contentFactory = {
                 val content: @Composable () -> Unit = {
                     val state by repository.state.collectAsState()
@@ -130,7 +130,7 @@ class GitPushTransportEndToEndTest {
                     MaterialTheme {
                         Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                             val changes = state.changes
-                            if (review.open) GitPushReviewPane(review, GitPushReviewActions(controller::prepare, controller::close, controller::review, controller::backToEdit, controller::confirm, controller::checkRemote, controller::acknowledgeUnknown))
+                            if (review.open) GitPushReviewPane(review, GitPushReviewActions(controller::prepare, controller::close, controller::review, controller::backToEdit, controller::confirm, controller::checkRemote, controller::acknowledgeUnknown, controller::resend))
                             else if (changes != null) ChangesPane(changes, ChangesActions(
                                 onClose = repository::closeChanges, onSelectBase = repository::selectChangesBase,
                                 onReload = repository::reloadChanges, onOpenFile = repository::openChangesFile,

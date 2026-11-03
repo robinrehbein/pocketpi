@@ -406,6 +406,38 @@ class GitChangesTest {
     }
 
     @Test
+    fun pushResentAfterReconnectCarriesTheIdenticalCommand() = runTest {
+        // The Host's ledger answers a resend only when the command's JSON matches the first one.
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        val token = "d3JpdGUtaWQtdG9rZW4tMQ"
+        val first = async { repository.gitPush(sessionId, token, "push-resend") }
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(GitWriteResult.Push.Unknown, first.await())
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        val second = async { repository.gitPush(sessionId, token, "push-resend") }
+        runCurrent()
+        val pushes = transport.git().filter { it.text("type") == "session.git.push" }
+        assertEquals(2, pushes.size)
+        assertEquals(pushes[0], pushes[1])
+        assertEquals(pushes[0].toString(), pushes[1].toString())
+        assertEquals(setOf("type", "requestId", "sessionId", "writeId"), pushes[0].keys)
+        transport.result(pushes[1], Wire.objectOf("kind" to "git.push", "sessionId" to sessionId, "pushed" to true,
+            "branch" to "feature", "remoteBranch" to "feature", "commit" to "a".repeat(40), "created" to false, "upstreamSet" to true))
+        runCurrent()
+        assertTrue(second.await() is GitWriteResult.Push.Pushed)
+    }
+
+    @Test
     fun pushReplyAfterDefaultTimeoutIsStillAccepted() = runTest {
         val transport = Transport()
         transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { null }

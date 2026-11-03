@@ -18,6 +18,11 @@
     <string name="remote_push_status_absent">Der entfernte Branch existiert aktuell nicht.</string>
     <string name="remote_push_status_different">Der entfernte Branch verweist aktuell auf einen anderen Commit.</string>
     <string name="remote_push_status_unavailable">Der aktuelle entfernte Stand konnte nicht geprüft werden.</string>
+    <string name="remote_push_resend">Übertragung erneut senden</string>
+    <string name="remote_push_resend_explanation">Hat der Mac diese Übertragung in den letzten Minuten schon erhalten, liefert erneutes Senden dieses Ergebnis, statt zweimal zu übertragen.</string>
+    <string name="remote_push_resend_unanswered">Noch keine Antwort vom Mac. Das Ergebnis bleibt unbekannt.</string>
+    <string name="remote_push_resend_refused">Antwort auf das erneute Senden: %1$s Das zeigt nicht, was mit der ersten Übertragung passiert ist.</string>
+    <string name="remote_push_resend_expired">Für ein sicheres erneutes Senden ist zu viel Zeit vergangen. Prüfe den entfernten Branch.</string>
     <string name="remote_push_ack">Branch und Verlauf geprüft</string>
     <string name="remote_push_ack_title">Unbekanntes Ergebnis zurücksetzen?</string>
     <string name="remote_push_ack_body">Prüfe zuerst den entfernten Branch und seinen Verlauf. Das Zurücksetzen wiederholt die Übertragung nicht. Eine neue Übertragung erfordert eine erneute Prüfung.</string>

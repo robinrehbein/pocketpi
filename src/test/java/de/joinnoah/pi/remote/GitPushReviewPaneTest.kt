@@ -26,8 +26,8 @@ class GitPushReviewPaneTest {
     private val target = GitWriteTarget("origin", "feature", "example.com", "team/repo")
     private val head = "a".repeat(40)
     private val intent = GitPushIntent("feature", head, "token", "request", target)
-    private fun actions(prepare: () -> Unit = {}, confirm: () -> Unit = {}, check: () -> Unit = {}, ack: () -> Unit = {}) =
-        GitPushReviewActions(prepare, {}, {}, {}, confirm, check, ack)
+    private fun actions(prepare: () -> Unit = {}, confirm: () -> Unit = {}, check: () -> Unit = {}, ack: () -> Unit = {}, resend: () -> Unit = {}) =
+        GitPushReviewActions(prepare, {}, {}, {}, confirm, check, ack, resend)
 
     @Test fun confirmationShowsTargetAndFullCommitBeforeExplicitPush() {
         var calls = 0
@@ -65,6 +65,20 @@ class GitPushReviewPaneTest {
         }
         compose.onNodeWithTag("pushPrepareAgain").performClick()
         compose.runOnIdle { assertEquals(1, prepares) }
+    }
+
+    @Test fun unknownOffersAnExplicitResendOnlyWhenAllowed() {
+        var resends = 0
+        var state by mutableStateOf(GitPushReviewState(open = true, pending = intent, result = GitWriteResult.Push.Unknown, canResend = false))
+        compose.setContent { MaterialTheme { GitPushReviewPane(state, actions(resend = { resends++ })) } }
+        compose.onNodeWithTag("pushResend").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle { state = state.copy(canResend = true) }
+        compose.onNodeWithTag("pushResend").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, resends); state = state.copy(canResend = false, resendNotice = GitPushResendNotice.REFUSED, resendRefusal = GitPushReason.NETWORK) }
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        compose.onNodeWithTag("pushResendNotice").performScrollTo().assertTextEquals(
+            context.getString(R.string.remote_push_resend_refused, context.getString(R.string.remote_push_reason_network)))
+        compose.onNodeWithTag("pushUnknown").assertIsDisplayed()
     }
 
     @Test fun observedRemoteStatesAreDescribedAsCurrentNotPastSuccess() {

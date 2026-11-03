@@ -37,6 +37,7 @@ internal class GitPushReviewActions(
     val confirm: () -> Unit,
     val checkRemote: () -> Unit,
     val acknowledgeUnknown: () -> Unit,
+    val resend: () -> Unit,
 )
 
 @Composable
@@ -85,6 +86,14 @@ internal fun GitPushReviewPane(
                             Text(stringResource(R.string.remote_push_status_explanation))
                             Text(stringResource(pushStatusText(observation.state)), Modifier.testTag("pushRecovery"))
                         }
+                        when (state.resendNotice) {
+                            GitPushResendNotice.UNANSWERED -> Text(stringResource(R.string.remote_push_resend_unanswered), Modifier.testTag("pushResendNotice"))
+                            GitPushResendNotice.REFUSED -> Text(stringResource(R.string.remote_push_resend_refused, state.resendRefusal?.let { stringResource(pushReasonText(it)) } ?: ""), Modifier.testTag("pushResendNotice"))
+                            GitPushResendNotice.EXPIRED -> Text(stringResource(R.string.remote_push_resend_expired), Modifier.testTag("pushResendNotice"))
+                            null -> {}
+                        }
+                        if (state.canResend) Text(stringResource(R.string.remote_push_resend_explanation))
+                        OutlinedButton(onClick = actions.resend, enabled = state.canResend, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("pushResend")) { Text(stringResource(R.string.remote_push_resend)) }
                         OutlinedButton(onClick = { confirmUnknown = true }, enabled = !state.sending && !state.checking && state.pending != null, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("pushUnknownAcknowledge")) { Text(stringResource(R.string.remote_push_ack)) }
                     }
                     null -> {

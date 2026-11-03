@@ -1733,6 +1733,7 @@ internal fun RemoteScreen(
                                 confirm = pushController::confirm,
                                 checkRemote = pushController::checkRemote,
                                 acknowledgeUnknown = pushController::acknowledgeUnknown,
+                                resend = pushController::resend,
                             )
                         },
                         Modifier.fillMaxSize(),
