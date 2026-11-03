@@ -13,12 +13,16 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import java.io.File
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
 import org.junit.rules.RuleChain
 
-/** UI-only test: the JPEG is host-captured, while control and acknowledgements are simulated. */
+/**
+ * UI-only test: the JPEG is host-captured, while control and acknowledgements are simulated. Runs only
+ * with `browserCaptureExpected=true` and the capture pushed to `/data/local/tmp/pocketpi-browser-capture.jpg`.
+ */
 class BrowserPaneDeviceTest {
     private val compose = createAndroidComposeRule<NavigationTestActivity>()
     private var acquired = 0
@@ -30,6 +34,8 @@ class BrowserPaneDeviceTest {
     @get:Rule val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
         override fun before() {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val args = InstrumentationRegistry.getArguments()
+            assumeTrue("Pass browserCaptureExpected=true after pushing a host capture", args.getString("browserCaptureExpected") == "true")
             val descriptor = instrumentation.uiAutomation.executeShellCommand("cat /data/local/tmp/pocketpi-browser-capture.jpg")
             val bytes = ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
             require(bytes.isNotEmpty()) { "Push the host capture to /data/local/tmp/pocketpi-browser-capture.jpg" }
