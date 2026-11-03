@@ -1,27 +1,32 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +38,9 @@ import androidx.compose.ui.unit.dp
 
 /** The corner of a page's cards and grouped rows. */
 internal val PAGE_CARD_CORNER = 20.dp
+
+/** The shape of a card inside another card or a message: a plan, an image, an artifact preview. */
+internal val INLINE_CARD_SHAPE = RoundedCornerShape(16.dp)
 
 /**
  * What a page is about at a glance: a glass avatar with [icon], then [content]. A glass card in
@@ -116,3 +124,47 @@ internal fun groupedRowShape(first: Boolean, last: Boolean, corner: Dp = PAGE_CA
         bottomStart = if (last) corner else 0.dp,
         bottomEnd = if (last) corner else 0.dp,
     )
+
+/**
+ * A card of a page in the floating-glass design, in place of Material's Card: a glass surface with
+ * the page cards' rounder corners. [tint] keeps a notice's colour (an error or hint container) as
+ * an opaque card; neutral cards get the glass tint. Inside the content it would blur, so it takes no
+ * blur of its own. [onClick] makes the whole card one button.
+ */
+@Composable
+internal fun GlassCard(
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.surfaceContainer,
+    contentColor: Color = contentColorFor(tint),
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    FloatingSurface(modifier, shape = RoundedCornerShape(24.dp), color = tint, contentColor = contentColor, blur = false) {
+        // FloatingSurface's Box does not pass a minimum width down, so the card fills its width here.
+        val click = if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier
+        Column(Modifier.fillMaxWidth().then(click), content = content)
+    }
+}
+
+/**
+ * A filter or tab chip in the floating-glass design, in place of Material's FilterChip: a glass
+ * pill that turns the accent colour when selected. [modifier] lands on the selectable node, so a
+ * test tag there carries the selected state.
+ */
+@Composable
+internal fun GlassChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FloatingSurface(
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        blur = false,
+    ) {
+        Box(
+            modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick)
+                .defaultMinSize(minHeight = 48.dp)
+                .padding(horizontal = 18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+    }
+}

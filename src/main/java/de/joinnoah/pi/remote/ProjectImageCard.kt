@@ -122,7 +122,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
                     // The cap comes first so a wide layout is capped too; the shape then narrows.
                     .heightIn(max = 320.dp)
                     .aspectRatio(CARD_ASPECT)
-                    .clip(MaterialTheme.shapes.small)
+                    .clip(INLINE_CARD_SHAPE)
                     // Dragged into another app, the card is the image file.
                     .dragOut(ready?.sha256, enabled = ready != null) { dragImage(context, source, path) }
                     .then(
@@ -131,7 +131,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
                         else Modifier
                     ),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = MaterialTheme.shapes.small,
+            shape = INLINE_CARD_SHAPE,
         ) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 if (ready != null)

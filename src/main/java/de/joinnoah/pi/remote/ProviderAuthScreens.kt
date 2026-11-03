@@ -261,13 +261,10 @@ private fun ProviderScaffold(
 
 @Composable
 private fun NoticeCard(text: String, onDismiss: (() -> Unit)?, modifier: Modifier = Modifier) {
-    Card(
+    GlassCard(
         modifier = modifier.fillMaxWidth().testTag("providerNotice"),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
+        tint = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {
         Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -483,13 +480,10 @@ private fun Message(text: String, tag: String) {
 
 @Composable
 private fun LoginBanner(text: String, onShow: (() -> Unit)?) {
-    Card(
+    GlassCard(
         modifier = Modifier.fillMaxWidth().testTag("providerBanner"),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            ),
+        tint = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
         Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text, Modifier.weight(1f).padding(vertical = 12.dp).semantics { liveRegion = LiveRegionMode.Polite })
@@ -522,7 +516,7 @@ private fun ProviderRow(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth().testTag("providerRow:${provider.id}")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("providerRow:${provider.id}")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(provider.name, style = MaterialTheme.typography.titleMedium)
             Surface(
@@ -709,7 +703,7 @@ private fun DeviceCodeCard(code: AuthEvent.DeviceCode, receivedAt: Long?, onOpen
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val remaining = rememberRemainingSeconds(receivedAt, code.expiresInSeconds)
-    Card(Modifier.fillMaxWidth().testTag("loginDeviceCode")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("loginDeviceCode")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.providers_device_code_intro))
             Text(
@@ -746,7 +740,7 @@ private fun DeviceCodeCard(code: AuthEvent.DeviceCode, receivedAt: Long?, onOpen
 
 @Composable
 private fun AuthUrlCard(event: AuthEvent.AuthUrl, onOpen: (String) -> Unit) {
-    Card(Modifier.fillMaxWidth().testTag("loginAuthUrl")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("loginAuthUrl")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(event.instructions ?: stringResource(R.string.providers_auth_url_intro))
             Button(onClick = { onOpen(event.url) }, modifier = Modifier.testTag("loginOpenLink")) {
@@ -760,7 +754,7 @@ private fun AuthUrlCard(event: AuthEvent.AuthUrl, onOpen: (String) -> Unit) {
 
 @Composable
 private fun InfoCard(info: AuthEvent.Info, onOpen: (String) -> Unit) {
-    Card(Modifier.fillMaxWidth().testTag("loginInfo")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("loginInfo")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(info.message)
             info.links.forEach { link ->
@@ -780,7 +774,7 @@ private fun InfoCard(info: AuthEvent.Info, onOpen: (String) -> Unit) {
 private fun PromptCard(pending: PendingPrompt, sending: Boolean, connected: Boolean, onAnswer: (String, String) -> Boolean) {
     val prompt = pending.prompt
     key(pending.promptId) {
-        Card(Modifier.fillMaxWidth().testTag("loginPrompt")) {
+        GlassCard(Modifier.fillMaxWidth().testTag("loginPrompt")) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (prompt.type == PromptType.MANUAL_CODE)
                     Text(stringResource(R.string.providers_manual_code_hint), style = MaterialTheme.typography.bodyMedium)

@@ -117,7 +117,9 @@ class ConversationMessageUiTest {
         // The expand icon still toggles the inline preview on its own.
         compose.onNodeWithTag("toolCardToggle").performClick()
         compose.onNodeWithContentDescription(text(R.string.remote_hide_output)).assertExists()
-        compose.onNodeWithTag("toolCardArguments").assertExists()
+        // Named arguments read as labelled fields, not as raw JSON.
+        compose.onNodeWithTag("toolCardFields").assertExists()
+        compose.onNode(hasText("ls -la") and hasAnyAncestor(hasTestTag("toolCardFields"))).assertExists()
         assertEquals(1, opened.size)
     }
 

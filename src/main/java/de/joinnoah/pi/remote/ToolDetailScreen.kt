@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -328,13 +329,15 @@ internal fun argumentFields(arguments: String?): List<ArgumentField>? {
     }
 }
 
-private fun toolIcon(name: String?): ImageVector =
+/** The icon of tool [name], shared by its chat card and its detail page. */
+internal fun toolIcon(name: String?): ImageVector =
     when (name) {
-        "bash", USER_BASH_TOOL -> Icons.Outlined.Terminal
+        "bash", "bash_bg", USER_BASH_TOOL -> Icons.Outlined.Terminal
         "read" -> Icons.Outlined.Description
         "edit", "write" -> Icons.Outlined.Edit
         "grep", "find", "ls" -> Icons.Default.Search
         "web_search", "web_fetch", "fetch" -> Icons.Outlined.Public
+        "advisor", "consult_advisor" -> Icons.Outlined.SupportAgent
         else -> Icons.Outlined.AutoAwesome
     }
 
@@ -859,17 +862,27 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
     }
 }
 
-/** Labelled argument values in one card, one row per field, as a settings list reads. */
+/**
+ * Labelled argument values in one card, one row per field, as a settings list reads. The chat's
+ * tool card shows them too, on a [container] that stands off the card around it.
+ */
 @Composable
-private fun ArgumentFieldsCard(fields: List<ArgumentField>) {
+internal fun ArgumentFieldsCard(
+    fields: List<ArgumentField>,
+    modifier: Modifier = Modifier,
+    container: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+    tag: String = "toolDetailFields",
+) {
     val colors = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth().testTag("toolDetailFields"), shape = RoundedCornerShape(20.dp), color = colors.surfaceContainerLow) {
+    // A structured value's code block keeps a step of contrast to the card it sits in.
+    val codeContainer = if (container == colors.surfaceContainer) colors.surfaceContainerHigh else colors.surfaceContainer
+    Surface(modifier.fillMaxWidth().testTag(tag), shape = RoundedCornerShape(20.dp), color = container) {
         Column(Modifier.padding(vertical = 4.dp)) {
             fields.forEachIndexed { index, field ->
                 if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant.copy(alpha = .5f))
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(field.key, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
-                    if (field.structured) CodeBlock(field.value, numbered = false, container = colors.surfaceContainer)
+                    if (field.structured) CodeBlock(field.value, numbered = false, container = codeContainer)
                     else FieldValue(field)
                 }
             }
@@ -1265,7 +1278,7 @@ private fun ResultCardView(card: ResultCard) {
     }
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("toolResultCard"),
-        shape = MaterialTheme.shapes.medium,
+        shape = RoundedCornerShape(PAGE_CARD_CORNER),
         color = colors.surfaceContainer,
         border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = .35f)),
     ) {

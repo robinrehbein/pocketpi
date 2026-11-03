@@ -76,7 +76,7 @@ internal fun HostCard(
             lastUsedAt == null -> stringResource(R.string.remote_host_tap_to_connect)
             else -> lastUsedStatus(context, lastUsedAt, now)
         }
-    OutlinedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
+    GlassCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),

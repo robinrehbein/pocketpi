@@ -83,7 +83,7 @@ internal fun QuestionCard(
                 Text(stringResource(R.string.remote_plan_intro))
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium,
+                    shape = INLINE_CARD_SHAPE,
                 ) {
                     Column(Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState()).padding(12.dp)) {
                         MarkdownText(question.text("plan"))
@@ -621,7 +621,7 @@ private fun QuestionPrompt(prompt: String) {
 private fun EscalationDetails(escalation: ConfirmEscalation) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.medium,
+        shape = INLINE_CARD_SHAPE,
     ) {
         Column(
             Modifier.fillMaxWidth().padding(12.dp),

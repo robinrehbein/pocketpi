@@ -205,16 +205,16 @@ internal fun ArtifactViewerBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                FilterChip(
+                GlassChip(
+                    stringResource(R.string.remote_artifact_preview),
                     selected = !state.showCode,
                     onClick = { state.showCode = false },
-                    label = { Text(stringResource(R.string.remote_artifact_preview)) },
                     modifier = Modifier.testTag("artifactTabPreview"),
                 )
-                FilterChip(
+                GlassChip(
+                    stringResource(R.string.remote_artifact_code),
                     selected = state.showCode,
                     onClick = { state.showCode = true },
-                    label = { Text(stringResource(R.string.remote_artifact_code)) },
                     modifier = Modifier.testTag("artifactTabCode"),
                 )
                 chips()

@@ -464,13 +464,10 @@ private fun FolderBadge(label: String) {
 
 @Composable
 private fun FolderNotice(text: String, onDismiss: () -> Unit) {
-    Card(
+    GlassCard(
         modifier = Modifier.fillMaxWidth().testTag("folderNotice"),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
+        tint = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {
         Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -495,7 +492,7 @@ internal fun CloneProgressCard(
     onDismiss: () -> Unit,
 ) {
     val where = folderDisplayPath(root, clone.path)
-    OutlinedCard(Modifier.fillMaxWidth().testTag("cloneProgress")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("cloneProgress")) {
         Column(
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
