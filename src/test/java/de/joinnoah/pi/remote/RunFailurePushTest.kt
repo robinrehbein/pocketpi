@@ -87,7 +87,7 @@ class RunFailurePushTest {
             mapOf(
                 "complete-agent-error" to
                     "The model or pi reported an error. Open the session to see it and continue.",
-                "complete-worker-exited" to "pi exited during the run. Open the session to continue.",
+                "complete-worker-exited" to "The connection to pi ended during the run. Open the session to continue.",
             )
         for (entry in entries("hostValid").filter { it.getValue("name").jsonPrimitive.content in expected }) {
             val payload = parsePushPayload(data(entry))!!
@@ -103,7 +103,9 @@ class RunFailurePushTest {
                 "pi stopped with an error",
                 notification.publicVersion.extras.getCharSequence(Notification.EXTRA_TITLE),
             )
-            assertNotNull(notification.actions.orEmpty().find { it.remoteInputs?.isNotEmpty() == true })
+            // A reply starts the next run, which an offline session whose pi went away cannot.
+            val reply = notification.actions.orEmpty().find { it.remoteInputs?.isNotEmpty() == true }
+            if (payload.failure == RunFailure.WORKER_EXITED) assertNull(reply) else assertNotNull(reply)
         }
     }
 

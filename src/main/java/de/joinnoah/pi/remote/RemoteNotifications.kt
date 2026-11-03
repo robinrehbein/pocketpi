@@ -218,8 +218,9 @@ internal object RemoteNotifications {
                 )
                 .setPublicVersion(publicVersion(context, generic, UPDATES_CHANNEL))
         // The session is idle now, so a reply starts its next run. Like an answer it needs an
-        // unlocked phone, which an action can only require from Android 12 on.
-        if (Build.VERSION.SDK_INT >= 31)
+        // unlocked phone, which an action can only require from Android 12 on. A session whose pi
+        // went away is offline: there a reply could not start anything.
+        if (Build.VERSION.SDK_INT >= 31 && payload.failure != RunFailure.WORKER_EXITED)
             builder.addAction(completionReplyAction(context, localized, payload.routeId, payload.sessionId))
         post(context, payload.routeId, payload.sessionId, builder.build())
     }
