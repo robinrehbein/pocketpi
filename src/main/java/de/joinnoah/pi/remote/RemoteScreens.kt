@@ -3695,16 +3695,12 @@ internal fun RemoteScreen(
                         )
                     FollowUpStatus(state, model::dismissFollowUp)
                     if (statusSheet && bannersShown)
-                        ModalBottomSheet(onDismissRequest = { statusSheet = false }) {
+                        GlassSheet(onDismissRequest = { statusSheet = false }) {
                             Column(
                                 Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text(
-                                    stringResource(R.string.remote_chat_status),
-                                    Modifier.semantics { heading() },
-                                    style = MaterialTheme.typography.titleLarge,
-                                )
+                                SheetHeader(stringResource(R.string.remote_chat_status), padding = PaddingValues(start = 8.dp))
                                 if (compactionVisible(state.compaction, compactionNow))
                                     CompactionBanner(state.compaction, compactionNow, floating = false)
                                 if (exportState != null)
@@ -4125,45 +4121,13 @@ internal fun RemoteScreen(
         )
     }
     if (filterSheet)
-        ModalBottomSheet(onDismissRequest = { filterSheet = false }) {
-            Column(
-                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    stringResource(R.string.remote_design_filter_sessions),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(hideOfflineLabel)
-                        Text(
-                            stringResource(R.string.remote_design_filter_offline_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = hideOfflineSessions,
-                        onCheckedChange = { (model as? SessionsViewModel)?.setHideOfflineSessions(it) },
-                        modifier =
-                            Modifier.semantics {
-                                contentDescription = hideOfflineLabel
-                            },
-                    )
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    TextButton(
-                        onClick = { (model as? SessionsViewModel)?.setHideOfflineSessions(false) }
-                    ) { Text(stringResource(R.string.remote_design_reset)) }
-                    Button(onClick = { filterSheet = false }) {
-                        Text(stringResource(R.string.remote_design_done))
-                    }
-                }
-            }
+        GlassSheet(onDismissRequest = { filterSheet = false }) {
+            SessionFilterSheetBody(
+                hideOffline = hideOfflineSessions,
+                hideOfflineLabel = hideOfflineLabel,
+                onHideOffline = { (model as? SessionsViewModel)?.setHideOfflineSessions(it) },
+                onDone = { filterSheet = false },
+            )
         }
     if (scan)
         QrScanner(
@@ -5047,6 +5011,49 @@ private fun ChatErrorCard(
                     FilledTonalButton(onClick = onReconnect, modifier = Modifier.testTag("reconnectNow")) {
                         Text(retryLabel(state.reconnectAt))
                     }
+            }
+        }
+    }
+}
+
+/** The session list's filter sheet: one switch in a card, then Reset and Done as pills. */
+@Composable
+private fun SessionFilterSheetBody(
+    hideOffline: Boolean,
+    hideOfflineLabel: String,
+    onHideOffline: (Boolean) -> Unit,
+    onDone: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        SheetHeader(stringResource(R.string.remote_design_filter_sessions), padding = PaddingValues(start = 8.dp))
+        SheetSection {
+            Row(Modifier.padding(16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(hideOfflineLabel)
+                    Text(
+                        stringResource(R.string.remote_design_filter_offline_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = hideOffline,
+                    onCheckedChange = onHideOffline,
+                    modifier = Modifier.semantics { contentDescription = hideOfflineLabel },
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.weight(1f)) {
+                SheetSecondaryButton(onClick = { onHideOffline(false) }) {
+                    Text(stringResource(R.string.remote_design_reset))
+                }
+            }
+            SheetPrimaryButton(onClick = onDone, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.remote_design_done))
             }
         }
     }

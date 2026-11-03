@@ -35,6 +35,8 @@
     <string name="remote_advisor_error">Advisor-Fehler</string>
     <string name="remote_advisor_off">Advisor aus</string>
     <string name="remote_advisor_unavailable_label">Advisor nicht verfügbar</string>
+    <string name="remote_advisor_from_parent">Advisor vom Hauptchat</string>
+    <string name="remote_advisor_from_parent_explanation">Dieser Subagent nutzt den Advisor seines Hauptchats. Ändern kannst du ihn dort.</string>
     <string name="remote_advisor_disconnected">Verbinde dich mit deinem Rechner, um den Advisor einzurichten.</string>
     <string name="remote_advisor_host_unsupported">Dein Rechner bietet den Advisor noch nicht an. Aktualisiere pi Remote auf deinem Rechner und verbinde dich erneut.</string>
     <string name="remote_advisor_extension_required">Diese Sitzung hat keinen Advisor. Lade die Advisor-Erweiterung in pi auf deinem Rechner und prüfe dann erneut.</string>
