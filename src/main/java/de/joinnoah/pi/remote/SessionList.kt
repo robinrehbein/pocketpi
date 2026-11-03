@@ -224,13 +224,22 @@ internal fun SessionListRow(
                             style = MaterialTheme.typography.titleMedium,
                         )
                     }
-                    Box(
-                        Modifier.align(Alignment.BottomEnd)
-                            .size(12.dp)
-                            .background(MaterialTheme.colorScheme.background, CircleShape)
-                            .padding(2.dp)
-                            .background(statusColor, CircleShape)
-                    )
+                    if (item.availability == SessionAvailability.RUNNING && !item.lastKnown) {
+                        StatusGlyph(
+                            kind = StatusGlyphKind.SESSION_RUNNING,
+                            color = statusColor,
+                            modifier = Modifier.align(Alignment.BottomEnd).size(16.dp)
+                                .background(MaterialTheme.colorScheme.background, CircleShape),
+                        )
+                    } else {
+                        Box(
+                            Modifier.align(Alignment.BottomEnd)
+                                .size(12.dp)
+                                .background(MaterialTheme.colorScheme.background, CircleShape)
+                                .padding(2.dp)
+                                .background(statusColor, CircleShape)
+                        )
+                    }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(

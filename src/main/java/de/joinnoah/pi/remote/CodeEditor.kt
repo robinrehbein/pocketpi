@@ -380,7 +380,7 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val viewportWidth = this.maxWidth
             val viewportHeight = this.maxHeight
-            Row(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("filesEditorScroll")) {
+            Row(Modifier.fillMaxSize().glassSource().verticalScroll(rememberScrollState()).testTag("filesEditorScroll")) {
                 // The numbers only mirror the text; a screen reader skips them.
                 Text(
                     numbers,

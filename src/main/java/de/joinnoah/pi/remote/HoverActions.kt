@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -79,7 +78,8 @@ internal fun HoverActionRow(visible: Boolean, actions: List<HoverAction>, modifi
     FloatingSurface(
         modifier.testTag("hoverActions").semantics { contentDescription = label },
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        // Drawn inside the message list it sits over, so it cannot blur that list.
+        blur = false,
     ) {
         Row {
             for (action in actions) {

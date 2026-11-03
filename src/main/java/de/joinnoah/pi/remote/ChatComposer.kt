@@ -656,7 +656,7 @@ internal fun ChatComposer(
     val longDraft = draft.text.length > EXPAND_OFFER_CHARS || '\n' in draft.text
     val hasExtras = state.quote != null || state.attachments.isNotEmpty() ||
         state.importingAttachments || state.attachmentProgress != null
-    FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+    FloatingSurface(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Column(
                 Modifier.fillMaxWidth()
@@ -1241,7 +1241,7 @@ private fun QuestionComposer(
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
     val abortEnabled = !abortBlocked && questionAbortEnabled(state)
-    FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+    FloatingSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

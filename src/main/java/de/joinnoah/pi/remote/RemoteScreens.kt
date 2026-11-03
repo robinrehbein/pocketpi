@@ -1444,7 +1444,7 @@ internal fun RemoteScreen(
             val chatTicket = remember(state.tickets, state.connected, state.capabilities, state.unavailableCapabilities, chatSessionId) {
                 chatSessionId?.let { ticketForSession(state, it) }
             }
-            val headerColor = floatingHeaderColor()
+            val headerColor = MaterialTheme.colorScheme.surfaceContainer
             // History never competes for the pill's places: it would push Settings into the menu.
             fun actionLayout(withHistory: Boolean) =
                 chatActionLayout(
@@ -1835,6 +1835,8 @@ internal fun RemoteScreen(
         if (tabs.open.isEmpty()) null
         else {
             {
+                // The inspector beside the chat blurs its own panes only.
+                ProvideGlass(MaterialTheme.colorScheme.surface) {
                 InspectorHost(
                     tabs,
                     content = ::tabContent,
@@ -1850,6 +1852,7 @@ internal fun RemoteScreen(
                     // An unsaved edit closes through its own prompt in the pane.
                     closable = { tab -> tab != InspectorTab.FILES || filesOpen?.editor?.changed != true },
                 )
+                }
             }
         }
     val focusManager = LocalFocusManager.current
@@ -2273,10 +2276,10 @@ internal fun RemoteScreen(
         val list: @Composable () -> Unit = {
             LazyColumn(
                 if (key is RemoteNavKey.Chat)
-                    Modifier.fillMaxSize().testTag("conversationList").then(underlay)
+                    Modifier.fillMaxSize().testTag("conversationList").glassSource().then(underlay)
                         .nestedScroll(headerScroll)
                         .onFocusChanged { conversationFocused = it.hasFocus }
-                else Modifier.fillMaxSize().then(listRegion),
+                else Modifier.fillMaxSize().then(listRegion).glassSource(),
                 state = listState,
                 contentPadding =
                     PaddingValues(
@@ -2369,6 +2372,8 @@ internal fun RemoteScreen(
                                 FloatingSurface(
                                     modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT).padding(end = 8.dp),
                                     shape = CircleShape,
+                                    // Part of the list it would blur.
+                                    blur = false,
                                 ) {
                                     IconButton(
                                         onClick = {
@@ -2408,6 +2413,7 @@ internal fun RemoteScreen(
                                     FloatingSurface(
                                         modifier = Modifier.testTag("sessionsFilterPill"),
                                         shape = CircleShape,
+                                        blur = false,
                                     ) {
                                         IconButton(
                                             onClick = { filterSheet = true },
@@ -3366,12 +3372,12 @@ internal fun RemoteScreen(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.error?.let { error ->
-                        Card(
+                        // Floats over the chat with the composer, so it is tinted glass like it.
+                        FloatingSurface(
                             modifier = Modifier.fillMaxWidth().testTag("errorCard"),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         ) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(
@@ -3548,9 +3554,9 @@ internal fun RemoteScreen(
                                     style = MaterialTheme.typography.titleLarge,
                                 )
                                 if (compactionVisible(state.compaction, compactionNow))
-                                    CompactionBanner(state.compaction, compactionNow)
+                                    CompactionBanner(state.compaction, compactionNow, floating = false)
                                 if (exportState != null)
-                                    ExportStatus(exportState, ::shareExport) {
+                                    ExportStatus(exportState, ::shareExport, floating = false) {
                                         if (exportState is ExportState.Done)
                                             exportScope.launch(Dispatchers.IO) { ExportStorage.clear(context.cacheDir) }
                                         exportState = null
@@ -3703,15 +3709,18 @@ internal fun RemoteScreen(
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp).testTag("chatSnackbar"),
-            )
+            ) { data -> GlassSnackbar(data) }
             Box(Modifier.fillMaxSize().then(overlayRegion)) {
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
-            if (!panesBeside) changesContent?.invoke()
-            if (!panesBeside) filesContent?.invoke()
-            if (!panesBeside) jobsContent?.invoke()
-            if (!panesBeside) toolContent?.invoke()
+            // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
+            // One call each, so a pane keeps its state while another comes or goes.
+            val paneSurface = MaterialTheme.colorScheme.surface
+            if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
+            if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
+            if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
+            if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
             }
             }
             if (dropHovered) DropScrim()
@@ -4510,8 +4519,11 @@ private fun ScrollToLatestSlot(visible: Boolean, onClick: () -> Unit) {
             enter = if (motion) fadeIn() else EnterTransition.None,
             exit = if (motion) fadeOut() else ExitTransition.None,
         ) {
-            SmallFloatingActionButton(onClick = onClick) {
-                Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
+            // A floating glass button like the header pills, rather than Material's own FAB.
+            FloatingSurface(shape = CircleShape) {
+                IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
+                }
             }
         }
     }

@@ -318,8 +318,16 @@ private fun ProviderListScreen(
         connection = connectionStatusLine(connected, connection, hostChosen = true),
         refreshing = auth.loading,
     ) { insets ->
+        // The provider list alone scrolls under the floating header; a notice or a state message
+        // above it keeps the page below the header.
+        val headerTop = insets.floatingHeaderOverlap()
+        val listUnderHeader = connected && available && auth.loaded && auth.notice == null
         Column(
-            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
+            Modifier.fillMaxSize()
+                .padding(insets.underFloatingHeader())
+                .consumeWindowInsets(insets)
+                .padding(top = if (listUnderHeader) 0.dp else headerTop)
+                .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             auth.notice?.let { NoticeCard(noticeText(it), onDismissNotice) }
@@ -339,8 +347,8 @@ private fun ProviderListScreen(
                     }
                 else ->
                     LazyColumn(
-                        Modifier.weight(1f).testTag("providerList"),
-                        contentPadding = PaddingValues(bottom = 24.dp),
+                        Modifier.weight(1f).testTag("providerList").glassSource(),
+                        contentPadding = PaddingValues(top = if (listUnderHeader) headerTop else 0.dp, bottom = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         item("banner") {
@@ -576,9 +584,12 @@ internal fun LoginFlowScreen(
     ProviderScaffold(stringResource(R.string.providers_flow_title, providerName), onBack, modifier) { insets ->
         Column(
             Modifier.fillMaxSize()
-                .padding(insets)
+                .padding(insets.underFloatingHeader())
                 .consumeWindowInsets(insets)
+                .glassSource()
                 .verticalScroll(rememberScrollState())
+                // Under the floating header, which blurs the page as it scrolls by.
+                .padding(top = insets.floatingHeaderOverlap())
                 .imePadding()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp)
@@ -586,7 +597,8 @@ internal fun LoginFlowScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             connectionStatusLine(connected, connection, hostChosen = true)?.let { line ->
-                ConnectionStatusChip(line)
+                // Part of the page it would blur.
+                ConnectionStatusChip(line, blur = false)
             }
             flow.notice?.let { NoticeCard(noticeText(it), null) }
             if (linkFailed) NoticeCard(stringResource(R.string.providers_no_browser), { linkFailed = false })
