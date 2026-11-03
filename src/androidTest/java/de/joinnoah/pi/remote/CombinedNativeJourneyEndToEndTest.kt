@@ -1012,7 +1012,8 @@ class CombinedNativeJourneyEndToEndTest {
         val created = paths.getString("created")
         val renamed = paths.getString("renamed")
         val taken = paths.getString("taken")
-        for (path in listOf(created, renamed, taken)) require(path.startsWith("$folder/") && path.count { it == '/' } == 1)
+        val placeholder = paths.getString("placeholder")
+        for (path in listOf(placeholder, created, renamed, taken)) require(path.startsWith("$folder/") && path.count { it == '/' } == 1)
         val createdName = created.substringAfter('/')
         val renamedName = renamed.substringAfter('/')
         val takenName = taken.substringAfter('/')
@@ -1056,7 +1057,7 @@ class CombinedNativeJourneyEndToEndTest {
             awaitTag("filesEntry:$folder")
             compose.onNodeWithTag("filesEntry:$folder").performScrollTo().performClick()
             compose.waitUntil(60_000) { repository.state.value.files?.let { it.path == folder && it.file == null && !it.loading && it.listing != null } == true }
-            assertTrue(requireNotNull(repository.state.value.files?.listing).entries.isEmpty())
+            assertEquals(listOf(placeholder.substringAfter('/')), requireNotNull(repository.state.value.files?.listing).entries.map { it.name })
 
             // Create.
             headerAction("filesCreate")
@@ -1070,6 +1071,14 @@ class CombinedNativeJourneyEndToEndTest {
             var disk = assertHostOperation(0, "session.files.create", createId, created, null, "applied", null)
             assertTrue(disk.getBoolean("folder")); assertEntry(disk, "created", true, 0)
             assertEntry(disk, "renamed", false); assertEntry(disk, "taken", false)
+            // An applied create opens the new file; back to the folder, whose listing holds it.
+            compose.waitUntil(30_000) { repository.state.value.files?.file?.path == created }
+            compose.onNodeWithTag("filesBack").performClick()
+            compose.waitUntil(30_000) {
+                repository.state.value.files?.let { files ->
+                    files.file == null && files.path == folder && !files.loading && files.listing?.entries?.any { it.name == createdName } == true
+                } == true
+            }
             awaitTag("filesEntry:$createdName")
             dismissOutcome()
 
