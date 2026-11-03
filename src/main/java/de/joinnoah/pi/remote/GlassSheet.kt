@@ -4,20 +4,13 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
-import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import kotlinx.coroutines.launch
-import androidx.compose.ui.semantics.expand
-import androidx.compose.ui.semantics.dismiss
-import androidx.compose.ui.semantics.collapse
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.material3.SheetValue
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -25,13 +18,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Close
@@ -45,6 +39,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,6 +49,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,19 +58,22 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -283,35 +283,32 @@ private fun SheetHandle(sheetState: SheetState, onDismissRequest: () -> Unit, ri
     val hideAndDismiss: () -> Unit = {
         scope.launch { sheetState.hide() }.invokeOnCompletion { if (!sheetState.isVisible) onDismissRequest() }
     }
+    // Full width and 32dp tall, as the handle row was inside Material's handle slot.
     Box(
         Modifier.fillMaxWidth()
             .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
-            .padding(top = 12.dp, bottom = 16.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier.clickable {
+            .clickable {
                 when (sheetState.currentValue) {
                     SheetValue.Expanded -> hideAndDismiss()
                     SheetValue.PartiallyExpanded -> scope.launch { sheetState.expand() }
                     SheetValue.Hidden -> scope.launch { sheetState.show() }
                 }
             }
-                .semantics(mergeDescendants = true) {
-                    dismiss(dismissLabel) { hideAndDismiss(); true }
-                    if (sheetState.currentValue == SheetValue.PartiallyExpanded) {
-                        expand(expandLabel) { scope.launch { sheetState.expand() }; true }
-                    } else if (sheetState.hasPartiallyExpandedState) {
-                        collapse(collapseLabel) { scope.launch { sheetState.partialExpand() }; true }
-                    }
+            .semantics(mergeDescendants = true) {
+                dismiss(dismissLabel) { hideAndDismiss(); true }
+                if (sheetState.currentValue == SheetValue.PartiallyExpanded) {
+                    expand(expandLabel) { scope.launch { sheetState.expand() }; true }
+                } else if (sheetState.hasPartiallyExpandedState) {
+                    collapse(collapseLabel) { scope.launch { sheetState.partialExpand() }; true }
                 }
-                .padding(horizontal = 24.dp, vertical = 8.dp),
-        ) {
-            Box(
-                Modifier.size(width = 36.dp, height = 4.dp)
-                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f), CircleShape)
-            )
-        }
+            }
+            .padding(top = 12.dp, bottom = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(width = 36.dp, height = 4.dp)
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f), CircleShape)
+        )
     }
 }
 
