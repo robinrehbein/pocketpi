@@ -38,7 +38,17 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,10 +56,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -270,6 +283,61 @@ internal fun argumentRowLimits(sizes: List<Int>, expanded: Boolean, budget: Int 
     }
 }
 
+/** Tools whose output is code, a file or a terminal transcript: it stays in numbered rows. */
+private val CODE_OUTPUT_TOOLS = setOf("bash", USER_BASH_TOOL, "read", "edit", "write", "grep", "find", "ls")
+
+/** Longer output starts as rows: rendering it as Markdown at once would stall the screen. */
+internal const val FORMATTED_OUTPUT_MAX_CHARS = 20_000
+
+/**
+ * Whether the output of tool [name] reads as prose (an advisor's answer, a web summary) and may
+ * show formatted, as the chat shows a reply. Code tools, JSON and very long output stay rows.
+ */
+internal fun formattedOutputAllowed(name: String?, output: String?): Boolean {
+    if (output.isNullOrBlank() || name in CODE_OUTPUT_TOOLS || output.length > FORMATTED_OUTPUT_MAX_CHARS) return false
+    val first = output.trimStart().first()
+    // Markdown may open with a bracket too (`[Title](url)`, `[INFO]`): only real JSON stays rows.
+    return (first != '{' && first != '[') || runCatching { Json.parseToJsonElement(output) }.isFailure
+}
+
+/** One argument of a tool call as a labelled value; [structured] values are indented JSON. */
+internal data class ArgumentField(val key: String, val value: String, val structured: Boolean)
+
+private const val MAX_ARGUMENT_FIELDS = 24
+
+/** Longer string values keep the arguments one bounded JSON block, as before the fields. */
+private const val MAX_ARGUMENT_FIELD_CHARS = 20_000
+
+/** Lines of a field's value shown before the user asks for all of it. */
+private const val ARGUMENT_FIELD_PREVIEW_LINES = 8
+
+/**
+ * The arguments of a tool without a view of its own as labelled fields, or null when they are not
+ * a JSON object of 1 to [MAX_ARGUMENT_FIELDS] entries: those stay one JSON block.
+ */
+internal fun argumentFields(arguments: String?): List<ArgumentField>? {
+    val parsed = arguments?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() } as? JsonObject ?: return null
+    if (parsed.isEmpty() || parsed.size > MAX_ARGUMENT_FIELDS) return null
+    if (parsed.values.any { it is JsonPrimitive && it.isString && it.content.length > MAX_ARGUMENT_FIELD_CHARS }) return null
+    return parsed.map { (key, value) ->
+        when {
+            value is JsonPrimitive && value.isString -> ArgumentField(key, value.content, structured = false)
+            value is JsonPrimitive -> ArgumentField(key, value.toString(), structured = false)
+            else -> ArgumentField(key, prettyJson.encodeToString(JsonElement.serializer(), value), structured = true)
+        }
+    }
+}
+
+private fun toolIcon(name: String?): ImageVector =
+    when (name) {
+        "bash", USER_BASH_TOOL -> Icons.Outlined.Terminal
+        "read" -> Icons.Outlined.Description
+        "edit", "write" -> Icons.Outlined.Edit
+        "grep", "find", "ls" -> Icons.Default.Search
+        "web_search", "web_fetch", "fetch" -> Icons.Outlined.Public
+        else -> Icons.Outlined.AutoAwesome
+    }
+
 // ---- Screen -------------------------------------------------------------------------------
 
 @Composable
@@ -349,8 +417,12 @@ private fun ToolDetailContent(
     var poppedOut by remember { mutableStateOf(false) }
     if (poppedOut && output != null) ToolOutputPeek(output, item.name, item.arguments) { poppedOut = false }
     val useCards = item.name == "bash" && rows.isNotEmpty()
-    val rawVisible = !useCards || showRaw || query.isNotEmpty()
-    val firstRowIndex = if (useCards) 4 else 3 // includes the raw-output disclosure
+    // Prose output reads as the chat shows a reply; a search always works on the rows.
+    val canFormat = remember(item.name, output) { formattedOutputAllowed(item.name, output) }
+    var formatted by rememberSaveable { mutableStateOf(true) }
+    val showFormatted = canFormat && formatted && query.isEmpty()
+    val rawVisible = !showFormatted && (!useCards || showRaw || query.isNotEmpty())
+    val firstRowIndex = if (useCards) 5 else 4 // overview, arguments, output, search, raw-output disclosure
 
     LaunchedEffect(query, navigation, matches.isNotEmpty()) {
         if (revealedNavigation == navigation) return@LaunchedEffect
@@ -368,14 +440,24 @@ private fun ToolDetailContent(
         outputScroll.animateScrollTo(column.toInt().coerceIn(0, outputScroll.maxValue))
     }
 
-    Surface(modifier.fillMaxSize().testTag("toolDetail")) {
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("toolDetail"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            // Above the list rather than over it: the list's sticky search bar pins at the list's top
+            // edge, which must stay clear of the header. No divider, as under the other pill headers.
             ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
-            HorizontalDivider()
+            val quote = !output.isNullOrBlank()
+            val bottomActions = quote || canAskToFix
+            // The output scrolls on under the floating Quote and Ask-to-fix pills.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().testTag("toolDetailContent").glassSource(),
+                Modifier.fillMaxSize().testTag("toolDetailContent").glassSource(),
                 state = listState,
+                contentPadding = PaddingValues(bottom = if (bottomActions) 72.dp else 0.dp),
             ) {
+                item(key = "overview") {
+                    ToolOverview(item, Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp))
+                }
                 item(key = "arguments") {
                     ArgumentsSection(item, Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                 }
@@ -388,6 +470,9 @@ private fun ToolDetailContent(
                         onLoadFullOutput = onLoadFullOutput,
                         onCancelFullOutput = onCancelFullOutput,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        // A search shows the rows, so the switch stays away while one runs.
+                        formatted = if (canFormat && query.isEmpty()) formatted else null,
+                        onFormatted = { formatted = it },
                     )
                 }
                 stickyHeader(key = "search") {
@@ -403,7 +488,7 @@ private fun ToolDetailContent(
                             modifier = Modifier.onSizeChanged { searchBarHeight = it.height },
                         )
                 }
-                if (useCards) {
+                if (useCards && !showFormatted) {
                     item(key = "rawToggle") {
                         if (!rawVisible) Text(
                             stringResource(R.string.remote_result_count, cards.size),
@@ -415,9 +500,13 @@ private fun ToolDetailContent(
                         }
                     }
                 }
-                if (rawVisible) {
+                if (showFormatted) {
+                    item(key = "formatted", contentType = "formatted") { FormattedOutput(output.orEmpty()) }
+                } else if (rawVisible) {
                     itemsIndexed(rows, contentType = { _, _ -> "row" }) { index, row ->
                         OutputRowView(
+                            first = index == 0,
+                            last = index == rows.lastIndex,
                             row = row,
                             matches = matchesByRow[index].orEmpty(),
                             current = current,
@@ -432,20 +521,22 @@ private fun ToolDetailContent(
                 }
                 item(key = "end") { Box(Modifier.heightIn(min = 16.dp)) }
             }
-            val quote = !output.isNullOrBlank()
-            if (quote || canAskToFix) {
-                HorizontalDivider()
+            if (bottomActions)
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
                     if (quote)
-                        OutlinedButton(onClick = onQuote, Modifier.testTag("toolDetailQuote")) {
-                            Text(stringResource(R.string.remote_quote))
+                        FloatingSurface(shape = CircleShape) {
+                            TextButton(onClick = onQuote, Modifier.heightIn(min = 48.dp).testTag("toolDetailQuote")) {
+                                Text(stringResource(R.string.remote_quote))
+                            }
                         }
                     if (canAskToFix)
-                        Button(onClick = onAskToFix, Modifier.testTag("toolDetailAskFix")) {
-                            Text(stringResource(R.string.remote_tool_detail_ask_fix))
+                        FloatingSurface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+                            TextButton(onClick = onAskToFix, Modifier.heightIn(min = 48.dp).testTag("toolDetailAskFix")) {
+                                Text(stringResource(R.string.remote_tool_detail_ask_fix), color = MaterialTheme.colorScheme.onPrimary)
+                            }
                         }
                 }
             }
@@ -465,7 +556,7 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
     Column(Modifier.fillMaxWidth()) {
         PaneHeader(
             title = item.summary.labelRes?.let { stringResource(it) } ?: item.name ?: stringResource(R.string.remote_tool),
-            // The detail is the list's first item, the arguments; the header keeps the title and the state.
+            // The overview card below carries the state and what the call worked on.
             subtitle = null,
             nested = false,
             busy = false,
@@ -489,7 +580,44 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
                 ),
             titleFocus = titleFocus,
         )
-        Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) { StateChip(item.state) }
+    }
+}
+
+/**
+ * What the call was at a glance: the tool's glyph, its raw name when the title is a label, what it
+ * worked on, and how it ended.
+ */
+@Composable
+private fun ToolOverview(item: ConversationItem.Activity, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    OverviewCard(toolIcon(item.name), modifier.testTag("toolDetailOverview")) {
+        item.summary.detail?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            StateChip(item.state)
+            item.name?.takeIf { item.summary.labelRes != null }?.let {
+                Text(it, style = monoTextStyle(), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/** Prose output as the chat shows a reply, in a reading card. */
+@Composable
+private fun FormattedOutput(text: String) {
+    Surface(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("toolDetailFormatted"),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        SelectionContainer(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) { MarkdownText(text) }
     }
 }
 
@@ -503,23 +631,13 @@ private fun StateChip(state: String) {
             "unavailable" -> Triple(R.string.remote_tool_unavailable, colors.surfaceVariant, colors.onSurfaceVariant)
             else -> Triple(R.string.remote_tool_complete, colors.secondaryContainer, colors.onSecondaryContainer)
         }
-    Surface(
-        color = container,
-        contentColor = content,
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier.testTag("toolDetailState"),
-    ) {
-        Text(
-            stringResource(label),
-            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-        )
-    }
+    // A tinted pill inside the overview card, with a dot in the state's colour.
+    StatusPill(stringResource(label), container, content, Modifier.testTag("toolDetailState"))
 }
 
 @Composable
-private fun SectionLabel(text: String) {
-    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun SectionLabel(text: String, trailing: (@Composable () -> Unit)? = null) {
+    SectionHeading(text, trailing = trailing)
 }
 
 @Composable
@@ -548,7 +666,7 @@ private fun CodeBlock(
     text: String,
     numbered: Boolean,
     modifier: Modifier = Modifier,
-    container: Color = MaterialTheme.colorScheme.surfaceContainer,
+    container: Color = MaterialTheme.colorScheme.surfaceContainerLow,
     content: Color = MaterialTheme.colorScheme.onSurface,
     limit: Int = MAX_ARGUMENT_ROWS,
 ) {
@@ -560,8 +678,8 @@ private fun CodeBlock(
     val maxNumber = remember(shown) { shown.maxOfOrNull { it.number ?: 0 } ?: 1 }
     val numberWidth = rememberLineNumberWidth(maxNumber, style)
     val scroll = rememberScrollState()
-    Surface(modifier.fillMaxWidth(), color = container, contentColor = content, shape = MaterialTheme.shapes.small) {
-        Column(Modifier.padding(vertical = 6.dp)) {
+    Surface(modifier.fillMaxWidth(), color = container, contentColor = content, shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(vertical = 10.dp)) {
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = CODE_BLOCK_MAX_HEIGHT).testTag("codeBlockRows")) {
                 items(shown.size, key = { it }, contentType = { "row" }) { index ->
                     val row = shown[index]
@@ -612,6 +730,11 @@ private sealed interface ArgumentBlock {
 
     data class Diff(val diff: ToolDiff) : ArgumentBlock {
         override val rows = diff.lines.size
+    }
+
+    /** Labelled values; their structured values bound their own rows, so they take no budget. */
+    data class Fields(val fields: List<ArgumentField>) : ArgumentBlock {
+        override val rows = 0
     }
 }
 
@@ -664,7 +787,12 @@ private fun argumentsModel(item: ConversationItem.Activity): ArgumentsModel {
                 changes.mapIndexed { index, change -> ArgumentBlock.Change(index, changes.size, change) } + diff,
             )
         }
-        else -> ArgumentsModel(null, null, listOf(ArgumentBlock.Code(prettyArguments(raw) ?: raw, numbered = false)))
+        else ->
+            ArgumentsModel(
+                null,
+                null,
+                listOf(argumentFields(raw)?.let(ArgumentBlock::Fields) ?: ArgumentBlock.Code(prettyArguments(raw) ?: raw, numbered = false)),
+            )
     }
 }
 
@@ -674,7 +802,15 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
     // Large arguments start as a bounded preview (ARGUMENT_PREVIEW_ROWS shared across blocks) and
     // the user opts into the rest; each code block then lays its own rows out lazily (CodeBlock).
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val sizes = remember(model) { model.blocks.flatMap { if (it is ArgumentBlock.Change) listOf(it.oldRows, it.newRows) else listOf(it.rows) } }
+    val sizes = remember(model) {
+        model.blocks.flatMap {
+            when (it) {
+                is ArgumentBlock.Change -> listOf(it.oldRows, it.newRows)
+                is ArgumentBlock.Fields -> emptyList()
+                else -> listOf(it.rows)
+            }
+        }
+    }
     val limits = remember(sizes, expanded) { argumentRowLimits(sizes, expanded) }
     val cut = remember(sizes) { argumentRowLimits(sizes, expanded = false).zip(sizes).any { (limit, size) -> limit < size } }
     Column(modifier.fillMaxWidth().testTag("toolDetailArguments"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -693,7 +829,7 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
             when (block) {
                 is ArgumentBlock.Code -> {
                     if (item.name == "bash" && !item.argumentsTruncated && block.rows <= 16 && block.text.length <= RESULT_CARD_PREVIEW_CHARS) {
-                        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(16.dp)) {
                             SelectionContainer { Text(block.text, Modifier.fillMaxWidth().padding(12.dp), style = monoTextStyle()) }
                         }
                     } else CodeBlock(block.text, block.numbered, limit = limits[at])
@@ -707,6 +843,7 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
                     EditDiffSection(block.diff, limits[at])
                     at += 1
                 }
+                is ArgumentBlock.Fields -> ArgumentFieldsCard(block.fields)
             }
         }
         if (model.truncated) Notice(stringResource(R.string.remote_tool_detail_arguments_truncated))
@@ -720,6 +857,49 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
                 )
             }
     }
+}
+
+/** Labelled argument values in one card, one row per field, as a settings list reads. */
+@Composable
+private fun ArgumentFieldsCard(fields: List<ArgumentField>) {
+    val colors = MaterialTheme.colorScheme
+    Surface(Modifier.fillMaxWidth().testTag("toolDetailFields"), shape = RoundedCornerShape(20.dp), color = colors.surfaceContainerLow) {
+        Column(Modifier.padding(vertical = 4.dp)) {
+            fields.forEachIndexed { index, field ->
+                if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.outlineVariant.copy(alpha = .5f))
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(field.key, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+                    if (field.structured) CodeBlock(field.value, numbered = false, container = colors.surfaceContainer)
+                    else FieldValue(field)
+                }
+            }
+        }
+    }
+}
+
+/** A string value, cut to a preview of a few lines until the user asks for all of it. */
+@Composable
+private fun FieldValue(field: ArgumentField) {
+    var open by rememberSaveable(field.key) { mutableStateOf(false) }
+    var overflows by remember(field.value) { mutableStateOf(false) }
+    SelectionContainer {
+        Text(
+            field.value,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = if (open) Int.MAX_VALUE else ARGUMENT_FIELD_PREVIEW_LINES,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { if (!open) overflows = it.hasVisualOverflow },
+        )
+    }
+    if (open || overflows)
+        TextButton(onClick = { open = !open }, Modifier.testTag("toolDetailFieldToggle")) {
+            Text(
+                stringResource(
+                    if (open) R.string.remote_tool_detail_arguments_show_less
+                    else R.string.remote_tool_detail_arguments_show_all
+                )
+            )
+        }
 }
 
 @Composable
@@ -765,7 +945,7 @@ private fun EditDiffSection(diff: ToolDiff, limit: Int) {
                 else R.string.remote_tool_detail_diff_from_arguments
             ) + " · " + stringResource(R.string.remote_tool_detail_diff_summary, diff.added, diff.removed)
         )
-        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.small) {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(16.dp)) {
             DiffView(diff.lines, Modifier.fillMaxWidth().padding(vertical = 6.dp), maxLines = limit)
         }
         if (diff.truncated) Notice(stringResource(R.string.remote_tool_detail_diff_truncated))
@@ -794,10 +974,15 @@ private fun OutputHeader(
     onLoadFullOutput: () -> Unit,
     onCancelFullOutput: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Whether the formatted view is on; null when the output has no formatted view. */
+    formatted: Boolean? = null,
+    onFormatted: (Boolean) -> Unit = {},
 ) {
     val complete = download?.takeIf { it.text != null }
     Column(modifier.fillMaxWidth().testTag("toolDetailOutput"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionLabel(stringResource(R.string.remote_tool_output))
+        SectionLabel(stringResource(R.string.remote_tool_output)) {
+            if (formatted != null) OutputViewToggle(formatted, onFormatted)
+        }
         if (!hasOutput) Notice(stringResource(R.string.remote_tool_detail_no_output))
         if (complete != null) {
             Notice(stringResource(R.string.remote_tool_detail_full_loaded))
@@ -810,6 +995,23 @@ private fun OutputHeader(
             LoadFullOutput(download, onLoadFullOutput, onCancelFullOutput, canRetry = canLoadFullOutput)
         else if (canLoadFullOutput && item.truncated && item.toolCallId != null && complete == null)
             LoadFullOutput(null, onLoadFullOutput, onCancelFullOutput, canRetry = true)
+    }
+}
+
+@Composable
+private fun OutputViewToggle(formatted: Boolean, onFormatted: (Boolean) -> Unit) {
+    SingleChoiceSegmentedButtonRow(Modifier.testTag("toolDetailViewToggle")) {
+        val options = listOf(true to R.string.remote_tool_detail_view_formatted, false to R.string.remote_tool_detail_view_raw)
+        options.forEachIndexed { index, (value, label) ->
+            SegmentedButton(
+                selected = formatted == value,
+                onClick = { onFormatted(value) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                icon = {},
+            ) {
+                Text(stringResource(label), style = MaterialTheme.typography.labelMedium)
+            }
+        }
     }
 }
 
@@ -913,18 +1115,29 @@ private fun SearchBar(
         announcedCurrent = current
     }
     val copyLabel = stringResource(R.string.remote_tool_detail_copy)
-    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+    // Sticky over the output: the page background behind it, the field itself a glass pill.
+    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { onQuery(it.take(200)) },
-                    modifier = Modifier.weight(1f).testTag("toolDetailSearch"),
-                    placeholder = { Text(stringResource(R.string.remote_tool_detail_search), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                )
+                FloatingSurface(Modifier.weight(1f), shape = CircleShape, blur = false) {
+                    TextField(
+                        value = query,
+                        onValueChange = { onQuery(it.take(200)) },
+                        modifier = Modifier.fillMaxWidth().testTag("toolDetailSearch"),
+                        placeholder = { Text(stringResource(R.string.remote_tool_detail_search), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                        ),
+                    )
+                }
                 IconButton(
                     onClick = {
                         scope.launch {
@@ -1004,6 +1217,8 @@ private fun SearchBar(
 
 @Composable
 private fun OutputRowView(
+    first: Boolean,
+    last: Boolean,
     row: OutputRow,
     matches: List<IndexedValue<SearchMatch>>,
     current: Int,
@@ -1021,9 +1236,20 @@ private fun OutputRowView(
             currentStyle = SpanStyle(background = colors.primary, color = colors.onPrimary),
             otherStyle = SpanStyle(background = colors.tertiaryContainer, color = colors.onTertiaryContainer),
         )
-    Row(Modifier.fillMaxWidth()) {
+    // The rows together read as one rounded code block, as the argument blocks do.
+    val corner = 16.dp
+    val shape = RoundedCornerShape(
+        topStart = if (first) corner else 0.dp, topEnd = if (first) corner else 0.dp,
+        bottomStart = if (last) corner else 0.dp, bottomEnd = if (last) corner else 0.dp,
+    )
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .background(colors.surfaceContainerLow, shape)
+            .padding(top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp)
+    ) {
         LineNumber(row.number, numberWidth, style)
-        Box(Modifier.weight(1f).horizontalScroll(scroll).padding(end = 16.dp)) {
+        Box(Modifier.weight(1f).horizontalScroll(scroll).padding(end = 12.dp)) {
             Text(text, Modifier.width(contentWidth), style = style, softWrap = false, maxLines = 1, color = LocalContentColor.current)
         }
     }

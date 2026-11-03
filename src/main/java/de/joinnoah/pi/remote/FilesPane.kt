@@ -213,7 +213,8 @@ internal fun FilesPane(
             dismissButton = { TextButton(onClick = { searchOpen = false }) { Text(stringResource(R.string.remote_files_search_close)) } },
         )
     }
-    Surface(modifier.fillMaxSize().testTag("filesPane")) {
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
         val editor = state.editor
         if (editor != null) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {

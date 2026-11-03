@@ -65,7 +65,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +72,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -207,7 +215,8 @@ internal fun ChangesPane(
     val headerActions =
         changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null, canCommitEntry, onPrepareCommit, canPushEntry, pushPending, onPreparePush, canPullRequestEntry, pullRequestPending, onPreparePullRequest) { prompt -> checked.onPrefill(prompt) }
     var headerHeight by remember { mutableStateOf(64.dp) }
-    Surface(modifier.fillMaxSize().testTag("changesPane")) {
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("changesPane"), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             Column(Modifier.fillMaxSize()) {
                 if (prefillFailed)
@@ -495,29 +504,44 @@ private fun changeLabel(change: GitChange): Int =
     }
 
 @Composable
-private fun FailureNotice(failure: ChangesFailure, onRetry: () -> Unit) {
+private fun FailureNotice(
+    failure: ChangesFailure,
+    contentPadding: PaddingValues = PaddingValues(16.dp),
+    onRetry: () -> Unit,
+) {
     PaneFailureNotice(
         stringResource(failureText(failure)),
         stringResource(R.string.remote_changes_retry),
         onRetry.takeIf { failure != ChangesFailure.UNSUPPORTED },
         Modifier.testTag("changesFailure"),
+        contentPadding,
     )
 }
+
+/*
+ * The file grid insets its content 16dp itself, so its full-width rows (base chips, notices,
+ * headings, commits) add no inset of their own and line up with the file tiles.
+ */
+private val GRID_FAILURE_PADDING = PaddingValues(vertical = 16.dp)
+
+@Composable
+private fun GridNotice(text: String, modifier: Modifier = Modifier) =
+    PaneNotice(text, modifier, PaddingValues(vertical = 8.dp))
 
 /** The changes shown could not be read again; [onRetry] tries once more. */
 @Composable
 private fun StaleNotice(text: String, onRetry: () -> Unit) {
     Column(Modifier.fillMaxWidth().testTag("changesStale")) {
-        PaneNotice(text, Modifier.testTag("changesUpdated"))
-        TextButton(onClick = onRetry, Modifier.padding(horizontal = 8.dp)) { Text(stringResource(R.string.remote_changes_retry)) }
+        GridNotice(text, Modifier.testTag("changesUpdated"))
+        TextButton(onClick = onRetry) { Text(stringResource(R.string.remote_changes_retry)) }
     }
 }
 
 @Composable
-private fun Loading() {
+private fun Loading(contentPadding: PaddingValues = PaddingValues(16.dp)) {
     val label = stringResource(R.string.remote_changes_loading)
     LinearProgressIndicator(
-        Modifier.fillMaxWidth().padding(16.dp).semantics { contentDescription = label }.testTag("changesLoading")
+        Modifier.fillMaxWidth().padding(contentPadding).semantics { contentDescription = label }.testTag("changesLoading")
     )
 }
 
@@ -556,69 +580,43 @@ private fun ChangesOverview(
                 }
             }
             item(key = "bases", span = { GridItemSpan(maxLineSpan) }) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    // A repository without a branch to compare against loses that choice, unless it is the one shown.
-                    val noDevBase = state.devBase?.ref == null && state.devBase != null
-                    GitBase.entries.filter { it != GitBase.DEV || !noDevBase || it == shownBase || it == state.base }.forEach { base ->
-                        FilterChip(
-                            selected = base == shownBase,
-                            onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
-                            label = { Text(baseLabel(base, state.devBase)) },
-                            modifier = Modifier.testTag("changesBase_${base.wire}"),
-                        )
-                    }
-                }
+                ChangesOverviewCard(state, status, shownBase, actions)
             }
             if (state.sessionUnavailable != null)
                 item(key = "fallback", span = { GridItemSpan(maxLineSpan) }) {
-                    PaneNotice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
+                    GridNotice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
                 }
-            status?.since?.let { since ->
-                item(key = "since", span = { GridItemSpan(maxLineSpan) }) {
-                    val time = formatTime(context, since.at)
-                    PaneNotice(
-                        stringResource(
-                            if (since.firstContact) R.string.remote_changes_since_first_contact
-                            else R.string.remote_changes_since_session_start,
-                            time,
-                        ),
-                        Modifier.testTag("changesSince"),
-                    )
-                }
-            }
             status?.takeIf { it.base == GitBase.DEV }?.let { it.devBase?.ref ?: it.devRef }?.let { ref ->
-                item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_dev_ref, ref)) }
+                item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_dev_ref, ref)) }
             }
             state.fetchedAt?.takeIf { (offline || state.stale) && status != null && state.failure == null }?.let { at ->
                 item(key = "updated", span = { GridItemSpan(maxLineSpan) }) {
                     val time = updatedTime(context, at)
-                    if (offline) PaneNotice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
+                    if (offline) GridNotice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
                     else StaleNotice(stringResource(R.string.remote_changes_stale_at, time), actions.onReload)
                 }
             }
             val failure = state.failure
             when {
-                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, actions.onReload) }
-                state.loading || status == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { Loading() }
+                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, GRID_FAILURE_PADDING, actions.onReload) }
+                state.loading || status == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { Loading(GRID_FAILURE_PADDING) }
                 status.unavailable != null ->
                     item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
-                        PaneNotice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
+                        GridNotice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
                     }
                 else -> {
                     if (status.files.isNotEmpty() || subagents.isNotEmpty())
                         item(key = "filesHeader", span = { GridItemSpan(maxLineSpan) }) {
-                            Text(
+                            SectionHeading(
                                 stringResource(
                                     if (subagents.isEmpty()) R.string.remote_files_title else R.string.remote_changes_this_session
                                 ),
-                                style = MaterialTheme.typography.titleSmall,
+                                Modifier.padding(top = 8.dp),
+                                count = status.files.size.takeIf { it > 0 },
                             )
                         }
                     if (status.files.isEmpty())
-                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_empty)) }
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_empty)) }
                     items(status.files.size, key = { "file:" + status.files[it].path }) { index ->
                         val file = status.files[index]
                         ChangesFileTile(file, commentCounts[file.path] ?: 0, state.previews[file.path],
@@ -627,7 +625,7 @@ private fun ChangesOverview(
                             onOpen = { actions.onOpenFile(file.path) })
                     }
                     if (status.truncated)
-                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_truncated)) }
+                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_truncated)) }
                     commits(state, context, actions.onReload)
                     subagents.forEach { sub -> subagentGroup(sub, actions) }
                 }
@@ -669,55 +667,159 @@ private fun LazyGridScope.subagentGroup(sub: SubagentChanges, actions: ChangesAc
     }
     if (sub.status.truncated)
         item(key = "subagentTruncated:" + sub.sessionId, span = { GridItemSpan(maxLineSpan) }) {
-            PaneNotice(stringResource(R.string.remote_changes_truncated))
+            GridNotice(stringResource(R.string.remote_changes_truncated))
         }
 }
 
 private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry: () -> Unit) {
     if (state.status?.base == GitBase.HEAD) return
     item(key = "commitsHeader", span = { GridItemSpan(maxLineSpan) }) {
-        Text(
+        SectionHeading(
             stringResource(R.string.remote_changes_commits),
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
-            style = MaterialTheme.typography.titleSmall,
+            Modifier.padding(top = 16.dp),
+            count = state.log?.commits?.size?.takeIf { it > 0 },
         )
     }
     val log = state.log
     val failure = state.logFailure
     when {
         // A busy host (per-device or host-wide limit) clears up; the retry reloads status and log.
-        failure != null -> item(key = "commitsFailure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, onRetry) }
-        state.logLoading || log == null -> item(key = "commitsLoading", span = { GridItemSpan(maxLineSpan) }) { Loading() }
+        failure != null -> item(key = "commitsFailure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, GRID_FAILURE_PADDING, onRetry) }
+        state.logLoading || log == null -> item(key = "commitsLoading", span = { GridItemSpan(maxLineSpan) }) { Loading(GRID_FAILURE_PADDING) }
         log.unavailable != null ->
-            item(key = "commitsUnavailable", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_commits_unavailable)) }
+            item(key = "commitsUnavailable", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_commits_unavailable)) }
         else -> {
             if (log.commits.isEmpty())
-                item(key = "commitsEmpty", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_commits_empty)) }
+                item(key = "commitsEmpty", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_commits_empty)) }
             items(log.commits.size, key = { "commit:" + log.commits[it].sha }, span = { GridItemSpan(maxLineSpan) }) { index ->
                 val commit = log.commits[index]
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("changesCommit")) {
-                    Text(
-                        commit.subject.ifEmpty { stringResource(R.string.remote_changes_commit_no_subject) },
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        stringResource(
-                            R.string.remote_changes_commit_meta,
-                            commit.sha.take(7),
-                            commit.author,
-                            formatTime(context, commit.time),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                CommitRow(commit, context, first = index == 0, last = index == log.commits.lastIndex)
             }
             if (log.truncated)
-                item(key = "commitsTruncated", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_commits_truncated)) }
+                item(key = "commitsTruncated", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_commits_truncated)) }
+        }
+    }
+}
+
+/**
+ * The page's overview: the branch, how much changed and against what, with the base to compare
+ * against chosen right here, and since when the session's changes count.
+ */
+@Composable
+private fun ChangesOverviewCard(state: ChangesState, status: GitStatus?, shownBase: GitBase, actions: ChangesActions) {
+    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    val files = status?.files.orEmpty()
+    val added = files.sumOf { it.additions ?: 0 }
+    val removed = files.sumOf { it.deletions ?: 0 }
+    FloatingSurface(Modifier.fillMaxWidth().testTag("changesOverview"), shape = RoundedCornerShape(24.dp), blur = false) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassAvatar(size = 48.dp) { Icon(Icons.Outlined.AccountTree, null, tint = colors.primary) }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    // Only a branch the host named: loading, a failure, an older host or a detached HEAD name none.
+                    status?.branch?.let { branch ->
+                        Text(
+                            branch,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (status?.available == true)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                pluralStringResource(R.plurals.remote_changes_overview_files, files.size, files.size),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = colors.onSurfaceVariant,
+                            )
+                            if (added > 0 || removed > 0) {
+                                val counts = stringResource(R.string.remote_changes_line_counts, added, removed)
+                                Row(
+                                    Modifier.semantics(mergeDescendants = true) { contentDescription = counts },
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text("+$added", Modifier.testTag("changesOverviewAdded"), style = MaterialTheme.typography.labelLarge, color = colors.primary)
+                                    Text("−$removed", style = MaterialTheme.typography.labelLarge, color = colors.error)
+                                }
+                            }
+                        }
+                }
+            }
+            // A repository without a branch to compare against loses that choice, unless it is the one shown.
+            val noDevBase = state.devBase?.ref == null && state.devBase != null
+            val bases = GitBase.entries.filter { it != GitBase.DEV || !noDevBase || it == shownBase || it == state.base }
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                bases.forEachIndexed { index, base ->
+                    SegmentedButton(
+                        selected = base == shownBase,
+                        onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
+                        shape = SegmentedButtonDefaults.itemShape(index, bases.size),
+                        icon = {},
+                        modifier = Modifier.testTag("changesBase_${base.wire}"),
+                    ) {
+                        Text(baseLabel(base, state.devBase), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            status?.since?.let { since ->
+                Text(
+                    stringResource(
+                        if (since.firstContact) R.string.remote_changes_since_first_contact
+                        else R.string.remote_changes_since_session_start,
+                        formatTime(context, since.at),
+                    ),
+                    Modifier.testTag("changesSince"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** One commit as a row of the commits card: its short hash in a pill, subject and author. */
+@Composable
+private fun CommitRow(commit: GitCommit, context: Context, first: Boolean, last: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().clip(groupedRowShape(first, last)).background(colors.surfaceContainerLow)) {
+        if (!first) HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = colors.outlineVariant.copy(alpha = .4f))
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp).testTag("changesCommit"),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Surface(shape = RoundedCornerShape(8.dp), color = colors.surfaceContainerHigh) {
+                Text(
+                    commit.sha.take(7),
+                    Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    commit.subject.ifEmpty { stringResource(R.string.remote_changes_commit_no_subject) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(
+                        R.string.remote_changes_commit_meta,
+                        commit.author,
+                        formatTime(context, commit.time),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

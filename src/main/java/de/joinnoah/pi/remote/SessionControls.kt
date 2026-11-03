@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -405,7 +406,10 @@ internal fun SessionControls(
                         suggestionList.animateScrollToItem(index)
                 }
                 LazyColumn(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp).testTag("slashSuggestions"),
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)
+                        // Rounds the highlighted row's corners to match the composer.
+                        .clip(MaterialTheme.shapes.medium)
+                        .testTag("slashSuggestions"),
                     state = suggestionList,
                 ) {
                     itemsIndexed(localSuggestions, key = { _, command -> "local:" + command.commandName }) { index, command ->
@@ -911,7 +915,8 @@ internal fun thinkingLevelLabel(level: String): String =
 @Composable
 private fun suggestionColors(highlighted: Boolean): ListItemColors =
     if (highlighted) ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-    else ListItemDefaults.colors()
+    // Transparent, so the composer's glass shows through rather than an opaque surface-coloured block.
+    else ListItemDefaults.colors(containerColor = Color.Transparent)
 
 private fun Modifier.suggestionHighlight(highlighted: Boolean): Modifier =
     if (highlighted) semantics { selected = true }.testTag("slashHighlight") else this
