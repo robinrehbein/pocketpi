@@ -8,6 +8,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -627,25 +628,18 @@ internal fun ChildSessionPickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         LazyColumn(
             Modifier.fillMaxWidth().testTag("childSessionPicker").navigationBarsPadding(),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
             item {
-                Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) {
-                    Text(
-                        stringResource(R.string.remote_panel_child_picker_title),
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Text(
-                        stringResource(R.string.remote_panel_child_picker_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                SheetHeader(
+                    stringResource(R.string.remote_panel_child_picker_title),
+                    subtitle = stringResource(R.string.remote_panel_child_picker_hint),
+                )
             }
-            items(candidates, key = { it.id }) { session ->
+            itemsIndexed(candidates, key = { _, candidate -> candidate.id }) { index, session ->
                 val reported =
                     stringResource(
                         when (session.availability) {
@@ -663,7 +657,9 @@ internal fun ChildSessionPickerSheet(
                             else DateFormat.getDateFormat(context))
                             .format(Date(it))
                     }
+                SheetGroupRow(first = index == 0, last = index == candidates.lastIndex) {
                 ListItem(
+                    colors = sheetListItemColors(),
                     headlineContent = { Text(session.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     supportingContent = {
                         Text(listOfNotNull(status, updated).joinToString(" · "), maxLines = 1)
@@ -691,6 +687,7 @@ internal fun ChildSessionPickerSheet(
                             }
                             .testTag("childSessionCandidate"),
                 )
+                }
             }
         }
     }

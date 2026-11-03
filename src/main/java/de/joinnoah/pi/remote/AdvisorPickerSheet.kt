@@ -1,5 +1,9 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -8,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -51,38 +56,37 @@ internal fun AdvisorPickerSheet(
     val currentLabel = stringResource(R.string.remote_advisor_current_label)
     val maxHeight = windowHeightFraction(0.84f)
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).navigationBarsPadding()) {
           LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f, fill = false).testTag("advisorPickerList"),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            item {
-                Text(
-                    stringResource(R.string.remote_advisor_title),
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-            }
+            item { SheetHeader(stringResource(R.string.remote_advisor_title), padding = PaddingValues(start = 4.dp)) }
             if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (advisor == null) {
                 if (!loading) {
-                    item { Text(unavailableReason ?: stringResource(R.string.remote_advisor_unavailable)) }
+                    item {
+                        SheetSection(Modifier.testTag("advisorUnavailable")) {
+                            Text(
+                                unavailableReason ?: stringResource(R.string.remote_advisor_unavailable),
+                                Modifier.padding(16.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                     if (onRetry != null) item {
-                        OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                        SheetSecondaryButton(onClick = onRetry) {
                             Text(stringResource(R.string.remote_advisor_retry))
                         }
                     }
                 }
             } else {
                 item {
-                    Surface(
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
+                    SheetCard {
                         Column(
-                            Modifier.padding(16.dp),
+                            Modifier.padding(18.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Text(
@@ -155,11 +159,9 @@ internal fun AdvisorPickerSheet(
                             contentDescription = description
                             if (current) stateDescription = currentLabel
                         },
-                        shape = MaterialTheme.shapes.medium,
-                        color = if (selected) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                            else null,
+                        // The choice reads from its tint, as the other sheets' choices do, not from a border.
+                        shape = SHEET_OPTION_SHAPE,
+                        color = sheetOptionColor(selected),
                     ) {
                         Row(
                             Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
@@ -192,7 +194,6 @@ internal fun AdvisorPickerSheet(
                   }
                 }
                 item {
-                    HorizontalDivider(Modifier.padding(top = 4.dp))
                     Text(
                         stringResource(R.string.remote_advisor_context_notice),
                         style = MaterialTheme.typography.bodySmall,
@@ -210,24 +211,48 @@ internal fun AdvisorPickerSheet(
                   if (selectedChoice != null) {
                       Text(stringResource(R.string.remote_advisor_thinking),
                           style = MaterialTheme.typography.titleMedium)
-                      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                          selectedChoice.levels.forEach { level ->
-                              FilterChip(
+                      val levels = selectedChoice.levels
+                      // A few levels fit one pill switch, as the other level choices in the app;
+                      // more wrap as pills, so a narrow phone never clips their labels.
+                      if (levels.size > 3)
+                          FlowRow(
+                              horizontalArrangement = Arrangement.spacedBy(8.dp),
+                              verticalArrangement = Arrangement.spacedBy(8.dp),
+                          ) {
+                              levels.forEach { level ->
+                                  FilterChip(
+                                      selected = selectedLevel == level,
+                                      onClick = { onSelectLevel(level) },
+                                      label = { Text(level) },
+                                      enabled = canSelect,
+                                      shape = CircleShape,
+                                      border = null,
+                                      colors = FilterChipDefaults.filterChipColors(
+                                          containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                          selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                      ),
+                                  )
+                              }
+                          }
+                      else SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                          levels.forEachIndexed { index, level ->
+                              SegmentedButton(
                                   selected = selectedLevel == level,
                                   onClick = { onSelectLevel(level) },
-                                  label = { Text(level) },
+                                  shape = SegmentedButtonDefaults.itemShape(index, levels.size),
                                   enabled = canSelect,
-                              )
+                                  icon = {},
+                              ) {
+                                  Text(level, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                              }
                           }
                       }
-                      Button(onClick = onApply, enabled = canSelect,
-                          modifier = Modifier.fillMaxWidth()) {
+                      SheetPrimaryButton(onClick = onApply, enabled = canSelect) {
                           Text(stringResource(R.string.remote_advisor_apply))
                       }
                   }
                   if (advisor.enabled) {
-                      OutlinedButton(onClick = onDisable, enabled = canSelect,
-                          modifier = Modifier.fillMaxWidth()) {
+                      SheetSecondaryButton(onClick = onDisable, enabled = canSelect) {
                           Text(stringResource(R.string.remote_advisor_disable))
                       }
                   }
@@ -237,15 +262,4 @@ internal fun AdvisorPickerSheet(
               ManageProvidersRow(onManageProviders)
         }
     }
-}
-
-/** The footer row of the model and advisor pickers that opens the host's providers. */
-@Composable
-internal fun ManageProvidersRow(onClick: () -> Unit) {
-    HorizontalDivider()
-    ListItem(
-        headlineContent = { Text(stringResource(R.string.remote_page_manage_providers)) },
-        trailingContent = { Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = null) },
-        modifier = Modifier.clickable(role = Role.Button, onClick = onClick).testTag("managePickerProviders"),
-    )
 }

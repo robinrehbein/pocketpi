@@ -6,9 +6,12 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,6 +58,20 @@ class PendingSendLabelTest {
     @Test fun promptOnItsWayShowsSending() {
         show(pending(PendingSendState.SENDING))
         compose.onNodeWithTag(tag).assertIsDisplayed().assertTextEquals("Sending…")
+    }
+
+    @Test fun shortPromptKeepsToTheEndEdgeWithItsStatusUnderIt() {
+        show(pending(PendingSendState.SENDING))
+        val root = compose.onRoot().getUnclippedBoundsInRoot()
+        val message = compose.onNodeWithTag("messageBubble-pending-m1").getUnclippedBoundsInRoot()
+        val label = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        // The status line no longer stretches the message to its widest, which left the bubble
+        // at the start of that width and the label alone at the end.
+        val messageWidth = message.right - message.left
+        val rootWidth = root.right - root.left
+        assertTrue("message $messageWidth of $rootWidth", messageWidth < rootWidth * 0.6f)
+        assertEquals(root.right.value, message.right.value, 0.5f)
+        assertTrue(label.right <= message.right && label.top >= message.top)
     }
 
     @Test fun unconfirmedPromptShowsNotConfirmed() {

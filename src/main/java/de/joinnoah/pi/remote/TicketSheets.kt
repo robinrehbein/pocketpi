@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -62,13 +63,13 @@ internal fun branchPreview(ref: String): String = "task/${ref.lowercase()}-…"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SheetFrame(title: String, onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier.fillMaxWidth().navigationBarsPadding().imePadding()
                 .verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+            SheetHeader(title, padding = PaddingValues(start = 4.dp))
             content()
         }
     }
@@ -81,13 +82,14 @@ private fun SheetField(label: String, value: String, onChange: (String) -> Unit,
         onValueChange = { onChange(it.take(maxChars)) },
         label = { Text(label) },
         minLines = 3,
+        shape = SHEET_OPTION_SHAPE,
         modifier = Modifier.fillMaxWidth().testTag("ticketSheetField"),
     )
 }
 
 @Composable
 private fun SheetConfirm(text: String, enabled: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("ticketSheetConfirm")) {
+    SheetPrimaryButton(onClick = onClick, enabled = enabled, modifier = Modifier.testTag("ticketSheetConfirm")) {
         Text(text)
     }
 }
@@ -260,7 +262,7 @@ internal fun StartSheet(
             }
         } else if (failedToSend) {
             TicketWriteMessage(tickets)
-            OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+            SheetSecondaryButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.remote_tickets_start_close))
             }
         } else {
@@ -328,7 +330,7 @@ private fun StartProgress(job: TicketStart?, onOpenChat: (String) -> Unit, onDis
             Button(onClick = { onOpenChat(sessionId); onDismiss() }, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.remote_tickets_start_open_chat))
             }
-        OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+        SheetSecondaryButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.remote_tickets_start_close))
         }
     }

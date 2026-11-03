@@ -10,8 +10,13 @@ const val COMPACT_CAPABILITY = "session.compact.v1"
 const val ADVISOR_CAPABILITY = "session.advisor.v1"
 const val SETTINGS_CAPABILITY = "session.settings.v1"
 
+/**
+ * The selected session has an advisor of its own the phone can read and change. A subagent child
+ * has none: it consults its parent's advisor, which the host does not expose for the child.
+ */
 internal fun advisorControlAvailable(state: RemoteState): Boolean =
-    ADVISOR_CAPABILITY in state.capabilities && ADVISOR_CAPABILITY !in state.unavailableCapabilities
+    ADVISOR_CAPABILITY in state.capabilities && ADVISOR_CAPABILITY !in state.unavailableCapabilities &&
+        !isChildSession(state)
 
 /** The queue modes the host accepts for [SessionSettings.steeringMode] and [SessionSettings.followUpMode]. */
 const val QUEUE_MODE_ONE_AT_A_TIME = "one-at-a-time"

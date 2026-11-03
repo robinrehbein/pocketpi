@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -183,7 +184,7 @@ internal fun CommandPalette(
         }
     }
     if (sheet)
-        ModalBottomSheet(
+        GlassSheet(
             onDismissRequest = onDismiss,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) { content() }
@@ -203,8 +204,9 @@ private fun PaletteRow(item: PaletteItem, selected: Boolean, onClick: () -> Unit
         Modifier.fillMaxWidth()
             .background(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                MaterialTheme.shapes.medium,
+                SHEET_OPTION_SHAPE,
             )
+            .clip(SHEET_OPTION_SHAPE)
             .clickable(role = Role.Button, onClick = onClick)
             // The current session or host says so in its detail line, which TalkBack reads already.
             .semantics { this.selected = selected }
