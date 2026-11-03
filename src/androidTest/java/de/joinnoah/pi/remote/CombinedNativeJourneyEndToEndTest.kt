@@ -139,7 +139,7 @@ class CombinedNativeJourneyEndToEndTest {
         assertFalse(status().optBoolean("agentVerified"))
         compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(agentPrompt)
         compose.onNodeWithTag("composerField").assertTextEquals(agentPrompt)
-        awaitStill("primaryComposerAction")
+        awaitComposerSettled()
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
         val agentResult = awaitStatus { it.optBoolean("agentVerified") }
         compose.waitUntil(60_000) {
@@ -163,7 +163,7 @@ class CombinedNativeJourneyEndToEndTest {
         check(canRunShellCommands(beforeShell)) { "Native workflow shell capabilities are unavailable; see boundary diagnostics" }
         compose.onNodeWithTag("composerField").assertTextEquals("!$shell")
         compose.waitUntil(5_000) { exists("shellMode") }
-        awaitStill("primaryComposerAction")
+        awaitComposerSettled()
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
         compose.waitForIdle()
         val afterShell = repository.state.value
@@ -403,15 +403,21 @@ class CombinedNativeJourneyEndToEndTest {
 
     // Typing focuses the composer and the keyboard slides in, carrying the composer up with it for
     // several hundred milliseconds. A click sent meanwhile presses where the button was and releases
-    // after it moved on, which Compose treats as a cancelled press: no send. Wait for it to settle.
-    private fun awaitStill(tag: String, stillMillis: Long = 300) {
-        var last: androidx.compose.ui.geometry.Rect? = null
+    // after it moved on, which Compose treats as a cancelled press: no send. Wait until the keyboard
+    // is shown and the button has not moved for [stillMillis], so a slide that has yet to start
+    // cannot pass for a settled one.
+    private fun awaitComposerSettled(tag: String = "primaryComposerAction", stillMillis: Long = 300) {
+        var last: Pair<androidx.compose.ui.geometry.Rect, Boolean>? = null
         var since = 0L
         compose.waitUntil(30_000) {
-            val bounds = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInWindow
+            var keyboard = false
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                keyboard = ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+            val sample = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInWindow to keyboard
             val now = android.os.SystemClock.uptimeMillis()
-            if (bounds != last) { last = bounds; since = now }
-            now - since >= stillMillis
+            if (sample != last) { last = sample; since = now }
+            keyboard && now - since >= stillMillis
         }
     }
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
@@ -631,7 +637,7 @@ class CombinedNativeJourneyEndToEndTest {
             recordEditorProgress("before-input")
             compose.onNodeWithTag("composerField").performTextReplacement(editorInput)
             recordEditorProgress("after-input")
-            awaitStill("primaryComposerAction")
+            awaitComposerSettled()
             compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
             recordEditorProgress("after-click")
             // Observation only: an error separates sendPrompt's refusals from active()'s silent drop.
@@ -1002,8 +1008,10 @@ class CombinedNativeJourneyEndToEndTest {
         assertEquals("One acquire after the resume", acquires + 1, resumed.getInt("deviceAcquires"))
         val acquiredAfterDrop = timeline(resumed).filter { it.getLong("at") > droppedAt && it.getString("type") == "emulator.acquire" }
         assertEquals(1, acquiredAfterDrop.size)
+        assertTrue("Host emulator failure after the drop", resumed.isNull("lastFailure"))
         assertEquals("emulator.lease", acquiredAfterDrop.single().optString("result"))
-        // A fresh Settings front, so the Host's Home observation stays meaningful for this input too.
+        // Settings in front again, so the Host's check at dispatch holds for this Home too. The Host's
+        // home observation is sticky from the first Home; this input is proven by its accepted ack.
         action("emulator-prepare-home")
         compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("emulatorKey_Home").assertIsEnabled(); true }.getOrDefault(false) }
         compose.onNodeWithTag("emulatorKey_Home").performScrollTo().performClick()
@@ -1016,6 +1024,7 @@ class CombinedNativeJourneyEndToEndTest {
         val accepted = fullStatus().getJSONObject("emulator")
         assertEquals("accepted", accepted.getString("inputStatus"))
         assertEquals(acquires + 1, accepted.getInt("deviceAcquires"))
+        assertTrue(accepted.isNull("lastFailure"))
         proof.put("emulatorReconnect", JSONObject().put("socketDropped", true).put("socketReopened", true)
             .put("deviceAcquires", accepted.getInt("deviceAcquires")).put("acquiresAfterDrop", 1)
             .put("deviceHomeInputs", accepted.getInt("deviceHomeInputs")).put("inputAcceptedAfterReconnect", true))
