@@ -29,7 +29,14 @@ Pi can list/open a profile, inspect participants, acquire/release control, hand 
 eligible participant, capture a snapshot, send finite key/tap/swipe input, detach or stop its owned
 context. PocketPi starts as a reader. Input requires the current lease and a fully delivered image
 for the current generation and geometry. Reconnection rejoins through an explicit profile open
-without automatically acquiring control. Frames use bounded PNG chunks and acknowledgements.
+as a reader. If this device held control when the connection dropped, the app then takes control
+back once with a single automatic acquire (PocketPi #215). It does so only for the same emulator
+ID and incarnation, while the pane is visible and not opening, and once the Host shows no owner.
+While the Host still lists the dropped connection as owner, the app waits for a state without an
+owner. Another owner, a Busy reply (shown without a busy notice), close, stop or handoff cancels
+the re-acquire. There is no re-acquire after a deliberate fail-closed (`fail()`, for example a
+frame deadline) or after a drop with an input in flight, which is uncertain; input is never
+replayed. Frames use bounded PNG chunks and acknowledgements.
 
 ## Current evidence
 
