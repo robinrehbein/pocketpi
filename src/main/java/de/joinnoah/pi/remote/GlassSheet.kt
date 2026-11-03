@@ -1,6 +1,12 @@
 package de.joinnoah.pi.remote
 
+import android.os.Build
+import android.view.View
+import android.view.ViewParent
+import android.view.Window
+import android.view.WindowManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -32,10 +39,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -43,10 +57,14 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
+import java.util.function.Consumer
 
 // The app's bottom sheets in the floating-glass design. A sheet is a window of its own above the
-// app, so nothing behind it can be blurred; it takes the look instead: the page background, a
-// slim handle, and glass cards, option pills and pill buttons inside.
+// app, so Haze cannot blur what lies behind it. From Android 12 the window asks the system to blur
+// everything behind it instead (cross-window blur), and the sheet turns frosted glass: the page
+// background at the glass tint, a light scrim and the glass rim. Where the system has that blur
+// off (battery saver, reduced animations, older Android) the sheet stays opaque.
 
 /** The top corners of every sheet. */
 private val SHEET_CORNER = 32.dp
@@ -63,17 +81,69 @@ internal fun GlassSheet(
     sheetState: SheetState = rememberModalBottomSheetState(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    var frosted by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(topStart = SHEET_CORNER, topEnd = SHEET_CORNER)
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
-        modifier = modifier,
+        modifier = if (frosted) modifier.border(GLASS_RIM_WIDTH, glassRimColor(scheme), shape) else modifier,
         sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = SHEET_CORNER, topEnd = SHEET_CORNER),
-        containerColor = MaterialTheme.colorScheme.background,
-        contentColor = MaterialTheme.colorScheme.onBackground,
+        shape = shape,
+        // The glass tint keeps text at 4.5:1 over any content, as on the floating pills.
+        containerColor = if (frosted) scheme.background.copy(alpha = GLASS_TINT_ALPHA) else scheme.background,
+        contentColor = scheme.onBackground,
         tonalElevation = 0.dp,
+        scrimColor = if (frosted) scheme.scrim.copy(alpha = FROSTED_SCRIM_ALPHA) else BottomSheetDefaults.ScrimColor,
         dragHandle = { SheetHandle() },
-        content = content,
-    )
+    ) {
+        BlurBehindSheetWindow { frosted = it }
+        content()
+    }
+}
+
+/** The scrim over the blurred app: lighter than the opaque sheet's, since the blur already sets it back. */
+private const val FROSTED_SCRIM_ALPHA = 0.14f
+
+/** How far the system blurs the app behind a frosted sheet, in pixels. */
+private const val SHEET_BLUR_RADIUS_PX = 64
+
+/**
+ * Asks the system to blur the app behind the sheet's window and reports whether that blur is on.
+ * The system can turn cross-window blur off and on while the sheet is open (battery saver), so the
+ * sheet follows its listener rather than reading it once.
+ */
+@Composable
+private fun BlurBehindSheetWindow(onFrosted: (Boolean) -> Unit) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    val view = LocalView.current
+    val report by rememberUpdatedState(onFrosted)
+    DisposableEffect(view) {
+        val window = view.dialogWindow()
+        val windowManager = view.context.getSystemService(WindowManager::class.java)
+        if (window == null || windowManager == null) return@DisposableEffect onDispose {}
+        val listener = Consumer<Boolean> { enabled ->
+            window.attributes = window.attributes.apply { blurBehindRadius = if (enabled) SHEET_BLUR_RADIUS_PX else 0 }
+            report(enabled)
+        }
+        // The listener is called at once with the current state. A window manager that cannot
+        // blur (a test's) leaves the sheet opaque instead of failing.
+        val registered = runCatching {
+            window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+            windowManager.addCrossWindowBlurEnabledListener(listener)
+        }.isSuccess
+        onDispose { if (registered) runCatching { windowManager.removeCrossWindowBlurEnabledListener(listener) } }
+    }
+}
+
+/** The window of the dialog that hosts this view, as the sheet's own layout provides it. */
+private fun View.dialogWindow(): Window? {
+    var current: ViewParent? = parent
+    if (this is DialogWindowProvider) return window
+    while (current != null) {
+        if (current is DialogWindowProvider) return current.window
+        current = current.parent
+    }
+    return null
 }
 
 @Composable

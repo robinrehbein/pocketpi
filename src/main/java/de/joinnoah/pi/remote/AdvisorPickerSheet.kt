@@ -141,7 +141,10 @@ internal fun AdvisorPickerSheet(
                             .semantics { heading() },
                     )
                   }
-                  items(group.choices, key = { it.provider + ":" + it.id }) { choice ->
+                  // A provider's models read as one card of rows, like the other lists in sheets.
+                  item(key = "advisorGroup/" + group.provider) {
+                   Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                   group.choices.forEachIndexed { index, choice ->
                     val selected = selectedChoice == choice
                     val current = advisor.enabled && currentChoice == choice
                     val providerLabel = advisorRowLabel(choice, group)
@@ -160,7 +163,7 @@ internal fun AdvisorPickerSheet(
                             if (current) stateDescription = currentLabel
                         },
                         // The choice reads from its tint, as the other sheets' choices do, not from a border.
-                        shape = SHEET_OPTION_SHAPE,
+                        shape = groupedRowShape(index == 0, index == group.choices.lastIndex, corner = 20.dp),
                         color = sheetOptionColor(selected),
                     ) {
                         Row(
@@ -191,6 +194,8 @@ internal fun AdvisorPickerSheet(
                             RadioButton(selected = selected, onClick = null, enabled = canSelect)
                         }
                     }
+                   }
+                   }
                   }
                 }
                 item {
