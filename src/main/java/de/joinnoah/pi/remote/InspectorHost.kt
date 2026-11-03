@@ -150,7 +150,8 @@ internal fun InspectorHost(
         known.addAll(tabs.open)
     }
     val active = tabs.active ?: tabs.open.firstOrNull()
-    Surface(modifier.fillMaxSize().testTag("inspectorHost")) {
+    // The page background, like the panes it shows, so its tab row meets them without a seam.
+    Surface(modifier.fillMaxSize().testTag("inspectorHost"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 PrimaryScrollableTabRow(
@@ -231,7 +232,7 @@ internal fun InspectorHost(
  */
 @Composable
 internal fun ChatStrip(statusColor: Color, statusLabel: String, onShowChat: () -> Unit) {
-    Surface(Modifier.fillMaxSize()) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical))

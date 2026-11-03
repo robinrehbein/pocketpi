@@ -82,10 +82,8 @@ internal fun HostCard(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(Modifier.size(52.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainer) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.LaptopMac, null, modifier = Modifier.size(28.dp))
-                }
+            GlassAvatar(size = 52.dp) {
+                Icon(Icons.Default.LaptopMac, null, modifier = Modifier.size(28.dp))
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(host.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -319,11 +317,7 @@ internal fun ProjectRow(
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier.size(40.dp).clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                contentAlignment = Alignment.Center,
-            ) {
+            GlassAvatar(size = 40.dp) {
                 Icon(
                     Icons.Outlined.Folder,
                     contentDescription = null,
@@ -410,9 +404,7 @@ internal fun SettingsOption(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Surface(Modifier.size(40.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainer) {
-            Box(contentAlignment = Alignment.Center) { Icon(icon, null, modifier = Modifier.size(20.dp)) }
-        }
+        GlassAvatar(size = 40.dp) { Icon(icon, null, modifier = Modifier.size(20.dp)) }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

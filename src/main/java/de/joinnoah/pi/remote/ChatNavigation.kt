@@ -514,7 +514,7 @@ internal fun ChatHistoryPane(
     initialIndex: Int = 0,
 ) {
     PaneBackHandler(onBack = onClose)
-    Surface(modifier.fillMaxSize().testTag("chatHistoryPane")) {
+    Surface(modifier.fillMaxSize().testTag("chatHistoryPane"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                 FloatingSurface(shape = CircleShape) {

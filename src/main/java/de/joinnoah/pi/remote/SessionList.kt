@@ -214,14 +214,11 @@ internal fun SessionListRow(
                 verticalAlignment = Alignment.Top,
             ) {
                 Box(Modifier.size(44.dp).clearAndSetSemantics {}) {
-                    Box(
-                        Modifier.fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    GlassAvatar(size = 44.dp) {
                         Text(
                             stringResource(R.string.remote_design_pi_mark),
                             style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
                     if (item.availability == SessionAvailability.RUNNING && !item.lastKnown) {

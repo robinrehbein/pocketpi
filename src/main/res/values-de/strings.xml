@@ -229,6 +229,10 @@
     <string name="remote_notification_subagent_stuck">Subagent scheint zu hängen</string>
     <string name="remote_notification_job_done">Hintergrundjob ist fertig</string>
     <string name="remote_notification_job_stuck">Hintergrundjob scheint zu hängen</string>
+    <plurals name="remote_changes_overview_files">
+        <item quantity="one">%1$d Datei</item>
+        <item quantity="other">%1$d Dateien</item>
+    </plurals>
     <plurals name="remote_notification_subagents_done">
         <item quantity="one">%d Subagent ist fertig</item>
         <item quantity="other">%d Subagenten sind fertig</item>
@@ -272,6 +276,8 @@
     <string name="remote_message_interrupted">Unterbrochen</string>
     <string name="remote_tool_arguments">Argumente</string>
     <string name="remote_tool_output">Ausgabe</string>
+    <string name="remote_tool_detail_view_formatted">Formatiert</string>
+    <string name="remote_tool_detail_view_raw">Roh</string>
     <string name="remote_prompt_too_long">Nachricht und Zitat überschreiten das Größenlimit. Kürze die Nachricht oder entferne das Zitat.</string>
     <string name="remote_configuration_error">Die Sitzungskonfiguration konnte nicht bestätigt werden. Aktualisiere sie vor einer weiteren Änderung.</string>
     <string name="remote_configuration_unavailable">Modell- und Denkeinstellungen sind für diese Sitzung nicht verfügbar.</string>
@@ -347,6 +353,10 @@
     <string name="remote_child_quote_unsupported">Zitate können nicht an einen Subagenten gesendet werden. Entferne das Zitat, um ihn fortzusetzen.</string>
     <string name="remote_child_command_unsupported">Befehle können keinen Subagenten fortsetzen. Sende stattdessen eine normale Nachricht.</string>
     <string name="remote_jobs_title">Hintergrundjobs</string>
+    <string name="remote_jobs_group_running">Läuft</string>
+    <string name="remote_jobs_group_finished">Beendet</string>
+    <string name="remote_activity_tile_finished">Fertig</string>
+    <string name="remote_activity_all_clear">Alles ruhig</string>
     <plurals name="remote_jobs_running_count">
         <item quantity="one">%d Job läuft</item>
         <item quantity="other">%d Jobs laufen</item>
