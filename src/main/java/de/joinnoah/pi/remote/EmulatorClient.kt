@@ -27,8 +27,10 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     // does not set it.
     private var reacquire = false; private var lostOwner: EmulatorOwner? = null
     private fun reacquireIfFree(owner: EmulatorOwner?) {
-        if (!reacquire) return
-        if (lease != null) reacquire = false else if (owner == null) { if (acquire()) reacquire = false } else if (owner != lostOwner) reacquire = false
+        // The resume's Open reply calls this again once the view is current.
+        if (!reacquire || view?.opening == true) return
+        // Only a visible pane takes control back; a hidden one does not later on its own.
+        if (lease != null || !visible) reacquire = false else if (owner == null) { if (acquire()) reacquire = false } else if (owner != lostOwner) reacquire = false
     }
     private var deadline: Job? = null
     private var stream: String? = null; private var assembler: EmulatorFrameAssembler? = null; private var watchToken = 0L; private var watching = false
