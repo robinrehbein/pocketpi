@@ -391,9 +391,12 @@ internal class FileMutationController(
         reason: FileMutationRefusal? = null,
         failure: FilesFailure? = null,
     ) = write(target) {
-        // Only the operation the outcome shows; a later one replaced it.
-        if (it.outcome?.operationId != request.operationId) it
-        else it.copy(outcome = it.outcome.copy(status = status, reason = reason, failure = failure))
+        // Only the operation the outcome shows, or one learned on recovery while none is shown.
+        when (it.outcome?.operationId) {
+            request.operationId -> it.copy(outcome = it.outcome.copy(status = status, reason = reason, failure = failure))
+            null -> it.copy(outcome = FileMutationOutcome(request.kind, request.path, request.destinationPath, status, reason, failure, request.operationId))
+            else -> it
+        }
     }
 
     /** Records what the host answered for [request]; a pending one is asked about again shortly. */

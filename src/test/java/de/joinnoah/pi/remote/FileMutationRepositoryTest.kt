@@ -343,6 +343,23 @@ class FileMutationRepositoryTest {
     }
 
     @Test
+    fun aRefusalLearnedAfterRestartIsShownWithItsReason() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        val request = FileMutationRequest("host", "device", sessionId, "b3BlcmF0aW9uLTAwMDMtYw", epoch, FileMutationKind.DELETE, "a.txt", baseVersion = version)
+        journal.entries = mapOf(FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.RESERVED))
+        transport.answer = { frame ->
+            record(Wire.objectOf("type" to "x", "operationId" to frame.text("operationId"), "operation" to "delete", "path" to "a.txt"), "refused", "conflict")
+        }
+        val repository = opened(repository(transport, journal))
+        assertEquals(listOf("session.files.mutation.status"), transport.types().filter { it.startsWith("session.files.mutation.s") || it in mutationTypes })
+        assertEquals(FileMutationStatus.REFUSED, repository.outcome()?.status)
+        assertEquals(FileMutationRefusal.CONFLICT, repository.outcome()?.reason)
+        assertEquals("a.txt", repository.outcome()?.path)
+        assertTrue(journal.entries.isEmpty())
+    }
+
+    @Test
     fun refusalsAreTerminalAndKeepTheirReason() = runTest {
         for (reason in FileMutationRefusal.entries) {
             val transport = Transport(all)
