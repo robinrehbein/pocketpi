@@ -2,7 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.text.format.DateUtils
 import androidx.annotation.StringRes
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,6 +13,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +28,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.ConfirmationNumber
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -40,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +62,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -129,6 +138,7 @@ internal fun TicketsContent(
     val tickets = state.tickets
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
     val project = tickets.projects.firstOrNull { it.projectId == chosen } ?: tickets.projects.firstOrNull()
+    val projectStates = rememberSaveableStateHolder()
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
@@ -152,10 +162,19 @@ internal fun TicketsContent(
         },
         snackbarHost = { TicketUndoBar(tickets.pendingAccept, onUndo) },
     ) { insets ->
-        // The list scrolls under the floating header: its pills blur it.
+        projectStates.SaveableStateProvider(project?.projectId ?: "__no_project__") {
+        var filter by rememberSaveable { mutableStateOf("all") }
+        var collapsed by rememberSaveable { mutableStateOf(emptyList<String>()) }
+        val page = project?.let { tickets.pages[it.projectId] }
+        LaunchedEffect(page, filter) {
+            if (page?.available == true && filter != "all" && page.items.none { it.section.wire == filter }) {
+                filter = "all"
+            }
+        }
+        // Keep sticky group headers below the floating navigation controls.
         LazyColumn(
-            Modifier.fillMaxSize().padding(insets.underFloatingHeader()).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = insets.floatingHeaderOverlap(), bottom = 24.dp),
+            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (hasWriteNotice(tickets))
@@ -180,17 +199,25 @@ internal fun TicketsContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            ticketsBody(state, project, now, onRetry, onOpen)
+            ticketsBody(state, project, now, onRetry, onOpen, filter, { filter = it }, collapsed) { wire ->
+                collapsed = if (wire in collapsed) collapsed - wire else collapsed + wire
+            }
+        }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 private fun androidx.compose.foundation.lazy.LazyListScope.ticketsBody(
     state: RemoteState,
     project: TicketProject?,
     now: Long,
     onRetry: () -> Unit,
     onOpen: (String, String) -> Unit,
+    filter: String,
+    onFilter: (String) -> Unit,
+    collapsed: List<String>,
+    onToggle: (String) -> Unit,
 ) {
     val tickets = state.tickets
     val page = project?.let { tickets.pages[it.projectId] }
@@ -240,17 +267,39 @@ private fun androidx.compose.foundation.lazy.LazyListScope.ticketsBody(
                         stringResource(R.string.remote_tickets_empty_body),
                     )
                 }
-            ticketSectionOrder.forEach { section ->
-                val items = bySection[section].orEmpty()
-                if (items.isNotEmpty())
-                    item("section:${section.wire}") {
-                        Section(stringResource(sectionTitle(section))) {
-                            items.forEachIndexed { index, ticket ->
-                                if (index > 0) HorizontalDivider()
-                                TicketRow(ticket) { onOpen(project.projectId, ticket.ref) }
-                            }
+            val sections = ticketSectionOrder.filter { bySection[it].orEmpty().isNotEmpty() }
+            val effectiveFilter = filter.takeIf { selected -> sections.any { it.wire == selected } } ?: "all"
+            if (sections.size > 1) {
+                item("filters") {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("ticketsFilter"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        TicketFilter(stringResource(R.string.remote_tickets_filter_all), page.items.size, effectiveFilter == "all", "all") { onFilter("all") }
+                        sections.forEach { section ->
+                            TicketFilter(stringResource(sectionTitle(section)), bySection[section].orEmpty().size, effectiveFilter == section.wire, section.wire) { onFilter(section.wire) }
                         }
                     }
+                }
+            }
+            sections.filter { effectiveFilter == "all" || effectiveFilter == it.wire }.forEachIndexed { index, section ->
+                val items = bySection[section].orEmpty()
+                if (index > 0) item("space:${section.wire}") { Spacer(Modifier.height(16.dp)) }
+                stickyHeader(key = "section:${section.wire}") {
+                    TicketGroupHeader(section, items.size, section.wire !in collapsed) { onToggle(section.wire) }
+                }
+                if (section.wire !in collapsed) {
+                    val occurrences = mutableMapOf<String, Int>()
+                    items.forEach { ticket ->
+                        val occurrence = occurrences.getOrDefault(ticket.ref, 0)
+                        occurrences[ticket.ref] = occurrence + 1
+                        // Pages can overlap; retain both rows without giving LazyColumn duplicate keys.
+                        val key = "ticket:${section.wire}:${ticket.ref.length}:${ticket.ref}:$occurrence"
+                        item(key = key) {
+                            TicketRow(ticket) { onOpen(project.projectId, ticket.ref) }
+                        }
+                    }
+                }
             }
         }
     }
@@ -265,17 +314,54 @@ private fun sectionTitle(section: TicketSection): Int =
     }
 
 @Composable
+private fun TicketFilter(label: String, count: Int, selected: Boolean, tag: String, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text("$label · $count") },
+        modifier = Modifier.defaultMinSize(minHeight = 48.dp).testTag("ticketsFilter:$tag"),
+    )
+}
+
+@Composable
+private fun TicketGroupHeader(section: TicketSection, count: Int, expanded: Boolean, onClick: () -> Unit) {
+    val state = stringResource(if (expanded) R.string.remote_tickets_group_expanded else R.string.remote_tickets_group_collapsed)
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
+            .defaultMinSize(minHeight = 48.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { heading(); stateDescription = state }
+            .testTag("ticketsGroup:${section.wire}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(stringResource(sectionTitle(section)), style = MaterialTheme.typography.titleMedium)
+        Text(
+            pluralStringResource(R.plurals.remote_tickets_group_count, count, count),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
+    }
+}
+
+@Composable
 private fun TicketRow(ticket: Ticket, onClick: () -> Unit) {
     val caption = ticketCaption(ticket)
     Column(
         Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
             .defaultMinSize(minHeight = 48.dp)
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) {},
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+            .semantics(mergeDescendants = true) {}
+            .testTag("ticketCard:${ticket.ref}")
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(ticket.ref, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(ticket.title, style = MaterialTheme.typography.bodyLarge)
+        Text(ticket.ref, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (caption != null)
             Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
