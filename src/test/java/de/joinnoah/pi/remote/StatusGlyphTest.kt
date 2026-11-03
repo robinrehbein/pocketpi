@@ -32,4 +32,13 @@ class StatusGlyphTest {
             assertEquals(0, statusGlyphFrame(kind, 12345))
         }
     }
+
+    @Test
+    fun staticSessionGlyphIsDistinctFromSnakeFrames() {
+        val snake = (0..7).map { sessionRunningCells(it, animated = true) }
+        assertEquals(listOf(4, 5, 1, 3, 2, 10, 8, 12), snake)
+        for (frame in 0..7) assertEquals(SESSION_RUNNING_STATIC_CELLS, sessionRunningCells(frame, animated = false))
+        assertEquals(false, SESSION_RUNNING_STATIC_CELLS in snake)
+        assertEquals(3, Integer.bitCount(SESSION_RUNNING_STATIC_CELLS))
+    }
 }

@@ -251,19 +251,26 @@ internal fun ProjectSessions.unverified(): ProjectSessions = copy(verified = fal
  * Projects page's featured chats do.
  */
 internal fun projectSessionItems(entry: ProjectSessions, connected: Boolean): List<SessionListItem> =
-    entry.sessions.map { sessionListItem(it, connected && entry.verified, loading = false, stale = false) }
+    entry.sessions.map { sessionListItem(it, connected && entry.verified, loading = false, stale = false, confirmed = entry.verified) }
 
 /**
  * The row of [session]. [stale]: the connection is lost while the state on screen is kept (see
  * [RemoteState.stale]); the row keeps the status the Mac last reported instead of going offline,
  * marked [SessionListItem.lastKnown]. That lasts as long as [stale] does, also once the reconnect
  * has given up and the connection reads "Offline".
+ *
+ * [confirmed]: a `sessions.list` reply read on the connection now up stands behind these rows
+ * ([RemoteState.sessionsFresh]). While a connection is up but its list has not answered yet (just
+ * after a reconnect), the rows are what an earlier connection said: they stay last known too, and
+ * none claims to be live.
  */
 internal fun sessionListItem(
     session: JsonObject,
     connected: Boolean,
     loading: Boolean,
     stale: Boolean = false,
+    // No default: a caller that forgets it would let an earlier connection's rows claim to be live.
+    confirmed: Boolean,
 ): SessionListItem {
     val availability =
         if (!connected && !stale) SessionAvailability.OFFLINE
@@ -286,8 +293,8 @@ internal fun sessionListItem(
         continuesAsCopy = session.text("origin") == "history",
         daemonOwned = session.text("origin") == "rpc",
         liveMacTui = session.text("origin") == "tui" &&
-            availability != SessionAvailability.OFFLINE && !loading,
-        lastKnown = !connected && availability != SessionAvailability.OFFLINE,
+            availability != SessionAvailability.OFFLINE && !loading && confirmed,
+        lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
     )
 }
@@ -313,10 +320,12 @@ internal fun visibleSessionListItems(
     openSessionId: String? = null,
     /** The ticket ref of a session ID, see [ticketRefForSession]. */
     ticketRef: (String) -> String? = { null },
+    /** See [sessionListItem]; pass [RemoteState.sessionsFresh]. No default, on purpose. */
+    confirmed: Boolean,
 ): List<SessionListItem> {
     val items =
         sessions.map { session ->
-            val item = sessionListItem(session, connected, loading, stale)
+            val item = sessionListItem(session, connected, loading, stale, confirmed)
             val mark = marks[item.id]
             item.copy(
                 ticketRef = ticketRef(item.id),
@@ -376,6 +385,11 @@ internal fun visibleSessionListItems(
     return result
 }
 
+/**
+ * Close is offered only for a session whose status the current connection confirmed. A
+ * [SessionListItem.lastKnown] row may already be closed on the Mac; closing waits until its list
+ * answers instead of acting on an unconfirmed status. This claims nothing about the session.
+ */
 internal fun canCloseSession(
     item: SessionListItem,
     connected: Boolean,
@@ -384,6 +398,7 @@ internal fun canCloseSession(
 ): Boolean =
     hostOwned(item, capabilities) &&
         item.availability != SessionAvailability.OFFLINE &&
+        !item.lastKnown &&
         connected &&
         !loading &&
         SESSION_CLOSE_CAPABILITY in capabilities

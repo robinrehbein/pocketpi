@@ -36,12 +36,12 @@ class HostWorkersTest {
     @Test
     fun aHostWorkerIsListedAsSuchEvenBeforeItsFirstReport() {
         val worker = withHostWorker(listed.obj("data").array("items").first { it.text("id") == "worker-session" })
-        val item = sessionListItem(worker, true, false)
+        val item = sessionListItem(worker, true, false, confirmed = true)
         assertTrue(item.hostWorker)
         assertEquals(SessionAvailability.OFFLINE, item.availability)
         assertFalse(item.liveMacTui)
         assertFalse(item.daemonOwned)
-        assertFalse(sessionListItem(Wire.objectOf("id" to "s", "title" to "T", "origin" to "tui", "status" to "idle"), true, false).hostWorker)
+        assertFalse(sessionListItem(Wire.objectOf("id" to "s", "title" to "T", "origin" to "tui", "status" to "idle"), true, false, confirmed = true).hostWorker)
     }
 
     @Test

@@ -303,7 +303,7 @@ internal fun RemoteScreen(
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities) {
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -311,6 +311,7 @@ internal fun RemoteScreen(
                 hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 collapsedIds,
                 stale = state.stale,
+                confirmed = state.sessionsFresh,
                 marks = routeMarks,
                 openSessionId = shownSessionId,
                 ticketRef = { ticketRefForSession(state, it) },
@@ -332,13 +333,14 @@ internal fun RemoteScreen(
             onDispose { shortcutTargets.unregisterRefresh(key, refresh) }
         }
     val sessionCount =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions) {
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
                 hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 stale = state.stale,
+                confirmed = state.sessionsFresh,
             ).size
         }
     val sessionActive =
@@ -440,9 +442,9 @@ internal fun RemoteScreen(
         }
     val errorCount = presentation.errorCount
     val children =
-        remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
+        remember(chatKey, state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh) {
             if (chatKey == null) emptyList()
-            else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
+            else sessionListItems(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh)
         }
     val strip =
         remember(chatKey, presentation, children) {
@@ -1490,8 +1492,9 @@ internal fun RemoteScreen(
         )
     val chatHeader: @Composable () -> Unit = {
         if (key is RemoteNavKey.Chat) {
-            val statusLabel = stringResource(chatStatusLabel(state))
-            val statusColor = chatStatusColor(state.status, state.connected)
+            val headerState = chatHeaderState(state)
+            val statusLabel = stringResource(chatStatusLabel(headerState))
+            val statusColor = chatStatusColor(headerState.status, headerState.connected)
             val canRename = canRenameSession(state)
             // The open session's row in the project's list, when that row could close it. The
             // repository closes only a session of that list, and its entries are complete rows.
@@ -1499,7 +1502,7 @@ internal fun RemoteScreen(
             val closableSession =
                 state.session?.optionalText("id")
                     ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
-                    ?.let { sessionListItem(it, state.connected, loading = false, state.stale) }
+                    ?.let { sessionListItem(it, state.connected, loading = false, state.stale, state.sessionsFresh) }
                     ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
             val hasTuiInfo = showsTuiInfo(state)
             // The ticket this chat belongs to, from the loaded tickets: its chip opens the ticket.
@@ -1606,10 +1609,11 @@ internal fun RemoteScreen(
                                     )
                                 }
                                 ChatStatusMark(
-                                    chatStatusShape(state),
+                                    chatStatusShape(headerState),
                                     statusColor,
                                     statusLabel,
                                     Modifier.padding(end = 8.dp).testTag("chatStatusDot"),
+                                    live = chatStatusLive(headerState, chatKey?.selection()),
                                 )
                                 val switchSession = stringResource(R.string.remote_palette_switch_session)
                                 Row(
@@ -2237,8 +2241,8 @@ internal fun RemoteScreen(
             twoPane?.takeIf { chatKey != null }?.let { pane ->
                 {
                     ChatStrip(
-                        chatStatusColor(state.status, state.connected),
-                        stringResource(chatStatusLabel(state)),
+                        chatStatusColor(chatHeaderState(state).status, state.connected),
+                        stringResource(chatStatusLabel(chatHeaderState(state))),
                         onShowChat = { if (pane.reviewing) pane.leaveReview() else pane.inspectorExpanded = false },
                     )
                 }
@@ -4602,7 +4606,7 @@ private fun ProjectChatRow(
         )
         SessionListRow(
             item =
-                sessionListItem(chat.session, connected && chat.verified, loading = false).let {
+                sessionListItem(chat.session, connected && chat.verified, loading = false, confirmed = chat.verified).let {
                     it.copy(
                         pinned = mark?.pinned == true,
                         unread = sessionUnread(mark, it.updatedAt, open = false),
@@ -4844,7 +4848,8 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
 
 /**
  * The compact chat's status in one line, at the start of the insights row while a banner waits in
- * the status sheet: what runs ([running] spins) or what is done. A tap opens the sheet; the line is
+ * the status sheet: what runs (compaction shows the dimmed snake, other [running] work a spinner) or
+ * what is done. A tap opens the sheet; the line is
  * read out as it changes.
  */
 @Composable
@@ -4859,7 +4864,11 @@ internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (running && ValueAnimator.areAnimatorsEnabled())
+            // Compaction shows the TUI's dimmed snake (static when animations are off), dimmed from
+            // the chip's own content color like the text beside it; export keeps its spinner.
+            if (line == R.string.remote_panel_compacting)
+                CompactionGlyph(LocalContentColor.current)
+            else if (running && ValueAnimator.areAnimatorsEnabled())
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             else Icon(
                 Icons.Outlined.Info,

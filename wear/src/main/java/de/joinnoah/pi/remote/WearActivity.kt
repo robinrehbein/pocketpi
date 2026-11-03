@@ -162,9 +162,9 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
             }
             WatchScreen.SESSIONS -> {
                 action(R.string.wear_new_session, ready, model::createSession)
-                items(visibleSessionListItems(state.sessions, state.connected, state.loading, preferences.hideOfflineSessions), key = { it.id }) { session ->
+                items(visibleSessionListItems(state.sessions, state.connected, state.loading, preferences.hideOfflineSessions, confirmed = state.sessionsFresh), key = { it.id }) { session ->
                     WatchAction(session.title, { model.navigate(route.selection.copy(sessionId = session.id)) }, ready,
-                        stringResource(watchStatus(session.availability.name.lowercase())) + if (session.parentSessionId != null) " · " + stringResource(R.string.wear_subagent) else "")
+                        watchSessionStatus(session) + if (session.parentSessionId != null) " · " + stringResource(R.string.wear_subagent) else "")
                 }
                 action(R.string.wear_refresh, !busy, repository::refresh)
             }
@@ -260,7 +260,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 if (canUseBackgroundJobs(state)) action(R.string.wear_jobs, ready) { model.open(WatchScreen.JOBS) }
                 if (RENAME_CAPABILITY in state.capabilities) action(R.string.wear_rename, ready) { model.open(WatchScreen.RENAME) }
                 state.session?.let { session ->
-                    if (canCloseSession(sessionListItem(session, state.connected, state.loading), state.connected, state.loading, state.capabilities))
+                    if (canCloseSession(sessionListItem(session, state.connected, state.loading, confirmed = state.sessionsFresh), state.connected, state.loading, state.capabilities))
                         action(R.string.wear_close_session, ready) { model.ask(WatchConfirmationKind.CLOSE) }
                 }
                 if (state.followUps.isNotEmpty()) action(R.string.wear_journal) { model.open(WatchScreen.JOURNAL) }
@@ -353,6 +353,13 @@ private fun watchTitle(screen: WatchScreen): Int = when (screen) {
     WatchScreen.CONFIRM -> R.string.wear_confirm
     else -> R.string.wear_folders
 }
+/** A last-known status is labelled as such, never as the Mac's current one. */
+@Composable
+private fun watchSessionStatus(session: SessionListItem): String {
+    val reported = stringResource(watchStatus(session.availability.name.lowercase()))
+    return if (watchStatusIsLastKnown(session)) stringResource(R.string.remote_status_last_known, reported) else reported
+}
+internal fun watchStatusIsLastKnown(session: SessionListItem): Boolean = session.lastKnown
 internal fun watchStatus(status: String): Int = when (status) {
     "idle" -> R.string.wear_idle
     "running" -> R.string.wear_running

@@ -225,9 +225,9 @@ class PagedEditorReopenEndToEndTest {
             }
         }
         val row = repository.state.value.sessions.single { it.optionalText("id") == selection.sessionId }
-        assertEquals(SessionAvailability.OFFLINE, sessionListItem(row, true, false).availability)
+        assertEquals(SessionAvailability.OFFLINE, sessionListItem(row, true, false, confirmed = true).availability)
         gate.captureOpen.set(true)
-        compose.onNode(hasClickAction() and hasText(sessionListItem(row, true, false).title) and hasAnyAncestor(hasTestTag("sessionRow-${selection.sessionId}"))).performScrollTo().assertIsDisplayed().performClick()
+        compose.onNode(hasClickAction() and hasText(sessionListItem(row, true, false, confirmed = true).title) and hasAnyAncestor(hasTestTag("sessionRow-${selection.sessionId}"))).performScrollTo().assertIsDisplayed().performClick()
         compose.waitUntil(120_000) {
             statusOrNull()?.optJSONObject("reopen")?.let {
                 check(it.isNull("failure")) { "Reopen fixture failed: ${it.optString("failure")}" }
