@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,10 +45,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -374,9 +376,14 @@ private fun ToolDetailContent(
             // Above the list rather than over it: the list's sticky search bar pins at the list's top
             // edge, which must stay clear of the header. No divider, as under the other pill headers.
             ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
+            val quote = !output.isNullOrBlank()
+            val bottomActions = quote || canAskToFix
+            // The output scrolls on under the floating Quote and Ask-to-fix pills.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().testTag("toolDetailContent").glassSource(),
+                Modifier.fillMaxSize().testTag("toolDetailContent").glassSource(),
                 state = listState,
+                contentPadding = PaddingValues(bottom = if (bottomActions) 72.dp else 0.dp),
             ) {
                 item(key = "arguments") {
                     ArgumentsSection(item, Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
@@ -434,20 +441,22 @@ private fun ToolDetailContent(
                 }
                 item(key = "end") { Box(Modifier.heightIn(min = 16.dp)) }
             }
-            val quote = !output.isNullOrBlank()
-            if (quote || canAskToFix) {
-                HorizontalDivider()
+            if (bottomActions)
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
                     if (quote)
-                        OutlinedButton(onClick = onQuote, Modifier.testTag("toolDetailQuote")) {
-                            Text(stringResource(R.string.remote_quote))
+                        FloatingSurface(shape = CircleShape) {
+                            TextButton(onClick = onQuote, Modifier.heightIn(min = 48.dp).testTag("toolDetailQuote")) {
+                                Text(stringResource(R.string.remote_quote))
+                            }
                         }
                     if (canAskToFix)
-                        Button(onClick = onAskToFix, Modifier.testTag("toolDetailAskFix")) {
-                            Text(stringResource(R.string.remote_tool_detail_ask_fix))
+                        FloatingSurface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+                            TextButton(onClick = onAskToFix, Modifier.heightIn(min = 48.dp).testTag("toolDetailAskFix")) {
+                                Text(stringResource(R.string.remote_tool_detail_ask_fix), color = MaterialTheme.colorScheme.onPrimary)
+                            }
                         }
                 }
             }
@@ -505,16 +514,17 @@ private fun StateChip(state: String) {
             "unavailable" -> Triple(R.string.remote_tool_unavailable, colors.surfaceVariant, colors.onSurfaceVariant)
             else -> Triple(R.string.remote_tool_complete, colors.secondaryContainer, colors.onSecondaryContainer)
         }
-    Surface(
+    // A tinted glass pill like the chat's insight chips, rather than a flat tag.
+    FloatingSurface(
+        modifier = Modifier.testTag("toolDetailState"),
+        shape = CircleShape,
         color = container,
         contentColor = content,
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier.testTag("toolDetailState"),
     ) {
         Text(
             stringResource(label),
-            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelLarge,
         )
     }
 }
@@ -915,18 +925,29 @@ private fun SearchBar(
         announcedCurrent = current
     }
     val copyLabel = stringResource(R.string.remote_tool_detail_copy)
-    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+    // Sticky over the output: the page background behind it, the field itself a glass pill.
+    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { onQuery(it.take(200)) },
-                    modifier = Modifier.weight(1f).testTag("toolDetailSearch"),
-                    placeholder = { Text(stringResource(R.string.remote_tool_detail_search), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                )
+                FloatingSurface(Modifier.weight(1f), shape = CircleShape, blur = false) {
+                    TextField(
+                        value = query,
+                        onValueChange = { onQuery(it.take(200)) },
+                        modifier = Modifier.fillMaxWidth().testTag("toolDetailSearch"),
+                        placeholder = { Text(stringResource(R.string.remote_tool_detail_search), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                        ),
+                    )
+                }
                 IconButton(
                     onClick = {
                         scope.launch {
