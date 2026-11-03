@@ -2,6 +2,12 @@ package de.joinnoah.pi.remote
 
 import android.view.View
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -285,3 +291,48 @@ internal fun PaddingValues.underFloatingHeader(): PaddingValues {
 @Composable
 internal fun PaddingValues.floatingHeaderOverlap(): Dp =
     (calculateTopPadding() - WindowInsets.statusBars.asPaddingValues().calculateTopPadding()).coerceAtLeast(0.dp)
+
+/** [this] without its bottom, for a list that pads its own bottom to scroll under a floating bottom pill. */
+@Composable
+internal fun PaddingValues.withoutBottom(): PaddingValues {
+    val direction = LocalLayoutDirection.current
+    return PaddingValues(
+        start = calculateStartPadding(direction),
+        top = calculateTopPadding(),
+        end = calculateEndPadding(direction),
+    )
+}
+
+/**
+ * A round avatar in the glass look: a soft top-lit fill instead of a flat disc, the glass rim and a
+ * small shadow. It sits in a list rather than over one, so it blurs nothing; [content] is centred.
+ */
+@Composable
+internal fun GlassAvatar(
+    modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.surface.luminance() < 0.5f
+    // Lit from above: a lighter top fading into the container colour the flat avatars had.
+    val fill =
+        if (dark) Brush.verticalGradient(listOf(scheme.surfaceContainerHighest, scheme.surfaceContainer))
+        else Brush.verticalGradient(listOf(scheme.surfaceContainerLowest, scheme.surfaceContainerHigh))
+    Box(
+        modifier
+            .size(size)
+            .shadow(
+                elevation = 2.dp,
+                shape = CircleShape,
+                clip = false,
+                ambientColor = Color.Black.copy(alpha = 0.14f),
+                spotColor = Color.Black.copy(alpha = 0.14f),
+            )
+            .clip(CircleShape)
+            .background(fill)
+            .border(GLASS_RIM_WIDTH, glassRimColor(scheme), CircleShape),
+        contentAlignment = Alignment.Center,
+        content = content,
+    )
+}

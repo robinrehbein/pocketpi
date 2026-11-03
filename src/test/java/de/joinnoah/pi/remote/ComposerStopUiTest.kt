@@ -3,7 +3,11 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +22,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertTextContains
@@ -28,7 +33,14 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -46,10 +58,21 @@ import org.robolectric.annotation.Config
 class ComposerStopUiTest {
     @get:Rule val compose = createComposeRule()
 
+    private var sends = 0
     private var stops = 0
     private var aborts = 0
     private var steers = 0
     private var followUps = 0
+    private var touchSlop = 0f
+    private var voiceStarts = 0
+    private val voiceEngine = object : VoiceRecognitionEngine {
+        override val systemAvailable = true
+        override val onDeviceAvailable = true
+        override fun start(start: VoiceInputStart, listener: VoiceRecognitionListener) { voiceStarts++ }
+        override fun stop() = Unit
+        override fun cancel() = Unit
+        override fun destroy() = Unit
+    }
     private val keys = ChatKeyTarget()
     private val current = mutableStateOf(RemoteState())
 
@@ -86,6 +109,7 @@ class ComposerStopUiTest {
         current.value = initial
         compose.setContent {
             val density = LocalDensity.current
+            touchSlop = LocalViewConfiguration.current.touchSlop
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale),
                 LocalChatKeyTarget provides keys,
@@ -97,13 +121,14 @@ class ComposerStopUiTest {
                     ChatComposer(
                         state = current.value,
                         onDraft = {},
-                        onSend = {},
+                        onSend = { sends++ },
                         onStop = { stops++ },
                         onRemoveQuote = {},
                         onFollowUp = { followUps++ },
                         onSteer = { steers++ },
                         onAbort = { aborts++ },
-                        voicePermissionGrantedOverride = false,
+                        voiceEngine = voiceEngine,
+                        voicePermissionGrantedOverride = true,
                     )
                     }
                 }
@@ -114,24 +139,166 @@ class ComposerStopUiTest {
     private val queued = listOf(PendingFollowUp("queued", "Also check the logs", "pending"))
 
     @Test
-    fun sendModeSegmentsStayAlignedOnNarrowScreenWithLargeFonts() {
+    fun modeMenuAndStopRemainAvailableOnNarrowScreenWithLargeFonts() {
         render(state(draft = "Next step"), widthDp = 280, fontScale = 2f)
-        val now = compose.onNodeWithTag("sendNow").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val later = compose.onNodeWithTag("sendWhenDone").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        assertEquals(now.top, later.top, 0.5f)
-        assertEquals(now.bottom, later.bottom, 0.5f)
+        val stop = compose.onNodeWithTag("stopRun").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val menu = compose.onNodeWithTag("sendModeMenu").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val send = compose.onNodeWithTag("steer").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val minSize = 48f * compose.density.density
+        org.junit.Assert.assertTrue(stop.width >= minSize && stop.height >= minSize)
+        org.junit.Assert.assertTrue(menu.width >= minSize && menu.height >= minSize)
+        org.junit.Assert.assertTrue(send.width >= minSize && send.height >= minSize)
+        org.junit.Assert.assertTrue(stop.right <= menu.left && menu.right <= send.left)
+        compose.onNodeWithTag("sendModeMenu").performClick()
         compose.onNodeWithTag("sendWhenDone").performClick()
         compose.onNodeWithTag("followUp").performClick()
         assertEquals(1, followUps)
     }
 
     @Test
-    fun sendModeSegmentsShareHeightAndVerticalAlignment() {
+    fun touchSwipesOnlySwitchModeAndTapsSendExactlyOnce() {
         render(state(draft = "Next step"))
-        val now = compose.onNodeWithTag("sendNow").fetchSemanticsNode().boundsInRoot
-        val later = compose.onNodeWithTag("sendWhenDone").fetchSemanticsNode().boundsInRoot
-        assertEquals(now.top, later.top, 0.5f)
-        assertEquals(now.bottom, later.bottom, 0.5f)
+        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+        compose.onNodeWithTag("followUp").performTouchInput { click() }
+        assertEquals(1, followUps)
+        compose.onNodeWithTag("followUp").performTouchInput { swipeRight() }
+        assertEquals(1, followUps)
+        compose.onNodeWithTag("steer").performTouchInput { click() }
+        assertEquals(1, steers)
+    }
+
+    @Test
+    fun diagonalBeyondRadialSlopNeverSendsOrSwitchesEvenAfterReturningOrCancel() {
+        render(state(draft = "Next step"))
+        val diagonal = Offset(touchSlop * 0.8f, touchSlop * 0.8f)
+        compose.onNodeWithTag("steer").performTouchInput {
+            down(center)
+            moveTo(center + diagonal)
+            up()
+        }
+        compose.onNodeWithTag("steer").assertIsDisplayed()
+        compose.onNodeWithTag("steer").performTouchInput {
+            down(center)
+            moveTo(center + diagonal)
+            moveTo(center)
+            up()
+        }
+        compose.onNodeWithTag("steer").assertIsDisplayed()
+        compose.onNodeWithTag("steer").performTouchInput {
+            down(center)
+            moveTo(center + diagonal)
+            cancel()
+        }
+        compose.onNodeWithTag("steer").assertIsDisplayed()
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+    }
+
+    @Test
+    fun horizontalIntentAtRadialCrossingSwitchesOnlyOnce() {
+        render(state(draft = "Next step"))
+        compose.onNodeWithTag("steer").performTouchInput {
+            down(center)
+            moveTo(center + Offset(touchSlop * 0.95f, touchSlop * 0.35f))
+            moveTo(center + Offset(touchSlop * 1.3f, touchSlop * 0.35f))
+            up()
+        }
+        compose.onNodeWithTag("followUp").assertIsDisplayed()
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+    }
+
+    @Test
+    fun unavailableModeDoesNotSwitchOrSendOnSwipe() {
+        render(state(draft = "Next step").copy(capabilities = setOf(STEER_CAPABILITY)))
+        compose.onNodeWithTag("sendModeMenu").assertDoesNotExist()
+        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
+        assertEquals(0, steers)
+        compose.onNodeWithTag("steer").performTouchInput { click() }
+        assertEquals(1, steers)
+    }
+
+    @Test
+    fun cancelledTouchAndSessionChangeNeverSend() {
+        render(state(draft = "Next step"))
+        compose.onNodeWithTag("steer").performTouchInput { down(center); cancel() }
+        assertEquals(0, steers)
+        compose.onNodeWithTag("steer").performTouchInput { down(center) }
+        compose.runOnIdle {
+            current.value = state(draft = "Next step").copy(
+                selection = RemoteSelection("host", "project", "other"),
+            )
+        }
+        compose.onNodeWithTag("steer").performTouchInput { up() }
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+    }
+
+    @Test
+    fun idleSendTouchCannotBecomeBusyAction() {
+        render(state(status = "idle", draft = "Next step"))
+        compose.onNodeWithTag("primaryComposerAction").performTouchInput { down(center) }
+        compose.runOnIdle { current.value = current.value.copy(status = "running") }
+        compose.onNodeWithTag("steer").performTouchInput { up() }
+        assertEquals(0, sends)
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+        compose.onNodeWithTag("steer").performTouchInput { click() }
+        assertEquals(1, steers)
+    }
+
+    @Test
+    fun voiceTouchCannotBecomeBusyAction() {
+        render(state(status = "idle"))
+        compose.onNodeWithTag("primaryComposerAction").performTouchInput { down(center) }
+        compose.runOnIdle { current.value = current.value.copy(status = "running", draft = "Next step") }
+        compose.onNodeWithTag("steer").performTouchInput { up() }
+        assertEquals(0, sends)
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+        assertEquals(0, voiceStarts)
+    }
+
+    @Test
+    fun unchangedIdleAndVoiceTouchActivateOnce() {
+        render(state(status = "idle"))
+        compose.onNodeWithTag("primaryComposerAction").performTouchInput { click() }
+        assertEquals(1, voiceStarts)
+    }
+
+    @Test
+    fun unchangedIdleSendTouchActivatesOnce() {
+        render(state(status = "idle", draft = "Next step"))
+        compose.onNodeWithTag("primaryComposerAction").performTouchInput { click() }
+        assertEquals(1, sends)
+    }
+
+    @Test
+    fun heldKeyboardActivationCannotRerouteWhenModeChanges() {
+        render(state(draft = "Next step"), hardwareKeyboard = true)
+        compose.onNodeWithTag("steer").performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.onNodeWithTag("steer").performKeyInput { keyDown(Key.Spacebar) }
+        compose.runOnIdle { current.value = current.value.copy(capabilities = setOf(FOLLOW_UP_CAPABILITY)) }
+        compose.onNodeWithTag("followUp").assertIsFocused().performKeyInput { keyUp(Key.Spacebar) }
+        assertEquals(0, sends)
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+        compose.onNodeWithTag("followUp").performKeyInput { pressKey(Key.Spacebar) }
+        assertEquals(1, followUps)
+    }
+
+    @Test
+    fun capabilityChangeDuringPressDoesNotSend() {
+        render(state(draft = "Next step"))
+        compose.onNodeWithTag("steer").performTouchInput { down(center) }
+        compose.runOnIdle {
+            current.value = current.value.copy(capabilities = setOf(FOLLOW_UP_CAPABILITY))
+        }
+        compose.onNodeWithTag("followUp").performTouchInput { up() }
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
     }
 
     @Test
@@ -199,13 +366,16 @@ class ComposerStopUiTest {
     @Test
     fun sendModeChoiceShowsBothVerbsAndSendsWithTheChosenMode() {
         render(state(draft = "Next step"))
+        compose.onNodeWithTag("sendModeMenu").performClick()
         compose.onNodeWithText(label(R.string.remote_send_now)).assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_send_when_done)).assertIsDisplayed()
+        compose.onNodeWithTag("sendNow").performClick()
 
         compose.onNodeWithTag("steer").performClick()
         assertEquals(1, steers)
         assertEquals(0, followUps)
 
+        compose.onNodeWithTag("sendModeMenu").performClick()
         compose.onNodeWithTag("sendWhenDone").performClick()
         compose.onNodeWithTag("followUp").performClick()
         assertEquals(1, steers)

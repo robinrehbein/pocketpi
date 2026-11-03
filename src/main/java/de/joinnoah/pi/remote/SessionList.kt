@@ -222,11 +222,7 @@ internal fun SessionListRow(
                 verticalAlignment = Alignment.Top,
             ) {
                 Box(Modifier.size(44.dp).clearAndSetSemantics {}) {
-                    Box(
-                        Modifier.fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    GlassAvatar(size = 44.dp) {
                         // A subagent shows the robot mark; only the host's parentSessionId makes a
                         // row one, nothing here guesses it from the title or origin.
                         if (item.parentSessionId != null)
@@ -240,6 +236,7 @@ internal fun SessionListRow(
                             Text(
                                 stringResource(R.string.remote_design_pi_mark),
                                 style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                     }
                     // No backing disc. The badge straddles the avatar's edge, so half of it would sit

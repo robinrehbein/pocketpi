@@ -124,7 +124,12 @@ class ChangesPaneTest {
             "big.kt" to "+2000",
         ).forEach { (path, detail) ->
             compose.onNodeWithTag("changesList").performScrollToNode(androidx.compose.ui.test.hasText(path))
-            compose.onNodeWithText(detail, useUnmergedTree = true).assertExists()
+            // The overview card sums the counts too, so the detail is looked up in the file's own tile.
+            compose.onNode(
+                androidx.compose.ui.test.hasText(detail) and
+                    androidx.compose.ui.test.hasAnyAncestor(androidx.compose.ui.test.hasTestTag("changesOverview")).not(),
+                useUnmergedTree = true,
+            ).assertExists()
         }
         compose.onNodeWithText("big.kt", useUnmergedTree = true).performClick()
         assertEquals(listOf<String?>("big.kt"), recorder.opened)
@@ -378,7 +383,9 @@ class ChangesPaneTest {
             }
         }
         compose.onNodeWithText(context.getString(R.string.remote_changes_this_session)).assertExists()
-        // The subagent on the session's own branch gets no group.
+        // The subagent on the session's own branch gets no group. The groups follow the overview
+        // card, the files and the commits, so the grid scrolls to them first.
+        compose.onNodeWithTag("changesList").performScrollToNode(hasTestTag("changesSubagent"))
         compose.onAllNodesWithTag("changesSubagent").assertCountEquals(1)
         compose.onNodeWithText("Implementer").assertExists()
         compose.onNodeWithText(context.getString(R.string.remote_changes_subagent_finished, "pi-agent-1")).assertExists()
