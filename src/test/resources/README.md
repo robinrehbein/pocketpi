@@ -11,4 +11,4 @@ capability.
 
 `files-mutations-v1.json` holds the wire shapes of `session.files.create.v1`, `.rename.v1`,
 `.delete.v1` and `session.files.mutation-recovery.v1`. Copied from noah branch
-`codex/pocketpi-file-mutations` at commit `34973a191f982df8284dd876ce5ab9b6dc1ef03f`.
+`codex/pocketpi-file-mutations` at commit `323cff9cb72376773201816692d1e518937fc9b9`.

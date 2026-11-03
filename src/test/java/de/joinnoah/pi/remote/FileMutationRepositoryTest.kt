@@ -816,6 +816,31 @@ class FileMutationRepositoryTest {
     }
 
     @Test
+    fun anEpochRefusalListsTheNewEpochAndARetryIsANewOperation() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        transport.answer = { record(it, "refused", "epoch") }
+        val repository = opened(repository(transport, journal))
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("x.md")
+        transport.listEpoch = otherEpoch
+        runCurrent()
+        assertEquals(FileMutationRefusal.EPOCH, repository.outcome()?.reason)
+        val first = transport.files().single { it.text("type") == "session.files.create" }
+        // The epoch is listed again, and nothing is resent on its own.
+        assertEquals("session.files.mutation.list", transport.types().last())
+        assertTrue(journal.entries.isEmpty())
+        transport.answer = { record(it, "applied") }
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("x.md")
+        runCurrent()
+        val creates = transport.files().filter { it.text("type") == "session.files.create" }
+        assertEquals(2, creates.size)
+        assertNotEquals(first.text("operationId"), creates.last().text("operationId"))
+        assertEquals(otherEpoch, creates.last().text("epoch"))
+    }
+
+    @Test
     fun refusalsAreTerminalAndKeepTheirReason() = runTest {
         for (reason in FileMutationRefusal.entries) {
             val transport = Transport(all)

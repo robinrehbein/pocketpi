@@ -551,6 +551,9 @@ internal class FileMutationController(
             FileMutationHostState.REFUSED -> {
                 removeRecovery(target, request.operationId)
                 showOutcome(target, request, FileMutationStatus.REFUSED, record.reason)
+                // The host started a new journal epoch: list it again. Nothing is resent; a retry by
+                // the user is a new operation with a new ID and the new epoch.
+                if (record.reason == FileMutationRefusal.EPOCH) reconcile()
             }
             FileMutationHostState.UNKNOWN -> {
                 showOutcome(target, request, FileMutationStatus.UNKNOWN)
