@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
@@ -48,8 +49,46 @@ data class ProjectChatSummary(
     val verified: Boolean = false,
 )
 
+/**
+ * The main sessions of [chats]: a subagent's row gives way to its top-level session, which takes on
+ * the subagent's activity while it is busy itself no more (waiting before running). A subagent whose
+ * main session is not among [chats] stays, so its work does not vanish from the page.
+ */
+internal fun mainSessionChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> {
+    fun id(chat: ProjectChatSummary) = chat.session.optionalText("id")
+    fun parent(chat: ProjectChatSummary) = chat.session.optionalText("parentSessionId")?.takeIf { it.isNotBlank() }
+    val byId = chats.associateBy { id(it) }
+    /** The top-level session listed for [chat], or null when its chain leaves the list. */
+    fun root(chat: ProjectChatSummary): ProjectChatSummary? {
+        var current = chat
+        val seen = mutableSetOf<String?>()
+        while (true) {
+            val parentId = parent(current) ?: return current
+            if (!seen.add(parentId)) return null
+            current = byId[parentId] ?: return null
+        }
+    }
+    val rank = mapOf("waiting" to 2, "running" to 1)
+    val lifted = HashMap<String?, String>()
+    for (chat in chats) {
+        if (parent(chat) == null) continue
+        val status = chat.session.optionalText("status")?.takeIf { it in rank } ?: continue
+        val top = root(chat) ?: continue
+        val best = lifted[id(top)] ?: top.session.optionalText("status")
+        if ((rank[status] ?: 0) > (rank[best] ?: 0)) lifted[id(top)] = status
+    }
+    return chats.mapNotNull { chat ->
+        when {
+            parent(chat) != null -> chat.takeIf { root(it) == null }
+            else -> lifted[id(chat)]?.let { status ->
+                chat.copy(session = JsonObject(chat.session + ("status" to JsonPrimitive(status))))
+            } ?: chat
+        }
+    }
+}
+
 internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> =
-    chats.sortedWith(
+    mainSessionChats(chats).sortedWith(
         compareBy<ProjectChatSummary> {
             if (!it.verified) 2
             else when (it.session.text("status")) {
