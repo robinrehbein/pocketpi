@@ -1,13 +1,5 @@
 package de.joinnoah.pi.remote
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-import android.graphics.Bitmap
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.view.PixelCopy
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,10 +39,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,17 +53,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.positionOnScreen
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -81,14 +65,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import kotlin.coroutines.resume
-import kotlin.math.roundToInt
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 
 // The app's bottom sheets in the floating-glass design. A sheet is a window of its own above the
 // app, so Haze cannot blur what lies behind it, and the system's blur behind windows is missing on
@@ -162,53 +139,6 @@ internal fun GlassSheet(
 
 private class SheetGlass(val scrim: Color, val tint: Color)
 
-/** A blurred, downscaled copy of the app window and the window's place and size on the screen. */
-private class AppBackdrop(val image: ImageBitmap, val originOnScreen: IntOffset, val windowSize: IntSize)
-
-/** How much smaller than the app the copy is: it is blurred anyway, and stays small in memory. */
-private const val BACKDROP_DOWNSCALE = 4
-
-/** The blur radius in pixels of the small copy; three box passes of it read as about 56 screen pixels. */
-private const val BACKDROP_BLUR_RADIUS = 14
-
-/** Copies and blurs the app window as the sheet opens; null until the copy is there or when it fails. */
-@Composable
-private fun rememberAppBackdrop(): AppBackdrop? {
-    // Robolectric's PixelCopy draws the window itself and fails on Compose's vector caches.
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || Build.FINGERPRINT == "robolectric") return null
-    val view = LocalView.current
-    val configuration = LocalConfiguration.current
-    var backdrop by remember { mutableStateOf<AppBackdrop?>(null) }
-    LaunchedEffect(view, configuration) {
-        backdrop = null
-        val window = view.context.sheetActivity()?.window ?: return@LaunchedEffect
-        val root = window.decorView
-        if (root.width == 0 || root.height == 0) return@LaunchedEffect
-        val bitmap = Bitmap.createBitmap(
-            (root.width / BACKDROP_DOWNSCALE).coerceAtLeast(1),
-            (root.height / BACKDROP_DOWNSCALE).coerceAtLeast(1),
-            Bitmap.Config.ARGB_8888,
-        )
-        val copied = suspendCancellableCoroutine { continuation ->
-            runCatching {
-                PixelCopy.request(window, bitmap, { result ->
-                    if (continuation.isActive) continuation.resume(result == PixelCopy.SUCCESS)
-                }, Handler(Looper.getMainLooper()))
-            }.onFailure { if (continuation.isActive) continuation.resume(false) }
-        }
-        if (!copied) return@LaunchedEffect
-        val location = IntArray(2).also(root::getLocationOnScreen)
-        withContext(Dispatchers.Default) {
-            val pixels = IntArray(bitmap.width * bitmap.height)
-            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-            boxBlur(pixels, bitmap.width, bitmap.height, BACKDROP_BLUR_RADIUS)
-            bitmap.setPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        }
-        backdrop = AppBackdrop(bitmap.asImageBitmap(), IntOffset(location[0], location[1]), IntSize(root.width, root.height))
-    }
-    return backdrop
-}
-
 /**
  * Blurs ARGB [pixels] of a [width] by [height] image in place: three box passes across and down,
  * which come close to a Gaussian blur. Edge pixels repeat beyond the image.
@@ -251,13 +181,6 @@ private fun boxBlurPass(input: IntArray, output: IntArray, width: Int, height: I
     }
 }
 
-private tailrec fun Context.sheetActivity(): Activity? =
-    when (this) {
-        is Activity -> this
-        is ContextWrapper -> baseContext.sheetActivity()
-        else -> null
-    }
-
 /**
  * The blurred app copy under the whole sheet, lined up with the screen, with the scrim and the
  * glass tint over it. It covers its box and reaches [reachUp] pixels above it, over the handle
@@ -268,7 +191,7 @@ private tailrec fun Context.sheetActivity(): Activity? =
  */
 @Composable
 private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass, reachUp: () -> Int, rim: Color, pill: Color) {
-    var origin by remember { mutableStateOf(Offset.Zero) }
+    val fallback = MaterialTheme.colorScheme.background
     Box(
         Modifier.matchParentSize()
             .layout { measurable, constraints ->
@@ -278,20 +201,11 @@ private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass
                 )
                 layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, -up) }
             }
-            // The copy is drawn at the whole window's size; clipping keeps it to the layer.
+            // Measure and position the entire layer, including the handle, before aligning the
+            // shared snapshot. The same bounds also clip and fill the resize fallback.
             .clipToBounds()
-            .onGloballyPositioned { origin = it.positionOnScreen() }
+            .snapshotBackdrop(backdrop, tint = glass.tint, fallback = fallback, scrim = glass.scrim)
             .drawBehind {
-                drawImage(
-                    backdrop.image,
-                    dstOffset = IntOffset(
-                        (backdrop.originOnScreen.x - origin.x).roundToInt(),
-                        (backdrop.originOnScreen.y - origin.y).roundToInt(),
-                    ),
-                    dstSize = backdrop.windowSize,
-                )
-                drawRect(glass.scrim)
-                drawRect(glass.tint)
                 drawTopRim(rim)
                 val up = reachUp()
                 if (up > 0) {

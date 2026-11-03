@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -15,8 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -94,12 +95,18 @@ internal fun SessionTreeSheet(
     var ui by remember { mutableStateOf<TreeUi>(TreeUi.Loading) }
     var reload by remember { mutableIntStateOf(0) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-    var asking by remember { mutableStateOf(false) }
+    var asking by rememberSaveable { mutableStateOf(false) }
     // The summary choice of the running navigation; null while none runs.
     var running by remember { mutableStateOf<Boolean?>(null) }
     var notice by remember { mutableStateOf<Int?>(null) }
     val loadLatest by rememberUpdatedState(load)
     val busy by rememberUpdatedState(running != null)
+    val loadedTree = (ui as? TreeUi.Loaded)?.tree
+    val pendingNode = loadedTree?.nodes?.firstOrNull { it.id == selectedId }
+    LaunchedEffect(loadedTree, pendingNode, state) {
+        if (loadedTree != null && (pendingNode == null ||
+                continueAvailability(state, loadedTree, pendingNode) != TreeContinue.AVAILABLE)) asking = false
+    }
 
     LaunchedEffect(reload) {
         ui = TreeUi.Loading
@@ -136,6 +143,7 @@ internal fun SessionTreeSheet(
         sheetState = sheetState,
         modifier = Modifier.testTag("treeSheet"),
     ) {
+        BackHandler(enabled = asking && running == null) { asking = false }
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).navigationBarsPadding()) {
             SheetHeader(stringResource(R.string.remote_tree_title))
             when (val current = ui) {
@@ -166,65 +174,62 @@ internal fun SessionTreeSheet(
                 is TreeUi.Loaded -> {
                     val tree = current.tree
                     val selected = tree.nodes.firstOrNull { it.id == selectedId }
-                    TreeList(
-                        tree = tree,
-                        selectedId = selected?.id,
-                        enabled = running == null,
-                        onSelect = { selectedId = it },
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (selected != null)
-                        TreeActions(
-                            state = state,
+                    if (asking && selected != null && continueAvailability(state, tree, selected) == TreeContinue.AVAILABLE) {
+                        Column(
+                            Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 12.dp).testTag("treeSummaryStep"),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(stringResource(R.string.remote_tree_continue), style = MaterialTheme.typography.labelLarge)
+                            Text(stringResource(R.string.remote_tree_summarize_title), style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.semantics { heading() })
+                            Text(stringResource(R.string.remote_tree_summarize_message))
+                            SheetPrimaryButton(onClick = { asking = false; navigateTo(selected.id, true) },
+                                modifier = Modifier.testTag("treeSummarize")) {
+                                Text(stringResource(R.string.remote_tree_summarize))
+                            }
+                            SheetSecondaryButton(onClick = { asking = false; navigateTo(selected.id, false) },
+                                modifier = Modifier.testTag("treeNoSummary")) {
+                                Text(stringResource(R.string.remote_tree_no_summary))
+                            }
+                            SheetSecondaryButton(onClick = { asking = false }, modifier = Modifier.testTag("treeSummaryBack")) {
+                                Text(stringResource(R.string.remote_back))
+                            }
+                            TextButton(onClick = onDismiss, modifier = Modifier.testTag("treeSummaryCancel")) {
+                                Text(stringResource(R.string.remote_cancel))
+                            }
+                        }
+                    } else {
+                        TreeList(
                             tree = tree,
-                            node = selected,
-                            running = running,
-                            notice = notice,
-                            onContinue = { asking = true },
-                            onFork = { onFork(selected.id) },
-                            onCancel = onAbort,
-                            forkBlocked = forkBlocked,
+                            selectedId = selected?.id,
+                            enabled = running == null,
+                            onSelect = { selectedId = it; asking = false },
+                            modifier = Modifier.weight(1f, fill = false),
                         )
-                    else if (notice != null)
-                        Text(
-                            stringResource(checkNotNull(notice)),
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                        )
+                        if (selected != null)
+                            TreeActions(
+                                state = state,
+                                tree = tree,
+                                node = selected,
+                                running = running,
+                                notice = notice,
+                                onContinue = { asking = true },
+                                onFork = { onFork(selected.id) },
+                                onCancel = onAbort,
+                                forkBlocked = forkBlocked,
+                            )
+                        else if (notice != null)
+                            Text(
+                                stringResource(checkNotNull(notice)),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                            )
+                    }
                 }
             }
         }
     }
-
-    val target = (ui as? TreeUi.Loaded)?.tree?.nodes?.firstOrNull { it.id == selectedId }
-    if (asking && target != null)
-        AlertDialog(
-            onDismissRequest = { asking = false },
-            title = { Text(stringResource(R.string.remote_tree_summarize_title)) },
-            text = { Text(stringResource(R.string.remote_tree_summarize_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        asking = false
-                        navigateTo(target.id, true)
-                    },
-                    modifier = Modifier.testTag("treeSummarize"),
-                ) {
-                    Text(stringResource(R.string.remote_tree_summarize))
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        asking = false
-                        navigateTo(target.id, false)
-                    },
-                    modifier = Modifier.testTag("treeNoSummary"),
-                ) {
-                    Text(stringResource(R.string.remote_tree_no_summary))
-                }
-            },
-        )
 }
 
 @Composable
@@ -395,7 +400,7 @@ private fun TreeActions(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("treeNotice"),
             )
-        Button(
+        SheetPrimaryButton(
             onClick = onContinue,
             enabled = idle && availability == TreeContinue.AVAILABLE,
             modifier = Modifier.fillMaxWidth().testTag("treeContinue"),

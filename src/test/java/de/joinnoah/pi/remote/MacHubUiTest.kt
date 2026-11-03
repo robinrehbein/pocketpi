@@ -343,7 +343,8 @@ class MacHubUiTest {
             headingTop(label(R.string.remote_tickets_section_acceptance)) <
                 headingTop(label(R.string.remote_status_needs_you))
         )
-        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+        compose.onNodeWithText("Title 1").assertIsDisplayed()
+        compose.onNodeWithText("DEV-1").assertIsDisplayed()
     }
 
     @Test
@@ -362,7 +363,8 @@ class MacHubUiTest {
     fun aRefreshOfKnownTicketsKeepsTheSection() {
         renderTickets(ticketsState(ticket(1), loading = true))
         compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertIsDisplayed()
-        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+        compose.onNodeWithText("Title 1").assertIsDisplayed()
+        compose.onNodeWithText("DEV-1").assertIsDisplayed()
     }
 
     @Test
@@ -403,8 +405,10 @@ class MacHubUiTest {
 
         compose.onAllNodes(hasText("Title", substring = true)).assertCountEquals(3)
         // The newest three show.
-        compose.onNodeWithText("DEV-4 · Title 4").assertIsDisplayed()
-        compose.onAllNodesWithText("DEV-1 · Title 1").assertCountEquals(0)
+        compose.onNodeWithText("Title 4").assertIsDisplayed()
+        compose.onNodeWithText("DEV-4").assertIsDisplayed()
+        compose.onAllNodesWithText("Title 1").assertCountEquals(0)
+        compose.onAllNodesWithText("DEV-1").assertCountEquals(0)
         compose.onNodeWithText(label(R.string.remote_tickets_all)).performClick()
         compose.waitForIdle()
         // The link leads to the tickets screen, not just to a refresh.
@@ -451,14 +455,15 @@ class MacHubUiTest {
     fun rowTapOpensTheTicketAndTheButtonOnlyShowsWhenWritable() {
         renderTickets(ticketsState(ticket(1)))
         compose.onNodeWithText(label(R.string.remote_ticket_accept)).assertIsDisplayed()
-        compose.onNodeWithText("DEV-1 · Title 1").performClick()
+        compose.onNodeWithText("Title 1").performClick()
         assertEquals(listOf("p1" to "DEV-1"), repository.ticketOpens.distinct())
     }
 
     @Test
     fun noAcceptButtonForAReadOnlyProject() {
         renderTickets(ticketsState(ticket(1), writable = false))
-        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+        compose.onNodeWithText("Title 1").assertIsDisplayed()
+        compose.onNodeWithText("DEV-1").assertIsDisplayed()
         compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)
     }
 

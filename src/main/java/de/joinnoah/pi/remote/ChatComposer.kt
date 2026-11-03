@@ -825,7 +825,7 @@ internal fun ChatComposer(
                                 Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))
                             }
                         }
-                        DropdownMenu(addMenu, onDismissRequest = { addMenu = false }) {
+                        GlassDropdownMenu(addMenu, onDismissRequest = { addMenu = false }) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.remote_pick_photos)) },
                                 onClick = {
@@ -1029,7 +1029,7 @@ internal fun ChatComposer(
                                     .semantics { stateDescription = currentMode },
                             ) { Icon(Icons.Default.MoreVert, modeLabel) }
                         }
-                        DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                        GlassDropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
                             listOf(BusyComposerAction.Steer, BusyComposerAction.FollowUp).forEach { mode ->
                                 DropdownMenuItem(
                                     text = { Text(stringResource(mode.labelRes())) },

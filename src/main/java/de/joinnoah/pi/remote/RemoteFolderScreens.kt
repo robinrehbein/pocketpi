@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Close
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -177,26 +179,12 @@ internal fun FolderBrowserContent(
                 Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { creating = true },
-                        enabled = actionable && folders.loaded,
-                        modifier = Modifier.weight(1f).testTag("folderNewAction"),
-                    ) {
-                        Icon(Icons.Default.CreateNewFolder, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.remote_folders_new_folder), maxLines = 1)
-                    }
-                    OutlinedButton(
-                        onClick = { cloning = true },
-                        enabled = actionable && folders.loaded && !cloneRunning,
-                        modifier = Modifier.weight(1f).testTag("folderCloneAction"),
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.remote_folders_clone), maxLines = 1)
-                    }
-                }
+                FolderSecondaryActions(
+                    enabled = actionable && folders.loaded,
+                    cloneEnabled = actionable && folders.loaded && !cloneRunning,
+                    onNew = { creating = true },
+                    onClone = { cloning = true },
+                )
                 Button(
                     onClick = { onOpen(folders.path) },
                     enabled = actionable && !atRoot,
@@ -292,6 +280,36 @@ internal fun FolderBrowserContent(
             onConfirm = { onConfirm(prompt) },
             onDismiss = onCancelTrust,
         )
+    }
+}
+
+internal fun stackFolderActions(widthDp: Float, fontScale: Float): Boolean = widthDp < 360f * fontScale.coerceAtLeast(1f)
+
+@Composable
+private fun FolderSecondaryActions(enabled: Boolean, cloneEnabled: Boolean, onNew: () -> Unit, onClone: () -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val stacked = stackFolderActions(maxWidth.value, LocalDensity.current.fontScale)
+        @Composable fun NewAction(modifier: Modifier) {
+            OutlinedButton(onClick = onNew, enabled = enabled, modifier = modifier.testTag("folderNewAction")) {
+                Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.remote_folders_new_folder))
+            }
+        }
+        @Composable fun CloneAction(modifier: Modifier) {
+            OutlinedButton(onClick = onClone, enabled = cloneEnabled, modifier = modifier.testTag("folderCloneAction")) {
+                Icon(Icons.Default.Download, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.remote_folders_clone))
+            }
+        }
+        if (stacked) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            NewAction(Modifier.fillMaxWidth())
+            CloneAction(Modifier.fillMaxWidth())
+        } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NewAction(Modifier.weight(1f))
+            CloneAction(Modifier.weight(1f))
+        }
     }
 }
 
@@ -560,15 +578,18 @@ internal fun CloneProgressCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NewFolderDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     val problem = folderNameProblem(name)
     val message = problem?.let(::folderNameProblemMessage)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.remote_folders_new_folder)) },
-        text = {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetHeader(stringResource(R.string.remote_folders_new_folder), padding = PaddingValues(start = 8.dp))
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -576,22 +597,19 @@ private fun NewFolderDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
                 isError = message != null,
                 supportingText = message?.let { { Text(stringResource(it)) } },
                 singleLine = true,
-                modifier = Modifier.testTag("newFolderName"),
+                modifier = Modifier.fillMaxWidth().testTag("newFolderName"),
             )
-        },
-        confirmButton = {
-            TextButton(
+            SheetPrimaryButton(
                 onClick = { onCreate(name) },
                 enabled = problem == null,
                 modifier = Modifier.testTag("newFolderCreate"),
-            ) {
-                Text(stringResource(R.string.remote_folders_create))
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) } },
-    )
+            ) { Text(stringResource(R.string.remote_folders_create)) }
+            SheetSecondaryButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) }
+        }
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Unit) {
     var url by rememberSaveable { mutableStateOf("") }
@@ -606,10 +624,12 @@ private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Uni
             name.isEmpty() -> R.string.remote_folders_clone_name_needed
             else -> folderNameProblemMessage(nameProblem)
         }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.remote_folders_clone_title)) },
-        text = {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetHeader(stringResource(R.string.remote_folders_clone_title), padding = PaddingValues(start = 8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = url,
@@ -626,7 +646,7 @@ private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Uni
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.testTag("cloneUrl"),
+                    modifier = Modifier.fillMaxWidth().testTag("cloneUrl"),
                 )
                 OutlinedTextField(
                     value = name,
@@ -636,21 +656,17 @@ private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Uni
                     isError = nameMessage != null,
                     supportingText = nameMessage?.let { { Text(stringResource(it)) } },
                     singleLine = true,
-                    modifier = Modifier.testTag("cloneName"),
+                    modifier = Modifier.fillMaxWidth().testTag("cloneName"),
                 )
             }
-        },
-        confirmButton = {
-            TextButton(
+            SheetPrimaryButton(
                 onClick = { onClone(url, name.ifEmpty { null }) },
                 enabled = urlValid && nameProblem == null,
                 modifier = Modifier.testTag("cloneStart"),
-            ) {
-                Text(stringResource(R.string.remote_folders_clone_start))
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) } },
-    )
+            ) { Text(stringResource(R.string.remote_folders_clone_start)) }
+            SheetSecondaryButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) }
+        }
+    }
 }
 
 @Composable

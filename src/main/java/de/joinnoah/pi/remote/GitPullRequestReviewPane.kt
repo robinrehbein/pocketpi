@@ -81,7 +81,7 @@ internal fun GitPullRequestReviewPane(state: GitPullRequestReviewState, actions:
                                 var expanded by remember { mutableStateOf(false) }
                                 Box {
                                     OutlinedButton(onClick = { expanded = true }, enabled = !state.loading && !state.sending && !state.invalidated && preparation.pullRequestBases.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("prBase")) { Text(stringResource(R.string.pr_base_value, state.draft.base ?: stringResource(R.string.pr_choose_base))) }
-                                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                    GlassDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                                         preparation.pullRequestBases.forEach { base -> DropdownMenuItem(text = { Text(base) }, onClick = { expanded = false; actions.setBase(base) }, modifier = Modifier.heightIn(min = 48.dp)) }
                                     }
                                 }
