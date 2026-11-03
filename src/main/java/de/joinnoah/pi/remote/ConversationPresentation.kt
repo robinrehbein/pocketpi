@@ -733,3 +733,37 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
         }
     }
 }
+
+/**
+ * Carries the chat list's key of a pending prompt's bubble over to the host's copy of that prompt
+ * when the copy replaces it. The list then sees one row whose content changes, rather than one row
+ * leaving and another arriving: with item animations those two rows overlap while one fades out
+ * and the other fades in, which reads as the prompt shown twice.
+ */
+internal class PendingBubbleKeys {
+    /** Host message item ID to the key of the pending bubble it replaced. */
+    private val adopted = HashMap<String, String>()
+    private var pending: ConversationItem.Bubble? = null
+    private var knownIds: Set<String> = emptySet()
+
+    /** Call with each new list of [items] and the pending bubble at its tail, if any. */
+    fun update(items: List<ConversationItem>, pendingItem: ConversationItem.Bubble?) {
+        val previous = pending
+        val before = knownIds
+        pending = pendingItem
+        knownIds = items.mapTo(HashSet()) { it.id }
+        if (pendingItem != null || previous == null) return
+        val wanted = bubbleKey(previous.text)
+        items.lastOrNull {
+            it is ConversationItem.Bubble && it.role == "user" && it.id !in before &&
+                it.id !in adopted && bubbleKey(it.text) == wanted
+        }?.let { adopted[it.id] = previous.id }
+    }
+
+    fun keyOf(item: ConversationItem): String = adopted[item.id] ?: item.id
+
+    /** The item ID behind a list [key], for a key read back from the list's layout. */
+    fun idOf(key: String): String = adopted.entries.firstOrNull { it.value == key }?.key ?: key
+
+    private fun bubbleKey(text: String) = text.replace("\r\n", "\n").replace('\r', '\n').trim()
+}

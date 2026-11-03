@@ -347,9 +347,13 @@ internal fun RemoteScreen(
     val presentation =
         remember(presenter, state.messages, sessionActive) { presenter.present(state.messages, sessionActive) }
     // The prompt the timeline does not show yet goes at the tail, where the reply will follow it.
+    val pendingKeys = remember(key) { PendingBubbleKeys() }
     val conversation =
         remember(presentation, state.pendingSend) {
-            state.pendingSend?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
+            val pendingItem = state.pendingSend?.let(::pendingSendItem)
+            val items = pendingItem?.let { presentation.items + it } ?: presentation.items
+            // The host's copy keeps the pending bubble's list key, so the swap does not animate.
+            items.also { pendingKeys.update(it, pendingItem) }
         }
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: ThinkingDisplay.STATUS
     val chatKey = key as? RemoteNavKey.Chat
@@ -641,7 +645,8 @@ internal fun RemoteScreen(
             if (viewportSaveBlocked || listState.layoutInfo.totalItemsCount == 0) null
             else {
                 val first = listState.firstVisibleItemIndex
-                val anchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == first }?.key as? String
+                val anchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == first }?.key
+                    .let { (it as? String)?.let(pendingKeys::idOf) }
                 ChatViewportPosition(
                     anchor, (first - leadingItems.count).coerceAtLeast(0),
                     listState.firstVisibleItemScrollOffset, autoFollow,
@@ -3142,7 +3147,7 @@ internal fun RemoteScreen(
                                 shownItems.lastOrNull {
                                     it is ConversationItem.Bubble && it.role == "assistant"
                                 }?.id
-                            items(shownItems, key = { it.id }, contentType = ::conversationContentType) { item ->
+                            items(shownItems, key = pendingKeys::keyOf, contentType = ::conversationContentType) { item ->
                                 val highlighted = item.id == highlightedId
                                 ConversationItemColumn(
                                     item,
