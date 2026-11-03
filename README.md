@@ -208,8 +208,8 @@ anything typed since. The same holds if the send after the reconnect fails. Canc
 does leaving the chat or sending new text while it still waits. A restart leaves the journal entry, which is shown as not
 confirmed.
 After an uncertain prompt result, check the session before sending the draft again. In a
-running host-owned RPC session, the busy row offers two send modes: Send now (interrupt step) sends
-the draft as a steer, and Send when done submits it to pi's follow-up queue. The journal
+running host-owned RPC session, the busy row offers two send modes: Steer now sends
+the draft as a steer into the running step, and Send later submits it to pi's follow-up queue. The journal
 distinguishes queued messages from uncertain outcomes. Stop, from the busy row, Esc Esc, Ctrl+. or a
 question's abort, asks first when queued messages would be discarded. Once confirmed, it clears the
 RPC queue before aborting, but pi does not return request IDs for removed messages, so PocketPi
