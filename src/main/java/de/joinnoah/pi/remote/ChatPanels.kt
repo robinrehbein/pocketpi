@@ -34,6 +34,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -488,7 +489,8 @@ private fun SubagentStripRow(
     Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             // The same glass π avatar as the sessions and the chat's subagent card.
-            GlassAvatar(size = 44.dp) {
+            // Decorative: the name beside it says which agent it is.
+            GlassAvatar(size = 44.dp, modifier = Modifier.clearAndSetSemantics {}) {
                 Text("π", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
