@@ -1,12 +1,12 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
 import android.os.Build
 import android.view.View
 import android.view.ViewParent
 import android.view.Window
 import android.view.WindowManager
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +34,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,7 +49,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -81,22 +88,24 @@ internal fun GlassSheet(
     sheetState: SheetState = rememberModalBottomSheetState(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    var frosted by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    // Start from the system's current answer, so a frosted sheet does not open opaque for a frame.
+    var frosted by remember { mutableStateOf(crossWindowBlurOn(context)) }
     val scheme = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(topStart = SHEET_CORNER, topEnd = SHEET_CORNER)
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
-        modifier = if (frosted) modifier.border(GLASS_RIM_WIDTH, glassRimColor(scheme), shape) else modifier,
+        modifier = modifier,
         sheetState = sheetState,
-        shape = shape,
+        shape = RoundedCornerShape(topStart = SHEET_CORNER, topEnd = SHEET_CORNER),
         // The glass tint keeps text at 4.5:1 over any content, as on the floating pills.
         containerColor = if (frosted) scheme.background.copy(alpha = GLASS_TINT_ALPHA) else scheme.background,
         contentColor = scheme.onBackground,
         tonalElevation = 0.dp,
         scrimColor = if (frosted) scheme.scrim.copy(alpha = FROSTED_SCRIM_ALPHA) else BottomSheetDefaults.ScrimColor,
-        dragHandle = { SheetHandle() },
+        // The rim is drawn inside the sheet (by the handle) so it moves with the sheet.
+        dragHandle = { SheetHandle(rim = if (frosted) glassRimColor(scheme) else null) },
     ) {
-        BlurBehindSheetWindow { frosted = it }
+        BlurBehindSheetWindow(hiding = sheetState.targetValue == SheetValue.Hidden) { frosted = it }
         content()
     }
 }
@@ -107,23 +116,33 @@ private const val FROSTED_SCRIM_ALPHA = 0.14f
 /** How far the system blurs the app behind a frosted sheet, in pixels. */
 private const val SHEET_BLUR_RADIUS_PX = 64
 
+private fun crossWindowBlurOn(context: Context): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        runCatching { context.getSystemService(WindowManager::class.java)?.isCrossWindowBlurEnabled == true }
+            .getOrDefault(false)
+
 /**
  * Asks the system to blur the app behind the sheet's window and reports whether that blur is on.
  * The system can turn cross-window blur off and on while the sheet is open (battery saver), so the
- * sheet follows its listener rather than reading it once.
+ * sheet follows its listener rather than reading it once. While the sheet is [hiding] the blur is
+ * taken away, so it does not stay at full strength as the sheet slides out.
  */
 @Composable
-private fun BlurBehindSheetWindow(onFrosted: (Boolean) -> Unit) {
+private fun BlurBehindSheetWindow(hiding: Boolean, onFrosted: (Boolean) -> Unit) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
     val view = LocalView.current
     val report by rememberUpdatedState(onFrosted)
-    DisposableEffect(view) {
-        val window = view.dialogWindow()
+    val window = remember(view) { view.dialogWindow() }
+    var enabled by remember { mutableStateOf(crossWindowBlurOn(view.context)) }
+    DisposableEffect(view, window) {
         val windowManager = view.context.getSystemService(WindowManager::class.java)
-        if (window == null || windowManager == null) return@DisposableEffect onDispose {}
-        val listener = Consumer<Boolean> { enabled ->
-            window.attributes = window.attributes.apply { blurBehindRadius = if (enabled) SHEET_BLUR_RADIUS_PX else 0 }
-            report(enabled)
+        if (window == null || windowManager == null) {
+            report(false)
+            return@DisposableEffect onDispose {}
+        }
+        val listener = Consumer<Boolean> { on ->
+            enabled = on
+            report(on)
         }
         // The listener is called at once with the current state. A window manager that cannot
         // blur (a test's) leaves the sheet opaque instead of failing.
@@ -131,14 +150,21 @@ private fun BlurBehindSheetWindow(onFrosted: (Boolean) -> Unit) {
             window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
             windowManager.addCrossWindowBlurEnabledListener(listener)
         }.isSuccess
+        if (!registered) report(false)
         onDispose { if (registered) runCatching { windowManager.removeCrossWindowBlurEnabledListener(listener) } }
+    }
+    val radius = if (enabled && !hiding) SHEET_BLUR_RADIUS_PX else 0
+    DisposableEffect(window, radius) {
+        if (window != null && window.attributes.blurBehindRadius != radius)
+            runCatching { window.attributes = window.attributes.apply { blurBehindRadius = radius } }
+        onDispose {}
     }
 }
 
 /** The window of the dialog that hosts this view, as the sheet's own layout provides it. */
 private fun View.dialogWindow(): Window? {
-    var current: ViewParent? = parent
     if (this is DialogWindowProvider) return window
+    var current: ViewParent? = parent
     while (current != null) {
         if (current is DialogWindowProvider) return current.window
         current = current.parent
@@ -147,13 +173,34 @@ private fun View.dialogWindow(): Window? {
 }
 
 @Composable
-private fun SheetHandle() {
-    Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp), contentAlignment = Alignment.Center) {
+private fun SheetHandle(rim: Color? = null) {
+    Box(
+        Modifier.fillMaxWidth()
+            .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
+            .padding(top = 12.dp, bottom = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Box(
             Modifier.size(width = 36.dp, height = 4.dp)
                 .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f), CircleShape)
         )
     }
+}
+
+/**
+ * The glass rim along the sheet's rounded top edge. The sheet clips to its shape, so half the
+ * stroke is cut away and the visible line is the rim's width.
+ */
+private fun DrawScope.drawTopRim(color: Color) {
+    val corner = SHEET_CORNER.toPx()
+    val w = size.width
+    val path = Path().apply {
+        moveTo(0f, corner)
+        arcTo(Rect(0f, 0f, 2 * corner, 2 * corner), 180f, 90f, false)
+        lineTo(w - corner, 0f)
+        arcTo(Rect(w - 2 * corner, 0f, w, 2 * corner), 270f, 90f, false)
+    }
+    drawPath(path, color, style = Stroke(width = GLASS_RIM_WIDTH.toPx() * 2))
 }
 
 /** A glass card inside a sheet: what a sheet is about, such as the current advisor. */
