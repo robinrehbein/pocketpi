@@ -36,10 +36,20 @@ class FileMutationRepositoryTest {
         override val lockIdentity: Any get() = this
         var entries: Map<FileMutationKey, FileMutationEntry> = emptyMap()
         var failSave = false
-        override fun load() = entries
+        var failLoad = false
+        var resets = 0
+        override fun load(): Map<FileMutationKey, FileMutationEntry> {
+            if (failLoad) error("unreadable")
+            return entries
+        }
         override fun save(entries: Map<FileMutationKey, FileMutationEntry>) {
             if (failSave) error("disk full")
             this.entries = entries
+        }
+        override fun reset() {
+            resets++
+            failLoad = false
+            entries = emptyMap()
         }
     }
 
@@ -357,6 +367,167 @@ class FileMutationRepositoryTest {
         assertEquals(FileMutationRefusal.CONFLICT, repository.outcome()?.reason)
         assertEquals("a.txt", repository.outcome()?.path)
         assertTrue(journal.entries.isEmpty())
+    }
+
+    private fun pendingDelete(operationId: String = "b3BlcmF0aW9uLTAwMDMtYw") =
+        FileMutationRequest("host", "device", sessionId, operationId, epoch, FileMutationKind.DELETE, "a.txt", baseVersion = version)
+
+    private fun statusOf(frame: JsonObject, state: String, path: String = "a.txt", acknowledged: Boolean = false) =
+        record(Wire.objectOf("type" to "x", "operationId" to frame.text("operationId"), "operation" to "delete", "path" to path), state, acknowledged = acknowledged)
+
+    @Test
+    fun aHostPendingOperationIsListedAndCheckAgainOnlyAsksForItsStatus() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        val request = pendingDelete()
+        journal.entries = mapOf(FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.RESERVED))
+        transport.answer = { statusOf(it, "pending") }
+        val repository = opened(repository(transport, journal))
+        val item = fileMutationsOf(repository.state.value)!!.recovery.single()
+        assertTrue(item.pending)
+        // Pending holds its path: a new delete of it is blocked.
+        repository.prepareFileDelete("a.txt")
+        runCurrent()
+        assertTrue(repository.dialog()!!.blocked)
+        repository.cancelFileMutation()
+        // Acknowledging a pending operation is not offered.
+        repository.acknowledgeFileMutation(item.operationId)
+        runCurrent()
+        assertTrue(transport.types().none { it == "session.files.mutation.acknowledge" })
+        transport.answer = { statusOf(it, "applied") }
+        repository.checkFileMutation(item.operationId)
+        runCurrent()
+        assertTrue(fileMutationsOf(repository.state.value)!!.recovery.isEmpty())
+        assertEquals(FileMutationStatus.APPLIED, repository.outcome()?.status)
+        assertTrue(journal.entries.isEmpty())
+        assertTrue(transport.types().none { it in mutationTypes })
+        assertTrue(transport.types().count { it == "session.files.mutation.status" } >= 2)
+    }
+
+    @Test
+    fun aPendingOperationIsPolledUntilTheHostSettlesIt() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        val request = pendingDelete()
+        journal.entries = mapOf(FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.RESERVED))
+        transport.answer = { statusOf(it, "pending") }
+        val repository = opened(repository(transport, journal))
+        assertTrue(fileMutationsOf(repository.state.value)!!.recovery.single().pending)
+        transport.answer = { statusOf(it, "unknown") }
+        advanceTimeBy(1_500)
+        runCurrent()
+        val item = fileMutationsOf(repository.state.value)!!.recovery.single()
+        assertFalse(item.pending)
+        assertEquals(FileMutationState.UNKNOWN, journal.entries.values.single().state)
+        assertTrue(transport.types().none { it in mutationTypes })
+    }
+
+    @Test
+    fun anOperationOnlyTheHostListsShowsAndIsCheckedByStatus() = runTest {
+        val transport = Transport(all)
+        val operationId = "b3BlcmF0aW9uLTAwMDQtZA"
+        transport.listOperations = listOf(Wire.objectOf("operationId" to operationId, "operation" to "delete", "path" to "a.txt", "state" to "pending", "acknowledged" to false))
+        val repository = opened(repository(transport))
+        val item = fileMutationsOf(repository.state.value)!!.recovery.single()
+        assertTrue(item.pending && !item.local)
+        transport.answer = { statusOf(it, "unknown") }
+        repository.checkFileMutation(operationId)
+        runCurrent()
+        val status = transport.files().last { it.text("type") == "session.files.mutation.status" }
+        assertEquals(operationId, status.text("operationId"))
+        assertEquals(epoch, status.text("epoch"))
+        assertFalse(fileMutationsOf(repository.state.value)!!.recovery.single().pending)
+        transport.answer = { statusOf(it, "unknown", acknowledged = true) }
+        repository.acknowledgeFileMutation(operationId)
+        runCurrent()
+        assertTrue(fileMutationsOf(repository.state.value)!!.recovery.isEmpty())
+        assertTrue(transport.types().none { it in mutationTypes })
+    }
+
+    @Test
+    fun anUnreadableJournalBlocksMutationsUntilAConfirmedReset() = runTest {
+        val transport = Transport(all)
+        val journal = Journal().apply { failLoad = true }
+        transport.listOperations = listOf(Wire.objectOf("operationId" to "b3BlcmF0aW9uLTAwMDQtZA", "operation" to "delete", "path" to "a.txt", "state" to "unknown", "acknowledged" to false))
+        val repository = opened(repository(transport, journal))
+        val mutations = fileMutationsOf(repository.state.value)!!
+        assertTrue(mutations.journalUnreadable)
+        // The host's own unresolved operations still show.
+        assertEquals("b3BlcmF0aW9uLTAwMDQtZA", mutations.recovery.single().operationId)
+        assertEquals(FileMutationAccess(), FileMutationAccess.of(repository.state.value))
+        repository.prepareFileCreate("")
+        assertNull(repository.dialog())
+        // Without the confirmation nothing is reset.
+        repository.confirmFileMutationReset()
+        repository.requestFileMutationReset()
+        repository.cancelFileMutationReset()
+        runCurrent()
+        assertEquals(0, journal.resets)
+        assertTrue(fileMutationsOf(repository.state.value)!!.journalUnreadable)
+        repository.requestFileMutationReset()
+        assertTrue(fileMutationsOf(repository.state.value)!!.resetConfirming)
+        repository.confirmFileMutationReset()
+        runCurrent()
+        assertEquals(1, journal.resets)
+        assertFalse(fileMutationsOf(repository.state.value)!!.journalUnreadable)
+        assertEquals(FileMutationAccess(true, true, true), FileMutationAccess.of(repository.state.value))
+        // The host still lists its unknown operation for acknowledgement; nothing was resent.
+        assertEquals(1, fileMutationsOf(repository.state.value)!!.recovery.size)
+        assertTrue(transport.types().none { it in mutationTypes })
+    }
+
+    @Test
+    fun anOpenFileFollowsAnAppliedRenameAndClosesOnAnAppliedDelete() = runTest {
+        val transport = Transport(all)
+        transport.answer = { record(it, "applied") }
+        val repository = opened(repository(transport))
+        repository.openFilesFile("a.txt")
+        runCurrent()
+        repository.prepareFileRename("a.txt")
+        runCurrent()
+        repository.confirmFileMutation("b.txt")
+        runCurrent()
+        assertEquals("b.txt", repository.state.value.files?.file?.path)
+        assertTrue(transport.files().any { it.text("type") == "session.files.read" && it.text("path") == "b.txt" })
+        assertNull(repository.state.value.files?.editor)
+        repository.prepareFileDelete("b.txt")
+        runCurrent()
+        repository.confirmFileMutation(null)
+        runCurrent()
+        assertNull(repository.state.value.files?.file)
+        assertEquals("", repository.state.value.files?.path)
+    }
+
+    @Test
+    fun aRefusedRenameLeavesTheOpenFileAlone() = runTest {
+        val transport = Transport(all)
+        transport.answer = { record(it, "refused", "exists") }
+        val repository = opened(repository(transport))
+        repository.openFilesFile("a.txt")
+        runCurrent()
+        repository.prepareFileRename("a.txt")
+        runCurrent()
+        repository.confirmFileMutation("b.txt")
+        runCurrent()
+        assertEquals("a.txt", repository.state.value.files?.file?.path)
+    }
+
+    @Test
+    fun aFullJournalRefusesANewOperationWithoutSending() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        journal.entries = (0 until MAX_FILE_MUTATION_JOURNAL_ENTRIES).associate { index ->
+            val request = FileMutationRequest("host", "device", "other-session", Wire.encode(ByteArray(16) { index.toByte() }), epoch,
+                FileMutationKind.DELETE, "f$index.txt", baseVersion = version)
+            FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.ACKNOWLEDGED_UNKNOWN)
+        }
+        val repository = opened(repository(transport, journal))
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("new.md")
+        runCurrent()
+        assertTrue(transport.types().none { it in mutationTypes })
+        assertEquals(FilesFailure.STORAGE, repository.dialog()?.failure)
+        assertEquals(MAX_FILE_MUTATION_JOURNAL_ENTRIES, journal.entries.size)
     }
 
     @Test

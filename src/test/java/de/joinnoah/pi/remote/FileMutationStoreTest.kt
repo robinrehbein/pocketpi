@@ -80,6 +80,20 @@ class FileMutationStoreTest {
         assertFalse(payload.exists())
     }
 
+    @Test fun confirmedResetReprovisionsAnEmptyJournalFromUnreadableOrHalfLostEvidence() {
+        store(expectProvisioned = false).save(mapOf(key to entry))
+        payload.writeBytes(byteArrayOf(1, 2))
+        assertThrows(Exception::class.java) { store().load() }
+        store().reset()
+        assertEquals(emptyMap<FileMutationKey, FileMutationEntry>(), store().load())
+        // A payload without its marker fails closed until a reset, too.
+        store().save(mapOf(key to entry))
+        File(directory, "file-mutations-v1.provisioned").delete()
+        assertThrows(Exception::class.java) { store(expectProvisioned = false).load() }
+        store().reset()
+        assertEquals(emptyMap<FileMutationKey, FileMutationEntry>(), store().load())
+    }
+
     @Test fun truncatedAndTamperedCiphertextIsPreserved() {
         store(expectProvisioned = false).save(mapOf(key to entry))
         val corruptions = listOf(
