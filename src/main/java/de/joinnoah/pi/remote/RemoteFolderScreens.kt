@@ -220,8 +220,18 @@ internal fun FolderBrowserContent(
             }
         },
     ) { insets ->
+        // The folder list alone scrolls under the floating header; a notice, a clone or a state
+        // message above it keeps the page below the header.
+        val headerTop = insets.calculateTopPadding()
+        val listUnderHeader =
+            connected && available && folders.notice == null && folders.clone == null &&
+                folders.error == null && folders.loaded && folders.entries.isNotEmpty()
         Column(
-            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
+            Modifier.fillMaxSize()
+                .padding(insets.withoutTop())
+                .consumeWindowInsets(insets)
+                .padding(top = if (listUnderHeader) 0.dp else headerTop)
+                .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             folders.notice?.let { notice ->
@@ -252,6 +262,7 @@ internal fun FolderBrowserContent(
                         onEnter = onEnter,
                         onRetry = onRetry,
                         modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(top = if (listUnderHeader) headerTop else 0.dp, bottom = 24.dp),
                     )
             }
         }

@@ -23,9 +23,12 @@ internal fun FollowUpStatus(state: RemoteState, onDismissFollowUp: (String) -> U
     }
     val visible = state.followUps.filter { it.status != "delivered" }
             if (visible.isNotEmpty()) {
+                // It floats over the chat like the composer under it, so it sits on the same glass.
+                FloatingSurface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
                 Column(
                     Modifier.fillMaxWidth().heightIn(max = 112.dp)
                         .verticalScroll(rememberScrollState())
+                        .padding(start = 16.dp, end = 4.dp)
                         .testTag("followUpJournal"),
                 ) {
                     visible.forEach { entry ->
@@ -57,6 +60,7 @@ internal fun FollowUpStatus(state: RemoteState, onDismissFollowUp: (String) -> U
                             }
                         }
                     }
+                }
                 }
             }
 

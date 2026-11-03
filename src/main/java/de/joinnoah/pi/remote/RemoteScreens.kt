@@ -3361,12 +3361,12 @@ internal fun RemoteScreen(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.error?.let { error ->
-                        Card(
+                        // Floats over the chat with the composer, so it is tinted glass like it.
+                        FloatingSurface(
                             modifier = Modifier.fillMaxWidth().testTag("errorCard"),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         ) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(
@@ -3551,9 +3551,9 @@ internal fun RemoteScreen(
                                     style = MaterialTheme.typography.titleLarge,
                                 )
                                 if (compactionVisible(state.compaction, compactionNow))
-                                    CompactionBanner(state.compaction, compactionNow)
+                                    CompactionBanner(state.compaction, compactionNow, floating = false)
                                 if (exportState != null)
-                                    ExportStatus(exportState, ::shareExport) {
+                                    ExportStatus(exportState, ::shareExport, floating = false) {
                                         if (exportState is ExportState.Done)
                                             exportScope.launch(Dispatchers.IO) { ExportStorage.clear(context.cacheDir) }
                                         exportState = null
@@ -3706,7 +3706,7 @@ internal fun RemoteScreen(
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp).testTag("chatSnackbar"),
-            )
+            ) { data -> GlassSnackbar(data) }
             Box(Modifier.fillMaxSize().then(overlayRegion)) {
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             // Beside the chat these are the inspector's tabs. The jobs stay open through a

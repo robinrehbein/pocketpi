@@ -51,6 +51,9 @@ class FloatingSurfaceTest {
                         scheme.primary to scheme.onPrimary,
                         scheme.primaryContainer to scheme.onPrimaryContainer,
                         scheme.errorContainer to scheme.onErrorContainer,
+                        scheme.secondaryContainer to scheme.onSecondaryContainer,
+                        // The snackbar and the tickets undo bar, whose action keeps the text colour.
+                        scheme.inverseSurface to scheme.inverseOnSurface,
                     )
                 for (backdrop in listOf(Color.Black, Color.White)) {
                     val where = "dark=$dark synthwave=$synthwave backdrop=$backdrop"

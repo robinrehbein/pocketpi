@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,12 +65,17 @@ internal fun exportFailureText(failure: ExportFailure): Int =
 
 /** Progress, failure or completion of `/export`; [onShare] shares the finished file again. */
 @Composable
-internal fun ExportStatus(state: ExportState?, onShare: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun ExportStatus(
+    state: ExportState?,
+    onShare: (String) -> Unit,
+    floating: Boolean = true,
+    onDismiss: () -> Unit,
+) {
     if (state == null) return
     val failed = state is ExportState.Failed
-    Surface(
+    BannerSurface(
+        floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("exportStatus").semantics { liveRegion = LiveRegionMode.Polite },
-        shape = MaterialTheme.shapes.small,
         color = if (failed) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
         contentColor =
             if (failed) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
