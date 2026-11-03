@@ -599,10 +599,14 @@ internal object RemoteNotifications {
                 localized.getString(R.string.remote_live_run_stop),
                 LiveRunService.pendingIntent(context, LiveRunService.ACTION_STOP),
             )
-        if (sdk >= 36)
+        if (sdk >= 36) {
             builder
                 .setStyle(NotificationCompat.ProgressStyle().setProgressIndeterminate(true))
                 .setRequestPromotedOngoing(true)
+            // The status bar pill shows the time since the run started; while pi waits for the
+            // user it says so instead, short enough to fit the pill.
+            if (content.waiting) builder.setShortCriticalText(localized.getString(R.string.remote_live_run_chip_waiting))
+        }
         return builder.build()
     }
 
