@@ -43,7 +43,7 @@ class GitPushReviewTest {
         assertTrue(runCatching { parseGitPushIntent(intent().copy(target = target.copy(branch = "other")).json()) }.isFailure)
     }
     @Test fun reviewPersistsBeforeOneDispatchAndShowsConfirmedResult() = runTest {
-        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection)
+        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }
         controller.prepare(); runCurrent(); controller.review(); val confirmation = checkNotNull(controller.state.value.confirmation)
         assertEquals(head, confirmation.head); assertEquals(target, confirmation.target); assertEquals(token, confirmation.writeId)
         controller.confirm(); controller.confirm(); runCurrent(); assertEquals(1, repo.sends); assertEquals(confirmation, repo.stored)
@@ -52,7 +52,7 @@ class GitPushReviewTest {
     }
     @Test fun restartUnknownCanCheckWithOwnerOffAndNeedsExplicitAck() = runTest {
         val repo = Repo(); repo.stored = intent(); ready(repo, push = false)
-        val controller = GitPushReviewController(repo, backgroundScope, selection); controller.prepare(); runCurrent()
+        val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }; controller.prepare(); runCurrent()
         assertEquals(GitWriteResult.Push.Unknown, controller.state.value.result); assertTrue(controller.state.value.canCheckRemote)
         controller.checkRemote(); runCurrent(); assertEquals(GitPushStatus.MATCHES, controller.state.value.recovery?.state)
         assertNotNull(repo.stored); assertEquals(0, repo.sends); assertEquals(0, repo.prepares)
@@ -60,20 +60,20 @@ class GitPushReviewTest {
         repo.saveFails = false; controller.acknowledgeUnknown(); runCurrent(); assertNull(repo.stored); assertTrue(controller.state.value.invalidated)
     }
     @Test fun staleSelectionOrStorageFailureNeverDispatches() = runTest {
-        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection)
+        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }
         controller.prepare(); runCurrent(); controller.review(); repo.saveFails = true; controller.confirm(); runCurrent(); assertEquals(0, repo.sends)
         repo.saveFails = false; controller.review(); repo.state.value = repo.state.value.copy(selection = RemoteSelection("host", "project", "other"), gitReviewGeneration = 1)
         controller.confirm(); runCurrent(); assertEquals(0, repo.sends)
     }
     @Test fun cancelledAfterDispatchRetainsPendingWithoutRetry() = runTest {
         val repo = Repo(); ready(repo); val job = SupervisorJob()
-        val controller = GitPushReviewController(repo, CoroutineScope(job + StandardTestDispatcher(testScheduler)), selection)
+        val controller = GitPushReviewController(repo, CoroutineScope(job + StandardTestDispatcher(testScheduler)), selection) { testScheduler.currentTime }
         controller.prepare(); runCurrent(); controller.review(); controller.confirm(); runCurrent(); assertEquals(1, repo.sends)
         job.cancel(); runCurrent(); assertEquals(GitWriteResult.Push.Unknown, controller.state.value.result); assertNotNull(repo.stored); assertEquals(1, repo.sends)
     }
 
     @Test fun lostPushResendsOnlyOnRequestWithItsOriginalIdsAndSettlesOnAnswer() = runTest {
-        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection)
+        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }
         // The connection drops after dispatch: the repository reports the outcome as unknown.
         repo.replies.add { GitWriteResult.Push.Unknown }
         controller.prepare(); runCurrent(); controller.review(); val confirmation = checkNotNull(controller.state.value.confirmation)
@@ -125,7 +125,7 @@ class GitPushReviewTest {
         assertEquals(GitPushResendNotice.EXPIRED, controller.state.value.resendNotice); assertNotNull(repo.stored)
         // After a restart the dispatch time is unknown.
         val restored = Repo(); restored.stored = intent(); ready(restored)
-        val fresh = GitPushReviewController(restored, backgroundScope, selection); fresh.prepare(); runCurrent()
+        val fresh = GitPushReviewController(restored, backgroundScope, selection) { testScheduler.currentTime }; fresh.prepare(); runCurrent()
         assertEquals(GitWriteResult.Push.Unknown, fresh.state.value.result); assertFalse(fresh.state.value.canResend)
         fresh.resend(); runCurrent(); assertEquals(0, restored.sends)
     }
@@ -142,7 +142,7 @@ class GitPushReviewTest {
 
     @Test fun ownerOffHydratesPendingWhileClosed() = runTest {
         val repo = Repo(); repo.stored = intent(); ready(repo, push = false)
-        val controller = GitPushReviewController(repo, backgroundScope, selection); runCurrent()
+        val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }; runCurrent()
         assertFalse(controller.state.value.open); assertEquals(intent(), controller.state.value.pending)
         assertEquals(GitWriteResult.Push.Unknown, controller.state.value.result); assertEquals(0, repo.prepares); assertEquals(0, repo.sends)
     }
@@ -194,20 +194,20 @@ class GitPushReviewTest {
 
     @Test fun staleInitialHydrationCannotResurrectIntentAfterPrepare() = runTest {
         val repo = Repo(); ready(repo, push = false); repo.stored = intent(); val gate = CompletableDeferred<Unit>(); repo.loadGate = gate
-        val controller = GitPushReviewController(repo, backgroundScope, selection); runCurrent()
+        val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }; runCurrent()
         repo.stored = null; controller.prepare(); runCurrent(); gate.complete(Unit); runCurrent()
         assertNull(controller.state.value.pending); assertNull(controller.state.value.result); assertEquals(0, repo.sends)
     }
     @Test fun authorityChangedWhilePreparingDiscardsStaleBranch() = runTest {
         val repo = Repo(); ready(repo); val gate = CompletableDeferred<Unit>(); repo.onRead = { gate.await() }
-        val controller = GitPushReviewController(repo, backgroundScope, selection); controller.prepare(); runCurrent()
+        val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }; controller.prepare(); runCurrent()
         repo.state.value = repo.state.value.copy(gitReviewGeneration = 1); runCurrent(); gate.complete(Unit); runCurrent()
         assertNull(controller.state.value.preparation); assertTrue(controller.state.value.invalidated); assertEquals(0, repo.sends)
     }
 
     @Test fun cancellationDuringConfirmedIntentClearRetainsKnownResult() = runTest {
         val repo = Repo(); ready(repo); val job = SupervisorJob()
-        val controller = GitPushReviewController(repo, CoroutineScope(job + StandardTestDispatcher(testScheduler)), selection)
+        val controller = GitPushReviewController(repo, CoroutineScope(job + StandardTestDispatcher(testScheduler)), selection) { testScheduler.currentTime }
         controller.prepare(); runCurrent(); controller.review(); controller.confirm(); runCurrent()
         repo.onClear = { job.cancel(); yield() }
         repo.reply.complete(GitWriteResult.Push.Pushed("feature", "feature", head, true, false)); runCurrent()
@@ -215,7 +215,7 @@ class GitPushReviewTest {
     }
 
     @Test fun ownerSwitchOffBeforeConfirmedReplyRetainsKnownResult() = runTest {
-        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection)
+        val repo = Repo(); ready(repo); val controller = GitPushReviewController(repo, backgroundScope, selection) { testScheduler.currentTime }
         controller.prepare(); runCurrent(); controller.review(); controller.confirm(); runCurrent()
         repo.state.value = repo.state.value.copy(capabilities = setOf(GIT_PUSH_STATUS_CAPABILITY), gitReviewGeneration = 1)
         repo.reply.complete(GitWriteResult.Push.Pushed("feature", "feature", head, true, false)); runCurrent()

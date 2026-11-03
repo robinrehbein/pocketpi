@@ -55,13 +55,15 @@ internal class GitPushReviewController(
     private val repository: RemoteRepository,
     private val scope: CoroutineScope,
     private val targetSelection: RemoteSelection,
-    private val now: () -> Long = { System.nanoTime() / 1_000_000 },
+    // Milliseconds that keep counting through deep sleep, like the Host's wall clock its ledger
+    // window runs on: SystemClock.elapsedRealtime in the app.
+    private val now: () -> Long,
 ) {
     // The intent this process dispatched, and when. An intent restored from storage has no known
     // dispatch time, so it is never resent.
-    private var dispatched: Pair<GitPushIntent, Long>? = null
+    private var dispatchedAt: Pair<GitPushIntent, Long>? = null
     private fun resendable(intent: GitPushIntent?): Boolean =
-        intent != null && dispatched?.let { (sent, at) -> sent == intent && now() - at < GIT_PUSH_RESEND_WINDOW_MILLIS } == true
+        intent != null && dispatchedAt?.let { (sent, at) -> sent == intent && now() - at < GIT_PUSH_RESEND_WINDOW_MILLIS } == true
     private val mutable = MutableStateFlow(GitPushReviewState())
     val state: StateFlow<GitPushReviewState> = mutable
     private val storage = Mutex()
@@ -161,7 +163,7 @@ internal class GitPushReviewController(
                     mutable.value = mutable.value.copy(sending = false, confirmation = null, invalidated = true); refreshCheck(); return@launch
                 }
                 val result = repository.gitPush(checkNotNull(targetSelection.sessionId), intent.writeId, intent.requestId) {
-                    dispatched = true; this@GitPushReviewController.dispatched = intent to now()
+                    dispatched = true; dispatchedAt = intent to now()
                 }
                 if (result != GitWriteResult.Push.Unknown) known = result
                 if (known != null) {
@@ -231,6 +233,8 @@ internal class GitPushReviewController(
      * for it if the push still runs, so a push that reached the Mac is not run twice, and one that
      * never arrived runs now. Only a push or `up_to_date` settles the intent: any other answer may
      * come from a fresh run (a Host restart forgets the ledger) and says nothing about the first.
+     * Such a fresh run cannot push twice: the Host answers `up_to_date` when the remote branch
+     * already points at the reviewed commit, and otherwise pushes it without force.
      */
     fun resend() {
         val intent = pending ?: return

@@ -341,7 +341,7 @@ internal class ChatViewModel(
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
     val commitReview = GitCommitReviewController(repository, viewModelScope, key.selection())
-    val pushReview = GitPushReviewController(repository, viewModelScope, key.selection())
+    val pushReview = GitPushReviewController(repository, viewModelScope, key.selection(), android.os.SystemClock::elapsedRealtime)
     val pullRequestReview = GitPullRequestReviewController(repository, viewModelScope, key.selection())
     fun openCommitReview() = active { pushReview.close(); pullRequestReview.close(); commitReview.prepare() }
     fun openPushReview() = active { commitReview.close(); pullRequestReview.close(); pushReview.prepare() }
