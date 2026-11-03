@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -39,7 +41,6 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,43 +48,44 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.collapse
-import androidx.compose.ui.semantics.dismiss
-import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -111,6 +113,7 @@ internal fun GlassSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val backdrop = rememberAppBackdrop()
+    var handleHeight by remember { mutableIntStateOf(0) }
     val scheme = MaterialTheme.colorScheme
     val glass = SheetGlass(
         // The scrim over the copy matches the scrim the sheet lays over the app around it.
@@ -127,16 +130,24 @@ internal fun GlassSheet(
         contentColor = scheme.onBackground,
         tonalElevation = 0.dp,
         scrimColor = glass.scrim,
-        // The handle and the window insets live inside the content, so one backdrop layer covers the
-        // whole sheet: no seam between handle and content, and no opaque strip over the insets.
-        dragHandle = null,
+        // Material's handle slot keeps the handle's click and TalkBack actions and holds the top
+        // inset; the bottom inset moves into the content. The content's backdrop reaches up over
+        // the slot, so one layer frosts the whole sheet: no seam at the handle, no opaque strip
+        // over the insets.
+        dragHandle = { SheetHandle(showPill = backdrop == null, onHeight = { handleHeight = it }) },
         contentWindowInsets = { WindowInsets(0) },
     ) {
         // The same structure with or without the backdrop, so its arrival keeps the content's state.
         Box(Modifier.fillMaxWidth()) {
-            if (backdrop != null) SheetBackdropLayer(backdrop, glass)
-            Column(Modifier.fillMaxWidth().windowInsetsPadding(BottomSheetDefaults.windowInsets)) {
-                SheetHandle(sheetState, onDismissRequest, rim = if (backdrop != null) glassRimColor(scheme) else null)
+            if (backdrop != null) {
+                SheetBackdropLayer(
+                    backdrop, glass,
+                    reachUp = handleHeight,
+                    rim = glassRimColor(scheme),
+                    pill = scheme.onSurfaceVariant.copy(alpha = HANDLE_PILL_ALPHA),
+                )
+            }
+            Column(Modifier.fillMaxWidth().windowInsetsPadding(BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Bottom))) {
                 content()
             }
         }
@@ -243,15 +254,23 @@ private tailrec fun Context.sheetActivity(): Activity? =
 
 /**
  * The blurred app copy under the whole sheet, lined up with the screen, with the scrim and the
- * glass tint over it. It reads the sheet's place on the screen, so it follows a drag; the copy is
+ * glass tint over it. It covers its box and reaches [reachUp] pixels above it, over the handle
+ * slot, where it also draws the glass [rim] and the handle [pill]: the slot is drawn first, so the
+ * layer would hide its pill. It reads its place on the screen, so it follows a drag; the copy is
  * blurred already, so a frame only moves it.
  */
 @Composable
-private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass) {
+private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass, reachUp: Int, rim: Color, pill: Color) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     Box(
-        // The copy is drawn at the whole window's size; clipping keeps it inside the sheet's layer.
         Modifier.matchParentSize()
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(
+                    Constraints.fixed(constraints.maxWidth, constraints.maxHeight + reachUp)
+                )
+                layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, -reachUp) }
+            }
+            // The copy is drawn at the whole window's size; clipping keeps it to the layer.
             .clipToBounds()
             .onGloballyPositioned { origin = it.positionOnScreen() }
             .drawBehind {
@@ -265,49 +284,50 @@ private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass
                 )
                 drawRect(glass.scrim)
                 drawRect(glass.tint)
+                drawTopRim(rim)
+                if (reachUp > 0) {
+                    val pillSize = Size(HANDLE_PILL_WIDTH.toPx(), HANDLE_PILL_HEIGHT.toPx())
+                    drawRoundRect(
+                        pill,
+                        topLeft = Offset(
+                            (size.width - pillSize.width) / 2,
+                            reachUp - HANDLE_BOTTOM_PADDING.toPx() - pillSize.height,
+                        ),
+                        size = pillSize,
+                        cornerRadius = CornerRadius(pillSize.height / 2),
+                    )
+                }
             }
     )
 }
 
+private val HANDLE_TOP_PADDING = 12.dp
+private val HANDLE_BOTTOM_PADDING = 16.dp
+private val HANDLE_PILL_WIDTH = 36.dp
+private val HANDLE_PILL_HEIGHT = 4.dp
+private const val HANDLE_PILL_ALPHA = .4f
+
 /**
- * The sheet's handle, with the click and TalkBack actions Material gives its own handle: dismiss,
- * and expand or collapse when the sheet has a half-open state.
+ * The handle row in Material's slot, below the top inset. It draws its pill only without the
+ * backdrop; with it, the backdrop layer draws the pill over the frosted copy. [onHeight] reports
+ * the row's height, inset included, so the backdrop can reach over it.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SheetHandle(sheetState: SheetState, onDismissRequest: () -> Unit, rim: Color?) {
-    val scope = rememberCoroutineScope()
-    val dismissLabel = stringResource(R.string.sheet_handle_dismiss)
-    val expandLabel = stringResource(R.string.sheet_handle_expand)
-    val collapseLabel = stringResource(R.string.sheet_handle_collapse)
-    val hideAndDismiss: () -> Unit = {
-        scope.launch { sheetState.hide() }.invokeOnCompletion { if (!sheetState.isVisible) onDismissRequest() }
-    }
-    // Full width and 32dp tall, as the handle row was inside Material's handle slot.
+private fun SheetHandle(showPill: Boolean, onHeight: (Int) -> Unit) {
     Box(
         Modifier.fillMaxWidth()
-            .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
-            .clickable {
-                when (sheetState.currentValue) {
-                    SheetValue.Expanded -> hideAndDismiss()
-                    SheetValue.PartiallyExpanded -> scope.launch { sheetState.expand() }
-                    SheetValue.Hidden -> scope.launch { sheetState.show() }
-                }
-            }
-            .semantics(mergeDescendants = true) {
-                dismiss(dismissLabel) { hideAndDismiss(); true }
-                if (sheetState.currentValue == SheetValue.PartiallyExpanded) {
-                    expand(expandLabel) { scope.launch { sheetState.expand() }; true }
-                } else if (sheetState.hasPartiallyExpandedState) {
-                    collapse(collapseLabel) { scope.launch { sheetState.partialExpand() }; true }
-                }
-            }
-            .padding(top = 12.dp, bottom = 16.dp),
+            .onSizeChanged { onHeight(it.height) }
+            .windowInsetsPadding(BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Top))
+            .padding(top = HANDLE_TOP_PADDING, bottom = HANDLE_BOTTOM_PADDING),
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(width = 36.dp, height = 4.dp)
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f), CircleShape)
+            Modifier.size(width = HANDLE_PILL_WIDTH, height = HANDLE_PILL_HEIGHT)
+                .then(
+                    if (showPill) Modifier.background(
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = HANDLE_PILL_ALPHA), CircleShape,
+                    ) else Modifier
+                )
         )
     }
 }

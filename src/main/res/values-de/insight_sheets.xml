@@ -3,7 +3,4 @@
     <string name="insight_files_view_changes">Änderungen ansehen</string>
     <string name="insight_errors_title">Fehler</string>
     <string name="insight_errors_filter">Nur Fehler anzeigen</string>
-    <string name="sheet_handle_dismiss">Sheet schließen</string>
-    <string name="sheet_handle_expand">Sheet ausklappen</string>
-    <string name="sheet_handle_collapse">Sheet einklappen</string>
 </resources>
