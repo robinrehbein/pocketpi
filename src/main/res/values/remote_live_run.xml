@@ -20,6 +20,6 @@
         <item quantity="other">While pi works, an ongoing notification shows its progress and keeps the session connected for up to %1$d minutes after you leave PocketPi.</item>
     </plurals>
     <string name="remote_live_run_chip_waiting">Waiting</string>
-    <string name="remote_live_updates_off">The status bar pill and the Now Bar are turned off for PocketPi, so a run shows only in the notification shade.</string>
+    <string name="remote_live_updates_off">Live Updates are turned off for PocketPi, so a run shows neither as a status bar pill nor, on Samsung, in the Now Bar, only in the notification shade.</string>
     <string name="remote_live_updates_enable">Turn on</string>
 </resources>

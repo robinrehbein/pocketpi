@@ -409,14 +409,14 @@ class LiveRunNotificationOnAndroid16Test {
         assertOngoingWithContent(notification)
         assertEquals(1, notification.actions.size)
         // Working: the pill shows the chronometer, no text of its own.
-        assertNull(notification.extras.getString(Notification.EXTRA_SHORT_CRITICAL_TEXT))
+        assertNull(notification.extras.getString(NotificationCompat.EXTRA_SHORT_CRITICAL_TEXT))
     }
 
     @Test
     fun whilePiWaitsThePillSaysSo() {
         val content = LiveRunContent(LiveRunTarget("route", "session"), "Fix the login", "pocketpi", waiting = true, tool = null, startedAt = STARTED_AT)
         val notification = RemoteNotifications.liveRun(context, content, actions = false, sdk = 36)
-        assertEquals("Waiting", notification.extras.getCharSequence(Notification.EXTRA_SHORT_CRITICAL_TEXT)?.toString())
+        assertEquals("Waiting", notification.extras.getCharSequence(NotificationCompat.EXTRA_SHORT_CRITICAL_TEXT)?.toString())
     }
 }
 
