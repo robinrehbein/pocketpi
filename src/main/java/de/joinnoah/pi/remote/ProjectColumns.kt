@@ -218,10 +218,7 @@ internal fun ProjectAvatar(
             .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
+        GlassAvatar(size = 40.dp) {
             Text(
                 projectInitials(name),
                 style = MaterialTheme.typography.labelLarge,
