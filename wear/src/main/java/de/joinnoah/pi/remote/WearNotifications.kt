@@ -40,7 +40,8 @@ internal object WearNotifications {
             is AttentionTitle.Single -> context.getString(value.id)
             is AttentionTitle.Bundle -> context.resources.getQuantityString(value.plural, value.count, value.count)
         }
-        val content = context.getString(R.string.remote_notification_open)
+        // A failed run (push.run_failure.v1) says why; the payload carries a category, never text.
+        val content = context.getString(payload.failure?.let(::runFailureText) ?: R.string.remote_notification_open)
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_remote).setContentTitle(title).setContentText(content)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setLocalOnly(true).setAutoCancel(true)

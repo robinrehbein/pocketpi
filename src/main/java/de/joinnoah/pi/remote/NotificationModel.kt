@@ -24,6 +24,29 @@ internal enum class PushEvent(val wire: String) {
         get() = this != QUESTION && this != COMPLETE
 }
 
+/**
+ * Why a run ended without an answer: the `failure` of a `complete` push (`push.run_failure.v1`). The
+ * Mac sends a category, never pi's error text. A category this version does not know is [UNKNOWN].
+ */
+internal enum class RunFailure(val wire: String) {
+    /** The run's last answer was an error: from the model's provider, or one pi's agent loop caught. */
+    AGENT_ERROR("agent_error"),
+
+    /** The pi running the session went away during the run. */
+    WORKER_EXITED("worker_exited"),
+
+    /** Any category a later Mac adds; its own name only carries it through the label upgrade. */
+    UNKNOWN("unknown"),
+}
+
+private val failureCategory = Regex("[a-z0-9_]{1,64}")
+
+/** A known category, [RunFailure.UNKNOWN] for a later one, null for none or a malformed value. */
+internal fun parseRunFailure(value: String?): RunFailure? =
+    value?.takeIf { failureCategory.matches(it) }?.let { wire ->
+        RunFailure.entries.find { it.wire == wire } ?: RunFailure.UNKNOWN
+    }
+
 /** The data of one push message. It only ever carries opaque identifiers, never chat text. */
 internal data class PushPayload(
     val routeId: String,
@@ -36,6 +59,8 @@ internal data class PushPayload(
     val jobId: String? = null,
     /** Completions bundled into this push, in 1..[MAX_PUSH_COUNT]. */
     val count: Int = 1,
+    /** A completion whose run ended without an answer. */
+    val failure: RunFailure? = null,
 )
 
 private val opaqueId = Regex("[A-Za-z0-9_-]{1,256}")
@@ -69,8 +94,17 @@ internal fun parsePushPayload(data: Map<String, String>): PushPayload? {
             (kind == PushEvent.JOB_DONE || kind == PushEvent.JOB_STUCK) && isOpaqueId(it)
         },
         if (kind == PushEvent.SUBAGENT_DONE || kind == PushEvent.JOB_DONE) count else 1,
+        if (kind == PushEvent.COMPLETE) parseRunFailure(data["failure"]) else null,
     )
 }
+
+/** What a failed run's notice says below its title. */
+internal fun runFailureText(failure: RunFailure): Int =
+    when (failure) {
+        RunFailure.AGENT_ERROR -> R.string.remote_notification_failure_agent_error
+        RunFailure.WORKER_EXITED -> R.string.remote_notification_failure_worker_exited
+        RunFailure.UNKNOWN -> R.string.remote_notification_failure_unknown
+    }
 
 /** Where a tapped notification leads: a session, optionally with its background jobs open. */
 internal data class NotificationTarget(
@@ -120,7 +154,11 @@ internal fun attentionTitle(payload: PushPayload): AttentionTitle =
             else AttentionTitle.Single(R.string.remote_notification_job_done)
         PushEvent.JOB_STUCK -> AttentionTitle.Single(R.string.remote_notification_job_stuck)
         PushEvent.QUESTION -> AttentionTitle.Single(R.string.remote_notification_question)
-        PushEvent.COMPLETE -> AttentionTitle.Single(R.string.remote_notification_complete)
+        PushEvent.COMPLETE ->
+            AttentionTitle.Single(
+                if (payload.failure != null) R.string.remote_notification_run_failed
+                else R.string.remote_notification_complete
+            )
     }
 
 internal sealed interface ActionLabel {
