@@ -68,6 +68,8 @@ class FileMutationRepositoryTest {
         var withoutV3 = false
         /** True holds a `mutation.list` request unanswered. */
         var holdList: () -> Boolean = { false }
+        /** Paths a read answers `not_found` for. */
+        var missing: Set<String> = emptySet()
 
         override fun connect(host: PairedHost) = listener.ready(emptySet())
         override fun pair(value: JsonObject) {}
@@ -76,7 +78,7 @@ class FileMutationRepositoryTest {
         override fun send(payload: JsonObject) {
             sent += payload
             onSend(payload)
-            error(payload)?.let { code ->
+            (error(payload) ?: if (payload.text("type") == "session.files.read" && payload.text("path") in missing) "not_found" else null)?.let { code ->
                 listener.message(Wire.objectOf("type" to "result", "requestId" to payload.text("requestId"), "ok" to false,
                     "error" to Wire.objectOf("code" to code, "message" to code)))
                 return
@@ -322,7 +324,7 @@ class FileMutationRepositoryTest {
         assertEquals(FileMutationState.LOST, journal.entries.getValue(key).state)
         val item = fileMutationsOf(repository.state.value)!!.recovery.single()
         assertTrue(item.lost)
-        assertFalse(item.neverReceived)
+        assertFalse(item.noRecord)
         assertTrue(transport.types().none { it in mutationTypes || it == "session.files.mutation.status" })
         // A lost operation's host journal is gone: acknowledging it is local, and sends no mutation.
         repository.acknowledgeFileMutation(item.operationId)
@@ -612,8 +614,8 @@ class FileMutationRepositoryTest {
         assertEquals(FileMutationState.LOST, journal.entries.getValue(key).state)
         val item = fileMutationsOf(repository.state.value)!!.recovery.single()
         assertTrue(item.lost && !item.pending)
-        // Same epoch: the computer never received it, so nothing ran; still nothing is resent.
-        assertTrue(item.neverReceived)
+        // The computer holds no record of it: shown as such, kept unknown, never resent.
+        assertTrue(item.noRecord)
         repository.acknowledgeFileMutation(item.operationId)
         runCurrent()
         assertTrue(journal.entries.isEmpty())
@@ -838,6 +840,54 @@ class FileMutationRepositoryTest {
         assertEquals(2, creates.size)
         assertNotEquals(first.text("operationId"), creates.last().text("operationId"))
         assertEquals(otherEpoch, creates.last().text("epoch"))
+    }
+
+    @Test
+    fun aDraftOfAMissingFileIsListedAndCanBeDiscarded() = runTest {
+        val transport = Transport(all).apply { missing = setOf("gone.txt") }
+        val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "gone.txt") to StoredFileDraft(version, "a", "edited")))
+        val repository = opened(repository(transport, drafts = drafts))
+        assertEquals(listOf("gone.txt"), fileMutationsOf(repository.state.value)!!.orphanDrafts)
+        repository.discardOrphanFileDraft("gone.txt")
+        runCurrent()
+        assertTrue(drafts.drafts.isEmpty())
+        assertTrue(fileMutationsOf(repository.state.value)!!.orphanDrafts.isEmpty())
+    }
+
+    @Test
+    fun aDraftOfAMissingFileOpensAsANewFileWithTheDraftOffered() = runTest {
+        val transport = Transport(all + FILES_WRITE_CAPABILITY).apply { missing = setOf("gone.txt") }
+        transport.answer = { record(it, "applied") }
+        val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "gone.txt") to StoredFileDraft(version, "a", "edited")))
+        val repository = opened(repository(transport, drafts = drafts))
+        repository.openOrphanFileDraft("gone.txt")
+        val dialog = checkNotNull(repository.dialog())
+        assertEquals(FileMutationKind.CREATE, dialog.kind)
+        assertEquals("gone.txt", dialog.name)
+        transport.missing = emptySet()
+        repository.confirmFileMutation("gone.txt")
+        runCurrent()
+        // The kept draft does not block creating its file, and its editor then offers it.
+        assertEquals(1, transport.types().count { it == "session.files.create" })
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals("gone.txt", editor.path)
+        assertEquals("edited", editor.recovery?.text)
+        assertTrue(drafts.drafts.isNotEmpty())
+    }
+
+    @Test
+    fun aTransientJournalFailureWhileSettlingIsAStorageFailureNotALostJournal() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        transport.answer = { record(it, "applied") }
+        transport.onSend = { if (it.text("type") == "session.files.create") journal.failLoad = true }
+        val repository = opened(repository(transport, journal))
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("x.md")
+        runCurrent()
+        val mutations = fileMutationsOf(repository.state.value)!!
+        assertTrue(mutations.storageFailed)
+        assertFalse(mutations.journalUnreadable)
     }
 
     @Test

@@ -288,6 +288,8 @@ internal fun filesActions(
         onRequestMutationReset = model::requestFileMutationReset,
         onConfirmMutationReset = model::confirmFileMutationReset,
         onCancelMutationReset = model::cancelFileMutationReset,
+        onOpenOrphanDraft = model::openOrphanFileDraft,
+        onDiscardOrphanDraft = model::discardOrphanFileDraft,
         onEditorPrompt = model::fileEditorPrompt,
         onConfirmLeave = model::confirmFileEditorLeave,
         onCancelLeave = model::cancelFileEditorLeave,

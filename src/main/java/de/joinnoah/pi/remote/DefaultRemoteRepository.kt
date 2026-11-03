@@ -11031,10 +11031,12 @@ class DefaultRemoteRepository(
                 fileMutationSource,
                 FileMutationJournal(storage, io, MAX_FILE_MUTATION_JOURNAL_ENTRIES),
                 { state.value },
-                draftsHold = { routeId, sessionId, paths -> filesLoader.mutationHeld(routeId, sessionId, paths, ::parkedDraft) },
-                applied = filesLoader::mutationApplied,
+                draftsHold = { routeId, sessionId, paths, kept -> filesLoader.mutationHeld(routeId, sessionId, paths, ::parkedDraft, kept) },
+                applied = { request, edit -> filesLoader.mutationApplied(request, edit) },
                 update = ::update,
                 connection = { generation },
+                keptDrafts = filesLoader::keptDraftPaths,
+                discardDraft = filesLoader::discardKeptDraft,
             )
         }
 
@@ -11059,6 +11061,10 @@ class DefaultRemoteRepository(
     override fun confirmFileMutationReset() { mutationController?.confirmReset() }
 
     override fun cancelFileMutationReset() { mutationController?.cancelReset() }
+
+    override fun openOrphanFileDraft(path: String) { mutationController?.openOrphan(path) }
+
+    override fun discardOrphanFileDraft(path: String) { mutationController?.discardOrphan(path) }
 
     override fun openFiles() = openFiles(exclusive = true)
 

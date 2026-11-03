@@ -804,10 +804,15 @@
     <string name="remote_files_mutation_journal_lost">Dieses Gerät hat seine Aufzeichnung offener Dateivorgänge verloren und sendet deshalb keine. Die offenen Vorgänge des Rechners werden weiter angezeigt.</string>
     <string name="remote_files_mutation_reset">Zurücksetzen</string>
     <string name="remote_files_mutation_reset_title">Aufzeichnung der Dateivorgänge zurücksetzen?</string>
-    <string name="remote_files_mutation_reset_text">Dieses Gerät kann nicht mehr erkennen, welche seiner Dateivorgänge noch offen sind. Zurücksetzen beginnt eine leere Aufzeichnung; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Rechner noch anzeigt.</string>
-    <string name="remote_files_mutation_never_received">Der Rechner hat diesen Vorgang nie erhalten; nichts wurde ausgeführt.</string>
+    <string name="remote_files_mutation_reset_text">Dieses Gerät kann nicht mehr erkennen, welche seiner Dateivorgänge noch offen sind. Zurücksetzen beginnt eine leere Aufzeichnung; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Rechner noch anzeigt. Die Dateien, die diese Vorgänge gehalten haben, werden wieder bearbeitbar.</string>
+    <string name="remote_files_mutation_no_record">Der Rechner hat keinen Eintrag zu diesem Vorgang. Prüfe die Dateien selbst.</string>
     <string name="remote_files_mutation_full">Die Aufzeichnung der Dateivorgänge auf diesem Gerät ist voll (%1$d von %2$d). Bestätige die offenen Vorgänge unten oder setze die Aufzeichnung zurück.</string>
     <string name="remote_files_mutation_full_short">Die Aufzeichnung der Dateivorgänge auf diesem Gerät ist voll.</string>
-    <string name="remote_files_mutation_reset_full_text">Zurücksetzen vergisst alle offenen Dateivorgänge, die dieses Gerät noch verfolgt, in allen Sitzungen; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Rechner noch anzeigt.</string>
+    <string name="remote_files_mutation_reset_full_text">Zurücksetzen vergisst alle offenen Dateivorgänge, die dieses Gerät noch verfolgt, in allen Sitzungen; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Rechner noch anzeigt. Die Dateien, die diese Vorgänge gehalten haben, werden wieder bearbeitbar.</string>
     <string name="remote_files_mutation_more">Weitere Aktionen für %1$s</string>
+    <string name="remote_files_mutation_orphans_title">Entwürfe fehlender Dateien</string>
+    <string name="remote_files_mutation_orphans_text">Diese Änderungen gehören zu Dateien, die der Rechner nicht mehr hat.</string>
+    <string name="remote_files_mutation_orphan_open">Als neue Datei öffnen</string>
+    <string name="remote_files_mutation_orphan_discard">Entwurf verwerfen</string>
+    <string name="remote_files_mutation_create_draft">Für diese Datei gibt es einen aufbewahrten Entwurf. Er öffnet sich, sobald die Datei angelegt ist.</string>
 </resources>
