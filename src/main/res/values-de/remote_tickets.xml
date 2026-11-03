@@ -7,6 +7,13 @@
     <string name="remote_tickets_all">Alle Tickets</string>
     <string name="remote_ticket_chip">Ticket %1$s</string>
     <!-- Tickets screen -->
+    <string name="remote_tickets_filter_all">Alle</string>
+    <string name="remote_tickets_group_expanded">Ausgeklappt</string>
+    <string name="remote_tickets_group_collapsed">Eingeklappt</string>
+    <plurals name="remote_tickets_group_count">
+        <item quantity="one">%d Ticket</item>
+        <item quantity="other">%d Tickets</item>
+    </plurals>
     <string name="remote_tickets_reload">Tickets neu laden</string>
     <string name="remote_tickets_loading">Tickets werden geladen</string>
     <string name="remote_tickets_retry">Erneut versuchen</string>
