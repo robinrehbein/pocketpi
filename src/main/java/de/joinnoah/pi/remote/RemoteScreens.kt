@@ -388,7 +388,15 @@ internal fun RemoteScreen(
     LaunchedEffect(state.selection.sessionId, state.connected, state.loading, jobsAvailable, jobsLeasable) {
         if (state.connected && !state.loading && jobsAvailable) chatModel?.refreshJobs()
     }
-    val statusJobs = visibleJobs(state)?.takeIf { chatModel != null }
+    val statusJobs = visibleJobs(state)?.takeIf { chatModel != null && chatKey?.selection() == state.selection }
+    // An open sheet must survive empty results, but never display another session's snapshot.
+    val sheetJobsSession = state.selection.sessionId?.takeIf {
+        chatModel != null && chatKey?.selection() == state.selection && jobsAvailable &&
+            state.jobs?.let { jobs -> jobs.sessionId != it || !jobs.unsupported } != false
+    }
+    val sheetJobs = sheetJobsSession?.let { sessionId ->
+        state.jobs?.takeIf { it.sessionId == sessionId } ?: JobsState(sessionId, loading = true)
+    }
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
@@ -776,6 +784,9 @@ internal fun RemoteScreen(
     var insightSheet by remember(key, state.selection.sessionId) { mutableStateOf<InsightSheetKind?>(null) }
     LaunchedEffect(chatKey, strip.entries.isEmpty()) {
         if (strip.entries.isEmpty() && insightSheet == InsightSheetKind.SUBAGENTS) insightSheet = null
+    }
+    LaunchedEffect(sheetJobsSession) {
+        if (sheetJobsSession == null && insightSheet == InsightSheetKind.JOBS) insightSheet = null
     }
     fun openInsightSheet(sheet: InsightSheetKind) {
         if (!sideCapable) touchedSheet = false
@@ -3498,7 +3509,7 @@ internal fun RemoteScreen(
                 // The list's end padding lane, between the header and the composer.
                 modifier =
                     Modifier.align(Alignment.TopEnd)
-                        .padding(end = laneInset, top = headerHeight + 8.dp, bottom = composerHeight + 8.dp)
+                        .padding(end = laneInset, top = headerHeight + 8.dp, bottom = composerHeight + 64.dp)
                         .then(underlay),
                 // A drag is the user's own scroll: follow new output only when it ends at the bottom.
                 onSeek = { atEnd ->
@@ -3508,11 +3519,11 @@ internal fun RemoteScreen(
             )
         }
         if (key is RemoteNavKey.Chat)
-            // Floats above the composer, left of the scrollbar lane, and only fades: neither the
+            // Floats above the composer, below the scrollbar lane, and only fades: neither the
             // composer nor the list changes size when it comes and goes.
             Box(
                 Modifier.align(Alignment.BottomEnd)
-                    .padding(end = laneInset + CHAT_SCROLLBAR_LANE + 4.dp, bottom = composerHeight + 8.dp)
+                    .padding(end = ((maxWidth - (PROSE_READING_WIDTH + 32.dp)).coerceAtLeast(0.dp) / 2) + 12.dp, bottom = composerHeight + 8.dp)
                     .then(underlay),
             ) {
                 ScrollToLatestSlot(!autoFollow, ::scrollToLatestItem)
@@ -3520,17 +3531,17 @@ internal fun RemoteScreen(
         if (key is RemoteNavKey.Chat) {
             Box(
                 Modifier.align(Alignment.BottomCenter)
-                    .widthIn(max = PROSE_READING_WIDTH + 32.dp)
                     .fillMaxWidth()
                     .onSizeChanged { composerSize = it }.testTag("floatingComposer")
                     .then(underlay)
-                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .padding(bottom = 16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.error?.let { error ->
                         // Floats over the chat with the composer, so it is tinted glass like it.
                         FloatingSurface(
-                            modifier = Modifier.fillMaxWidth().testTag("errorCard"),
+                            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                                .fillMaxWidth().padding(horizontal = 16.dp).testTag("errorCard"),
                             shape = MaterialTheme.shapes.medium,
                             color = MaterialTheme.colorScheme.errorContainer,
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -3592,12 +3603,11 @@ internal fun RemoteScreen(
                             }
                         }
                     }
-                    // Held here so the row knows whether a chip shows; finished jobs stay behind the Jobs action.
-                    val jobsExpanded = rememberSaveable(statusJobs?.sessionId) { mutableStateOf(false) }
+                    val chipJobs = if (insightSheet == InsightSheetKind.JOBS) sheetJobs else statusJobs
                     val insightsShown =
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
                             subagentChipShown(strip, insightSheet == InsightSheetKind.SUBAGENTS) ||
-                            jobsChipShown(statusJobs, jobsExpanded.value) || state.pullRequest != null ||
+                            jobsChipShown(chipJobs, insightSheet == InsightSheetKind.JOBS) || state.pullRequest != null ||
                             taskInsightShown(state.tasks)
                     // The chips sit in their own row above the composer, never inside it. While the chat is
                     // compact the row also holds the status chip that stands in for the banners.
@@ -3612,17 +3622,10 @@ internal fun RemoteScreen(
                                 InsightChip.TASKS ->
                                     TaskInsightPill(state.tasks) { openInsightSheet(InsightSheetKind.TASKS) }
                                 InsightChip.JOBS ->
-                                    statusJobs?.let { jobs ->
-                                        key(jobs.sessionId) {
-                                            val chat = checkNotNull(chatModel)
-                                            val openJobs by rememberUpdatedState { openInspector(InspectorTab.JOBS) }
-                                            BackgroundJobsChip(jobs, remember(chat) {
-                                                JobsActions(
-                                                    chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs,
-                                                    chat::stopJob,
-                                                    onOpenList = { openJobs() },
-                                                )
-                                            }, jobsExpanded)
+                                    chipJobs?.let { jobs ->
+                                        BackgroundJobsChip(jobs, insightSheet == InsightSheetKind.JOBS) {
+                                            openInsightSheet(InsightSheetKind.JOBS)
+                                            checkNotNull(chatModel).refreshJobs()
                                         }
                                     }
                                 InsightChip.SUBAGENTS ->
@@ -3666,9 +3669,15 @@ internal fun RemoteScreen(
                                     }
                             }
                     }
+                    if (currentActivity != null)
+                        Box(Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                            .fillMaxWidth().padding(horizontal = 16.dp)) {
+                            ChatCurrentActivity(currentActivity)
+                        }
                     if (insightsShown || statusChipLine != null)
                         Row(
-                            Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
+                            Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -3678,6 +3687,11 @@ internal fun RemoteScreen(
                             }
                             if (insightsShown) insightChips()
                         }
+                    Column(
+                        Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                            .fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                     val treeSessionId = state.selection.sessionId
                     val treeChat = model as? ChatViewModel
                     if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
@@ -3756,7 +3770,6 @@ internal fun RemoteScreen(
                          connectionStatusLine(state),
                          draftDeliveryNotice(state.sending, state.uncertain, state.connected),
                      )
-                    ChatCurrentActivity(currentActivity)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
@@ -3876,6 +3889,7 @@ internal fun RemoteScreen(
                         editorExpanded = compact && editorExpanded,
                         onEditorExpanded = if (compact) ({ expanded -> editorExpanded = expanded }) else null,
                     )
+                    }
                 }
             }
             SnackbarHost(
@@ -4041,6 +4055,15 @@ internal fun RemoteScreen(
                 state.tasks, state.session?.optionalText("title")?.takeIf(String::isNotBlank),
                 onDismiss = { insightSheet = null },
             )
+            InsightSheetKind.JOBS -> sheetJobs?.let { jobs ->
+                val chat = checkNotNull(chatModel)
+                JobsInsightSheet(
+                    jobs,
+                    JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob,
+                        onOpenList = { openInspector(InspectorTab.JOBS) }),
+                    onDismiss = { insightSheet = null },
+                )
+            }
             InsightSheetKind.SUBAGENTS -> SubagentInsightSheet(
                 strip,
                 canAbort = { entry -> entry.sessionId?.let { canAbortSubagent(state, it) } == true },
@@ -4759,7 +4782,7 @@ private suspend fun LazyListState.scrollToLatest() {
 /** "Scroll to latest" in a slot of fixed size: it only fades, so the composer keeps its size. */
 @Composable
 private fun ScrollToLatestSlot(visible: Boolean, onClick: () -> Unit) {
-    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(48.dp).testTag("scrollToLatestSlot"), contentAlignment = Alignment.Center) {
         val motion = ValueAnimator.areAnimatorsEnabled()
         AnimatedVisibility(
             visible,
@@ -4870,13 +4893,12 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
  * read out as it changes.
  */
 @Composable
-private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
-    // A glass pill like the other chips of the insights row.
+internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
     FloatingSurface(shape = CircleShape) {
         Row(
-            Modifier.testTag("chatStatusChip")
-                .clickable(role = Role.Button, onClick = onClick)
-                .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+            Modifier.clickable(role = Role.Button, onClick = onClick)
+                .testTag("chatStatusChip")
+                .semantics { liveRegion = LiveRegionMode.Polite }
                 .minimumInteractiveComponentSize()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4884,13 +4906,13 @@ private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -
         ) {
             if (running && ValueAnimator.areAnimatorsEnabled())
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-            else Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(
-                stringResource(line),
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            else Icon(
+                Icons.Outlined.Info,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Text(stringResource(line), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -4910,7 +4932,7 @@ private fun rememberTouchExploring(): State<Boolean> {
     return exploring
 }
 
-internal enum class InsightSheetKind { FILES, ERRORS, TASKS, SUBAGENTS }
+internal enum class InsightSheetKind { FILES, ERRORS, TASKS, JOBS, SUBAGENTS }
 
 internal fun taskInsightShown(tasks: SessionTasks): Boolean =
     tasks.items.isNotEmpty() && tasks.freshness in setOf(TaskFreshness.LIVE, TaskFreshness.STALE)

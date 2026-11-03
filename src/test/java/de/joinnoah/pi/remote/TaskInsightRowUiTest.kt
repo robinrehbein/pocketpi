@@ -44,7 +44,7 @@ class TaskInsightRowUiTest {
         compose.onNodeWithText("First session").performClick()
         compose.runOnIdle {
             repository.state.value = listed.copy(
-                selection = RemoteSelection("host", "project", "s1"), session = session, status = "idle",
+                selection = RemoteSelection("host", "project", "s1"), session = session, status = "running",
                 tasks = SessionTasks(listOf(SessionTask(1, "Task", TaskStatus.IN_PROGRESS)), TaskFreshness.LIVE),
                 compaction = SessionCompaction("threshold", System.currentTimeMillis()),
             )
@@ -56,6 +56,15 @@ class TaskInsightRowUiTest {
         compose.onAllNodesWithTag("taskInsightPill").assertCountEquals(1)
         task.assertIsDisplayed()
         status.assertIsDisplayed()
+        val activity = compose.onNodeWithTag("chatCurrentActivity")
+        val insights = compose.onNodeWithTag("chatInsights")
+        compose.onAllNodesWithTag("chatCurrentActivity").assertCountEquals(1)
+        activity.assertIsDisplayed()
+        insights.assertIsDisplayed()
+        val footerBounds = compose.onNodeWithTag("floatingComposer").fetchSemanticsNode().boundsInRoot
+        val insightBounds = insights.fetchSemanticsNode().boundsInRoot
+        assertTrue("Insights viewport must span the footer", kotlin.math.abs(footerBounds.width - insightBounds.width) < 1f)
+        assertTrue("Activity must be above insights", activity.fetchSemanticsNode().boundsInRoot.bottom <= insights.fetchSemanticsNode().boundsInRoot.top)
         assertTrue("Tasks must precede the compact status chip", task.fetchSemanticsNode().boundsInRoot.right <= status.fetchSemanticsNode().boundsInRoot.left)
 
         compose.runOnIdle { repository.state.value = repository.state.value.copy(tasks = SessionTasks()) }
@@ -63,5 +72,7 @@ class TaskInsightRowUiTest {
         status.assertIsDisplayed()
         compose.runOnIdle { repository.state.value = repository.state.value.copy(compaction = null) }
         compose.onNodeWithTag("chatInsights").assertDoesNotExist()
+        compose.onAllNodesWithTag("chatCurrentActivity").assertCountEquals(1)
+        activity.assertIsDisplayed()
     }
 }

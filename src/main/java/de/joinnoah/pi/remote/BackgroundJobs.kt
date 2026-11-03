@@ -839,59 +839,45 @@ private fun jobStatusLabel(job: BackgroundJob): String =
         JobStatus.TIMEOUT -> stringResource(R.string.remote_jobs_status_timeout)
     }
 
-/**
- * The selected session's status chip and overview while a job runs; only job details navigate
- * away. Finished jobs stay in the overview and in the full list behind the chat's Jobs action.
- */
+/** The selected session's running jobs open the shared insight sheet. */
 @Composable
-internal fun BackgroundJobsChip(
-    jobs: JobsState,
-    actions: JobsActions,
-    expandedState: MutableState<Boolean> =
-        androidx.compose.runtime.saveable.rememberSaveable(jobs.sessionId) { mutableStateOf(false) },
-) {
-    var expanded by expandedState
+internal fun BackgroundJobsChip(jobs: JobsState, expanded: Boolean, onClick: () -> Unit) {
     if (!jobsChipShown(jobs, expanded)) return
     val running = jobs.jobs.count { it.status == JobStatus.RUNNING }
-    val label =
-        if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
+    val label = if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
         else stringResource(R.string.remote_jobs_title)
-    StatusPopover(
-        summary = label,
-        icon = Icons.Outlined.Terminal,
-        expanded = expanded,
-        onExpandedChange = {
-            expanded = it
-            if (it) actions.onRefresh()
-        },
-        expandDescription = stringResource(R.string.remote_jobs_expand),
-        collapseDescription = stringResource(R.string.remote_jobs_collapse),
-        title = stringResource(R.string.remote_jobs_title),
-        closeDescription = stringResource(R.string.remote_jobs_close),
-        chipTag = "jobsChip",
-        popoverTag = "jobsPopover",
-        actions = {
-            IconButton(onClick = actions.onRefresh, enabled = !jobs.loading, modifier = Modifier.testTag("jobsRefresh")) {
-                Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
-            }
-            // The full list: beside the chat where a side inspector fits, over it elsewhere.
-            actions.onOpenList?.let { open ->
-                val label = stringResource(R.string.remote_jobs_open_all)
-                ShortcutTooltip(label, Shortcut.JOBS) {
-                    IconButton(
-                        onClick = {
-                            expanded = false
-                            open()
-                        },
-                        modifier = Modifier.testTag("jobsOpenAll"),
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, label)
+    FloatingSurface(shape = androidx.compose.foundation.shape.CircleShape) {
+        Row(
+            Modifier.clickable(role = Role.Button, onClick = onClick).testTag("jobsChip")
+                .minimumInteractiveComponentSize().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Terminal, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+internal fun JobsInsightSheet(jobs: JobsState, actions: JobsActions, onDismiss: () -> Unit) {
+    InsightSheet(title = stringResource(R.string.remote_jobs_title), onDismiss = onDismiss) {
+        Column(Modifier.fillMaxWidth().testTag("jobsInsightSheet")) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                IconButton(onClick = actions.onRefresh, enabled = !jobs.loading, modifier = Modifier.testTag("jobsRefresh")) {
+                    Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
+                }
+                actions.onOpenList?.let { open ->
+                    val label = stringResource(R.string.remote_jobs_open_all)
+                    ShortcutTooltip(label, Shortcut.JOBS) {
+                        IconButton(onClick = { onDismiss(); open() }, modifier = Modifier.testTag("jobsOpenAll")) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, label)
+                        }
                     }
                 }
             }
-        },
-    ) {
-        JobListContent(jobs, { id -> expanded = false; actions.onOpenJob(id) }, Modifier.heightIn(max = 320.dp))
+            JobListContent(jobs, { id -> onDismiss(); actions.onOpenJob(id) }, Modifier.fillMaxWidth().heightIn(max = 480.dp))
+        }
     }
 }
 
@@ -905,7 +891,7 @@ internal class JobsActions(
     val onCloseJob: () -> Unit,
     val onClose: () -> Unit,
     val onStop: (String) -> Unit,
-    /** Opens the full list from the chip's popover; null leaves the popover without it. */
+    /** Opens the full list from the insight sheet; null hides the action. */
     val onOpenList: (() -> Unit)? = null,
     /**
      * Puts a prompt quoting the job's output into the composer, never sending it; false when the
