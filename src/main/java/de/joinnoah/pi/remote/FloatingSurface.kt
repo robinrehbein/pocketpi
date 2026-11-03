@@ -2,11 +2,28 @@ package de.joinnoah.pi.remote
 
 import android.view.View
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.SnackbarData
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.contentColorFor
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
@@ -18,7 +35,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
@@ -35,8 +57,12 @@ import dev.chrisbanes.haze.rememberHazeState
  * The blurred content is what the scrolling lists draw: each list behind a floating element marks
  * itself with [glassSource]. A floating element that is not over a source, or sits inside one (a
  * sticky list item, a hover row in a message), shows its tint alone. Where blur is not available
- * (before Android 12, in a dialog, sheet or popup, or without [ProvideGlass]) the tint is as opaque as the pills were before
- * glass, so text keeps its contrast over the sharp content.
+ * (before Android 12, in a dialog, sheet or popup, or without [ProvideGlass]) the tint is as
+ * opaque as the pills were before glass, so text keeps its contrast over the sharp content.
+ *
+ * A page's content scrolls under its floating header rather than stopping below it, so the header
+ * pills have something to blur: a Scaffold page pads its content's top itself, see
+ * [underFloatingHeader].
  */
 
 /**
@@ -183,3 +209,79 @@ private val GLASS_RIM_WIDTH = 0.5.dp
 
 private fun glassRimColor(scheme: ColorScheme): Color =
     if (scheme.surface.luminance() < 0.5f) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.6f)
+
+/**
+ * A banner that floats over the chat (in its header) as tinted glass, or sits [floating] = false
+ * inside a sheet as a plain surface of the same colour.
+ */
+@Composable
+internal fun BannerSurface(
+    floating: Boolean,
+    modifier: Modifier,
+    color: Color,
+    contentColor: Color,
+    content: @Composable () -> Unit,
+) {
+    val shape = MaterialTheme.shapes.small
+    if (floating) FloatingSurface(modifier, shape, color, contentColor, content = content)
+    else Surface(modifier, shape = shape, color = color, contentColor = contentColor, content = content)
+}
+
+/**
+ * Material's snackbar as a floating glass bar of the inverse surface. The action keeps the bar's
+ * text colour: inversePrimary would fall below 4.5:1 on the translucent bar over light content.
+ */
+@Composable
+internal fun GlassSnackbar(data: SnackbarData, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val visuals = data.visuals
+    FloatingSurface(
+        // As wide as the composer at most, rather than the whole chat of a wide window.
+        modifier.padding(12.dp).widthIn(max = PROSE_READING_WIDTH + 32.dp),
+        shape = MaterialTheme.shapes.small,
+        color = scheme.inverseSurface,
+        contentColor = scheme.inverseOnSurface,
+    ) {
+        Row(
+            Modifier.padding(start = 16.dp, end = if (visuals.withDismissAction || visuals.actionLabel != null) 4.dp else 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                visuals.message,
+                Modifier.weight(1f, fill = false).padding(vertical = 14.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            visuals.actionLabel?.let { label ->
+                TextButton(onClick = data::performAction) {
+                    Text(label, color = scheme.inverseOnSurface, fontWeight = FontWeight.Bold)
+                }
+            }
+            if (visuals.withDismissAction)
+                IconButton(onClick = data::dismiss) {
+                    Icon(Icons.Default.Close, stringResource(R.string.remote_snackbar_dismiss))
+                }
+        }
+    }
+}
+
+/**
+ * The Scaffold content padding of a page whose content scrolls under its floating header: the top
+ * keeps only the status bar, which stays clear as on the other pages, and the content pads the
+ * rest of the header itself with [floatingHeaderOverlap].
+ */
+@Composable
+internal fun PaddingValues.underFloatingHeader(): PaddingValues {
+    val direction = LocalLayoutDirection.current
+    return PaddingValues(
+        start = calculateStartPadding(direction),
+        top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
+        end = calculateEndPadding(direction),
+        bottom = calculateBottomPadding(),
+    )
+}
+
+/** How far the floating header reaches below the status bar, for content under it to pad. */
+@Composable
+internal fun PaddingValues.floatingHeaderOverlap(): Dp =
+    (calculateTopPadding() - WindowInsets.statusBars.asPaddingValues().calculateTopPadding()).coerceAtLeast(0.dp)

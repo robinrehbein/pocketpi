@@ -501,7 +501,7 @@ internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit
 // ---- Compaction ---------------------------------------------------------------------------
 
 @Composable
-internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
+internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, floating: Boolean = true) {
     if (compaction == null || !compactionVisible(compaction, nowMillis)) return
     val reason =
         when (compaction.reason) {
@@ -510,9 +510,9 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
             "overflow" -> R.string.remote_panel_compaction_overflow
             else -> null
         }
-    Surface(
+    BannerSurface(
+        floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("compactionBanner").semantics { liveRegion = LiveRegionMode.Polite },
-        shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
