@@ -128,11 +128,13 @@ internal fun SheetSecondaryButton(
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
-    FloatingSurface(modifier.fillMaxWidth(), shape = CircleShape, blur = false) {
+    // The caller's modifier goes to the button, so a test tag lands on the node that clicks and
+    // carries the enabled state; the glass around it only sizes to it.
+    FloatingSurface(Modifier.fillMaxWidth(), shape = CircleShape, blur = false) {
         TextButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            modifier = modifier.fillMaxWidth().heightIn(min = 52.dp),
             content = content,
         )
     }

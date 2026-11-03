@@ -4758,8 +4758,10 @@ private fun SessionFilterSheetBody(
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SheetSecondaryButton(onClick = { onHideOffline(false) }, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.remote_design_reset))
+            Box(Modifier.weight(1f)) {
+                SheetSecondaryButton(onClick = { onHideOffline(false) }) {
+                    Text(stringResource(R.string.remote_design_reset))
+                }
             }
             SheetPrimaryButton(onClick = onDone, modifier = Modifier.weight(1f)) {
                 Text(stringResource(R.string.remote_design_done))

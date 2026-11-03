@@ -210,7 +210,7 @@ internal fun SessionControls(
     val loadingContext = state.loading || (usage == null && state.contextLoading)
     val advisorAvailable = advisorControlAvailable(state)
     // A subagent consults the main chat's advisor; the chip says so instead of "unavailable".
-    val childAdvisor = isChildSession(state)
+    val childAdvisor = isChildSession(state) && state.connected && ADVISOR_CAPABILITY in state.capabilities
     val advisorUnavailableReason = when {
         childAdvisor -> stringResource(R.string.remote_advisor_from_parent_explanation)
         !state.connected -> stringResource(R.string.remote_advisor_disconnected)
@@ -510,7 +510,7 @@ internal fun SessionControls(
         onRetry = if (state.connected && ADVISOR_CAPABILITY in state.capabilities && !childAdvisor) refreshAdvisor else null,
         selectedChoice = advisorChoice,
         selectedLevel = advisorLevel,
-        loading = state.advisorLoading || state.advisorChanging,
+        loading = !childAdvisor && (state.advisorLoading || state.advisorChanging),
         canSelect = canChange && advisorAvailable && !state.advisorChanging && !state.advisorLoading,
         onSelectChoice = { choice ->
             advisorChoice = choice

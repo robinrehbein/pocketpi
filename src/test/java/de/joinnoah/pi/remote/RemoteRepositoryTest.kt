@@ -7756,6 +7756,8 @@ class RemoteRepositoryTest {
         val repository = childRepository(transport, capabilities = setOf(SUBAGENT_CONTROL_CAPABILITY, ADVISOR_CAPABILITY))
         runCurrent()
         assertTrue(isChildSession(repository.state.value))
+        // Opening the child already skipped the read the activation makes for a main chat.
+        assertFalse(transport.sent.any { it.text("type") == "session.advisor.get" })
         val before = transport.sent.size
         repository.refreshAdvisor()
         repository.setAdvisor(null, null, null)

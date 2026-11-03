@@ -558,7 +558,7 @@ internal fun ChildSessionPickerSheet(
                     subtitle = stringResource(R.string.remote_panel_child_picker_hint),
                 )
             }
-            itemsIndexed(candidates, key = { _, it -> it.id }) { index, session ->
+            itemsIndexed(candidates, key = { _, candidate -> candidate.id }) { index, session ->
                 val status =
                     stringResource(
                         when (session.availability) {

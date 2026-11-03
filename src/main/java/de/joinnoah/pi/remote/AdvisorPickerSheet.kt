@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -210,9 +211,30 @@ internal fun AdvisorPickerSheet(
                   if (selectedChoice != null) {
                       Text(stringResource(R.string.remote_advisor_thinking),
                           style = MaterialTheme.typography.titleMedium)
-                      // One pill switch, as the other choices of a level in the app.
-                      SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                          val levels = selectedChoice.levels
+                      val levels = selectedChoice.levels
+                      // A few levels fit one pill switch, as the other level choices in the app;
+                      // more wrap as pills, so a narrow phone never clips their labels.
+                      if (levels.size > 3)
+                          FlowRow(
+                              horizontalArrangement = Arrangement.spacedBy(8.dp),
+                              verticalArrangement = Arrangement.spacedBy(8.dp),
+                          ) {
+                              levels.forEach { level ->
+                                  FilterChip(
+                                      selected = selectedLevel == level,
+                                      onClick = { onSelectLevel(level) },
+                                      label = { Text(level) },
+                                      enabled = canSelect,
+                                      shape = CircleShape,
+                                      border = null,
+                                      colors = FilterChipDefaults.filterChipColors(
+                                          containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                          selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                      ),
+                                  )
+                              }
+                          }
+                      else SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                           levels.forEachIndexed { index, level ->
                               SegmentedButton(
                                   selected = selectedLevel == level,
@@ -221,7 +243,7 @@ internal fun AdvisorPickerSheet(
                                   enabled = canSelect,
                                   icon = {},
                               ) {
-                                  Text(level, maxLines = 1)
+                                  Text(level, maxLines = 1, overflow = TextOverflow.Ellipsis)
                               }
                           }
                       }
