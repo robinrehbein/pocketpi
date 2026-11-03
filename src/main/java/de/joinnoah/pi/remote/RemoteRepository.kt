@@ -160,6 +160,12 @@ data class RemoteState(
     val sessions: List<JsonObject> = emptyList(),
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */
     val sessionsFresh: Boolean = false,
+    /**
+     * With [sessionsFresh]: [sessions] was reused from an earlier read on the same, still live
+     * connection rather than fetched just now. Fine to show as current, but a row missing from it
+     * is no proof the session closed, so closure detection ignores such a list.
+     */
+    val sessionsReused: Boolean = false,
     val session: JsonObject? = null,
     val tasks: SessionTasks = SessionTasks(),
     val messages: List<JsonObject> = emptyList(),
