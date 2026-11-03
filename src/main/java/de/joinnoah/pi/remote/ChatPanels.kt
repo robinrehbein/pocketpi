@@ -501,9 +501,9 @@ private fun SubagentStripRow(
                         if (entry.lastKnown) MaterialTheme.colorScheme.outline else subagentStateColor(entry.state)
                     val glyph = if (entry.lastKnown) null else subagentStateGlyph(entry.state)
                     if (glyph != null) {
-                        // The strip has no freshness flag, so state may be last-known: never animate.
-                        // The label beside it carries the meaning; the glyph shape does not rely on color.
-                        StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp).testTag("subagentGlyph_$glyph"), animate = false)
+                        // Only live state reaches here (last-known entries show a muted dot), so a running
+                        // agent may animate. The label beside it carries the meaning; the shape does not rely on color.
+                        StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp).testTag("subagentGlyph_$glyph"))
                     } else {
                         StatusDot(color)
                     }
