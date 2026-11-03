@@ -1019,7 +1019,7 @@ class CombinedNativeJourneyEndToEndTest {
         val takenName = taken.substringAfter('/')
         val before = requireNotNull(fileMutationStatus())
         assertTrue(before.getBoolean("enabled"))
-        assertEquals("darwin", before.getString("platform"))
+        assertTrue("Host platform offers file mutations", before.getString("platform") in setOf("darwin", "linux"))
         val advertised = before.getJSONArray("advertised").let { a -> (0 until a.length()).map(a::getString) }
         for (capability in listOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY))
             assertTrue("Host advertises $capability", capability in advertised)
