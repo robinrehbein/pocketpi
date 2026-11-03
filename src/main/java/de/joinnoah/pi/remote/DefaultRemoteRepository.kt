@@ -9392,13 +9392,5 @@ private fun StoredDraft.restoringSubmitted(): StoredDraft {
  */
 private fun settledSend(pending: PendingSend?, messages: List<JsonObject>): PendingSend? {
     if (pending == null || pending.state != PendingSendState.CONFIRMED) return pending
-    val baseline = pending.afterMessageId?.let { id -> messages.indexOfFirst { it.optionalText("id") == id } }
-    // A baseline the timeline no longer holds leaves every message a candidate.
-    val sentSince = messages.drop(if (baseline == null || baseline < 0) 0 else baseline + 1)
-    val wanted = promptKey(pending.text)
-    val arrived = sentSince.any { it.text("role") == "user" && promptKey(userMessageBody(it)) == wanted }
-    return if (arrived) null else pending
+    return if (pendingSendCopyId(pending, messages) != null) null else pending
 }
-
-/** Prompt text as the host and the phone compare it: line endings and surrounding whitespace aside. */
-private fun promptKey(text: String): String = text.replace("\r\n", "\n").replace('\r', '\n').trim()
