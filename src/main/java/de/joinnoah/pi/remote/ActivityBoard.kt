@@ -44,6 +44,10 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -226,8 +230,11 @@ internal fun ActivityBoardContent(
 ) {
     val empty = groups.values.all { it.isEmpty() }
     val density = LocalDensity.current
-    // The board scrolls under its floating header, whose pills blur it, as on the other pages.
-    var headerHeight by remember { mutableStateOf(0.dp) }
+    // The board scrolls under its floating header, whose pills blur it, as on the other pages. It
+    // starts at the header's usual height, so the board does not jump once it is measured.
+    var headerHeight by remember { mutableStateOf(64.dp) }
+    // The last cards clear the navigation bar.
+    val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp
     val lastKnownNote: @Composable () -> Unit = {
         Text(
             stringResource(R.string.remote_activity_last_known),
@@ -237,6 +244,14 @@ internal fun ActivityBoardContent(
         )
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+        // Composed first, so Tab reaches Back before the cards; zIndex keeps it drawn on top.
+        PageHeader(
+            title = stringResource(R.string.remote_activity_title),
+            titleInPill = true,
+            onBack = onBack,
+            modifier = Modifier.align(Alignment.TopCenter).zIndex(1f)
+                .onSizeChanged { headerHeight = with(density) { it.height.toDp() } },
+        )
         if (empty)
             Column(Modifier.fillMaxSize().padding(top = headerHeight).padding(horizontal = 16.dp)) {
                 if (lastKnown) lastKnownNote()
@@ -252,7 +267,7 @@ internal fun ActivityBoardContent(
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 260.dp),
                 modifier = Modifier.fillMaxSize().glassSource(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = 16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = bottom),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -275,7 +290,7 @@ internal fun ActivityBoardContent(
                     .wrapContentWidth(Alignment.CenterHorizontally)
                     .widthIn(max = MAX_PAGE_WIDTH)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = 16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = bottom),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (lastKnown) item(key = "lastKnown") { lastKnownNote() }
@@ -288,12 +303,6 @@ internal fun ActivityBoardContent(
                     }
                 }
             }
-        PageHeader(
-            title = stringResource(R.string.remote_activity_title),
-            titleInPill = true,
-            onBack = onBack,
-            modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } },
-        )
     }
 }
 

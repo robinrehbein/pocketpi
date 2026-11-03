@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -372,13 +371,12 @@ private fun ToolDetailContent(
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("toolDetail"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            // The content scrolls under the floating header, whose pills blur it, as in the other panes.
-            var headerHeight by remember { mutableStateOf(0.dp) }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            // Above the list rather than over it: the list's sticky search bar pins at the list's top
+            // edge, which must stay clear of the header. No divider, as under the other pill headers.
+            ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
             LazyColumn(
-                Modifier.fillMaxSize().testTag("toolDetailContent").glassSource(),
+                Modifier.weight(1f).fillMaxWidth().testTag("toolDetailContent").glassSource(),
                 state = listState,
-                contentPadding = PaddingValues(top = headerHeight),
             ) {
                 item(key = "arguments") {
                     ArgumentsSection(item, Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
@@ -435,10 +433,6 @@ private fun ToolDetailContent(
                     items(cards, contentType = { "resultCard" }) { card -> ResultCardView(card) }
                 }
                 item(key = "end") { Box(Modifier.heightIn(min = 16.dp)) }
-            }
-            Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
-                ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
-            }
             }
             val quote = !output.isNullOrBlank()
             if (quote || canAskToFix) {

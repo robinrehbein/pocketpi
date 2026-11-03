@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -988,16 +989,12 @@ internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifi
 @Composable
 private fun JobList(state: JobsState, actions: JobsActions) {
     // The list scrolls under the floating header, whose pills blur it, as in the other panes.
-    var headerHeight by remember { mutableStateOf(0.dp) }
+    // Starts at the header's usual height, so the list does not jump once it is measured.
+    var headerHeight by remember { mutableStateOf(64.dp) }
     val density = LocalDensity.current
     Box(Modifier.fillMaxSize()) {
-    JobListContent(
-        state,
-        actions.onOpenJob,
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = headerHeight, bottom = 16.dp),
-    )
-    Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
+    // Composed first, so Tab reaches Close and Refresh before the rows; zIndex keeps it drawn on top.
+    Box(Modifier.align(Alignment.TopCenter).zIndex(1f).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
     JobsTopBar(
         title = stringResource(R.string.remote_jobs_title),
         nested = false,
@@ -1015,6 +1012,12 @@ private fun JobList(state: JobsState, actions: JobsActions) {
             ),
     )
     }
+    JobListContent(
+        state,
+        actions.onOpenJob,
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = headerHeight, bottom = 16.dp),
+    )
     }
 }
 
