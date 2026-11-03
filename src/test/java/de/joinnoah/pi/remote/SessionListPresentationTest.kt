@@ -18,7 +18,7 @@ class SessionListPresentationTest {
 
         assertEquals(
             listOf("waiting", "history", "idle", "running"),
-            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true)
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true, confirmed = true)
                 .map(SessionListItem::id),
         )
     }
@@ -43,7 +43,7 @@ class SessionListPresentationTest {
                 ),
             )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
 
         assertEquals(listOf("parent", "child"), visible.map(SessionListItem::id))
         assertEquals(0, visible[0].depth)
@@ -66,7 +66,7 @@ class SessionListPresentationTest {
         )
         fun visible(collapsedIds: Set<String>) = visibleSessionListItems(
             sessions, connected = true, loading = false, hideOffline = false,
-            collapsedIds = collapsedIds,
+            collapsedIds = collapsedIds, confirmed = true,
         )
 
         assertEquals(listOf("first", "second", "other-child"),
@@ -107,7 +107,7 @@ class SessionListPresentationTest {
                 ),
             )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true, confirmed = true)
 
         assertEquals(listOf("parent", "child", "grandchild"), visible.map(SessionListItem::id))
         assertEquals(listOf(0, 1, 2), visible.map(SessionListItem::depth))
@@ -147,7 +147,7 @@ class SessionListPresentationTest {
                 ),
             )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
 
         assertEquals(listOf("missing", "first", "second", "self"), visible.map(SessionListItem::id))
         assertEquals(listOf(0, 0, 0, 0), visible.map(SessionListItem::depth))
@@ -171,11 +171,11 @@ class SessionListPresentationTest {
                 )
             assertEquals(
                 SessionAvailability.OFFLINE,
-                sessionListItem(session, connected = false, loading = false).availability,
+                sessionListItem(session, connected = false, loading = false, confirmed = true).availability,
             )
             assertEquals(
                 availability,
-                sessionListItem(session, connected = true, loading = true).availability,
+                sessionListItem(session, connected = true, loading = true, confirmed = true).availability,
             )
         }
     }
@@ -198,7 +198,7 @@ class SessionListPresentationTest {
                         "status" to status,
                     ),
                     true,
-                    false,
+                    false, confirmed = true,
                 )
             assertEquals(availability, item.availability)
             assertTrue(item.continuesAsCopy)
@@ -217,7 +217,7 @@ class SessionListPresentationTest {
                     "updatedAt" to 1234,
                 ),
                 true,
-                false,
+                false, confirmed = true,
             )
         assertEquals("Last message", item.preview)
         assertEquals(1234L, item.updatedAt)
@@ -228,7 +228,7 @@ class SessionListPresentationTest {
             sessionListItem(
                     Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
                     true,
-                    false,
+                    false, confirmed = true,
                 )
                 .daemonOwned
         )
@@ -242,7 +242,7 @@ class SessionListPresentationTest {
             sessionListItem(
                 withHostWorker(Wire.objectOf("id" to "w", "title" to "W", "origin" to "worker", "status" to "idle")),
                 connected = true,
-                loading = false,
+                loading = false, confirmed = true,
             )
         assertTrue(canCloseSession(worker, true, false, v2))
         assertFalse(canCloseSession(worker, true, false, close))
@@ -252,7 +252,7 @@ class SessionListPresentationTest {
             sessionListItem(
                 Wire.objectOf("id" to "t", "title" to "T", "origin" to "tui", "status" to "idle"),
                 connected = true,
-                loading = false,
+                loading = false, confirmed = true,
             )
         assertFalse(canCloseSession(terminal, true, false, v2))
     }
@@ -263,7 +263,7 @@ class SessionListPresentationTest {
             sessionListItem(
                 Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
                 connected = true,
-                loading = false,
+                loading = false, confirmed = true,
             )
         assertTrue(canCloseSession(rpc, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
         assertFalse(canCloseSession(rpc, false, false, setOf(SESSION_CLOSE_CAPABILITY)))
@@ -273,9 +273,20 @@ class SessionListPresentationTest {
             sessionListItem(
                 Wire.objectOf("id" to "offline", "title" to "Offline", "origin" to "rpc", "status" to "offline"),
                 connected = true,
-                loading = false,
+                loading = false, confirmed = true,
             )
         assertFalse(canCloseSession(offline, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
+    }
+
+    @Test
+    fun closingWaitsForAConfirmedStatus() {
+        val row = Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "running")
+        val confirmed = sessionListItem(row, connected = true, loading = false, confirmed = true)
+        val unconfirmed = sessionListItem(row, connected = true, loading = false, confirmed = false)
+        assertFalse(confirmed.lastKnown)
+        assertTrue(unconfirmed.lastKnown)
+        assertTrue(canCloseSession(confirmed, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
+        assertFalse(canCloseSession(unconfirmed, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
     }
 
     @Test
@@ -290,12 +301,12 @@ class SessionListPresentationTest {
 
         assertEquals(
             listOf("waiting-a", "waiting-b", "idle", "running", "offline"),
-            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
                 .map(SessionListItem::id),
         )
         assertEquals(
             listOf("idle", "waiting-a", "running", "waiting-b", "offline"),
-            visibleSessionListItems(sessions, connected = false, loading = false, hideOffline = false)
+            visibleSessionListItems(sessions, connected = false, loading = false, hideOffline = false, confirmed = true)
                 .map(SessionListItem::id),
         )
     }
@@ -310,7 +321,7 @@ class SessionListPresentationTest {
             Wire.objectOf("id" to "child-a", "title" to "Child A", "origin" to "rpc", "parentSessionId" to "parent", "status" to "waiting"),
         )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
 
         assertEquals(
             listOf("parent", "child-b", "child-a", "idle", "idle-child"),
@@ -328,7 +339,7 @@ class SessionListPresentationTest {
             Wire.objectOf("id" to "grandchild", "title" to "Grandchild", "origin" to "rpc", "parentSessionId" to "live", "status" to "idle"),
         )
         fun counts(hideOffline: Boolean) =
-            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = hideOffline)
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = hideOffline, confirmed = true)
                 .associate { it.id to it.childCount }
 
         assertEquals(mapOf("parent" to 2, "live" to 1, "grandchild" to 0, "gone" to 0), counts(false))
@@ -420,17 +431,17 @@ class SessionListPresentationTest {
             val session = Wire.objectOf("id" to "s", "title" to "Title", "origin" to "rpc", "status" to status)
             assertEquals(
                 availability,
-                sessionListItem(session, connected = false, loading = false, stale = true).availability,
+                sessionListItem(session, connected = false, loading = false, stale = true, confirmed = true).availability,
             )
             assertEquals(
                 availability,
-                sessionListItems(listOf(session), connected = false, loading = false, stale = true)
+                sessionListItems(listOf(session), connected = false, loading = false, stale = true, confirmed = true)
                     .single().availability,
             )
             // Without a reconnect under way a lost connection still shows every row offline.
             assertEquals(
                 SessionAvailability.OFFLINE,
-                sessionListItem(session, connected = false, loading = false, stale = false).availability,
+                sessionListItem(session, connected = false, loading = false, stale = false, confirmed = true).availability,
             )
         }
         // A last-known status offers nothing that needs the connection.
@@ -439,7 +450,7 @@ class SessionListPresentationTest {
                 Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
                 connected = false,
                 loading = false,
-                stale = true,
+                stale = true, confirmed = true,
             )
         assertFalse(canCloseSession(stale, false, false, setOf(SESSION_CLOSE_CAPABILITY)))
     }
@@ -464,7 +475,7 @@ class SessionListPresentationTest {
                 connected = connected,
                 loading = false,
                 hideOffline = hidesOfflineSessions(true, connected, stale),
-                stale = stale,
+                stale = stale, confirmed = true,
             ).map { it.id to it.availability }
 
         // Connected: the real availability decides.
@@ -492,12 +503,12 @@ class SessionListPresentationTest {
         val gone = Wire.objectOf("id" to "g", "title" to "Gone", "origin" to "rpc", "status" to "offline")
         // After a second transient failure, or once the reconnect stopped, the connection reads
         // "Offline" while the state stays stale: the rows still carry the last-known status, marked.
-        val item = sessionListItem(running, connected = false, loading = false, stale = true)
+        val item = sessionListItem(running, connected = false, loading = false, stale = true, confirmed = true)
         assertEquals(SessionAvailability.RUNNING, item.availability)
         assertTrue(item.lastKnown)
-        assertFalse(sessionListItem(gone, connected = false, loading = false, stale = true).lastKnown)
-        assertFalse(sessionListItem(running, connected = true, loading = false, stale = false).lastKnown)
-        assertFalse(sessionListItem(running, connected = false, loading = false, stale = false).lastKnown)
+        assertFalse(sessionListItem(gone, connected = false, loading = false, stale = true, confirmed = true).lastKnown)
+        assertFalse(sessionListItem(running, connected = true, loading = false, stale = false, confirmed = true).lastKnown)
+        assertFalse(sessionListItem(running, connected = false, loading = false, stale = false, confirmed = true).lastKnown)
         // Sorting and the live filter still go by the last-known status.
         assertTrue(item.live())
         assertEquals(
@@ -507,7 +518,7 @@ class SessionListPresentationTest {
                 connected = false,
                 loading = false,
                 hideOffline = hidesOfflineSessions(true, connected = false, stale = true),
-                stale = true,
+                stale = true, confirmed = true,
             ).map { it.id to it.lastKnown },
         )
     }
@@ -536,7 +547,7 @@ class SessionListPresentationTest {
                 loading = false,
                 hideOffline = false,
                 marks = marks,
-                openSessionId = "open",
+                openSessionId = "open", confirmed = true,
             )
 
         assertEquals(listOf("pinned", "waiting", "plain", "changed", "open"), visible.map(SessionListItem::id))
@@ -552,10 +563,10 @@ class SessionListPresentationTest {
 
         val finished =
             visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false,
-                marks = mapOf("done" to SessionMark(finishedAt = 90)))
+                marks = mapOf("done" to SessionMark(finishedAt = 90)), confirmed = true)
         val read =
             visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false,
-                marks = mapOf("done" to SessionMark(seenAt = 95, seenUpdatedAt = 100)))
+                marks = mapOf("done" to SessionMark(seenAt = 95, seenUpdatedAt = 100)), confirmed = true)
 
         assertTrue(finished.single().unread)
         assertFalse(read.single().unread)
@@ -614,5 +625,36 @@ class SessionListPresentationTest {
         val offline = quickChats(chats, connected = false, showRunningAll = true, showRecentAll = true)
         assertTrue(offline.waiting.isEmpty())
         assertEquals(6, offline.recent.size)
+    }
+
+    @Test
+    fun freshWaitingShowsTheNeedsInputDiamondAndFreshRunningTheSpinner() {
+        assertEquals(StatusGlyphKind.NEEDS_INPUT, sessionBadgeGlyph(SessionAvailability.WAITING, lastKnown = false))
+        assertEquals(StatusGlyphKind.SESSION_RUNNING, sessionBadgeGlyph(SessionAvailability.RUNNING, lastKnown = false))
+        assertNull(sessionBadgeGlyph(SessionAvailability.IDLE, lastKnown = false))
+        assertNull(sessionBadgeGlyph(SessionAvailability.OFFLINE, lastKnown = false))
+    }
+
+    @Test
+    fun lastKnownStatusNeverGetsALiveGlyph() {
+        SessionAvailability.entries.forEach { assertNull(it.name, sessionBadgeGlyph(it, lastKnown = true)) }
+    }
+
+    @Test
+    fun rowsOfAConnectionWhoseListHasNotAnsweredYetStayLastKnown() {
+        val tui = Wire.objectOf("id" to "t", "title" to "TUI", "origin" to "tui", "status" to "running")
+        val unconfirmed = sessionListItem(tui, connected = true, loading = false, confirmed = false)
+        assertEquals(SessionAvailability.RUNNING, unconfirmed.availability)
+        assertTrue(unconfirmed.lastKnown)
+        assertFalse(unconfirmed.liveMacTui)
+        assertNull(sessionBadgeGlyph(unconfirmed.availability, unconfirmed.lastKnown))
+
+        val confirmed = sessionListItem(tui, connected = true, loading = false, confirmed = true)
+        assertFalse(confirmed.lastKnown)
+        assertTrue(confirmed.liveMacTui)
+
+        val listed =
+            visibleSessionListItems(listOf(tui), connected = true, loading = false, hideOffline = false, confirmed = false)
+        assertTrue(listed.single().lastKnown)
     }
 }

@@ -2172,11 +2172,21 @@ class RemoteNavigationUiTest {
         // The chip merges its label into itself, as a button does.
         compose.onNode(hasTestTag("chatStatusChip") and hasText(label(R.string.remote_panel_compacting)))
             .assertIsDisplayed()
+        // The chip shows the TUI's snake, not a Material spinner.
+        compose.onNode(hasTestTag("compactionGlyph") and hasAnyAncestor(hasTestTag("chatStatusChip")), useUnmergedTree = true)
+            .assertExists()
+        compose.onAllNodes(
+            SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo) and
+                hasAnyAncestor(hasTestTag("chatStatusChip")),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
         compose.onNodeWithTag("chatActionsMore").performClick()
         compose.onNodeWithTag("chatActionMenu_status").performClick()
         compose.onNodeWithTag("compactionBanner").assertIsDisplayed()
         compose.onNode(hasText(label(R.string.remote_panel_compacting)) and hasAnyAncestor(hasTestTag("compactionBanner")))
             .assertIsDisplayed()
+        compose.onNode(hasTestTag("compactionGlyph") and hasAnyAncestor(hasTestTag("compactionBanner")), useUnmergedTree = true)
+            .assertExists()
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(compaction = null)
         }

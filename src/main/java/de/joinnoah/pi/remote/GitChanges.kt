@@ -174,6 +174,11 @@ data class SubagentChanges(
     val title: String,
     val running: Boolean,
     val status: GitStatus,
+    /**
+     * The child's status is only last known (cached or unconfirmed list), so it is neither
+     * running nor finished as far as the phone can tell. [running] is false then.
+     */
+    val lastKnown: Boolean = false,
 )
 
 /** At most this many subagents are asked for their changes, running ones and the newest first. */

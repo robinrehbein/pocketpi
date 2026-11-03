@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -63,6 +64,13 @@ internal fun TaskInsightPill(tasks: SessionTasks, onClick: () -> Unit) {
     }
 }
 
+internal fun taskGlyphColor(status: TaskStatus, neutral: Color, active: Color, success: Color): Color =
+    when (status) {
+        TaskStatus.PENDING -> neutral
+        TaskStatus.IN_PROGRESS -> active
+        TaskStatus.COMPLETED -> success
+    }
+
 @Composable
 internal fun TaskInsightSheet(tasks: SessionTasks, sessionTitle: String?, onDismiss: () -> Unit) {
     val completed = tasks.items.count { it.status == TaskStatus.COMPLETED }
@@ -98,7 +106,12 @@ internal fun TaskInsightSheet(tasks: SessionTasks, sessionTitle: String?, onDism
                                     TaskStatus.COMPLETED -> StatusGlyphKind.DONE
                                 },
                                 modifier = Modifier.padding(end = 12.dp),
-                                color = if (task.status == TaskStatus.IN_PROGRESS) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = taskGlyphColor(
+                                    task.status,
+                                    neutral = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    active = MaterialTheme.colorScheme.primary,
+                                    success = idleColor(),
+                                ),
                                 animate = tasks.freshness == TaskFreshness.LIVE,
                             )
                             Column {

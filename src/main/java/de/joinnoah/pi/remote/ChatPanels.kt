@@ -252,13 +252,39 @@ private fun TouchedFileRow(file: TouchedFile, onOpenedInFiles: () -> Unit, onCli
 
 internal fun subagentStateLabel(state: String): Int =
     when (state) {
+        "waiting" -> R.string.remote_status_waiting
         "queued" -> R.string.remote_subagent_queued
         "running" -> R.string.remote_subagent_running
         "succeeded" -> R.string.remote_subagent_succeeded
         "failed" -> R.string.remote_subagent_failed
         "ended" -> R.string.remote_subagent_ended
         "offline" -> R.string.remote_status_offline
-        else -> R.string.remote_subagent_cancelled
+        "cancelled" -> R.string.remote_subagent_cancelled
+        // An unknown state claims nothing about the outcome.
+        else -> R.string.remote_subagent_ended
+    }
+
+/** Glyph per subagent state, or null for a neutral dot (ended, offline, unknown). */
+internal fun subagentStateGlyph(state: String): StatusGlyphKind? =
+    when (state) {
+        "waiting" -> StatusGlyphKind.NEEDS_INPUT
+        "running" -> StatusGlyphKind.SESSION_RUNNING
+        "queued" -> StatusGlyphKind.WAITING
+        "succeeded" -> StatusGlyphKind.DONE
+        "failed" -> StatusGlyphKind.FAILED
+        "cancelled" -> StatusGlyphKind.STOPPED
+        else -> null
+    }
+
+@Composable
+private fun subagentStateColor(state: String): Color =
+    when (state) {
+        "waiting" -> waitingColor()
+        "running" -> sessionStatusColor(SessionAvailability.RUNNING)
+        "succeeded" -> idleColor()
+        "failed" -> MaterialTheme.colorScheme.error
+        "offline" -> sessionStatusColor(SessionAvailability.OFFLINE)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
 @Composable
@@ -273,12 +299,25 @@ internal fun SubagentStrip(
 ) {
     var expanded by expandedState
     if (!subagentChipShown(strip, expanded)) return
-    val queued = strip.entries.count { it.state == "queued" }
+    val counts = subagentChipCounts(strip)
+    val needsYou = stringResource(R.string.remote_status_waiting)
+    val running = pluralStringResource(R.plurals.remote_panel_subagents_running, counts.running, counts.running)
+    val cachedRunning =
+        pluralStringResource(R.plurals.remote_panel_subagents_running, counts.cachedRunning, counts.cachedRunning)
     val summary =
         when {
-            strip.running > 0 ->
-                pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
-            queued > 0 -> pluralStringResource(R.plurals.remote_panel_subagents_queued, queued, queued)
+            // Needing input leads; a running count beside it stays true and is kept.
+            counts.waiting > 0 -> if (counts.running > 0) "$needsYou · $running" else needsYou
+            counts.running > 0 -> running
+            counts.queued > 0 -> pluralStringResource(R.plurals.remote_panel_subagents_queued, counts.queued, counts.queued)
+            // Only cached states: say so, never as a current request for input.
+            counts.cachedWaiting > 0 -> stringResource(R.string.remote_status_last_known, needsYou)
+            counts.cachedRunning > 0 -> stringResource(R.string.remote_status_last_known, cachedRunning)
+            counts.cachedQueued > 0 ->
+                stringResource(
+                    R.string.remote_status_last_known,
+                    pluralStringResource(R.plurals.remote_panel_subagents_queued, counts.cachedQueued, counts.cachedQueued),
+                )
             else -> stringResource(R.string.remote_subagent_popover_title)
         }
     StatusPopover(
@@ -324,7 +363,30 @@ internal fun SubagentInsightSheet(
  * once they all finish.
  */
 internal fun subagentChipShown(strip: SubagentStrip, expanded: Boolean): Boolean =
-    strip.entries.isNotEmpty() && (expanded || strip.running > 0 || strip.entries.any { it.state == "queued" })
+    strip.entries.isNotEmpty() && (expanded || strip.running > 0 ||
+        strip.entries.any { it.state == "queued" || it.state == "waiting" || (it.lastKnown && it.state == "running") })
+
+internal data class SubagentChipCounts(
+    val waiting: Int,
+    val running: Int,
+    val queued: Int,
+    val cachedWaiting: Int,
+    val cachedRunning: Int,
+    val cachedQueued: Int = 0,
+)
+
+/** Current counts exclude last-known entries; those are counted apart and labelled as such. */
+internal fun subagentChipCounts(strip: SubagentStrip): SubagentChipCounts {
+    fun count(state: String, lastKnown: Boolean) = strip.entries.count { it.state == state && it.lastKnown == lastKnown }
+    return SubagentChipCounts(
+        waiting = count("waiting", false),
+        running = strip.running,
+        queued = count("queued", false),
+        cachedWaiting = count("waiting", true),
+        cachedRunning = count("running", true),
+        cachedQueued = count("queued", true),
+    )
+}
 
 /**
  * Shared status chip and anchored, dismissible overview used above the composer, in the touched
@@ -431,20 +493,22 @@ private fun SubagentStripRow(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (entry.state == "running") {
-                        // The strip has no freshness flag, so running state may be last-known.
-                        StatusGlyph(
-                            kind = StatusGlyphKind.SESSION_RUNNING,
-                            color = sessionStatusColor(SessionAvailability.RUNNING),
-                            modifier = Modifier.size(16.dp),
-                            animate = false,
-                        )
+                    // A last-known state is muted and named as such, like the session list.
+                    val color =
+                        if (entry.lastKnown) MaterialTheme.colorScheme.outline else subagentStateColor(entry.state)
+                    val glyph = if (entry.lastKnown) null else subagentStateGlyph(entry.state)
+                    if (glyph != null) {
+                        // The strip has no freshness flag, so state may be last-known: never animate.
+                        // The label beside it carries the meaning; the glyph shape does not rely on color.
+                        StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp).testTag("subagentGlyph_$glyph"), animate = false)
                     } else {
-                        StatusDot(sessionStatusColor(
-                            if (entry.state == "offline") SessionAvailability.OFFLINE else SessionAvailability.IDLE
-                        ))
+                        StatusDot(color)
                     }
-                    Text(stringResource(subagentStateLabel(entry.state)), style = MaterialTheme.typography.labelMedium)
+                    val label = stringResource(subagentStateLabel(entry.state))
+                    Text(
+                        if (entry.lastKnown) stringResource(R.string.remote_status_last_known, label) else label,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                 }
                 entry.activity?.takeIf(String::isNotBlank)?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -521,11 +585,9 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircularProgressIndicator(
-                Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
+            // The TUI's dimmed pending snake, not a Material spinner. Decorative: the text says it.
+            // StatusGlyph holds a static frame while system animations are off.
+            CompactionGlyph(MaterialTheme.colorScheme.onSecondaryContainer)
             Column {
                 Text(stringResource(R.string.remote_panel_compacting), style = MaterialTheme.typography.labelLarge)
                 reason?.let {
@@ -535,6 +597,25 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
         }
     }
 }
+
+/**
+ * The compaction activity mark, shared by the banner and the compact status chip: the session snake
+ * at a dimmed but still legible alpha of [base], 16dp, without semantics of its own.
+ */
+@Composable
+internal fun CompactionGlyph(base: Color, modifier: Modifier = Modifier) {
+    StatusGlyph(
+        kind = StatusGlyphKind.SESSION_RUNNING,
+        color = base.copy(alpha = COMPACTION_GLYPH_ALPHA),
+        modifier = modifier.size(16.dp).testTag("compactionGlyph"),
+    )
+}
+
+/**
+ * Dimmed like the TUI's pending glyph. ChatPanelsTest checks 3:1 against the opaque containers of the
+ * built-in schemes; over translucent glass the result depends on the content behind it.
+ */
+internal const val COMPACTION_GLYPH_ALPHA = 0.78f
 
 // ---- Child session picker -----------------------------------------------------------------
 
@@ -565,7 +646,7 @@ internal fun ChildSessionPickerSheet(
                 }
             }
             items(candidates, key = { it.id }) { session ->
-                val status =
+                val reported =
                     stringResource(
                         when (session.availability) {
                             SessionAvailability.IDLE -> R.string.remote_status_idle
@@ -574,6 +655,8 @@ internal fun ChildSessionPickerSheet(
                             SessionAvailability.OFFLINE -> R.string.remote_status_offline
                         }
                     )
+                val status =
+                    if (session.lastKnown) stringResource(R.string.remote_status_last_known, reported) else reported
                 val updated =
                     session.updatedAt?.let {
                         (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
@@ -586,14 +669,19 @@ internal fun ChildSessionPickerSheet(
                         Text(listOfNotNull(status, updated).joinToString(" · "), maxLines = 1)
                     },
                     leadingContent = {
-                        if (session.availability == SessionAvailability.RUNNING && !session.lastKnown) {
+                        // Same rule as the session list: only a fresh report gets a glyph.
+                        val glyph = sessionBadgeGlyph(session.availability, session.lastKnown)
+                        val color =
+                            if (session.lastKnown) MaterialTheme.colorScheme.outline
+                            else sessionStatusColor(session.availability)
+                        if (glyph != null) {
                             StatusGlyph(
-                                kind = StatusGlyphKind.SESSION_RUNNING,
-                                color = sessionStatusColor(session.availability),
-                                modifier = Modifier.size(16.dp),
+                                kind = glyph,
+                                color = color,
+                                modifier = Modifier.size(16.dp).testTag("candidateGlyph_$glyph"),
                             )
                         } else {
-                            StatusDot(sessionStatusColor(session.availability))
+                            StatusDot(color)
                         }
                     },
                     modifier =
