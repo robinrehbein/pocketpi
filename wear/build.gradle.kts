@@ -72,6 +72,8 @@ android {
     lint {
         // Same policy as the phone app: lint reports only findings missing from this baseline.
         baseline = file("lint-baseline.xml")
+        // Scopes WearMaterialTheme to wear/src; the shared phone screens keep phone Material 3.
+        lintConfig = file("lint.xml")
         checkDependencies = true
     }
 }
@@ -109,6 +111,9 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
+    // Frosted backdrop of the floating pills (FloatingSurface.kt).
+    implementation(libs.haze)
+    implementation(libs.haze.blur)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)

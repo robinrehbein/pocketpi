@@ -28,6 +28,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -339,7 +340,8 @@ private fun StartProgress(job: TicketStart?, onOpenChat: (String) -> Unit, onDis
 @Composable
 internal fun TicketUndoBar(pending: PendingAccept?, onUndo: () -> Unit, modifier: Modifier = Modifier) {
     if (pending == null) return
-    Surface(
+    // A floating bar like the chat's snackbar: tinted glass of the inverse surface.
+    FloatingSurface(
         modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().testTag("ticketUndoBar")
             .semantics { liveRegion = LiveRegionMode.Polite },
         shape = MaterialTheme.shapes.small,
@@ -353,7 +355,12 @@ internal fun TicketUndoBar(pending: PendingAccept?, onUndo: () -> Unit, modifier
                 modifier = Modifier.weight(1f).padding(vertical = 12.dp),
             )
             TextButton(onClick = onUndo) {
-                Text(stringResource(R.string.remote_tickets_undo), color = MaterialTheme.colorScheme.inversePrimary)
+                // Not inversePrimary: on the translucent bar it would fall below 4.5:1 over light content.
+                Text(
+                    stringResource(R.string.remote_tickets_undo),
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }

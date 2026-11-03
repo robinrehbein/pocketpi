@@ -11,9 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,12 +66,24 @@ internal fun exportFailureText(failure: ExportFailure): Int =
 
 /** Progress, failure or completion of `/export`; [onShare] shares the finished file again. */
 @Composable
-internal fun ExportStatus(state: ExportState?, onShare: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun ExportStatus(
+    state: ExportState?,
+    onShare: (String) -> Unit,
+    floating: Boolean = true,
+    onDismiss: () -> Unit,
+) {
     if (state == null) return
     val failed = state is ExportState.Failed
-    Surface(
+    // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
+    val labelColors =
+        ButtonDefaults.textButtonColors(
+            contentColor =
+                if (failed) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+    BannerSurface(
+        floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("exportStatus").semantics { liveRegion = LiveRegionMode.Polite },
-        shape = MaterialTheme.shapes.small,
         color = if (failed) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
         contentColor =
             if (failed) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
@@ -98,7 +110,7 @@ internal fun ExportStatus(state: ExportState?, onShare: (String) -> Unit, onDism
                             modifier = Modifier.padding(vertical = 8.dp),
                         )
                     }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_export_dismiss)) }
+                    TextButton(onClick = onDismiss, colors = labelColors) { Text(stringResource(R.string.remote_export_dismiss)) }
                 }
                 is ExportState.Done -> {
                     Text(
@@ -106,8 +118,8 @@ internal fun ExportStatus(state: ExportState?, onShare: (String) -> Unit, onDism
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
-                    TextButton(onClick = { onShare(state.uri) }) { Text(stringResource(R.string.remote_export_share)) }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_export_dismiss)) }
+                    TextButton(onClick = { onShare(state.uri) }, colors = labelColors) { Text(stringResource(R.string.remote_export_share)) }
+                    TextButton(onClick = onDismiss, colors = labelColors) { Text(stringResource(R.string.remote_export_dismiss)) }
                 }
             }
         }

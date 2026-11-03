@@ -25,7 +25,7 @@ class InsightSheetSelectionTest {
                 val original = insightChipOrder(compact, attention)
                 val withTasks = insightChipOrder(compact, attention, includeTasks = true)
                 assertEquals(original, withTasks.filterNot { it == InsightChip.TASKS })
-                assertEquals(InsightChip.TASKS, withTasks.last())
+                assertEquals(InsightChip.TASKS, withTasks.first())
                 assertTrue(withTasks.containsAll(InsightChip.entries))
             }
         }

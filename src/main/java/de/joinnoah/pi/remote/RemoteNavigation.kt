@@ -1576,62 +1576,89 @@ private fun RemoteNavDisplay(
         entryProvider =
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
-                    val model = viewModel { HostsViewModel(repository) }
-                    var recoveryOpen by rememberSaveable { mutableStateOf(false) }
-                    CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied, onOpenEditorRecovery = { recoveryOpen = true })
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { HostsViewModel(repository) }
+                        var recoveryOpen by rememberSaveable { mutableStateOf(false) }
+                        CenteredPage {
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied, onOpenEditorRecovery = { recoveryOpen = true })
+                        }
+                        if (recoveryOpen) EditorRecoveryDialog(repository::loadEditorRecovery) { recoveryOpen = false }
                     }
-                    if (recoveryOpen) EditorRecoveryDialog(repository::loadEditorRecovery) { recoveryOpen = false }
                 }
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { ProjectsViewModel(repository, key) }
-                    val column = LocalProjectsColumn.current
-                    if (column == null)
-                        CenteredPage {
-                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
-                        }
-                    else {
-                        // Keeps the full column's scroll position while the strip stands in for it.
-                        val holder = rememberSaveableStateHolder()
-                        if (column.strip)
-                            holder.SaveableStateProvider("strip") {
-                                ProjectStrip(key, model, navigator, column.selectedProjectId, column.canExpand)
-                            }
-                        else
-                            holder.SaveableStateProvider("column") {
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ProjectsViewModel(repository, key) }
+                        val column = LocalProjectsColumn.current
+                        if (column == null)
+                            CenteredPage {
                                 RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                             }
+                        else {
+                            // Keeps the full column's scroll position while the strip stands in for it.
+                            val holder = rememberSaveableStateHolder()
+                            if (column.strip)
+                                holder.SaveableStateProvider("strip") {
+                                    ProjectStrip(key, model, navigator, column.selectedProjectId, column.canExpand)
+                                }
+                            else
+                                holder.SaveableStateProvider("column") {
+                                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                                }
+                        }
                     }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { SessionsViewModel(repository, key, settings) }
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    }
                 }
                 entry<RemoteNavKey.FolderBrowser>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { FolderBrowserViewModel(repository, key) }
-                    CenteredPage { FolderBrowserScreen(key, model, navigator) }
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { FolderBrowserViewModel(repository, key) }
+                        CenteredPage { FolderBrowserScreen(key, model, navigator) }
+                    }
                 }
                 entry<RemoteNavKey.Providers>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { ProvidersViewModel(repository, key) }
-                    CenteredPage { ProvidersScreen(key, model, navigator) }
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ProvidersViewModel(repository, key) }
+                        CenteredPage { ProvidersScreen(key, model, navigator) }
+                    }
                 }
                 entry<RemoteNavKey.Tickets>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { TicketsViewModel(repository, key) }
-                    CenteredPage { TicketsScreen(key, model, navigator) }
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { TicketsViewModel(repository, key) }
+                        CenteredPage { TicketsScreen(key, model, navigator) }
+                    }
                 }
                 entry<RemoteNavKey.Ticket>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { TicketsViewModel(repository, key) }
-                    CenteredPage { TicketDetailScreen(key, model, navigator) }
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { TicketsViewModel(repository, key) }
+                        CenteredPage { TicketDetailScreen(key, model, navigator) }
+                    }
                 }
                 entry<RemoteNavKey.Activity>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { ActivityViewModel(repository, key) }
-                    // A column of the wide layout fills its pane; a phone page keeps the centred width.
-                    if (LocalTwoPane.current == null) CenteredPage { ActivityBoardScreen(key, model, navigator) }
-                    else ActivityBoardScreen(key, model, navigator)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ActivityViewModel(repository, key) }
+                        // A column of the wide layout fills its pane; a phone page keeps the centred width.
+                        if (LocalTwoPane.current == null) CenteredPage { ActivityBoardScreen(key, model, navigator) }
+                        else ActivityBoardScreen(key, model, navigator)
+                    }
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ChatViewModel(repository, key, settings) }
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    }
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata =
@@ -1642,9 +1669,12 @@ private fun RemoteNavDisplay(
                                 put(NavDisplay.PredictivePopTransitionKey) { settingsTransition() }
                             },
                 ) { key ->
-                    val model = viewModel { SettingsViewModel(repository, settings) }
-                    CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { SettingsViewModel(repository, settings) }
+                        CenteredPage {
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                        }
                     }
                 }
             },

@@ -47,6 +47,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
@@ -670,7 +671,7 @@ internal fun ChatComposer(
     val longDraft = draft.text.length > EXPAND_OFFER_CHARS || '\n' in draft.text
     val hasExtras = state.quote != null || state.attachments.isNotEmpty() ||
         state.importingAttachments || state.attachmentProgress != null
-    FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+    FloatingSurface(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Column(
                 Modifier.fillMaxWidth()
@@ -1239,18 +1240,19 @@ private fun RowScope.SendModeChoice(
 ) {
     val modes = listOf(BusyComposerAction.Steer, BusyComposerAction.FollowUp)
     val description = stringResource(R.string.remote_send_mode)
-    SingleChoiceSegmentedButtonRow(Modifier.weight(1f).semantics { contentDescription = description }) {
+    SingleChoiceSegmentedButtonRow(Modifier.weight(1f).height(IntrinsicSize.Min).semantics { contentDescription = description }) {
         modes.forEachIndexed { index, mode ->
             SegmentedButton(
                 selected = selected == mode,
                 onClick = { onSelect(mode) },
                 enabled = if (mode == BusyComposerAction.Steer) steerEnabled else followUpEnabled,
                 shape = SegmentedButtonDefaults.itemShape(index, modes.size),
-                modifier = Modifier.testTag(if (mode == BusyComposerAction.Steer) "sendNow" else "sendWhenDone"),
+                modifier = Modifier.fillMaxHeight().testTag(if (mode == BusyComposerAction.Steer) "sendNow" else "sendWhenDone"),
                 icon = {},
             ) {
                 Text(
                     stringResource(mode.labelRes()),
+                    textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelMedium,
@@ -1280,7 +1282,7 @@ private fun QuestionComposer(
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
     val abortEnabled = !abortBlocked && questionAbortEnabled(state)
-    FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+    FloatingSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

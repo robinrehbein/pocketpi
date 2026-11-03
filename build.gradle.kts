@@ -301,6 +301,9 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
+    // Frosted backdrop of the floating pills (FloatingSurface.kt).
+    implementation(libs.haze)
+    implementation(libs.haze.blur)
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)

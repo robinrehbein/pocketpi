@@ -18,9 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FormatQuote
@@ -298,6 +296,7 @@ internal fun ConversationMessage(
     onForkMenuRequestHandled: () -> Unit = {},
     /** Takes back the prompt that waits for the connection; the queued bubble offers it when set. */
     onCancelQueued: (() -> Unit)? = null,
+    hideThinkingStatus: Boolean = false,
 ) {
     // A bubble draws the outline along its own shape; other items get it around their box.
     Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
@@ -318,6 +317,7 @@ internal fun ConversationMessage(
             forkMenuRequested,
             onForkMenuRequestHandled,
             onCancelQueued,
+            hideThinkingStatus,
         )
     }
 }
@@ -341,6 +341,7 @@ private fun ConversationMessageContent(
     forkMenuRequested: Boolean,
     onForkMenuRequestHandled: () -> Unit,
     onCancelQueued: (() -> Unit)?,
+    hideThinkingStatus: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -692,7 +693,7 @@ private fun ConversationMessageContent(
                         }
                     }
                 }
-            else if (item.streaming && thinkingActive) ThinkingStatus(true)
+            else if (item.streaming && thinkingActive && !hideThinkingStatus) ThinkingStatus(true)
         }
         is ConversationItem.Activity -> {
             val planMarkdown = remember(item.name, item.arguments) {
@@ -823,33 +824,28 @@ private fun ConversationMessageContent(
                                 }
                         }
                         fileTarget?.let { OpenInFilesButton(it.path, it.lines) }
-                        when (state) {
-                            R.string.remote_tool_error ->
-                                Icon(
-                                    Icons.Default.Error,
-                                    stateLabel,
-                                    Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            R.string.remote_tool_complete ->
-                                Icon(
-                                    Icons.Default.Check,
-                                    stateLabel,
-                                    Modifier.size(18.dp),
-                                    tint = sessionStatusColor(SessionAvailability.IDLE),
-                                )
-                            R.string.remote_tool_pending ->
-                                CircularProgressIndicator(
-                                    Modifier.size(16.dp).semantics { contentDescription = stateLabel },
-                                    strokeWidth = 2.dp,
-                                )
-                            else ->
-                                Icon(
-                                    Icons.Default.Remove,
-                                    stateLabel,
-                                    Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.outline,
-                                )
+                        if (state == R.string.remote_tool_unavailable) {
+                            Icon(
+                                Icons.Default.Remove,
+                                stateLabel,
+                                Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.outline,
+                            )
+                        } else {
+                            StatusGlyph(
+                                kind = when (state) {
+                                    R.string.remote_tool_error -> StatusGlyphKind.FAILED
+                                    R.string.remote_tool_complete -> StatusGlyphKind.DONE
+                                    else -> StatusGlyphKind.TOOL_RUNNING
+                                },
+                                color = when (state) {
+                                    R.string.remote_tool_error -> MaterialTheme.colorScheme.error
+                                    R.string.remote_tool_complete -> sessionStatusColor(SessionAvailability.IDLE)
+                                    else -> MaterialTheme.colorScheme.primary
+                                },
+                                modifier = Modifier.size(18.dp),
+                                contentDescription = stateLabel,
+                            )
                         }
                         val toggleIcon = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore
                         val toggleLabel =

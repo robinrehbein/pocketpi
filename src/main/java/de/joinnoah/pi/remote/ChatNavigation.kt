@@ -455,10 +455,16 @@ private fun ScrollbarBubble(
         }
             .testTag("chatScrollbarBubble")
             .clearAndSetSemantics {}
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
-            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
-        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+        // Floats over the chat like the other floating elements.
+        FloatingSurface(shape = MaterialTheme.shapes.small) {
+            Text(
+                text,
+                Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -549,7 +555,7 @@ private fun ChatHistoryList(
     }
     // Opens where the chat stands, so the nearby entries are at hand in a long chat.
     val state = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex.coerceIn(0, entries.lastIndex))
-    LazyColumn(modifier.testTag("chatHistoryList"), state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(modifier.testTag("chatHistoryList").glassSource(), state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
         items(entries, key = { it.itemId }) { entry -> ChatHistoryRow(entry) { onOpen(entry.itemId) } }
     }
 }

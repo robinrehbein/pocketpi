@@ -289,7 +289,7 @@ private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeigh
     val entries = state.listing?.entries.orEmpty()
     val label = stringResource(R.string.remote_files_title)
     LazyColumn(
-        modifier.semantics { contentDescription = label }.testTag("filesSideList"),
+        modifier.semantics { contentDescription = label }.testTag("filesSideList").glassSource(),
         contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
     ) {
         itemsIndexed(entries, key = { _, entry -> entry.name }) { _, entry ->
@@ -392,7 +392,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
         val columns = fileGridColumns(maxWidth)
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
-            modifier = Modifier.fillMaxSize().testTag("filesList"),
+            modifier = Modifier.fillMaxSize().testTag("filesList").glassSource(),
             state = gridState,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -608,7 +608,7 @@ private fun FileView(
         }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().testTag("filesFile")
+            Modifier.weight(1f).fillMaxWidth().testTag("filesFile").glassSource()
                 .onPlaced { gutterRows.coordinates = it }
                 .focusRequester(focus)
                 .onFocusChanged { paneFocused = it.hasFocus }
