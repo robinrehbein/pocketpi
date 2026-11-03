@@ -5,21 +5,25 @@ name: Android CI
 on:
   pull_request:
     branches: [main]
+    # closed only cancels the pull request's running checks (see concurrency); no job runs for it.
+    types: [opened, synchronize, reopened, closed]
   push:
     branches: [main]
 
 permissions:
   contents: read
 
-# A new push to a pull request replaces its older run. Runs on main are never cancelled, because
-# the release gate needs a successful push run for each main commit.
+# One run per pull request and one for main: a new push replaces the older run, and closing or
+# merging a pull request stops its checks. The release gates only accept a successful push run of
+# the main commit they publish, which is always the newest, so an older main run is not needed.
 concurrency:
-  group: android-ci-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: android-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # The setup steps are written once as YAML anchors in the first job and reused by the others.
 jobs:
   build:
+    if: github.event.action != 'closed'
     name: Unit tests and debug builds
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -72,6 +76,7 @@ jobs:
           if-no-files-found: ignore
 
   lint:
+    if: github.event.action != 'closed'
     name: Android Lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -95,6 +100,7 @@ jobs:
           if-no-files-found: ignore
 
   benchmark:
+    if: github.event.action != 'closed'
     name: Benchmark isolation
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -136,6 +142,7 @@ jobs:
           if-no-files-found: ignore
 
   emulator:
+    if: github.event.action != 'closed'
     name: Emulator tests
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -234,6 +241,7 @@ jobs:
           if-no-files-found: ignore
 
   minified:
+    if: github.event.action != 'closed'
     name: Minified smoke tests
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -273,6 +281,7 @@ jobs:
           if-no-files-found: ignore
 
   tablet:
+    if: github.event.action != 'closed'
     name: Tablet emulator tests
     runs-on: ubuntu-latest
     timeout-minutes: 40
