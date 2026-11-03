@@ -41,7 +41,7 @@ which need `/dev/kvm`). `scripts/quick-check.sh --full` runs the set locally, an
 ```sh
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug
-./gradlew :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug
+./gradlew :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:assembleDebugAndroidTest
 ./gradlew assembleDebugAndroidTest :assembleBenchmark :benchmarks:assembleBenchmark
 ```
 

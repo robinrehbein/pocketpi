@@ -62,7 +62,7 @@ jobs:
       - name: English and German resource parity
         run: python3 scripts/i18n-check.py .
       - name: Unit tests and debug APKs
-        run: ./gradlew testDebugUnitTest assembleDebug :wear:testDebugUnitTest :wear:assembleDebug
+        run: ./gradlew testDebugUnitTest assembleDebug :wear:testDebugUnitTest :wear:assembleDebug :wear:assembleDebugAndroidTest
       - name: Upload unit test reports
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
