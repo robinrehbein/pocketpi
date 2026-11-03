@@ -95,6 +95,7 @@
     <string name="remote_export_done">Session exported</string>
     <string name="remote_export_share">Share</string>
     <string name="remote_export_dismiss">Dismiss</string>
+    <string name="remote_snackbar_dismiss">Dismiss</string>
     <string name="remote_export_chooser">Share the session export</string>
     <string name="remote_export_unsupported">This session cannot be exported. Only sessions started from the phone can, and your Mac needs a current pi Remote.</string>
     <string name="remote_export_busy">Your Mac is busy with another export. Try again shortly.</string>

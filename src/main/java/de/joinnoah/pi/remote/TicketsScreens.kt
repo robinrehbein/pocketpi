@@ -171,9 +171,10 @@ internal fun TicketsContent(
                 filter = "all"
             }
         }
+        // The list scrolls under the floating header: its pills blur it.
         LazyColumn(
-            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
+            Modifier.fillMaxSize().padding(insets.underFloatingHeader()).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = insets.floatingHeaderOverlap(), bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (hasWriteNotice(tickets))
@@ -498,8 +499,11 @@ internal fun TicketDetailContent(
         snackbarHost = { TicketUndoBar(state.tickets.pendingAccept, onUndo) },
     ) { insets ->
         Column(
-            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
-                .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
+            Modifier.fillMaxSize().padding(insets.underFloatingHeader()).consumeWindowInsets(insets).glassSource()
+                .verticalScroll(rememberScrollState())
+                // Under the floating header, which blurs the page as it scrolls by.
+                .padding(top = insets.floatingHeaderOverlap())
+                .padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // The start sheet reports its own failures; another ticket's result is left for its page and home.

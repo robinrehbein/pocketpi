@@ -455,10 +455,16 @@ private fun ScrollbarBubble(
         }
             .testTag("chatScrollbarBubble")
             .clearAndSetSemantics {}
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
-            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
-        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+        // Floats over the chat like the other floating elements.
+        FloatingSurface(shape = MaterialTheme.shapes.small) {
+            Text(
+                text,
+                Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+        }
     }
 }
 
