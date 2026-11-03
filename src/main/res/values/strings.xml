@@ -806,4 +806,9 @@
     <string name="remote_files_mutation_reset">Reset</string>
     <string name="remote_files_mutation_reset_title">Reset the record of file operations?</string>
     <string name="remote_files_mutation_reset_text">This phone can no longer tell which of its file operations are still open. Resetting starts an empty record; nothing is sent again. Check the files yourself, and acknowledge what the computer still lists.</string>
+    <string name="remote_files_mutation_never_received">The computer never received this operation; nothing ran.</string>
+    <string name="remote_files_mutation_full">This phone’s record of file operations is full (%1$d of %2$d). Acknowledge the open operations below, or reset the record.</string>
+    <string name="remote_files_mutation_full_short">This phone’s record of file operations is full.</string>
+    <string name="remote_files_mutation_reset_full_text">Resetting forgets every open file operation this phone still tracks, in all sessions; nothing is sent again. Check the files yourself, and acknowledge what the computer still lists.</string>
+    <string name="remote_files_mutation_more">More actions for %1$s</string>
 </resources>

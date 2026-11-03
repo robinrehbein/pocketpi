@@ -234,7 +234,7 @@ internal fun FilesPane(
             dismissButton = { TextButton(onClick = { searchOpen = false }) { Text(stringResource(R.string.remote_files_search_close)) } },
         )
     }
-    mutations?.dialog?.let { FileMutationPrompt(it, actions) }
+    mutations?.dialog?.let { FileMutationPrompt(it, actions, mutations.journalFull) }
     if (mutations?.resetConfirming == true) FileMutationResetPrompt(mutations, actions)
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
@@ -255,7 +255,7 @@ internal fun FilesPane(
                         color = MaterialTheme.colorScheme.error,
                     )
                 val notices = mutations != null &&
-                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable)
+                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable || mutations.journalFull)
                 if (mutations != null && notices)
                     FileMutationNotices(mutations, actions, Modifier.padding(top = if (prefillFailed) 0.dp else headerHeight))
                 // Backspace, or Left at the edge, goes up a folder or back from a file.
@@ -265,11 +265,11 @@ internal fun FilesPane(
                     val file = state.file
                     val onEdit = actions.onStartEditing.takeIf { canEdit }
                     when {
-                        file == null -> key(state.path) { FolderList(state, actions, inset, send) }
+                        file == null -> key(state.path) { FolderList(state, actions, inset, send, mutationAccess) }
                         // A wide pane keeps the folder's entries beside the open file.
                         maxWidth >= FILE_LIST_BESIDE_MIN_WIDTH ->
                             Row(Modifier.fillMaxSize()) {
-                                FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight())
+                                FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight(), mutationAccess)
                                 VerticalDivider()
                                 Box(Modifier.weight(1f).fillMaxHeight()) {
                                     key(file.path) { FileView(file, actions, send, ask, inset, onEdit, codeWrap.wrap) }
@@ -328,7 +328,7 @@ private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Un
  * in place of the one shown. Up and Down open the file above or below.
  */
 @Composable
-private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeight: Dp, modifier: Modifier) {
+private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeight: Dp, modifier: Modifier, mutationAccess: FileMutationAccess = FileMutationAccess()) {
     val entries = state.listing?.entries.orEmpty()
     val label = stringResource(R.string.remote_files_title)
     LazyColumn(
@@ -362,7 +362,10 @@ private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeigh
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                val rowActions = if (entry.type == FileEntryType.FILE) fileMutationItems(path, actions, mutationAccess) else emptyList()
+                if (rowActions.isNotEmpty()) FileRowActions(entry.name, rowActions)
             }
         }
     }
@@ -415,7 +418,7 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 }
 
 @Composable
-private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit) {
+private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit, mutationAccess: FileMutationAccess = FileMutationAccess()) {
     val resources = LocalResources.current
     val gridState = rememberLazyGridState()
     var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
@@ -498,6 +501,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                                 if (entry.type == FileEntryType.FILE) {
                                     { send(resources.getString(R.string.remote_files_reference_file, path)) }
                                 } else null,
+                            actions = if (entry.type == FileEntryType.FILE) fileMutationItems(path, actions, mutationAccess) else emptyList(),
                         )
                     }
                     if (listing.nextAfter != null)
@@ -942,3 +946,10 @@ internal fun filePrompt(
         language,
     )
 }
+
+/** Rename and delete of the file at [path], as offered by [access]. */
+internal fun fileMutationItems(path: String, actions: FilesActions, access: FileMutationAccess): List<MenuItem> =
+    listOfNotNull(
+        MenuItem(R.string.remote_files_rename, "rename") { actions.onPrepareRename(path) }.takeIf { access.rename },
+        MenuItem(R.string.remote_files_delete, "delete") { actions.onPrepareDelete(path) }.takeIf { access.delete },
+    )

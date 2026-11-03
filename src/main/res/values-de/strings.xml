@@ -805,4 +805,9 @@
     <string name="remote_files_mutation_reset">Zurücksetzen</string>
     <string name="remote_files_mutation_reset_title">Aufzeichnung der Dateivorgänge zurücksetzen?</string>
     <string name="remote_files_mutation_reset_text">Dieses Gerät kann nicht mehr erkennen, welche seiner Dateivorgänge noch offen sind. Zurücksetzen beginnt eine leere Aufzeichnung; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Rechner noch anzeigt.</string>
+    <string name="remote_files_mutation_never_received">Der Rechner hat diesen Vorgang nie erhalten; nichts wurde ausgeführt.</string>
+    <string name="remote_files_mutation_full">Die Aufzeichnung der Dateivorgänge auf diesem Gerät ist voll (%1$d von %2$d). Bestätige die offenen Vorgänge unten oder setze die Aufzeichnung zurück.</string>
+    <string name="remote_files_mutation_full_short">Die Aufzeichnung der Dateivorgänge auf diesem Gerät ist voll.</string>
+    <string name="remote_files_mutation_reset_full_text">Zurücksetzen vergisst alle offenen Dateivorgänge, die dieses Gerät noch verfolgt, in allen Sitzungen; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Rechner noch anzeigt.</string>
+    <string name="remote_files_mutation_more">Weitere Aktionen für %1$s</string>
 </resources>

@@ -47,7 +47,7 @@ private fun operationText(kind: FileMutationKind, path: String, destination: Str
  * or Cancel sends nothing, and Delete is enabled only once a fresh read found the file free.
  */
 @Composable
-internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesActions) {
+internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesActions, journalFull: Boolean = false) {
     val original = if (dialog.kind == FileMutationKind.RENAME) dialog.path.substringAfterLast('/') else ""
     var name by rememberSaveable(dialog.kind, dialog.path) { mutableStateOf(original) }
     val named = dialog.kind == FileMutationKind.DELETE || (validMutationName(name) && name != original)
@@ -94,6 +94,7 @@ internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesAction
                 val notice =
                     when {
                         dialog.blocked -> stringResource(R.string.remote_files_mutation_blocked)
+                        dialog.failure == FilesFailure.STORAGE && journalFull -> stringResource(R.string.remote_files_mutation_full_short)
                         dialog.failure != null -> stringResource(filesFailureText(dialog.failure))
                         dialog.changed -> stringResource(R.string.remote_files_mutation_changed)
                         dialog.nameTaken -> stringResource(R.string.remote_files_mutation_name_taken)
@@ -131,12 +132,24 @@ internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesAction
 @Composable
 internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesActions, modifier: Modifier = Modifier) {
     val outcome = mutations.outcome
-    if (outcome == null && mutations.recovery.isEmpty() && !mutations.storageFailed && !mutations.journalUnreadable) return
+    if (outcome == null && mutations.recovery.isEmpty() && !mutations.storageFailed && !mutations.journalUnreadable && !mutations.journalFull) return
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesMutationNotices")) {
         if (mutations.journalUnreadable)
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesMutationJournalLost")) {
                 Text(
                     stringResource(R.string.remote_files_mutation_journal_lost),
+                    Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TextButton(onClick = actions.onRequestMutationReset, enabled = !mutations.resetting, modifier = Modifier.testTag("filesMutationReset")) {
+                    Text(stringResource(R.string.remote_files_mutation_reset))
+                }
+            }
+        if (mutations.journalFull && !mutations.journalUnreadable)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesMutationJournalFull")) {
+                Text(
+                    stringResource(R.string.remote_files_mutation_full, mutations.journalEntries, mutations.journalCapacity),
                     Modifier.weight(1f),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
@@ -185,7 +198,11 @@ internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesAc
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesMutationRecovery:${item.operationId}")) {
                     Column(Modifier.weight(1f)) {
                         Text(operationText(item.kind, item.path, item.destinationPath), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-                        if (item.lost) Text(stringResource(R.string.remote_files_mutation_lost), style = MaterialTheme.typography.bodySmall)
+                        if (item.lost)
+                            Text(
+                                stringResource(if (item.neverReceived) R.string.remote_files_mutation_never_received else R.string.remote_files_mutation_lost),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         if (item.pending) Text(stringResource(R.string.remote_files_mutation_recovery_pending), style = MaterialTheme.typography.bodySmall)
                         if (item.failure != null)
                             Text(
@@ -223,7 +240,9 @@ internal fun FileMutationResetPrompt(mutations: FileMutationsState, actions: Fil
         onDismissRequest = actions.onCancelMutationReset,
         modifier = Modifier.testTag("filesMutationResetDialog"),
         title = { Text(stringResource(R.string.remote_files_mutation_reset_title)) },
-        text = { Text(stringResource(R.string.remote_files_mutation_reset_text)) },
+        text = {
+            Text(stringResource(if (mutations.journalUnreadable) R.string.remote_files_mutation_reset_text else R.string.remote_files_mutation_reset_full_text))
+        },
         confirmButton = {
             TextButton(onClick = actions.onConfirmMutationReset, enabled = !mutations.resetting, modifier = Modifier.testTag("filesMutationResetConfirm")) {
                 Text(stringResource(R.string.remote_files_mutation_reset), color = MaterialTheme.colorScheme.error)

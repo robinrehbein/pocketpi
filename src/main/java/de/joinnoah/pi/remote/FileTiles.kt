@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -25,6 +26,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -79,6 +82,8 @@ internal fun FileEntryTile(
     path: String? = null,
     /** Puts a reference to the file into the composer; null where the tile cannot. */
     onSend: (() -> Unit)? = null,
+    /** Rename and delete where offered: in the tile's menu and behind its More button. */
+    actions: List<MenuItem> = emptyList(),
 ) {
     val openable = entry.type == FileEntryType.DIR || entry.type == FileEntryType.FILE
     val kind = stringResource(
@@ -109,7 +114,7 @@ internal fun FileEntryTile(
                     FileMenuAction.COPY_CONTENTS -> contents?.let(copyContents)
                 }
             }
-        }
+        } + actions
     }
     if (entry.type == FileEntryType.FILE) {
         LaunchedEffect(entry.name, preview == null) {
@@ -178,6 +183,7 @@ internal fun FileEntryTile(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (actions.isNotEmpty()) FileRowActions(entry.name, actions)
             }
             Column {
                 Text(
@@ -306,6 +312,27 @@ internal fun FilePeekPopup(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+        }
+    }
+}
+
+/** A More button opening [actions] (rename, delete) for one file, for touch. */
+@Composable
+internal fun FileRowActions(name: String, actions: List<MenuItem>) {
+    var open by androidx.compose.runtime.saveable.rememberSaveable(name) { androidx.compose.runtime.mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(32.dp).testTag("fileActions:$name")) {
+            Icon(androidx.compose.material.icons.Icons.Default.MoreVert, contentDescription = stringResource(R.string.remote_files_mutation_more, name))
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            actions.forEach { action ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(stringResource(action.label)) },
+                    enabled = action.enabled,
+                    onClick = { open = false; action.onClick() },
+                    modifier = Modifier.testTag("fileAction:${action.tag}:$name"),
+                )
             }
         }
     }
