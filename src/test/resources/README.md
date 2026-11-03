@@ -1,6 +1,6 @@
 # Test fixtures
 
-The `*-v1.json` files here are copies of the Remote protocol fixtures in the noah monorepo, under
+The `*-v1.json` files and `paged-editor-wire.json` here are copies of the Remote protocol fixtures in the noah monorepo, under
 `packages/pi-atlas/extensions/remote/protocol/fixtures/`. Copy them byte for byte; change them there
 first. The copies match noah `dev` at commit `b9257b805829823f81409e7a161f1b1679585154`.
 
