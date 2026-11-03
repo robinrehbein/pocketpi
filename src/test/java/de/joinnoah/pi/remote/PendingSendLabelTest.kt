@@ -67,7 +67,9 @@ class PendingSendLabelTest {
         val label = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
         // The status line no longer stretches the message to its widest, which left the bubble
         // at the start of that width and the label alone at the end.
-        assertTrue("message ${message.width} of ${root.width}", message.width < root.width * 0.6f)
+        val messageWidth = message.right - message.left
+        val rootWidth = root.right - root.left
+        assertTrue("message $messageWidth of $rootWidth", messageWidth < rootWidth * 0.6f)
         assertEquals(root.right.value, message.right.value, 0.5f)
         assertTrue(label.right <= message.right && label.top >= message.top)
     }
