@@ -260,6 +260,8 @@
     <string name="remote_tool_error">Tool failed</string>
     <string name="remote_tool_arguments">Arguments</string>
     <string name="remote_tool_output">Output</string>
+    <string name="remote_tool_detail_view_formatted">Formatted</string>
+    <string name="remote_tool_detail_view_raw">Raw</string>
     <string name="remote_prompt_too_long">This message and quote exceed the size limit. Shorten the message or remove the quote.</string>
     <string name="remote_configuration_error">Could not confirm the session configuration. Refresh before changing it again.</string>
     <string name="remote_configuration_unavailable">Model and thinking controls are unavailable for this session.</string>

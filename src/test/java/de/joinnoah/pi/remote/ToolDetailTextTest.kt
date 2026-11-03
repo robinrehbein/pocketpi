@@ -185,4 +185,38 @@ class ToolDetailTextTest {
         // Every byte in the same decile reports the same step, not a per-chunk value.
         assertEquals(loadingProgressStep(201, 1000), loadingProgressStep(209, 1000))
     }
+
+    @Test
+    fun onlyProseOutputOfNonCodeToolsShowsFormatted() {
+        assertTrue(formattedOutputAllowed("advisor", "## Advice\n\nShip it."))
+        assertTrue(formattedOutputAllowed(null, "Plain answer"))
+        assertFalse(formattedOutputAllowed("bash", "Plain answer"))
+        assertFalse(formattedOutputAllowed("read", "Plain answer"))
+        assertFalse(formattedOutputAllowed("advisor", "  {\"ok\": true}"))
+        assertFalse(formattedOutputAllowed("advisor", "[1, 2]"))
+        assertFalse(formattedOutputAllowed("advisor", "   "))
+        assertFalse(formattedOutputAllowed("advisor", null))
+        assertFalse(formattedOutputAllowed("advisor", "a".repeat(FORMATTED_OUTPUT_MAX_CHARS + 1)))
+    }
+
+    @Test
+    fun argumentFieldsLabelFlatValuesAndIndentNestedOnes() {
+        val fields = argumentFields("""{"question":"Is it safe?","depth":2,"strict":true,"files":["a.kt"]}""")!!
+        assertEquals(
+            listOf(
+                ArgumentField("question", "Is it safe?", structured = false),
+                ArgumentField("depth", "2", structured = false),
+                ArgumentField("strict", "true", structured = false),
+            ),
+            fields.take(3),
+        )
+        assertEquals("files", fields[3].key)
+        assertTrue(fields[3].structured)
+        assertTrue(fields[3].value.contains("\"a.kt\""))
+        assertNull(argumentFields("{}"))
+        assertNull(argumentFields("[1]"))
+        assertNull(argumentFields("not json"))
+        assertNull(argumentFields(null))
+        assertNull(argumentFields((1..25).joinToString(",", "{", "}") { "\"k$it\":$it" }))
+    }
 }

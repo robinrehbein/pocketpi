@@ -260,6 +260,8 @@
     <string name="remote_tool_error">Werkzeug fehlgeschlagen</string>
     <string name="remote_tool_arguments">Argumente</string>
     <string name="remote_tool_output">Ausgabe</string>
+    <string name="remote_tool_detail_view_formatted">Formatiert</string>
+    <string name="remote_tool_detail_view_raw">Roh</string>
     <string name="remote_prompt_too_long">Nachricht und Zitat überschreiten das Größenlimit. Kürze die Nachricht oder entferne das Zitat.</string>
     <string name="remote_configuration_error">Die Sitzungskonfiguration konnte nicht bestätigt werden. Aktualisiere sie vor einer weiteren Änderung.</string>
     <string name="remote_configuration_unavailable">Modell- und Denkeinstellungen sind für diese Sitzung nicht verfügbar.</string>
