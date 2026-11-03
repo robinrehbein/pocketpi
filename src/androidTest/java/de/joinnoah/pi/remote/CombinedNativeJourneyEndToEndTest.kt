@@ -139,6 +139,7 @@ class CombinedNativeJourneyEndToEndTest {
         assertFalse(status().optBoolean("agentVerified"))
         compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput(agentPrompt)
         compose.onNodeWithTag("composerField").assertTextEquals(agentPrompt)
+        awaitStill("primaryComposerAction")
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
         val agentResult = awaitStatus { it.optBoolean("agentVerified") }
         compose.waitUntil(60_000) {
@@ -162,6 +163,7 @@ class CombinedNativeJourneyEndToEndTest {
         check(canRunShellCommands(beforeShell)) { "Native workflow shell capabilities are unavailable; see boundary diagnostics" }
         compose.onNodeWithTag("composerField").assertTextEquals("!$shell")
         compose.waitUntil(5_000) { exists("shellMode") }
+        awaitStill("primaryComposerAction")
         compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
         compose.waitForIdle()
         val afterShell = repository.state.value
@@ -399,6 +401,19 @@ class CombinedNativeJourneyEndToEndTest {
         compose.onNode(hasText(marker, substring = true), useUnmergedTree = true).assertIsDisplayed()
     }
 
+    // Typing focuses the composer and the keyboard slides in, carrying the composer up with it for
+    // several hundred milliseconds. A click sent meanwhile presses where the button was and releases
+    // after it moved on, which Compose treats as a cancelled press: no send. Wait for it to settle.
+    private fun awaitStill(tag: String, stillMillis: Long = 300) {
+        var last: androidx.compose.ui.geometry.Rect? = null
+        var since = 0L
+        compose.waitUntil(30_000) {
+            val bounds = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInWindow
+            val now = android.os.SystemClock.uptimeMillis()
+            if (bounds != last) { last = bounds; since = now }
+            now - since >= stillMillis
+        }
+    }
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
     private fun awaitTag(tag: String, timeoutMillis: Long = 60_000) {
 
@@ -616,6 +631,7 @@ class CombinedNativeJourneyEndToEndTest {
             recordEditorProgress("before-input")
             compose.onNodeWithTag("composerField").performTextReplacement(editorInput)
             recordEditorProgress("after-input")
+            awaitStill("primaryComposerAction")
             compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
             recordEditorProgress("after-click")
             // Observation only: an error separates sendPrompt's refusals from active()'s silent drop.
@@ -918,6 +934,7 @@ class CombinedNativeJourneyEndToEndTest {
                 statusOrNull()?.getJSONObject("emulator")?.let { it.optBoolean("homeObserved") && it.optString("inputStatus") == "accepted" } == true &&
                     repository.state.value.emulator?.inputPending == false
             }
+            exerciseEmulatorReconnect()
         } catch (failure: Throwable) {
             runCatching {
                 val view = repository.state.value.emulator
@@ -927,13 +944,22 @@ class CombinedNativeJourneyEndToEndTest {
                     .put("ownsControl", view?.ownsControl ?: JSONObject.NULL).put("inputPending", view?.inputPending ?: JSONObject.NULL)
                     .put("imagePresent", view?.image != null).put("notice", view?.notice ?: JSONObject.NULL)
                     .put("hostInputStatus", host?.opt("inputStatus") ?: JSONObject.NULL).put("hostHomeObserved", host?.opt("homeObserved") ?: JSONObject.NULL)
-                    .put("hostObservationError", host?.opt("homeObservationError") ?: JSONObject.NULL).put("hostLastFailure", host?.opt("lastFailure") ?: JSONObject.NULL))
+                    .put("hostObservationError", host?.opt("homeObservationError") ?: JSONObject.NULL).put("hostLastFailure", host?.opt("lastFailure") ?: JSONObject.NULL)
+                    // Separates a Host still showing the dropped connection as holder from an app that never re-acquired.
+                    .put("ownerKind", view?.owner?.kind ?: JSONObject.NULL).put("generation", view?.generation ?: JSONObject.NULL)
+                    .put("hostDeviceAcquires", host?.opt("deviceAcquires") ?: JSONObject.NULL).put("hostDeviceHomeInputs", host?.opt("deviceHomeInputs") ?: JSONObject.NULL)
+                    .put("hostTimelineTail", host?.optJSONArray("timeline")?.let { array -> org.json.JSONArray((maxOf(0, array.length() - 12) until array.length()).map { array.get(it) }) } ?: JSONObject.NULL)
+                    .put("socketOpens", ProductionEntryBootstrap.socketOpens.get()).put("socketFailures", ProductionEntryBootstrap.socketFailures.get())
+                    .put("connected", repository.state.value.connected))
                 record(proof.optString("stage", "emulator"))
             }
             runCatching { UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(File(app.getExternalFilesDir(null), "combined-native-emulator-failure.png")) }
             throw failure
         }
         val observed = fullStatus().getJSONObject("emulator")
+        // Still the one automatic acquire after the reconnect, and both Home inputs.
+        assertEquals(proof.getJSONObject("emulatorReconnect").getInt("deviceAcquires"), observed.getInt("deviceAcquires"))
+        assertEquals(proof.getJSONObject("emulatorReconnect").getInt("deviceHomeInputs"), observed.getInt("deviceHomeInputs"))
         assertEquals(selection.sessionId, observed.getString("sessionId"))
         assertTrue(observed.getInt("opens") in 1..3)
         assertTrue(observed.getInt("deviceAcquires") >= 1)
@@ -946,6 +972,54 @@ class CombinedNativeJourneyEndToEndTest {
             .put("deviceAcquires", observed.getInt("deviceAcquires")).put("deviceHomeInputs", observed.getInt("deviceHomeInputs"))
             .put("inputAccepted", true).put("homeObserved", true).put("settingsBeforeHome", true))
         record("emulator-complete")
+    }
+    // Control held through a connection drop: the app reconnects, takes control back on its own
+    // with exactly one acquire, and the Host accepts a further input. The drop happens with no input
+    // in flight; an input in flight at a drop is uncertain and, by design, gives up control.
+    private fun exerciseEmulatorReconnect() {
+        fun emulatorStatus() = statusOrNull()?.optJSONObject("emulator")
+        fun timeline(status: JSONObject) = status.getJSONArray("timeline").let { array -> (0 until array.length()).map { array.getJSONObject(it) } }
+        val held = requireNotNull(repository.state.value.emulator)
+        check(held.ownsControl && !held.inputPending) { "Control must be held with no input in flight before the drop" }
+        val before = fullStatus().getJSONObject("emulator")
+        val acquires = before.getInt("deviceAcquires")
+        val homeInputs = before.getInt("deviceHomeInputs")
+        val droppedAt = timeline(before).lastOrNull()?.getLong("at") ?: -1L
+        val opens = ProductionEntryBootstrap.socketOpens.get()
+        val failures = ProductionEntryBootstrap.socketFailures.get()
+        record("emulator-reconnect")
+        // Main thread: no input can start between the check and the drop.
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            check(repository.state.value.emulator?.let { it.ownsControl && !it.inputPending } == true) { "Input in flight at the drop" }
+            ProductionEntryBootstrap.dropOpenSocket()
+        }
+        compose.waitUntil(30_000) { ProductionEntryBootstrap.socketFailures.get() > failures }
+        compose.waitUntil(60_000) { ProductionEntryBootstrap.socketOpens.get() > opens && repository.state.value.connected }
+        compose.waitUntil(60_000) {
+            repository.state.value.emulator?.let { it.ownsControl && it.owner?.kind == "device" && it.notice == null && it.image?.revision == it.geometry?.revision } == true
+        }
+        val resumed = fullStatus().getJSONObject("emulator")
+        assertEquals("One acquire after the resume", acquires + 1, resumed.getInt("deviceAcquires"))
+        val acquiredAfterDrop = timeline(resumed).filter { it.getLong("at") > droppedAt && it.getString("type") == "emulator.acquire" }
+        assertEquals(1, acquiredAfterDrop.size)
+        assertEquals("emulator.lease", acquiredAfterDrop.single().optString("result"))
+        // A fresh Settings front, so the Host's Home observation stays meaningful for this input too.
+        action("emulator-prepare-home")
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("emulatorKey_Home").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithTag("emulatorKey_Home").performScrollTo().performClick()
+        compose.waitUntil(60_000) {
+            emulatorStatus()?.let { status ->
+                status.getInt("deviceHomeInputs") == homeInputs + 1 && status.isNull("homeObservationError") &&
+                    timeline(status).lastOrNull { it.getString("type") == "emulator.input" }?.let { it.getLong("at") > droppedAt && it.optString("result") == "emulator.input.ack" } == true
+            } == true && repository.state.value.emulator?.let { it.ownsControl && !it.inputPending } == true
+        }
+        val accepted = fullStatus().getJSONObject("emulator")
+        assertEquals("accepted", accepted.getString("inputStatus"))
+        assertEquals(acquires + 1, accepted.getInt("deviceAcquires"))
+        proof.put("emulatorReconnect", JSONObject().put("socketDropped", true).put("socketReopened", true)
+            .put("deviceAcquires", accepted.getInt("deviceAcquires")).put("acquiresAfterDrop", 1)
+            .put("deviceHomeInputs", accepted.getInt("deviceHomeInputs")).put("inputAcceptedAfterReconnect", true))
+        record("emulator-reconnect-complete")
     }
     private fun fileMutationStatus(): JSONObject? = statusOrNull()?.getJSONObject("fileMutations")
     private fun mutationOutcome(): FileMutationOutcome? = fileMutationsOf(repository.state.value)?.outcome
