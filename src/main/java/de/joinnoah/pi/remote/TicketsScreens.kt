@@ -171,10 +171,10 @@ internal fun TicketsContent(
                 filter = "all"
             }
         }
-        // The list scrolls under the floating header: its pills blur it.
+        // Keep sticky group headers below the floating navigation controls.
         LazyColumn(
-            Modifier.fillMaxSize().padding(insets.underFloatingHeader()).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = insets.floatingHeaderOverlap(), bottom = 24.dp),
+            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList").glassSource(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (hasWriteNotice(tickets))

@@ -6,11 +6,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,6 +51,36 @@ class TicketListHierarchyTest {
     private fun group(section: TicketSection) = compose.onNodeWithTag("ticketsGroup:${section.wire}")
     private fun filter(section: TicketSection) = compose.onNodeWithTag("ticketsFilter:${section.wire}")
     private fun card(ref: String) = compose.onNodeWithTag("ticketCard:$ref")
+
+    @Test
+    fun stickyGroupHeadersStayBelowNavigationAndRemainClickable() {
+        val tickets = (1..60).map { ticket("A-$it", TicketSection.ACCEPTANCE) } +
+            (1..60).map { ticket("W-$it", TicketSection.WORKING) }
+        show(*tickets.toTypedArray())
+        val list = compose.onNodeWithTag("ticketsList")
+
+        fun scrollTo(ref: String) {
+            list.performScrollToNode(hasTestTag("ticketCard:$ref"))
+            card(ref).assertIsDisplayed()
+        }
+        fun headerTop(section: TicketSection): Float {
+            val pill = compose.onNodeWithTag("navigationPill").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val header = group(section).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue("Sticky header overlaps navigation pill", header.top >= pill.bottom - 1f)
+            return header.top
+        }
+
+        scrollTo("A-40")
+        val firstTop = headerTop(TicketSection.ACCEPTANCE)
+        val listTop = list.fetchSemanticsNode().boundsInRoot.top
+        assertEquals(listTop, firstTop, 1f)
+        scrollTo("A-50")
+        assertEquals(firstTop, headerTop(TicketSection.ACCEPTANCE), 1f)
+        scrollTo("W-40")
+        assertEquals(firstTop, headerTop(TicketSection.WORKING), 1f)
+        group(TicketSection.WORKING).assertHasClickAction().performClick()
+        card("W-40").assertDoesNotExist()
+    }
 
     @Test
     fun filterAbsentForEmptyPage() {
