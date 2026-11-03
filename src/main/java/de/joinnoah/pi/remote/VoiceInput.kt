@@ -161,6 +161,7 @@ internal fun VoiceInput(
     onSwitchBusyAction: () -> Unit = {},
     modifier: Modifier = Modifier,
     permissionGrantedOverride: Boolean? = null,
+    interactionSourceOverride: MutableInteractionSource? = null,
 ) {
     val context = LocalContext.current
     val recognitionEngine = binding.engine
@@ -212,7 +213,8 @@ internal fun VoiceInput(
             }
         }
     }
-    val interactionSource = remember { MutableInteractionSource() }
+    // Keep the source stable for the lifetime of a press, including disposal cleanup.
+    val interactionSource = remember { interactionSourceOverride ?: MutableInteractionSource() }
     val latestActivate by rememberUpdatedState(activate)
     val latestSwitch by rememberUpdatedState(onSwitchBusyAction)
     val pressContext = listOf(
@@ -305,7 +307,7 @@ internal fun VoiceInput(
                         false
                     } else {
                         when (event.type) {
-                            KeyEventType.KeyDown -> if (heldKey == null) {
+                            KeyEventType.KeyDown -> if (heldKey == null && event.nativeKeyEvent.repeatCount == 0) {
                                 heldKey = event.key
                                 heldContext = if (enabled) pressContext else null
                                 if (enabled) {
@@ -315,7 +317,7 @@ internal fun VoiceInput(
                                 }
                             }
                             KeyEventType.KeyUp -> if (heldKey == event.key) {
-                                val activateHeld = heldContext == pressContext && enabled
+                                val activateHeld = heldContext == pressContext && enabled && !event.nativeKeyEvent.isCanceled
                                 heldKey = null
                                 heldContext = null
                                 endKeyboardPress(release = activateHeld)

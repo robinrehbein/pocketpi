@@ -219,6 +219,7 @@ class BackgroundJobsSheetUiTest {
         val selection = RemoteSelection("host", "project", "session")
         val otherSelection = RemoteSelection("host", "project", "other")
         val notification = mutableStateOf(RemoteNotification("host", "session", 1))
+        val settings = FakeSettingsRepository()
         repository.state.value = RemoteState(
             selection = selection, connected = true, status = "idle",
             session = Wire.objectOf("id" to "session", "origin" to "tui", "status" to "idle"),
@@ -237,7 +238,7 @@ class BackgroundJobsSheetUiTest {
             } else selection
         }
         compose.setContent {
-            MaterialTheme { RemoteNavigation(repository, FakeSettingsRepository(), false, {}, notification.value) }
+            MaterialTheme { RemoteNavigation(repository, settings, false, {}, notification.value) }
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("jobsChip").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("jobsChip").performClick()
@@ -257,12 +258,15 @@ class BackgroundJobsSheetUiTest {
         compose.onNodeWithTag("jobsChip").performClick()
         // A repository selection alone does not navigate: the old chat retains its own snapshot.
         compose.runOnIdle { notification.value = RemoteNotification("host", "other", 2) }
-        compose.waitUntil(5_000) {
-            repository.state.value.selection == otherSelection &&
-                compose.onAllNodesWithTag("jobsInsightSheet").fetchSemanticsNodes().isEmpty() &&
-                compose.onAllNodesWithTag("jobsChip").fetchSemanticsNodes().isNotEmpty()
-        }
+        compose.waitUntil(5_000) { repository.notificationRequests.contains("host" to "other") }
+        compose.waitUntil(5_000) { repository.state.value.selection == otherSelection }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("jobsInsightSheet").fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("jobsChip").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("jobsInsightSheet").assertDoesNotExist()
+        compose.onNodeWithTag("jobsChip").performClick()
+        compose.onNodeWithTag("job-other").assertExists()
+        compose.onNodeWithTag("job-two").assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.insight_sheet_close)).performClick()
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(jobs = JobsState("session", listOf(job("late"))))
         }
