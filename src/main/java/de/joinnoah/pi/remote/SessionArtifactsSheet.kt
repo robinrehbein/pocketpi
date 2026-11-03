@@ -402,9 +402,9 @@ private fun ArtifactCard(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Surface(
-            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small),
+            Modifier.fillMaxWidth().clip(INLINE_CARD_SHAPE),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = MaterialTheme.shapes.small,
+            shape = INLINE_CARD_SHAPE,
         ) {
             when (val current = content) {
                 is ArtifactCardContent.Text ->

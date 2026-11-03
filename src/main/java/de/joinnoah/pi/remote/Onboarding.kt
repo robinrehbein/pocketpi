@@ -101,13 +101,10 @@ internal fun PairingWaitCard(deadline: Long, onCancel: () -> Unit, now: () -> Lo
                 delay(250)
             }
         }
-    Card(
+    GlassCard(
         Modifier.fillMaxWidth().testTag("pairingWaitCard"),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            ),
+        tint = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -150,7 +147,7 @@ internal fun PairingWaitCard(deadline: Long, onCancel: () -> Unit, now: () -> Lo
 @Composable
 internal fun FirstRunCard(onScan: () -> Unit, onPaste: () -> Unit) {
     var setup by rememberSaveable { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth().testTag("firstRunCard")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("firstRunCard")) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(

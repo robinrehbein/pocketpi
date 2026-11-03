@@ -406,9 +406,25 @@ class ConversationPresentationTest {
     @Test
     fun toolSummaryUsesTheRawNameForUnknownTools() {
         val none = ToolSummary(null, null)
-        assertEquals(none, toolSummary("grep", """{"pattern":"x","path":"src"}"""))
         assertEquals(none, toolSummary("submit_plan", """{"plan":"# Plan"}"""))
         assertEquals(none, toolSummary(null, """{"path":"src"}"""))
+    }
+
+    @Test
+    fun toolSummaryNamesTheAdvisorSearchAndWebToolsWithWhatTheyWorkOn() {
+        assertEquals(
+            ToolSummary(R.string.remote_tool_advisor, "Is the plan safe?"),
+            toolSummary("advisor", """{"question":"Is the plan safe?\nMore context"}"""),
+        )
+        assertEquals(ToolSummary(R.string.remote_tool_advisor, null), toolSummary("consult_advisor", "{}"))
+        assertEquals(ToolSummary(R.string.remote_tool_search, "x"), toolSummary("grep", """{"pattern":"x","path":"src"}"""))
+        assertEquals(ToolSummary(R.string.remote_tool_find, "*.kt"), toolSummary("find", """{"pattern":"*.kt"}"""))
+        assertEquals(ToolSummary(R.string.remote_tool_list, "src"), toolSummary("ls", """{"path":"src"}"""))
+        assertEquals(ToolSummary(R.string.remote_tool_web_search, "compose"), toolSummary("web_search", """{"query":"compose"}"""))
+        assertEquals(
+            ToolSummary(R.string.remote_tool_web_fetch, "https://example.com"),
+            toolSummary("web_fetch", """{"url":"https://example.com"}"""),
+        )
     }
 
     @Test

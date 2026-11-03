@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
@@ -131,14 +132,15 @@ internal fun FileEntryTile(
             .dragOut(path, enabled = path != null) { path?.let(::pathTransfer) }
             .then(
                 // Right opens the tile as Enter does, where no tile lies to its right.
-                if (openable) Modifier.focusRing(MaterialTheme.shapes.medium).then(regionChild).openOnRight(focusManager, onOpen)
+                if (openable) Modifier.focusRing(RoundedCornerShape(PAGE_CARD_CORNER)).then(regionChild).openOnRight(focusManager, onOpen)
                     .pointerHoverIcon(PointerIcon.Hand).combinedClickable(
                     onClick = onOpen,
                     onLongClickLabel = peekAction,
                     onLongClick = { onPeek(bounds) },
                 ) else Modifier.semantics { disabled() }
             ),
-        shape = MaterialTheme.shapes.medium,
+        // The rounder corner of the app's other cards.
+        shape = RoundedCornerShape(PAGE_CARD_CORNER),
         colors = androidx.compose.material3.CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
@@ -268,7 +270,7 @@ internal fun FilePeekPopup(
     ) {
         Card(
             modifier = Modifier.width(popupWidth).testTag("filePeek"),
-            shape = MaterialTheme.shapes.medium,
+            shape = RoundedCornerShape(PAGE_CARD_CORNER),
             colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

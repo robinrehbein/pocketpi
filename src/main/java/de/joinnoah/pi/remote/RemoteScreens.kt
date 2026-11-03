@@ -39,6 +39,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.selectableGroup
@@ -2458,13 +2459,10 @@ internal fun RemoteScreen(
                 ) {
                     leading++
                     item(key = "error-card") {
-                        Card(
+                        GlassCard(
                             modifier = Modifier.fillMaxWidth().testTag("errorCard"),
-                            colors =
-                                CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                                ),
+                            tint = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         ) {
                             Column(
                                 Modifier.padding(16.dp),
@@ -4439,7 +4437,7 @@ internal fun SkeletonBar(modifier: Modifier) {
 
 @Composable
 internal fun Section(title: String?, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier.fillMaxWidth()) {
+    GlassCard(modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (title != null)
                 Text(
@@ -4686,7 +4684,7 @@ private fun ChatErrorCard(
     FloatingSurface(
         modifier = modifier.widthIn(max = PROSE_READING_WIDTH + 32.dp)
             .fillMaxWidth().padding(horizontal = 16.dp).testTag("errorCard"),
-        shape = MaterialTheme.shapes.medium,
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {

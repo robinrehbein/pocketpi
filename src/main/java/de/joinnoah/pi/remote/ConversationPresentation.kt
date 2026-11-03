@@ -236,13 +236,26 @@ internal fun toolSummary(name: String?, arguments: String?, output: String? = nu
                 else R.string.remote_tool_bash
             // Older sessions start background jobs with `bash_bg`, which also takes `command`.
             "bash_bg" -> R.string.remote_tool_bash_background
+            // The advisor tool; sessions saved before its rename hold calls as `consult_advisor`.
+            "advisor", "consult_advisor" -> R.string.remote_tool_advisor
+            "grep" -> R.string.remote_tool_search
+            "find" -> R.string.remote_tool_find
+            "ls" -> R.string.remote_tool_list
+            "web_search" -> R.string.remote_tool_web_search
+            "web_fetch", "fetch" -> R.string.remote_tool_web_fetch
             else -> return ToolSummary(null, null)
         }
     fun field(key: String): String? =
         (args?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
     val detail =
-        if (name == "bash" || name == "bash_bg") field("command")?.trim()?.lineSequence()?.first()?.trim()
-        else field("path") ?: field("file_path")
+        when (name) {
+            "bash", "bash_bg" -> field("command")
+            "advisor", "consult_advisor" -> field("question")
+            "grep", "find" -> field("pattern")
+            "web_search" -> field("query")
+            "web_fetch", "fetch" -> field("url")
+            else -> field("path") ?: field("file_path")
+        }?.trim()?.lineSequence()?.first()?.trim()
     return ToolSummary(label, detail?.takeIf(String::isNotEmpty))
 }
 

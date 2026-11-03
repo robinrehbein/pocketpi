@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material.icons.Icons
@@ -593,11 +594,13 @@ private fun ConversationMessageContent(
         is ConversationItem.Subagent -> {
             var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
             val expandState = expandStateDescription(expanded)
-            Card(
+            // The same quiet card as a tool call: a glass π avatar, then the agents as one group.
+            Surface(
                 Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+                shape = RoundedCornerShape(PAGE_CARD_CORNER),
+                color = MaterialTheme.colorScheme.surfaceContainer,
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         Modifier.fillMaxWidth()
                             .testTag("subagentHeader")
@@ -605,7 +608,11 @@ private fun ConversationMessageContent(
                             .semantics { stateDescription = expandState }
                             .heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        GlassAvatar(size = 36.dp) {
+                            Text("π", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        }
                         Text(
                             stringResource(R.string.remote_subagent_title),
                             style = MaterialTheme.typography.titleSmall,
@@ -622,6 +629,7 @@ private fun ConversationMessageContent(
                         Text(stringResource(R.string.remote_subagent_unavailable), style = MaterialTheme.typography.bodySmall)
                     } else {
                         val openAgentLabel = stringResource(R.string.remote_card_open_subagent)
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         for ((index, agent) in item.agents.withIndex()) {
                             val state = when (agent.state) {
                                 "queued" -> R.string.remote_subagent_queued
@@ -630,14 +638,31 @@ private fun ConversationMessageContent(
                                 "failed" -> R.string.remote_subagent_failed
                                 else -> R.string.remote_subagent_cancelled
                             }
-                            Column(
-                                if (onOpenAgent != null)
+                            // One row per agent; together they read as one card.
+                            Surface(
+                                shape = groupedRowShape(index == 0, index == item.agents.lastIndex, corner = 16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            ) {
+                            Row(
+                                (if (onOpenAgent != null)
                                     Modifier.fillMaxWidth()
                                         .testTag("subagentAgent")
                                         .pointerHoverIcon(PointerIcon.Hand)
                                         .clickable(onClickLabel = openAgentLabel, role = Role.Button) { onOpenAgent(item, index) }
                                         .heightIn(min = 48.dp)
-                                else Modifier.fillMaxWidth(),
+                                else Modifier.fillMaxWidth())
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                // The card carries no freshness of its own, so its state may be last known: never animate.
+                                val glyph = subagentStateGlyph(agent.state)
+                                val color = subagentStateColor(agent.state)
+                                Box(Modifier.padding(top = 2.dp)) {
+                                    if (glyph != null) StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp), animate = false)
+                                    else StatusDot(color)
+                                }
+                            Column(
+                                Modifier.weight(1f),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
                                 Text("${agent.name} · ${stringResource(state)}", style = MaterialTheme.typography.labelLarge)
@@ -664,6 +689,9 @@ private fun ConversationMessageContent(
                                         )
                                     }
                             }
+                            }
+                            }
+                        }
                         }
                     }
                     if (expanded) {
@@ -727,11 +755,12 @@ private fun ConversationMessageContent(
                     }
                 }
             }
-            val activityShape = MaterialTheme.shapes.medium
             val activityContainer =
                 if (item.state == "error") MaterialTheme.colorScheme.errorContainer
                 else MaterialTheme.colorScheme.surfaceContainer
-            Card(
+            // A quiet rounded card in the page's family; what floats over the chat is glass, the
+            // cards in it are not.
+            Surface(
                 Modifier.fillMaxWidth()
                     .testTag("toolCard")
                     .contextMenu(items = toolMenu)
@@ -748,12 +777,8 @@ private fun ConversationMessageContent(
                                     }
                                 )
                 },
-                shape = activityShape,
-                colors =
-                    CardDefaults.cardColors(
-                        containerColor = activityContainer,
-                    ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                shape = RoundedCornerShape(PAGE_CARD_CORNER),
+                color = activityContainer,
             ) {
                 Box(Modifier.fillMaxWidth()) {
                     Column(
@@ -790,15 +815,26 @@ private fun ConversationMessageContent(
                             .then(if (openTool == null) Modifier.semantics { stateDescription = expandState } else Modifier)
                             .heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        // What the tool does at a glance, as the tool detail's overview shows it.
+                        GlassAvatar(size = 36.dp) {
+                            Icon(
+                                toolIcon(item.name),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint =
+                                    if (item.state == "error") MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.primary,
+                            )
+                        }
                         Column(Modifier.weight(1f)) {
                             Text(
                                 if (planMarkdown != null) stringResource(R.string.remote_plan_title)
                                 else summary.labelRes?.let { stringResource(it) }
                                     ?: item.name
                                     ?: stringResource(R.string.remote_tool),
-                                style = MaterialTheme.typography.labelLarge,
+                                style = MaterialTheme.typography.titleSmall,
                             )
                             if (summary.detail != null || diff != null)
                                 Row(
@@ -875,8 +911,13 @@ private fun ConversationMessageContent(
                                 stringResource(if (planMarkdown != null) R.string.remote_plan_title else R.string.remote_tool_arguments),
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            if (planMarkdown != null) SelectionContainer { MarkdownText(planMarkdown) }
-                            else ArgumentsText(it)
+                            val fields = remember(it, planMarkdown) { if (planMarkdown == null) argumentFields(it) else null }
+                            when {
+                                planMarkdown != null -> SelectionContainer { MarkdownText(planMarkdown) }
+                                // Named values read as labelled fields; anything else stays as written.
+                                fields != null -> ArgumentFieldsCard(fields, tag = "toolCardFields")
+                                else -> ArgumentsText(it)
+                            }
                         }
                         item.output?.let {
                             Text(

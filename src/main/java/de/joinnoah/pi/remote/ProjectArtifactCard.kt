@@ -155,13 +155,13 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
     val context = LocalContext.current
     Column(modifier.fillMaxWidth().testTag("projectArtifact-$path"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+            Modifier.fillMaxWidth().clip(INLINE_CARD_SHAPE)
                 // Dragged into another app, the card is the HTML file.
                 .dragOut(ready?.artifact?.sha256, enabled = ready != null) {
                     ready?.artifact?.let { dragArtifact(context, path, it.html) }
                 },
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = MaterialTheme.shapes.small,
+            shape = INLINE_CARD_SHAPE,
         ) {
             Column {
                 if (ready != null) {
@@ -259,9 +259,9 @@ internal fun MermaidCard(code: String, modifier: Modifier = Modifier, codeBlock:
             .joinToString(" · ") + " · " + pluralStringResource(R.plurals.remote_mermaid_lines, lines, lines)
     Column(modifier.fillMaxWidth().testTag("mermaidCard"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small),
+            Modifier.fillMaxWidth().clip(INLINE_CARD_SHAPE),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = MaterialTheme.shapes.small,
+            shape = INLINE_CARD_SHAPE,
         ) {
             Column {
                 ArtifactThumbnail(

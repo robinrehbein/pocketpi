@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +35,9 @@ import androidx.compose.ui.unit.dp
 
 /** The corner of a page's cards and grouped rows. */
 internal val PAGE_CARD_CORNER = 20.dp
+
+/** The shape of a card inside another card or a message: a plan, an image, an artifact preview. */
+internal val INLINE_CARD_SHAPE = RoundedCornerShape(16.dp)
 
 /**
  * What a page is about at a glance: a glass avatar with [icon], then [content]. A glass card in
@@ -116,3 +121,22 @@ internal fun groupedRowShape(first: Boolean, last: Boolean, corner: Dp = PAGE_CA
         bottomStart = if (last) corner else 0.dp,
         bottomEnd = if (last) corner else 0.dp,
     )
+
+/**
+ * A card of a page in the floating-glass design, in place of Material's Card: a glass surface with
+ * the page cards' rounder corners. [tint] keeps a notice's colour (an error or hint container) as
+ * an opaque card; neutral cards get the glass tint. Inside the content it would blur, so it takes no
+ * blur of its own. [onClick] makes the whole card one button.
+ */
+@Composable
+internal fun GlassCard(
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.surfaceContainer,
+    contentColor: Color = contentColorFor(tint),
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    FloatingSurface(modifier, shape = RoundedCornerShape(24.dp), color = tint, contentColor = contentColor, blur = false) {
+        Column(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier, content = content)
+    }
+}

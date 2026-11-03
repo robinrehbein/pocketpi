@@ -105,8 +105,8 @@ class LiveRunStateTest {
         )
         assertNull("no reply to the latest prompt yet", currentTool(listOf(reply(bash), prompt())))
         assertEquals(
-            LiveRunTool("grep", null, null),
-            currentTool(listOf(prompt(), reply(toolCall("c2", "grep", "{}")))),
+            LiveRunTool("submit_plan", null, null),
+            currentTool(listOf(prompt(), reply(toolCall("c2", "submit_plan", "{}")))),
         )
     }
 

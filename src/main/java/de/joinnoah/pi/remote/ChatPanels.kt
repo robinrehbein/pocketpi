@@ -278,7 +278,7 @@ internal fun subagentStateGlyph(state: String): StatusGlyphKind? =
     }
 
 @Composable
-private fun subagentStateColor(state: String): Color =
+internal fun subagentStateColor(state: String): Color =
     when (state) {
         "waiting" -> waitingColor()
         "running" -> sessionStatusColor(SessionAvailability.RUNNING)
@@ -474,7 +474,7 @@ internal fun StatusPopover(
 }
 
 @Composable
-private fun StatusDot(color: Color) {
+internal fun StatusDot(color: Color) {
     Box(Modifier.size(8.dp).clip(CircleShape).background(color))
 }
 
