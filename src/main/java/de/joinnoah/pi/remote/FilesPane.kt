@@ -42,6 +42,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.WrapText
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -108,6 +111,8 @@ import kotlinx.coroutines.withContext
 /** What [FilesPane] can ask for; the chat screen wires these to its view model. */
 internal class FilesActions(
     val onClose: () -> Unit,
+    val onSearch: (String) -> Unit = {},
+    val onOpenSearchHit: (FileSearchHit) -> Unit = {},
     val onOpenDir: (String) -> Unit,
     /** Opens a file of the shown folder, or returns to the folder for null. */
     val onOpenFile: (String?) -> Unit,
@@ -127,6 +132,8 @@ internal class FilesActions(
     val onStartEditing: () -> Unit = {},
     val onEditorText: (String) -> Unit = {},
     val onSaveEditor: () -> Unit = {},
+    val onRestoreEditorDraft: () -> Unit = {},
+    val onDiscardEditorDraft: () -> Unit = {},
     val onDiscardEditor: () -> Unit = {},
     val onReloadAfterConflict: () -> Unit = {},
     /**
@@ -153,6 +160,7 @@ internal fun FilesPane(
     modifier: Modifier = Modifier,
     projectName: String? = null,
     canEdit: Boolean = false,
+    canSearch: Boolean = state.searchEnabled,
 ) {
     val back = {
         when {
@@ -172,12 +180,45 @@ internal fun FilesPane(
     val focusManager = LocalFocusManager.current
     val codeWrap = rememberCodeWrap()
     var headerHeight by remember { mutableStateOf(64.dp) }
+    var searchOpen by remember(state.sessionId) { mutableStateOf(false) }
+    var searchQuery by remember(state.sessionId) { mutableStateOf("") }
+    if (searchOpen && canSearch) {
+        AlertDialog(
+            onDismissRequest = { searchOpen = false },
+            title = { Text(stringResource(R.string.remote_files_search_title)) },
+            text = {
+                Column {
+                    OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it; actions.onSearch("") }, singleLine = true,
+                        label = { Text(stringResource(R.string.remote_files_search_query)) }, modifier = Modifier.fillMaxWidth().testTag("filesSearchQuery"))
+                    when {
+                        state.search.loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                        state.search.failure != null -> Text(stringResource(R.string.remote_files_search_failed))
+                        state.search.result != null -> {
+                            val result = state.search.result
+                            if (result.truncated) Text(stringResource(R.string.remote_files_search_incomplete))
+                            if (result.matches.isEmpty()) Text(stringResource(R.string.remote_files_search_empty))
+                            LazyColumn(Modifier.heightIn(max = 360.dp).testTag("filesSearchResults")) {
+                                items(result.matches) { hit ->
+                                    Column(Modifier.fillMaxWidth().clickable { searchOpen = false; actions.onOpenSearchHit(hit) }.padding(vertical = 8.dp)) {
+                                        Text("${hit.path}:${hit.line}:${hit.column}", style = MaterialTheme.typography.labelMedium)
+                                        Text(hit.snippet, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { actions.onSearch(searchQuery) }, enabled = validSearchQuery(searchQuery), modifier = Modifier.testTag("filesSearchSubmit")) { Text(stringResource(R.string.remote_files_search_title)) } },
+            dismissButton = { TextButton(onClick = { searchOpen = false }) { Text(stringResource(R.string.remote_files_search_close)) } },
+        )
+    }
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
         val editor = state.editor
         if (editor != null) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                key(editor.path) { CodeEditor(editor, actions) }
+                key(editor.path) { CodeEditor(editor, actions, onProjectSearch = if (canSearch) ({ searchOpen = true }) else null) }
             }
             return@Surface
         }
@@ -212,14 +253,14 @@ internal fun FilesPane(
                 }
             }
             Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
-                FilesTopBar(state, actions, back, projectName, codeWrap)
+                FilesTopBar(state, actions, back, projectName, codeWrap, canSearch) { searchOpen = true }
             }
         }
     }
 }
 
 @Composable
-private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?, codeWrap: CodeWrapState) {
+private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?, codeWrap: CodeWrapState, canSearch: Boolean, onSearch: () -> Unit) {
     val nested = state.file != null || state.path.isNotEmpty()
     val wrapLabel = stringResource(R.string.remote_review_wrap_lines)
     PaneHeader(
@@ -235,8 +276,8 @@ private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Un
         onClose = actions.onClose,
         onReload = actions.onReload,
         actions =
-            if (state.file == null) emptyList()
-            else listOf(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "filesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle)),
+            (if (canSearch) listOf(PaneAction(stringResource(R.string.remote_files_search_title), Icons.Default.Search, "filesSearch", onClick = onSearch)) else emptyList()) +
+                (if (state.file == null) emptyList() else listOf(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "filesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))),
     )
 }
 
@@ -295,6 +336,7 @@ private fun failureText(failure: FilesFailure): Int =
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
         FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
         FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
+        FilesFailure.STORAGE -> R.string.remote_files_editor_storage_failure
         FilesFailure.FAILED -> R.string.remote_files_failure_failed
     }
 

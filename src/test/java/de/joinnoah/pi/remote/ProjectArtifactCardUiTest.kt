@@ -74,7 +74,7 @@ class ProjectArtifactCardUiTest {
         failure(ProjectArtifactResult.NotAnArtifact, "This file is not an HTML page that can be shown.")
 
     @Test fun anOlderHostAsksForAnUpdate() =
-        failure(ProjectArtifactResult.UnsupportedHost, "Update pi Remote on your Mac to see HTML pages.")
+        failure(ProjectArtifactResult.UnsupportedHost, "Update pi Remote on your computer to see HTML pages.")
 
     @Test fun aConnectionFailureCanBeRetried() {
         var attempts = 0

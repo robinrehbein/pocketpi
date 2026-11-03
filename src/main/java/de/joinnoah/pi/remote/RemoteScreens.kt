@@ -81,6 +81,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -244,6 +245,7 @@ internal fun RemoteScreen(
     pushDecided: Boolean = false,
     /** Records a denial of the notification permission as the user's answer, so no card offers it again. */
     onNotificationDenied: () -> Unit = {},
+    onOpenEditorRecovery: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     // The first list the user came for is on screen: the time to full display that startup
@@ -368,6 +370,9 @@ internal fun RemoteScreen(
         sessionActivityLine(state, presentation.items, chatKey?.selection())
     }
     val chatModel = model as? ChatViewModel
+    val commitReview = chatModel?.commitReview?.state?.collectAsStateWithLifecycle()?.value
+    val pushReview = chatModel?.pushReview?.state?.collectAsStateWithLifecycle()?.value
+    val pullRequestReview = chatModel?.pullRequestReview?.state?.collectAsStateWithLifecycle()?.value
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
     // this destination's chat from the start, so text typed before a load or a navigation lands
@@ -742,6 +747,45 @@ internal fun RemoteScreen(
     val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    val browserOpen = state.browser?.sessionId == state.selection.sessionId && state.browser != null
+    var previewShown by rememberSaveable(key) { mutableStateOf(false) }
+    var previewInstance by rememberSaveable(key) { mutableStateOf(0) }
+    val previewSavedState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    var retainedPreviewKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val currentPreviewKey = state.previewBrowser?.let {
+        "${state.selection.routeId}:${state.selection.projectId}:${state.selection.sessionId}:${it.previewPort}:$previewInstance"
+    }
+    var previewPortDialog by remember(key) { mutableStateOf(false) }
+    var previewPortText by rememberSaveable(key) { mutableStateOf("") }
+    var previewHasUnsent by rememberSaveable(key) { mutableStateOf(false) }
+    LaunchedEffect(currentPreviewKey) {
+        retainedPreviewKey?.takeIf { it != currentPreviewKey }?.let(previewSavedState::removeState)
+        retainedPreviewKey = currentPreviewKey
+        if (currentPreviewKey == null) previewHasUnsent = false
+    }
+    var previewCloseConfirm by remember(key) { mutableStateOf(false) }
+    var browserHasUnsent by remember(key) { mutableStateOf(false) }
+    var browserCloseConfirm by remember(key) { mutableStateOf(false) }
+    var terminalOpen by remember(key) { mutableStateOf(false) }
+    var terminalHasUnsent by remember(key) { mutableStateOf(false) }
+    var terminalCloseConfirm by remember(key) { mutableStateOf(false) }
+    var terminalLeave by remember(key) { mutableStateOf<Pair<() -> Unit, () -> Unit>?>(null) }
+    val unsentNow by rememberUpdatedState(terminalHasUnsent || browserHasUnsent || previewHasUnsent)
+    val terminalSelectionNow by rememberUpdatedState(state.selection)
+    DisposableEffect(navigator, key) {
+        val guard: (() -> Unit, () -> Unit) -> Boolean = { action, cancel ->
+            if (key is RemoteNavKey.Chat && terminalSelectionNow == key.selection() && unsentNow) {
+                terminalLeave?.second?.invoke()
+                terminalLeave = action to cancel
+                true
+            } else false
+        }
+        if (key is RemoteNavKey.Chat) navigator.registerTerminalGuard(key, guard)
+        onDispose {
+            if (key is RemoteNavKey.Chat) navigator.unregisterTerminalGuard(key, guard)
+            terminalLeave?.second?.invoke()
+        }
+    }
     // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
     var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
     var insightSheet by remember(key, state.selection.sessionId) { mutableStateOf<InsightSheetKind?>(null) }
@@ -791,6 +835,10 @@ internal fun RemoteScreen(
         val chat = chatModel ?: return
         showTab(tab)
         when (tab) {
+            InspectorTab.BROWSER -> { if (!browserOpen) chat.openBrowser() else { chat.setBrowserVisible(true); chat.refreshBrowser() } }
+            InspectorTab.TERMINAL -> {
+                if (!terminalOpen && chat.attachTerminal(80, 24)) terminalOpen = true
+            }
             InspectorTab.CHANGES -> if (changesOpen == null) chat.openChanges(exclusive = !sideCapable)
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
             InspectorTab.JOBS -> if (!jobsOpen) chat.openJobs()
@@ -802,8 +850,15 @@ internal fun RemoteScreen(
     }
     /** Closes [tab] and what backs it; the tab before it becomes active. */
     fun closeTab(tab: InspectorTab) {
+        if (tab == InspectorTab.BROWSER && browserHasUnsent) { browserCloseConfirm = true; return }
+        if (tab == InspectorTab.TERMINAL && terminalHasUnsent) {
+            terminalCloseConfirm = true
+            return
+        }
         inspectorTabs = inspectorTabs.close(tab)
         when (tab) {
+            InspectorTab.BROWSER -> { browserHasUnsent = false; chatModel?.closeBrowser() }
+            InspectorTab.TERMINAL -> { terminalOpen = false; chatModel?.detachTerminal() }
             InspectorTab.CHANGES -> chatModel?.closeChanges()
             InspectorTab.FILES -> chatModel?.closeFiles()
             InspectorTab.JOBS -> chatModel?.closeJobs()
@@ -1301,6 +1356,9 @@ internal fun RemoteScreen(
         when (action) {
             ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
             ChatAction.FILES -> openInspector(InspectorTab.FILES)
+            ChatAction.BROWSER -> openInspector(InspectorTab.BROWSER)
+            ChatAction.EMULATOR -> { if (state.emulator == null) chatModel?.openEmulator() }
+            ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
@@ -1460,6 +1518,9 @@ internal fun RemoteScreen(
                     buildSet {
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
+                        if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
+                        if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
+                        if (state.emulator != null || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -1490,6 +1551,9 @@ internal fun RemoteScreen(
                         ) {
                             Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
                         }
+                    }
+                    if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
+                        Text(stringResource(R.string.remote_terminal_title))
                     }
                     ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = { currentRunAction(it) })
                 }
@@ -1638,16 +1702,82 @@ internal fun RemoteScreen(
     val changesContent: (@Composable () -> Unit)? =
         changesOpen?.let { changes ->
             {
-                ChangesPane(
-                    changes,
-                    remember(chatModel, composerDraft) {
-                        changesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
-                    },
-                    Modifier.fillMaxSize(),
-                    projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
-                    offline = !state.connected,
-                    pullRequest = state.pullRequest,
-                )
+                val controller = checkNotNull(chatModel).commitReview
+                val pushController = chatModel.pushReview
+                val pullRequestController = chatModel.pullRequestReview
+                if (pullRequestReview?.open == true) {
+                    GitPullRequestReviewPane(
+                        pullRequestReview,
+                        remember(pullRequestController) {
+                            GitPullRequestReviewActions(
+                                prepare = pullRequestController::prepare, close = pullRequestController::close,
+                                setBase = pullRequestController::setBase, setTitle = pullRequestController::setTitle,
+                                setBody = pullRequestController::setBody, setDraft = pullRequestController::setDraft,
+                                review = pullRequestController::review, backToEdit = pullRequestController::backToEdit,
+                                confirm = pullRequestController::confirm, checkRemote = pullRequestController::checkRemote,
+                                acknowledgeUnknown = pullRequestController::acknowledgeUnknown,
+                            )
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                } else if (pushReview?.open == true) {
+                    GitPushReviewPane(
+                        pushReview,
+                        remember(pushController) {
+                            GitPushReviewActions(
+                                prepare = pushController::prepare,
+                                close = pushController::close,
+                                review = pushController::review,
+                                backToEdit = pushController::backToEdit,
+                                confirm = pushController::confirm,
+                                checkRemote = pushController::checkRemote,
+                                acknowledgeUnknown = pushController::acknowledgeUnknown,
+                            )
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                } else if (commitReview?.open == true) {
+                    GitCommitReviewPane(
+                        commitReview,
+                        remember(controller) {
+                            GitCommitReviewActions(
+                                close = controller::close,
+                                toggle = controller::toggle,
+                                setMessage = controller::setMessage,
+                                review = controller::review,
+                                backToEdit = controller::backToEdit,
+                                confirm = controller::confirm,
+                                acknowledgeUnknown = controller::acknowledgeUnknown,
+                            )
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                } else {
+                    ChangesPane(
+                        changes,
+                        remember(chatModel, composerDraft) {
+                            changesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
+                        },
+                        Modifier.fillMaxSize(),
+                        projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
+                        offline = !state.connected,
+                        pullRequest = state.pullRequest,
+                        canCommitEntry = state.connected &&
+                            GIT_WRITE_CAPABILITY in state.capabilities &&
+                            GIT_WRITE_CAPABILITY !in state.unavailableCapabilities,
+                        onPrepareCommit = chatModel::openCommitReview,
+                        canPushEntry = (state.connected && state.capabilitiesKnown &&
+                            GIT_PUSH_CAPABILITY in state.capabilities &&
+                            GIT_PUSH_CAPABILITY !in state.unavailableCapabilities) || pushReview?.pending != null,
+                        pushPending = pushReview?.pending != null,
+                        onPreparePush = chatModel::openPushReview,
+                        canPullRequestEntry = (state.connected && state.capabilitiesKnown &&
+                            SESSION_GIT_PULL_REQUEST_CAPABILITY in state.capabilities &&
+                            SESSION_GIT_PULL_REQUEST_CAPABILITY !in state.unavailableCapabilities) || pullRequestReview?.pending != null,
+                        pullRequestPending = pullRequestReview?.pending != null,
+                        onPreparePullRequest = chatModel::openPullRequestReview,
+                    )
+                }
             }
         }
     val filesContent: (@Composable () -> Unit)? =
@@ -1661,6 +1791,7 @@ internal fun RemoteScreen(
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                     canEdit = canEditFile(state),
+                    canSearch = FILES_SEARCH_CAPABILITY in state.capabilities && FILES_SEARCH_CAPABILITY !in state.unavailableCapabilities,
                 )
             }
         }
@@ -1766,8 +1897,35 @@ internal fun RemoteScreen(
         if (touchedSheet && chatKey != null && sideCapable) {
             { TouchedFilesPane(touched, onOpen = ::jumpTo, onClose = { closeTab(InspectorTab.TOUCHED) }) }
         } else null
+    // One terminal instance moves between inspector, hidden keeper and phone overlay without
+    // disposing its connection or losing buffered input during layout changes.
+    val movableTerminal = remember(key) {
+        movableContentOf<TerminalView?, ChatViewModel, () -> Unit, (Boolean) -> Unit> { terminal, model, close, unsent ->
+            TerminalPane(terminal, model, close, unsent)
+        }
+    }
+    val terminalContent: (@Composable () -> Unit)? =
+        if (terminalOpen && chatModel != null) ({
+            movableTerminal(state.terminal, chatModel, { closeTab(InspectorTab.TERMINAL) }, { terminalHasUnsent = it })
+        }) else null
+    val movableBrowser = remember(key) {
+        movableContentOf<BrowserView?, ChatViewModel, () -> Unit, (Boolean) -> Unit> { browser, model, close, unsent ->
+            val actions = remember(model) { BrowserPaneActions(
+                open = model::openBrowser, acquire = model::acquireBrowser, refresh = model::refreshBrowser,
+                newTab = model::newBrowserTab, navigate = model::navigateBrowser, selectTab = model::selectBrowserTab,
+                closeTab = model::closeBrowserTab, handoff = model::handoffBrowser, resize = model::resizeBrowser,
+                input = model::sendBrowserInput, visible = model::setBrowserVisible,
+            ) }
+            BrowserPane(browser, actions, close, unsent)
+        }
+    }
+    val browserContent: (@Composable () -> Unit)? = if (browserOpen && chatModel != null) ({
+        movableBrowser(state.browser, chatModel, { closeTab(InspectorTab.BROWSER) }, { browserHasUnsent = it })
+    }) else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
+            InspectorTab.BROWSER -> browserContent
+            InspectorTab.TERMINAL -> terminalContent
             InspectorTab.CHANGES -> changesContent
             InspectorTab.FILES -> filesContent
             InspectorTab.JOBS -> jobsContent
@@ -1781,6 +1939,8 @@ internal fun RemoteScreen(
     // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
     val availableTabs =
         buildList {
+            if (browserContent != null) add(InspectorTab.BROWSER)
+            if (terminalContent != null) add(InspectorTab.TERMINAL)
             if (changesContent != null) add(InspectorTab.CHANGES)
             if (filesContent != null) add(InspectorTab.FILES)
             if (jobsContent != null) add(InspectorTab.JOBS)
@@ -1872,7 +2032,7 @@ internal fun RemoteScreen(
     // does an expanded inspector that leaves the chat only a strip.
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
-            (jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
+            (browserOpen || terminalOpen || jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
     // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
     val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
@@ -2833,6 +2993,11 @@ internal fun RemoteScreen(
                         // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
                         is RemoteNavKey.Activity -> Unit
                         RemoteNavKey.Hosts -> {
+                            item(key = "editor_recovery") {
+                                TextButton(onClick = onOpenEditorRecovery, modifier = Modifier.testTag("openEditorRecovery")) {
+                                    Text(stringResource(R.string.editor_recovery_open))
+                                }
+                            }
                             // While the Mac asks its user, the wait leads the page, above any Macs.
                             state.pairingDeadline?.let { deadline ->
                                 item(key = "pairing_wait") {
@@ -3068,7 +3233,7 @@ internal fun RemoteScreen(
                             else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                                 item { Text(stringResource(R.string.remote_session_search_empty)) }
                             items(listedSessions, key = SessionListItem::id) { session ->
-                                Box(Modifier.itemMotion(this)) {
+                                Box(Modifier.itemMotion(this).testTag("sessionRow-${session.id}")) {
                                     SessionListRow(
                                         item = session,
                                         selected = session.id == listPane?.selectedSessionId,
@@ -3578,6 +3743,9 @@ internal fun RemoteScreen(
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
+                        presenceOwner = model,
+                        presenceSelection = chatKey?.selection()?.takeUnless { composerCovered },
+                        acquirePresence = model::acquireNativeEditorPresence,
                         // Typed text goes through `composer`, which pushes it to model::draft.
                         draft = composer,
                         onSend = { if (!runShellCommand() && !runLocalCommand()) model.prompt() },
@@ -3594,6 +3762,11 @@ internal fun RemoteScreen(
                                 abortTarget = AbortRunTarget(sessionId, questionIds)
                         },
                         onAnswer = model::answer,
+                        onLoadQuestionDetails = model::loadQuestionDetails,
+                        onLoadPagedEditor = model::loadPagedEditor,
+                        onEditPagedEditor = model::editPagedEditor,
+                        onSubmitPagedEditor = model::submitPagedEditor,
+                        onRetryPagedEditorStorage = model::retryPagedEditorStorage,
                         suggestions = {
                             val typed = composer.text
                             SessionControls(
@@ -3699,14 +3872,10 @@ internal fun RemoteScreen(
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
-            // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
-            // One call each, so a pane keeps its state while another comes or goes. The panes draw
-            // on the page background, which also fills the gaps of their blurred lists.
-            val paneSurface = MaterialTheme.colorScheme.background
-            if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
-            if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
-            if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
-            if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
+            PaneOverlays(
+                panesBeside, inspectorShown, tabs.active == InspectorTab.BROWSER,
+                changesContent, filesContent, jobsContent, toolContent, terminalContent, browserContent,
+            )
             }
             }
             if (dropHovered) DropScrim()
@@ -3715,6 +3884,74 @@ internal fun RemoteScreen(
     }
     }
     }
+    if (previewPortDialog) AlertDialog(
+        onDismissRequest = { previewPortDialog = false },
+        title = { Text(stringResource(R.string.preview_title)) },
+        text = { OutlinedTextField(previewPortText, { previewPortText = it }, Modifier.testTag("previewPortField"), label = { Text(stringResource(R.string.preview_port)) }, singleLine = true) },
+        confirmButton = { TextButton(onClick = {
+            val port = previewPortText.toIntOrNull()
+            if (port != null && previewPortText.all { it in '0'..'9' } && port in 1..65535 && chatModel?.openPreview(port) == true) { previewPortDialog = false; previewInstance++; previewShown = true }
+        }, Modifier.testTag("previewOpen"), enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
+        dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
+    val currentEmulator = state.emulator
+    if (currentEmulator != null && chatModel != null && currentEmulator.sessionId == state.selection.sessionId) androidx.compose.ui.window.Dialog(onDismissRequest = { chatModel.closeEmulator() }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            val actions = remember(chatModel) { EmulatorPaneActions(chatModel::selectEmulatorProfile, chatModel::acquireEmulator, chatModel::handoffEmulator, chatModel::stopEmulator, chatModel::sendEmulatorInput, chatModel::refreshEmulator, chatModel::setEmulatorVisible) }
+            EmulatorPane(currentEmulator, actions, chatModel::closeEmulator)
+        }
+    }
+    if (previewShown && state.previewBrowser != null && chatModel != null) androidx.compose.ui.window.Dialog(onDismissRequest = {
+        if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
+    }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            val actions = remember(chatModel) { BrowserPaneActions(
+                acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
+                newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
+                closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
+                input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible,
+            ) }
+            previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
+                BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
+            }
+        }
+    }
+    if (previewCloseConfirm) AlertDialog(
+        onDismissRequest = { previewCloseConfirm = false },
+        title = { Text(stringResource(R.string.browser_discard_title)) },
+        text = { Text(stringResource(R.string.browser_discard_body)) },
+        confirmButton = { TextButton(onClick = { previewCloseConfirm = false; previewHasUnsent = false; chatModel?.closePreview() }) { Text(stringResource(R.string.browser_close)) } },
+        dismissButton = { TextButton(onClick = { previewCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
+    if (terminalLeave != null) AlertDialog(
+        onDismissRequest = { terminalLeave?.second?.invoke(); terminalLeave = null },
+        title = { Text(stringResource(if (browserHasUnsent || previewHasUnsent) R.string.browser_discard_title else R.string.remote_terminal_discard_title)) },
+        text = { Text(stringResource(if (browserHasUnsent || previewHasUnsent) R.string.browser_discard_body else R.string.remote_terminal_discard_body)) },
+        confirmButton = { TextButton(onClick = {
+            val action = terminalLeave
+            terminalLeave = null
+            action?.first?.invoke()
+        }) { Text(stringResource(R.string.remote_terminal_close)) } },
+        dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
+    if (browserCloseConfirm) AlertDialog(
+        onDismissRequest = { browserCloseConfirm = false },
+        title = { Text(stringResource(R.string.browser_discard_title)) },
+        text = { Text(stringResource(R.string.browser_discard_body)) },
+        confirmButton = { TextButton(onClick = { browserCloseConfirm = false; browserHasUnsent = false; closeTab(InspectorTab.BROWSER) }) { Text(stringResource(R.string.browser_close)) } },
+        dismissButton = { TextButton(onClick = { browserCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
+    if (terminalCloseConfirm) AlertDialog(
+        onDismissRequest = { terminalCloseConfirm = false },
+        title = { Text(stringResource(R.string.remote_terminal_discard_title)) },
+        text = { Text(stringResource(R.string.remote_terminal_discard_body)) },
+        confirmButton = { TextButton(onClick = {
+            terminalCloseConfirm = false
+            terminalHasUnsent = false
+            closeTab(InspectorTab.TERMINAL)
+        }) { Text(stringResource(R.string.remote_terminal_close)) } },
+        dismissButton = { TextButton(onClick = { terminalCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
     val hideOfflineLabel = stringResource(R.string.remote_hide_offline_sessions)
     if (tuiInfoOpen && key is RemoteNavKey.Chat && state.session?.optionalText("origin") == "tui")
         AlertDialog(
@@ -4669,6 +4906,49 @@ internal class HeaderHideConnection(
         if (current == 0 to 0) setHidden(false)
         else if (source == NestedScrollSource.UserInput && active()) setHidden(headerHiddenAfterScroll(hidden(), before, current))
         return Offset.Zero
+    }
+}
+
+/**
+ * The panes laid over the chat on a narrow screen, and the hidden ones still measured beside it.
+ * Kept out of [RemoteScreen]'s content lambda: R8 miscompiled that lambda once it grew this block
+ * (ART rejected it with a VerifyError at startup in the minified build).
+ */
+@Composable
+private fun PaneOverlays(
+    panesBeside: Boolean,
+    inspectorShown: Boolean,
+    browserActive: Boolean,
+    changesContent: (@Composable () -> Unit)?,
+    filesContent: (@Composable () -> Unit)?,
+    jobsContent: (@Composable () -> Unit)?,
+    toolContent: (@Composable () -> Unit)?,
+    terminalContent: (@Composable () -> Unit)?,
+    browserContent: (@Composable () -> Unit)?,
+) {
+    // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
+    // One call each, so a pane keeps its state while another comes or goes. The panes draw
+    // on the page background, which also fills the gaps of their blurred lists.
+    val paneSurface = MaterialTheme.colorScheme.background
+    if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
+    if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
+    if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
+    if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
+    if (!panesBeside && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
+    if (!panesBeside && browserActive && browserContent != null) ProvideGlass(paneSurface) { browserContent() }
+    if (browserContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && !browserActive))) {
+        Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { }
+        }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { browserContent() } }
+    }
+    // The inspector may be hidden while its tab remains open. Measure the terminal at
+    // a real size without placing it, so it receives neither input nor semantics.
+    if (panesBeside && !inspectorShown && terminalContent != null) {
+        Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { }
+        }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { terminalContent() } }
     }
 }
 

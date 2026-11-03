@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_paged_editor_storage_pending">Checking saved editor state…</string>
+    <string name="remote_paged_editor_storage_failed">Saved editor state could not be read or updated. Sending is disabled. Keep the editor open to retain the current text.</string>
+    <string name="remote_paged_editor_storage_retry">Check saved state again</string>
+</resources>

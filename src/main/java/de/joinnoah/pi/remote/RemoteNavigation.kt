@@ -163,6 +163,39 @@ internal class RemoteNavigator(
         private set
     private var consumePendingNotification: (() -> Unit)? = null
 
+    /** The visible terminal may hold user input that disappears with its screen. */
+    private val terminalGuards = mutableMapOf<RemoteNavKey.Chat, (() -> Unit, () -> Unit) -> Boolean>()
+
+    fun registerTerminalGuard(key: RemoteNavKey.Chat, guard: (() -> Unit, () -> Unit) -> Boolean) {
+        terminalGuards[key] = guard
+    }
+
+    fun unregisterTerminalGuard(key: RemoteNavKey.Chat, guard: (() -> Unit, () -> Unit) -> Boolean) {
+        if (terminalGuards[key] === guard) terminalGuards.remove(key)
+    }
+
+    private fun leavingTerminal(onDropped: ((Boolean) -> Unit)? = null, action: () -> Unit) {
+        val before = stack.toList()
+        val selection = repository.state.value.selection
+        var consumed = false
+        val guarded = {
+            if (!consumed) {
+                consumed = true
+                if (stack.toList() == before && repository.state.value.selection == selection) action()
+                else onDropped?.invoke(false)
+            }
+        }
+        val selectionKey = selection.keys().lastOrNull() as? RemoteNavKey.Chat
+        val guard = selectionKey?.let { terminalGuards[it] }
+        val cancel = {
+            if (!consumed) {
+                consumed = true
+                onDropped?.invoke(true)
+            }
+        }
+        if (guard?.invoke(guarded, cancel) != true) guarded()
+    }
+
     private fun invalidate(): Long {
         // Another navigation began before the created chat's screen took it.
         freshSession = null
@@ -428,6 +461,7 @@ internal class RemoteNavigator(
 
     /** Where keyboard focus is relative to the code editor; the editor reports it. */
     val editorFocus = EditorFocus()
+    val terminalInputFocus = TerminalInputFocus()
 
     /**
      * Keyboard focus is in the session's code editor, whose keys then win over the layout's
@@ -466,9 +500,12 @@ internal class RemoteNavigator(
         val state = repository.state.value
         val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
         val leaves = target.routeId != state.selection.routeId || target.sessionId != state.selection.sessionId
-        if (editor != null && leaves && editor.changed)
-            hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action, onDropped))
-        else action()
+        val proceed = {
+            if (editor != null && leaves && editor.changed)
+                hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action, onDropped))
+            else action()
+        }
+        leavingTerminal(onDropped, proceed)
     }
 
     /**
@@ -550,12 +587,14 @@ internal class RemoteNavigator(
             repository.browseFolder(top.routeId, parentFolderPath(folders.path))
             return
         }
-        stack.removeAt(stack.lastIndex)
-        activate(stack.last() as RemoteNavKey, ActivationMode.RESTORE)
+        leavingTerminal {
+            stack.removeAt(stack.lastIndex)
+            activate(stack.last() as RemoteNavKey, ActivationMode.RESTORE)
+        }
     }
 
     fun settings() {
-        if (stack.lastOrNull() != RemoteNavKey.Settings) stack.add(RemoteNavKey.Settings)
+        if (stack.lastOrNull() != RemoteNavKey.Settings) leavingTerminal { stack.add(RemoteNavKey.Settings) }
     }
 
     /**
@@ -666,7 +705,9 @@ internal class RemoteNavigator(
     }
 
     /** Opens the folder browser at the browse root, on top of the host's open destination. */
-    fun openFolders(routeId: String) {
+    fun openFolders(routeId: String) = leavingTerminal { openFoldersNow(routeId) }
+
+    private fun openFoldersNow(routeId: String) {
         if (!pushOverHost(routeId, RemoteNavKey.FolderBrowser(routeId))) return
         repository.cancelFolderTrust()
         repository.dismissFolderNotice()
@@ -687,14 +728,18 @@ internal class RemoteNavigator(
     }
 
     /** Opens the providers of [routeId] on top of the host's open destination. */
-    fun openProviders(routeId: String) {
+    fun openProviders(routeId: String) = leavingTerminal { openProvidersNow(routeId) }
+
+    private fun openProvidersNow(routeId: String) {
         if (!pushOverHost(routeId, RemoteNavKey.Providers(routeId))) return
         repository.dismissProviderNotice()
         repository.browseProviders(routeId)
     }
 
     /** Opens the tickets of [routeId] on top of the host's open destination. */
-    fun openTickets(routeId: String) {
+    fun openTickets(routeId: String) = leavingTerminal { openTicketsNow(routeId) }
+
+    private fun openTicketsNow(routeId: String) {
         if (!canUseTickets(repository.state.value)) return
         if (!pushOverHost(routeId, RemoteNavKey.Tickets(routeId))) return
         repository.refreshTickets(false)
@@ -706,7 +751,9 @@ internal class RemoteNavigator(
      * beneath. A ticket already on top is replaced, not stacked. Nothing happens without the
      * capability, for another host or with Settings on top.
      */
-    fun openTicket(routeId: String, projectId: String, ref: String) {
+    fun openTicket(routeId: String, projectId: String, ref: String) = leavingTerminal { openTicketNow(routeId, projectId, ref) }
+
+    private fun openTicketNow(routeId: String, projectId: String, ref: String) {
         if (!canUseTickets(repository.state.value)) return
         if (stack.lastOrNull() == RemoteNavKey.Settings) return
         val top = topKey() ?: return
@@ -723,7 +770,9 @@ internal class RemoteNavigator(
      * [open], which replaces the board. Beside a chat the board takes the list column, so a
      * collapsed list of [twoPane] comes back to show it.
      */
-    fun openActivity(routeId: String, twoPane: TwoPaneState? = null) {
+    fun openActivity(routeId: String, twoPane: TwoPaneState? = null) = leavingTerminal { openActivityNow(routeId, twoPane) }
+
+    private fun openActivityNow(routeId: String, twoPane: TwoPaneState?) {
         // Settings stays on top of whatever is beneath it, like for the other pages.
         if (stack.lastOrNull() == RemoteNavKey.Settings) return
         val top = topKey()
@@ -791,6 +840,20 @@ internal class RemoteNavigator(
         jobs: Boolean = false,
         jobId: String? = null,
         consumed: () -> Unit = {},
+    ) {
+        if (routeId.isBlank() || routeId.length > 256 || sessionId.isBlank() || sessionId.length > 256) {
+            consumed()
+            return
+        }
+        leavingTerminal({ consumed() }) { notificationNow(routeId, sessionId, jobs, jobId, consumed) }
+    }
+
+    private fun notificationNow(
+        routeId: String,
+        sessionId: String,
+        jobs: Boolean,
+        jobId: String?,
+        consumed: () -> Unit,
     ) {
         if (
             routeId.isBlank() ||
@@ -1387,6 +1450,7 @@ internal fun RemoteNavigation(
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
             LocalEditorFocus provides navigator.editorFocus,
+            LocalTerminalInputFocus provides navigator.terminalInputFocus,
             LocalShortcutTargets provides targets,
             LocalFocusRingColor provides MaterialTheme.colorScheme.primary,
         ) {
@@ -1446,10 +1510,14 @@ internal fun RemoteNavigation(
  * past here (Android would turn it into Back), and a printable key nothing took goes into the
  * composer. With focus in the code editor its keys are its own; an Esc it leaves comes back.
  */
-private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
+internal fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
     // Beside the activity board the chat keeps its keys, but Esc stays Back and closes the board.
     val chat = chatInView(twoPane)?.let(targets::chat)
     val native = event.nativeKeyEvent
+    if (terminalInputFocus.focused) {
+        val region = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
+        if (region != Shortcut.NEXT_REGION && region != Shortcut.PREVIOUS_REGION) return false
+    }
     if (event.key == Key.Escape) {
         val escaping = topChat?.let(targets::chat)
         if (escaping == null || (editing && !unhandled)) return false
@@ -1512,9 +1580,11 @@ private fun RemoteNavDisplay(
                     // Each page blurs only its own lists, also beside or behind another one.
                     ProvideGlass {
                         val model = viewModel { HostsViewModel(repository) }
+                        var recoveryOpen by rememberSaveable { mutableStateOf(false) }
                         CenteredPage {
-                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied, onOpenEditorRecovery = { recoveryOpen = true })
                         }
+                        if (recoveryOpen) EditorRecoveryDialog(repository::loadEditorRecovery) { recoveryOpen = false }
                     }
                 }
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->

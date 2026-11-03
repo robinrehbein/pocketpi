@@ -8,6 +8,9 @@ internal const val STEER_CAPABILITY = "session.steer.v1"
 internal const val PROJECT_UNSHARE_CAPABILITY = "project.unshare.v1"
 internal const val TOOL_OUTPUT_CAPABILITY = "session.tool_output.v1"
 internal const val SESSION_FORK_CAPABILITY = "session.fork.v1"
+internal const val GIT_WRITE_CAPABILITY = "session.git.write.v1"
+internal const val GIT_PUSH_CAPABILITY = "session.git.push.v1"
+internal const val GIT_PUSH_STATUS_CAPABILITY = "session.git.push.status.v1"
 
 /** How `session.fork` continues: resend the message, or put it back into the composer. */
 enum class ForkMode(val wire: String) {
@@ -106,6 +109,13 @@ data class PendingSend(
 )
 
 data class RemoteState(
+    /** Changes when editor authority or a question incarnation changes, including identical replacements. */
+    val editorQuestionGeneration: Long = 0,
+    /** Changes whenever commit review authority or its selected target changes. */
+    val gitReviewGeneration: Long = 0,
+    val browser: BrowserView? = null,
+    val emulator: EmulatorView? = null,
+    val terminal: TerminalView? = null,
     val hosts: List<PairedHost> = emptyList(),
     /**
      * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
@@ -199,6 +209,12 @@ data class RemoteState(
      */
     val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
     val answering: Set<String> = emptySet(),
+    internal val questionDetails: Map<String, QuestionDetailsView> = emptyMap(),
+    internal val pagedEditors: Map<String, PagedEditorView> = emptyMap(),
+    internal val pagedQuarantines: Set<String> = emptySet(),
+    internal val pagedStoragePending: Boolean = false,
+    internal val pagedStorageFailed: Boolean = false,
+    internal val pagedStorageRetryAvailable: Boolean = false,
     /** Questions the user cannot answer from here right now, by question ID. */
     val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
@@ -239,6 +255,7 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
     /** Plane tickets of the shown Mac (`tickets.v1`); empty without the capability. */
     val tickets: TicketsState = TicketsState(),
+    val previewBrowser: BrowserView? = null,
 )
 
 /** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
@@ -260,7 +277,46 @@ internal const val PUSH_WAKE_WAIT_MILLIS = 3_000L
 data class Picked(val uri: String, val photo: Boolean)
 
 interface RemoteRepository {
+    suspend fun loadEditorRecovery(): EditorRecoveryLoad = EditorRecoveryLoad.Unavailable
     val state: StateFlow<RemoteState>
+    fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit = {}
+    fun canOpenPreview(): Boolean = false
+    fun openPreview(port: Int): Boolean = false
+    fun closePreview() {}
+    fun acquirePreview(): Boolean = false
+    fun handoffPreview(ownerId: String): Boolean = false
+    fun newPreviewTab(url: String): Boolean = false
+    fun navigatePreview(url: String): Boolean = false
+    fun selectPreviewTab(tabId: String) {}
+    fun closePreviewTab(tabId: String): Boolean = false
+    fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
+    fun sendPreviewInput(input: BrowserInput): Boolean = false
+    fun refreshPreview(): Boolean = false
+    fun setPreviewVisible(visible: Boolean) {}
+
+    fun canOpenEmulator(): Boolean = false
+    fun openEmulator(): Boolean = false
+    fun selectEmulatorProfile(id: String): Boolean = false
+    fun closeEmulator() {}
+    fun acquireEmulator(): Boolean = false
+    fun handoffEmulator(id: String): Boolean = false
+    fun stopEmulator(): Boolean = false
+    fun sendEmulatorInput(input: EmulatorInput): Boolean = false
+    fun refreshEmulator(): Boolean = false
+    fun setEmulatorVisible(visible: Boolean) {}
+    fun canOpenBrowser(): Boolean = false
+    fun openBrowser(): Boolean = false
+    fun closeBrowser() {}
+    fun acquireBrowser(): Boolean = false
+    fun handoffBrowser(ownerId: String): Boolean = false
+    fun newBrowserTab(url: String): Boolean = false
+    fun navigateBrowser(url: String): Boolean = false
+    fun selectBrowserTab(tabId: String) {}
+    fun closeBrowserTab(tabId: String): Boolean = false
+    fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
+    fun sendBrowserInput(input: BrowserInput): Boolean = false
+    fun refreshBrowser(): Boolean = false
+    fun setBrowserVisible(visible: Boolean) {}
 
     suspend fun activate(
         selection: RemoteSelection,
@@ -346,6 +402,13 @@ interface RemoteRepository {
     fun remove(routeId: String)
 
     fun disconnect()
+
+    fun canAttachTerminal(): Boolean = false
+    fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long? = null): Boolean = false
+    fun detachTerminal() {}
+    fun takeTerminalOutput(): List<String> = emptyList()
+    fun sendTerminalInput(input: TerminalInput): Boolean = false
+    fun resizeTerminal(cols: Int, rows: Int): Boolean = false
 
     fun setForeground(foreground: Boolean) {}
 
@@ -491,7 +554,46 @@ interface RemoteRepository {
     /** Dismisses a finished shell command; a running one stays. */
     fun closeBash() {}
 
+    fun loadQuestionDetails(questionId: String) {}
+    fun loadPagedEditor(question: JsonObject) {}
+    fun editPagedEditor(question: JsonObject, draft: String) {}
+    fun submitPagedEditor(question: JsonObject, draft: String) {}
+    fun retryPagedEditorStorage() {}
     fun answer(questionId: String, answer: JsonObject)
+
+    /**
+     * Commits explicitly selected paths from a confirmed HEAD snapshot. The caller owns the
+     * request ID and must retain the confirmed inputs for any intentional same-ID recovery.
+     * Unknown means the request may have been applied; it must not be automatically retried.
+     * If the coroutine is cancelled after [onDispatch], the outcome is likewise unknown.
+     */
+    suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Commit =
+        throw UnsupportedOperationException("Git writes are unavailable")
+
+    /** Fresh token-bound push preparation, including the exact HEAD to confirm. */
+    suspend fun gitPullRequestPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Pull request is unavailable")
+    suspend fun gitPullRequest(sessionId: String, writeId: String, base: String, title: String, body: String, draft: Boolean, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.PullRequest = throw UnsupportedOperationException("Pull request is unavailable")
+    suspend fun gitPullRequestStatus(sessionId: String, writeId: String): GitWriteResult.PullRequestStatus = throw UnsupportedOperationException("Pull request status is unavailable")
+    suspend fun gitPullRequestDraft(selection: RemoteSelection): GitPullRequestDraft? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPullRequestDraft(selection: RemoteSelection, draft: GitPullRequestDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
+    suspend fun gitPullRequestIntent(selection: RemoteSelection): GitPullRequestIntent? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPullRequestIntent(selection: RemoteSelection, intent: GitPullRequestIntent?) { throw UnsupportedOperationException("Git drafts are unavailable") }
+    suspend fun gitPushPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Git push is unavailable")
+    /** No automatic retry; cancellation after onDispatch leaves the outcome unknown. */
+    suspend fun gitPush(sessionId: String, writeId: String, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Push = throw UnsupportedOperationException("Git push is unavailable")
+    /** Explicit remote observation; this reports current state, not which attempt caused it. */
+    suspend fun gitPushStatus(sessionId: String, writeId: String): GitWriteResult.PushStatus = throw UnsupportedOperationException("Git push status is unavailable")
+
+    /** Reads an own-checkout HEAD snapshot specifically authorized for commit review. */
+    suspend fun gitCommitStatus(sessionId: String): GitStatus = throw UnsupportedOperationException("Git writes are unavailable")
+
+    /** Private per-session commit draft and outstanding intent, stored before dispatch. */
+    /** Durable push intent in the same private per-route/session draft journal. */
+    suspend fun gitPushIntent(selection: RemoteSelection): GitPushIntent? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPushIntent(selection: RemoteSelection, intent: GitPushIntent?) { throw UnsupportedOperationException("Git drafts are unavailable") }
+
+    suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitCommitDraft(selection: RemoteSelection, draft: GitCommitDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
 
     /** `session.git.status`; only with [GIT_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus =
@@ -585,6 +687,11 @@ interface RemoteRepository {
     /** Clears the failure or unknown outcome of the last ticket write after the user saw it. */
     fun dismissTicketNotice() {}
 
+    suspend fun filesSearch(sessionId: String, query: String): FileSearchResult = throw RemoteRequestException.unsupported()
+
+    fun searchFiles(query: String) {}
+    fun openSearchHit(hit: FileSearchHit) {}
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
         throw RemoteRequestException.unsupported()
@@ -659,7 +766,7 @@ interface RemoteRepository {
 
     /**
      * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
-     * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
+     * `session.export.get`, for sessions qualified by the host's export capabilities).
      */
     suspend fun exportSession(sessionId: String): ExportResult =
         ExportResult.Failed(ExportFailure.UNSUPPORTED)
@@ -732,6 +839,10 @@ interface RemoteRepository {
 
     /** Saves the editor's text over the version it was read or last saved as. */
     fun saveFileEditor() {}
+
+    fun restoreFileEditorDraft() {}
+
+    fun discardFileEditorDraft() {}
 
     /** Leaves the editor and drops its text; a save still on its way is ignored. */
     fun discardFileEditor() {}

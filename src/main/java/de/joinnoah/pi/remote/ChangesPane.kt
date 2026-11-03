@@ -144,6 +144,14 @@ internal fun ChangesPane(
     offline: Boolean = false,
     /** The open pull request of the session's branch, when the host reports one. */
     pullRequest: PullRequestStatus? = null,
+    canCommitEntry: Boolean = false,
+    onPrepareCommit: (() -> Unit)? = null,
+    canPushEntry: Boolean = false,
+    pushPending: Boolean = false,
+    onPreparePush: (() -> Unit)? = null,
+    canPullRequestEntry: Boolean = false,
+    pullRequestPending: Boolean = false,
+    onPreparePullRequest: (() -> Unit)? = null,
 ) {
     PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // Review mode belongs to the two-pane layout, which gives the pane the window.
@@ -205,7 +213,7 @@ internal fun ChangesPane(
             onDispose { keyTarget.removeReviewHandler(handler) }
         }
     val headerActions =
-        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null) { prompt -> checked.onPrefill(prompt) }
+        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null, canCommitEntry, onPrepareCommit, canPushEntry, pushPending, onPreparePush, canPullRequestEntry, pullRequestPending, onPreparePullRequest) { prompt -> checked.onPrefill(prompt) }
     var headerHeight by remember { mutableStateOf(64.dp) }
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("changesPane"), color = MaterialTheme.colorScheme.background) {
@@ -343,6 +351,14 @@ private fun changesHeaderActions(
     twoPane: TwoPaneState?,
     reviewing: Boolean,
     prOpen: Boolean,
+    canCommitEntry: Boolean,
+    onPrepareCommit: (() -> Unit)?,
+    canPushEntry: Boolean,
+    pushPending: Boolean,
+    onPreparePush: (() -> Unit)?,
+    canPullRequestEntry: Boolean,
+    pullRequestPending: Boolean,
+    onPreparePullRequest: (() -> Unit)?,
     onPrefill: (String) -> Unit,
 ): List<PaneAction> {
     val context = LocalContext.current
@@ -354,6 +370,12 @@ private fun changesHeaderActions(
     val devBase = state.devBase?.takeIf { it.ref != null } ?: state.status?.devRef?.let(::GitDevBase)
     val repository = state.status?.available == true
     return buildList {
+        if (canCommitEntry && onPrepareCommit != null)
+            add(PaneAction(stringResource(R.string.remote_commit_prepare), Icons.Default.RateReview, "changesCommitPrepare", onClick = onPrepareCommit))
+        if (canPushEntry && onPreparePush != null)
+            add(PaneAction(stringResource(if (pushPending) R.string.remote_push_status_entry else R.string.remote_push_title), Icons.Default.RocketLaunch, "changesPushPrepare", onClick = onPreparePush))
+        if (canPullRequestEntry && onPreparePullRequest != null)
+            add(PaneAction(stringResource(if (pullRequestPending) R.string.pr_status_entry else R.string.pr_heading), Icons.Default.RateReview, "changesPullRequestPrepare", onClick = onPreparePullRequest))
         if (state.file != null)
             add(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "changesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))
         if (twoPane != null)

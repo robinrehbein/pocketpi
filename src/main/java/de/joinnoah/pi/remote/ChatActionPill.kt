@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
@@ -49,6 +50,7 @@ private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
+        ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR -> Icons.Default.Language
         ChatAction.JOBS -> Icons.Outlined.Terminal
         ChatAction.TREE -> Icons.Default.AccountTree
         ChatAction.ARTIFACTS -> Icons.Default.Collections
@@ -76,13 +78,16 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
         ChatAction.HISTORY -> Shortcut.HISTORY
         ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD,
-        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE -> null
+        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR -> null
     }
 
 internal fun ChatAction.label(): Int =
     when (this) {
         ChatAction.CHANGES -> R.string.remote_changes_open
         ChatAction.FILES -> R.string.remote_files_open
+        ChatAction.BROWSER -> R.string.browser_title
+        ChatAction.PREVIEW -> R.string.preview_title
+        ChatAction.EMULATOR -> R.string.emulator_title
         ChatAction.JOBS -> R.string.remote_jobs_title
         ChatAction.TREE -> R.string.remote_tree_title
         ChatAction.ARTIFACTS -> R.string.remote_artifacts_title
@@ -231,6 +236,8 @@ internal fun filesActions(
 ) =
     FilesActions(
         onClose = model::closeFiles,
+        onSearch = model::searchFiles,
+        onOpenSearchHit = model::openSearchHit,
         onOpenDir = model::openFilesDir,
         onOpenFile = model::openFilesFile,
         onLoadMore = model::loadMoreFiles,
@@ -266,6 +273,8 @@ internal fun filesActions(
         onStartEditing = model::startFileEditing,
         onEditorText = model::updateFileEditorText,
         onSaveEditor = model::saveFileEditor,
+        onRestoreEditorDraft = model::restoreFileEditorDraft,
+        onDiscardEditorDraft = model::discardFileEditorDraft,
         onDiscardEditor = model::discardFileEditor,
         onReloadAfterConflict = model::reloadFileAfterConflict,
         onEditorPrompt = model::fileEditorPrompt,

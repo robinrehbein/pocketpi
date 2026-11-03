@@ -158,8 +158,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
     private fun replier(app: Context) =
         CompletionReplier(
             pairedHost = { pairedHost(app, it) },
-            live = { routeId, block ->
-                (app as? RemoteApplication)?.repository?.withHealthyConnection(routeId, block = block)
+            live = { routeId, onSent, block ->
+                (app as? RemoteApplication)?.repository?.withHealthyConnection(routeId, onSent, block)
             },
             background = { host, block -> BackgroundRemoteClient().use(host, block) },
         )
@@ -227,6 +227,7 @@ internal class NotificationAnswerer(
     },
 ) {
     suspend fun answer(routeId: String, sessionId: String, questionId: String, answer: JsonObject): AnswerOutcome {
+        if (answer.optionalText("kind") == "editor") return AnswerOutcome.FAILED
         var error: Throwable? = null
         val finished =
             withTimeoutOrNull(timeoutMillis) {

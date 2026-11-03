@@ -6,12 +6,12 @@
     <string name="remote_fork_stop_first">Erst pi anhalten</string>
     <string name="remote_fork_retry_title">Abzweigen und erneut senden?</string>
     <string name="remote_fork_edit_title">Abzweigen und bearbeiten?</string>
-    <string name="remote_fork_retry_message">Vor dieser Nachricht zweigt eine neue Sitzung ab und sendet sie erneut. Diese Sitzung bleibt unverändert. Dateien auf dem Mac werden nicht zurückgesetzt.</string>
-    <string name="remote_fork_edit_message">Vor dieser Nachricht zweigt eine neue Sitzung ab, die Nachricht steht im Eingabefeld. Diese Sitzung bleibt unverändert. Dateien auf dem Mac werden nicht zurückgesetzt.</string>
+    <string name="remote_fork_retry_message">Vor dieser Nachricht zweigt eine neue Sitzung ab und sendet sie erneut. Diese Sitzung bleibt unverändert. Dateien auf dem Rechner werden nicht zurückgesetzt.</string>
+    <string name="remote_fork_edit_message">Vor dieser Nachricht zweigt eine neue Sitzung ab, die Nachricht steht im Eingabefeld. Diese Sitzung bleibt unverändert. Dateien auf dem Rechner werden nicht zurückgesetzt.</string>
     <string name="remote_fork_confirm">Abzweigen</string>
     <string name="remote_fork_cancel">Abbrechen</string>
     <string name="remote_fork_busy">Halte pi an, bevor du von dieser Sitzung abzweigst.</string>
     <string name="remote_fork_resend_failed">Die Abzweigung wurde gestartet, aber die Nachricht konnte nicht erneut gesendet werden. Sende sie über das Eingabefeld.</string>
     <string name="remote_fork_attachments_dropped">Anhänge werden nicht übernommen. Füge sie bei Bedarf erneut hinzu.</string>
-    <string name="remote_fork_resend_uncertain">Die Abzweigung wurde gestartet, aber dein Mac konnte nicht bestätigen, ob die Nachricht erneut gesendet wurde. Warte auf die Antwort, bevor du etwas sendest.</string>
+    <string name="remote_fork_resend_uncertain">Die Abzweigung wurde gestartet, aber dein Rechner konnte nicht bestätigen, ob die Nachricht erneut gesendet wurde. Warte auf die Antwort, bevor du etwas sendest.</string>
 </resources>

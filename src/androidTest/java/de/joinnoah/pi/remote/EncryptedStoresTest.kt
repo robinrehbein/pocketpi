@@ -3,8 +3,10 @@ package de.joinnoah.pi.remote
 import android.content.Context
 import android.content.ContextWrapper
 import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -40,6 +42,45 @@ class EncryptedStoresTest {
     }
 
     @Test
+    fun legacyBackupOnlyRestoresEncryptedJournalOnAndroid() = isolated { context ->
+        val alias = context.noBackupFilesDir.name + "-legacy"
+        val base = File(context.noBackupFilesDir, "legacy.enc")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        val journal = "unresolved mutation".toByteArray()
+        store.write(journal)
+        assertTrue(base.renameTo(File(base.path + ".bak")))
+
+        assertArrayEquals(journal, store.read())
+        assertFalse(store.takeReset())
+    }
+
+    @Test
+    fun failedAtomicRenameIsReportedAndLeavesPreviousCiphertext() = isolated { context ->
+        val alias = context.noBackupFilesDir.name + "-atomic"
+        val base = File(context.noBackupFilesDir, "atomic.enc")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        store.write("previous".toByteArray())
+        val oldCiphertext = base.readBytes()
+
+        // Unlink the pending file before the real framework commit. Its rename then fails,
+        // but Android's finishWrite logs the failure and returns normally.
+        val atomic = object : AtomicFile(base) {
+            override fun finishWrite(stream: FileOutputStream) {
+                check(File(base.path + ".new").delete())
+                super.finishWrite(stream)
+            }
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply {
+            isAccessible = true
+            set(store, atomic)
+        }
+
+        assertThrows(IOException::class.java) { store.write("replacement".toByteArray()) }
+        assertArrayEquals(oldCiphertext, base.readBytes())
+        assertArrayEquals("previous".toByteArray(), store.read())
+    }
+
+    @Test
     fun readsExistingPairingCipherFormatAndRoundTrips() = isolated { context ->
         val host = PairedHost("route", "https://relay.test", "device", "secret", "Host")
         val alias = context.noBackupFilesDir.name + "-pairings"
@@ -58,6 +99,23 @@ class EncryptedStoresTest {
         assertEquals(listOf(host), PairingStore(context, alias = alias).load())
         PairingStore(context, alias = alias).save(listOf(host.copy(name = "Updated")))
         assertEquals("Updated", PairingStore(context, alias = alias).load().single().name)
+    }
+
+    @Test
+    fun independentDraftStoreRecreationPreservesPromptComposerProvenance() = isolated { context ->
+        val alias = context.noBackupFilesDir.name + "-prompt-provenance"
+        val values = mapOf(
+            DraftKey("route", "restored") to StoredDraft(text = "Original", mutationId = "one",
+                submittedText = "Original", submittedDelivery = "prompt", promptTextState = "restored",
+                promptQuoteState = "restored", promptAttachmentsState = "restored"),
+            DraftKey("route", "edited") to StoredDraft(text = "", mutationId = "two",
+                submittedText = "Original", submittedDelivery = "prompt", promptTextState = "edited",
+                promptQuoteState = "cleared", promptAttachmentsState = "restored"),
+            DraftKey("route", "legacy") to StoredDraft(text = "Original", mutationId = "three",
+                submittedText = "Original", submittedDelivery = "prompt"),
+        )
+        DraftStore(context, alias = alias).save(values)
+        assertEquals(values, DraftStore(context, alias = alias).load())
     }
 
     @Test

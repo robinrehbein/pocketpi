@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="remote_local_command_artifacts">Browse the artifacts of this session</string>
-    <string name="remote_local_command_artifacts_host_outdated">Needs an updated, restarted pi Remote on your Mac</string>
-    <string name="remote_artifacts_host_outdated">Update and restart pi Remote on your Mac to see artifacts here.</string>
+    <string name="remote_local_command_artifacts_host_outdated">Needs an updated, restarted pi Remote on your computer</string>
+    <string name="remote_artifacts_host_outdated">Update and restart pi Remote on your computer to see artifacts here.</string>
     <string name="remote_artifacts_not_now">Artifacts are not available right now. Try again in a moment.</string>
     <string name="remote_artifacts_title">Artifacts</string>
     <string name="remote_artifacts_loading">Loading artifacts…</string>
@@ -11,8 +11,8 @@
     <string name="remote_artifacts_reload">Reload artifacts</string>
     <string name="remote_artifacts_retry">Try again</string>
     <string name="remote_artifacts_failed">Could not load the artifacts. Check your connection.</string>
-    <string name="remote_artifacts_unavailable">Your Mac did not return the artifacts of this session.</string>
-    <string name="remote_artifacts_unsupported">Update pi Remote on your Mac to browse artifacts.</string>
+    <string name="remote_artifacts_unavailable">Your computer did not return the artifacts of this session.</string>
+    <string name="remote_artifacts_unsupported">Update pi Remote on your computer to browse artifacts.</string>
     <string name="remote_artifacts_open">Open artifact %1$s</string>
     <string name="remote_artifacts_type_html">HTML</string>
     <string name="remote_artifacts_type_svg">SVG</string>
@@ -21,7 +21,7 @@
     <string name="remote_artifacts_card_too_large">Too large to show.</string>
     <string name="remote_artifacts_card_not_an_artifact">This file cannot be shown.</string>
     <string name="remote_artifacts_card_unavailable">Not available.</string>
-    <string name="remote_artifacts_card_busy">Your Mac is busy. Try again in a moment.</string>
+    <string name="remote_artifacts_card_busy">Your computer is busy. Try again in a moment.</string>
     <string name="remote_artifacts_card_failed">Could not load. Check your connection.</string>
     <string name="remote_artifacts_card_malformed">This image cannot be displayed.</string>
     <string name="remote_artifacts_card_loading">Loading artifact…</string>

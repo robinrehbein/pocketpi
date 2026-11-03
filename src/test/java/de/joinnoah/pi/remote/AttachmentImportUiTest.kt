@@ -5,6 +5,7 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.database.Cursor
 import android.net.Uri
@@ -13,6 +14,7 @@ import android.view.DragEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
+import androidx.core.content.FileProvider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
@@ -314,6 +316,11 @@ class AttachmentImportUiTest {
         assertFalse(path.flags and View.DRAG_FLAG_GLOBAL_URI_READ != 0)
 
         val context = compose.activity
+        // AndroidX caches paths by authority across Robolectric sandboxes, whose cache directories
+        // differ. Reattach using the manifest's ProviderInfo to reset the cached paths for this test.
+        val authority = "${context.packageName}.exports"
+        val info = checkNotNull(context.packageManager.resolveContentProvider(authority, PackageManager.GET_META_DATA))
+        Robolectric.buildContentProvider(FileProvider::class.java).create(info)
         val payload = runBlocking { dragArtifact(context, "site/report page.html", "<html>report</html>") }
         val artifact = payload.data
         assertSame(OwnDrag, artifact.localState)

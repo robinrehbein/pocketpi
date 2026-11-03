@@ -8,7 +8,7 @@
     <string name="remote_widget_none_waiting">Nichts braucht dich</string>
     <string name="remote_widget_empty">Gerade arbeitet keine Sitzung.</string>
     <string name="remote_widget_not_paired">Nicht gekoppelt</string>
-    <string name="remote_widget_pair_hint">Öffne PocketPi, um es mit deinem Mac zu koppeln.</string>
+    <string name="remote_widget_pair_hint">Öffne PocketPi, um es mit deinem Rechner zu koppeln.</string>
     <string name="remote_widget_state_waiting">Braucht dich</string>
     <string name="remote_widget_state_running">Arbeitet</string>
     <string name="remote_widget_row_detail">%1$s · %2$s</string>

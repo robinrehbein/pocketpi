@@ -1,0 +1,14 @@
+<resources>
+    <string name="remote_files_editor_recovery_title">Recover file draft</string>
+    <string name="remote_files_editor_recovery_loading">Checking the encrypted draft…</string>
+    <string name="remote_files_editor_recovery_same">A saved draft is available. The file on the development computer still matches its original version.</string>
+    <string name="remote_files_editor_recovery_changed">A saved draft is available, but the file on the development computer has changed. Restoring keeps the draft’s original base so a later save can detect a conflict.</string>
+    <string name="remote_files_editor_recovery_pending">Earlier saves have unconfirmed results. Their records stay on this device. Restoring sends nothing.</string>
+    <string name="remote_files_editor_recovery_restore">Restore draft</string>
+    <string name="remote_files_editor_recovery_use_host">Use version on the development computer</string>
+    <string name="remote_files_editor_storage_failure">The local draft could not be updated. Keep the editor open. A save already started may have succeeded on the development computer.</string>
+    <string name="remote_files_editor_recovery_preview">Preview: up to the first 2,000 characters of each version.</string>
+    <string name="remote_files_editor_recovery_host_label">Version on the development computer</string>
+    <string name="remote_files_editor_recovery_draft_label">Your draft</string>
+    <string name="remote_files_editor_recovery_pending_label">Last unconfirmed save</string>
+</resources>

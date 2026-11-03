@@ -1,6 +1,8 @@
 # PocketPi for Android
 
-This separate application controls pi sessions on paired Macs through the pi Remote relay. It uses
+This separate application controls pi sessions on paired host computers through the pi Remote relay.
+The goal is to support Macs, independent Linux hosts, and development containers equally; Linux and
+container runtime qualification is still pending. It uses
 application ID `de.robinrehbein.pocketpi` and does not share Noah accounts or data.
 
 ## Build and install
@@ -299,6 +301,53 @@ request IDs, the snapshot `epoch`, the `session.events` result and the `epoch` o
 events) are byte-for-byte copies from `packages/pi-atlas/extensions/remote/protocol/fixtures/` from
 noah-monorepo commit `b6ebb559ff51413148b56d7468df39fdf3572a47`, the merge of pull request 1336
 into `dev`.
+
+## Project code search
+
+On an updated host, open Files and choose Search project. Search matches literal text with case
+sensitivity across the permitted project files. Results show the path, line, column and a text
+snippet. Incomplete results are marked when the host reaches a limit or cannot read a candidate.
+Ignored and denied paths remain outside the file browser's access policy.
+
+A result opens the current file at the matching line and enters the editor when the complete file
+can be edited. Otherwise the file stays in the reader. Changing files asks before discarding an
+unsaved edit; cancelling preserves the buffer. Search is also available in the editor header.
+Hosts without `session.files.search.v1` do not show this action. Protocol tests use the shared
+`files-search-v1.json` fixture.
+
+## Native worker terminal
+
+An updated host can offer an interactive terminal for sessions it owns as native PTY workers.
+Use the host CLI in noah-monorepo, `node packages/pi-atlas/extensions/remote/host/cli.ts`.
+Enable `config terminal-control on` on the host, then use
+`terminal grant <deviceId> <projectId>` while the host is running. This grants shell-level authority;
+it remains off by default. Terminal access is separate from the shell-command switch. Revoke it
+with `terminal revoke <deviceId> <projectId>` or turn terminal control off.
+
+The chat's Terminal action opens a phone overlay or a tablet inspector tab. Another writer requires
+an explicit takeover. Closing the terminal releases input ownership and keeps the worker running.
+After a disconnect, open it explicitly again; inputs are never automatically replayed. Externally
+started terminal sessions and RPC sessions do not offer this view.
+
+Hosts advertising `session.terminal.keys.v1` also offer Ctrl, Alt, Shift and F1-F12 controls.
+The character picker accepts a base character and, for shifted symbols, the actual shifted
+character from the keyboard layout. Hardware AltGr remains local text input; the optional Ctrl+Alt
+shortcut toggle enables ambiguous left-side chords. F6 still moves between app panes.
+
+Named keys use mode-aware host encoding when this addon is present; older hosts keep terminal v1.
+Repeated queued navigation keys are grouped, and input shares a paced queue with terminal resizes.
+Control chords preserve the local draft. Sending a draft waits until earlier input is settled;
+an explicitly unsupported chord shows a notice and keeps the attachment open. The shared
+`terminal-keys-v1.json` fixture comes from noah-monorepo `6dc453c5995aa65c03eebd819c4111ad993d1441`.
+The `browser-v1.json` fixture comes from noah-monorepo `2440314b3`;
+`browser-stream-v1.json` remains pinned to `11d5a39c4`.
+The shared `browser-recovery-v1.json` fixture comes from noah-monorepo `c14e10248`.
+
+The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
+integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and
+an API 36 WebView. Samsung and Linux/container qualification remain open. Leaving the chat or
+closing the terminal asks before discarding a draft or queued input. Cancelling keeps the current
+chat; confirmation is bound to the navigation that requested it and cannot be replayed.
 
 ## Appearance
 

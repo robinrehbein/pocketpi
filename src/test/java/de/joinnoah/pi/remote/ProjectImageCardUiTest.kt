@@ -74,7 +74,7 @@ class ProjectImageCardUiTest {
     @Test fun unavailableHasItsText() = failure(ProjectImageResult.Unavailable, "This image is not available.")
 
     @Test fun anOlderHostAsksForAnUpdate() =
-        failure(ProjectImageResult.Unsupported, "Update pi Remote on your Mac to see images.")
+        failure(ProjectImageResult.Unsupported, "Update pi Remote on your computer to see images.")
 
     @Test fun aConnectionFailureCanBeRetried() {
         var attempts = 0

@@ -1,18 +1,30 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.*
+
+private class QuestionCallbackFence { var active = false }
 
 @Composable
 internal fun QuestionCard(
@@ -20,16 +32,50 @@ internal fun QuestionCard(
     enabled: Boolean,
     pending: Boolean = false,
     block: QuestionBlock? = null,
+    details: QuestionDetailsView? = null,
+    onLoadDetails: () -> Unit = {},
+    editorScope: Any? = null,
+    editorAvailable: Boolean = true,
+    pagedEditor: PagedEditorView? = null,
+    answerQuarantined: Boolean = false,
+    journalState: PagedEditorView? = null,
+    onLoadPagedEditor: () -> Unit = {},
+    onEditPagedEditor: (String) -> Unit = {},
+    onSubmitPagedEditor: (String) -> Unit = {},
+    onRetryPagedEditorStorage: () -> Unit = {},
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
     val kind = question.text("kind")
-    val controlsEnabled = enabled && !pending && block == null
+    val callbackFence = remember(EditorQuestionKey(question), editorScope) { QuestionCallbackFence() }
+    SideEffect { callbackFence.active = true }
+    DisposableEffect(callbackFence) { onDispose { callbackFence.active = false } }
+    val storage = journalState ?: pagedEditor
+    val paged = kind == "editor" && pagedEditor != null && question.containsKey("editorUploadGrantId")
+    val baseControlsEnabled = enabled && !pending && (block == null || pagedEditor?.quarantined == true && block == QuestionBlock.UNCERTAIN)
+    val controlsEnabled = baseControlsEnabled && (paged || !answerQuarantined) && storage?.storagePending != true && storage?.storageFailed != true
+    val cancelEnabled = enabled && !pending && (block == null || block == QuestionBlock.UNCERTAIN && pagedEditor?.quarantined == true)
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
+    val currentCancelEnabled by rememberUpdatedState(cancelEnabled)
+    val currentAnswerBlocked by rememberUpdatedState(answerQuarantined || pagedEditor?.quarantined == true || storage?.storagePending == true || storage?.storageFailed == true)
+    val currentStorageRetry by rememberUpdatedState(storage?.storageRetryAvailable == true && !storage.storagePending)
+    val currentEditorAvailable by rememberUpdatedState(editorAvailable)
+    val currentPagedSendAvailable by rememberUpdatedState(pagedEditor?.let { !it.quarantined && !it.capacityFull && !it.loading && !it.storagePending && !it.storageFailed } == true)
     fun submit(answer: JsonObject) {
-        if (currentControlsEnabled) onAnswer(answer)
+        if (!callbackFence.active) return
+        val cancel = answer.optionalText("kind") == "cancel" || kind == "plan" && answer.optionalText("kind") == "plan" && answer.optionalText("action") == "cancel"
+        if (if (cancel) currentCancelEnabled else currentControlsEnabled && !currentAnswerBlocked) onAnswer(answer)
     }
+    key(EditorQuestionKey(question)) {
     Section(if (kind == "plan") stringResource(R.string.remote_plan_title) else question.optionalText("title") ?: stringResource(R.string.remote_questions)) {
+        if (storage?.storagePending == true) Text(stringResource(R.string.remote_paged_editor_storage_pending), Modifier.testTag("pagedEditorStoragePending"))
+        if (storage?.storageFailed == true) Text(stringResource(R.string.remote_paged_editor_storage_failed), Modifier.testTag("pagedEditorStorageFailure"), color = MaterialTheme.colorScheme.error)
+        if (storage?.storageRetryAvailable == true) TextButton(
+            onClick = { if (callbackFence.active && currentStorageRetry) onRetryPagedEditorStorage() },
+            enabled = !storage.storagePending, modifier = Modifier.testTag("pagedEditorStorageRetry"),
+        ) { Text(stringResource(R.string.remote_paged_editor_storage_retry)) }
+        if (answerQuarantined && !paged && block != QuestionBlock.UNCERTAIN)
+            Text(stringResource(R.string.remote_question_answer_uncertain), Modifier.testTag("questionJournalQuarantine"))
         when (kind) {
             "plan" -> {
                 var editing by remember(id) { mutableStateOf(false) }
@@ -80,18 +126,43 @@ internal fun QuestionCard(
                 }
                 TextButton(
                     onClick = { submit(Wire.objectOf("kind" to "plan", "action" to "cancel")) },
-                    enabled = controlsEnabled,
+                    enabled = cancelEnabled,
                 ) { Text(stringResource(R.string.remote_cancel)) }
             }
             "confirm" -> {
                 val escalation = remember(question) { confirmEscalation(question) }
                 if (escalation != null) EscalationDetails(escalation)
                 Text(question.text("message"))
+                val hasDetails = question.containsKey("details")
+                if (hasDetails) {
+                    if (details?.text != null) {
+                        val chunks = remember(details.text) {
+                            val text = details.text
+                            buildList {
+                                var start = 0
+                                while (start < text.length) {
+                                    var end = minOf(start + 4096, text.length)
+                                    if (end < text.length && Character.isHighSurrogate(text[end - 1])) end--
+                                    add(text.substring(start, end))
+                                    start = end
+                                }
+                            }
+                        }
+                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                            items(chunks) { Text(it) }
+                        }
+                    } else {
+                        Text(stringResource(if (details?.failed == true) R.string.remote_question_details_failed else R.string.remote_question_details_needed))
+                        OutlinedButton(onClick = onLoadDetails, enabled = controlsEnabled && details?.loading != true) {
+                            Text(stringResource(if (details?.loading == true) R.string.remote_question_details_loading else if (details?.failed == true) R.string.remote_question_details_retry else R.string.remote_question_details_load))
+                        }
+                    }
+                }
                 Row {
                     // An escalation's yes runs the blocked call once; the phone offers no session allow.
                     Button(
                         onClick = { submit(Wire.objectOf("kind" to "confirm", "value" to true)) },
-                        enabled = controlsEnabled,
+                        enabled = controlsEnabled && (!hasDetails || details?.text != null),
                     ) {
                         Text(
                             stringResource(
@@ -155,17 +226,146 @@ internal fun QuestionCard(
                     Text(stringResource(R.string.remote_answer))
                 }
             }
+            "editor" -> {
+                val prefill = editorPrefill(question)
+                if (pagedEditor != null && question.containsKey("editorUploadGrantId")) {
+                  key(EditorQuestionKey(question), editorScope) {
+                    val pagedCallbackFence = remember { QuestionCallbackFence() }
+                    SideEffect { pagedCallbackFence.active = true }
+                    DisposableEffect(pagedCallbackFence) { onDispose { pagedCallbackFence.active = false } }
+                    fun active() = pagedCallbackFence.active
+                    val verified = pagedEditor.text
+                    val currentLoadAvailable by rememberUpdatedState(verified == null && !pagedEditor.loading && !pagedEditor.storagePending && controlsEnabled && editorAvailable)
+                    if (pagedEditor.quarantined && block != QuestionBlock.UNCERTAIN) Text(stringResource(R.string.remote_question_answer_uncertain))
+                    if (verified == null) {
+                        OutlinedButton(onClick = { if (active() && currentLoadAvailable) onLoadPagedEditor() }, enabled = controlsEnabled && editorAvailable && !pagedEditor.loading && !pagedEditor.storagePending) {
+                            Text(stringResource(if (pagedEditor.loading) R.string.remote_question_details_loading else R.string.remote_paged_editor_load))
+                        }
+                        if (pagedEditor.failed) Text(stringResource(R.string.remote_question_details_failed))
+                    } else {
+                        val editorKey = EditorQuestionKey(question)
+                        var text by remember(editorKey, editorScope) { mutableStateOf(verified) }
+                        var window by remember(editorKey, editorScope) { mutableStateOf(EditorWindows.atOffset(verified, 0)) }
+                        var field by remember(editorKey, editorScope) { mutableStateOf(TextFieldValue(verified.substring(window.start, window.end))) }
+                        var section by remember(editorKey, editorScope) { mutableStateOf("1") }
+                        var fieldSession by remember(editorKey, editorScope) { mutableIntStateOf(0) }
+                        var fieldFocused by remember(editorKey, editorScope) { mutableStateOf(false) }
+                        var restoreFieldFocus by remember(editorKey, editorScope) { mutableStateOf(false) }
+                        fun restartField() {
+                            restoreFieldFocus = fieldFocused
+                            fieldSession++
+                        }
+                        val editEnabled = controlsEnabled && !pagedEditor.loading && !pagedEditor.storagePending
+                        val currentEditEnabled by rememberUpdatedState(editEnabled)
+                        fun canEdit() = active() && currentEditEnabled
+                        val validDraft = remember(text) { validEditorText(text, MAX_EDITOR_UPLOAD_BYTES) }
+                        fun showWindow(next: EditorWindow, selection: TextRange = TextRange(next.start), composition: TextRange? = null, requestedSection: Int? = null) {
+                            if (!canEdit()) return
+                            fun map(offset: Int) = (offset - next.start).coerceIn(0, next.end - next.start)
+                            val mappedComposition = composition?.takeIf { it.min >= next.start && it.max <= next.end }?.let { TextRange(map(it.start), map(it.end)) }
+                            window = next
+                            field = TextFieldValue(text.substring(next.start, next.end), TextRange(map(selection.start), map(selection.end)), mappedComposition)
+                            section = (requestedSection ?: ((next.start / EditorWindows.MAX_UNITS) + 1)).toString()
+                        }
+                        fun replaceWindow(value: TextFieldValue) {
+                            if (!canEdit()) return
+                            if (value.text == field.text) { field = value; return }
+                            val old = window
+                            val updated = EditorWindows.replace(text, old, value.text)
+                            val absoluteSelection = TextRange(old.start + value.selection.start, old.start + value.selection.end)
+                            val absoluteComposition = value.composition?.let { TextRange(old.start + it.start, old.start + it.end) }
+                            // A large replacement changes the input connection's entire text basis.
+                            // Fence callbacks from that connection before installing the new window.
+                            if (value.text.length > EditorWindows.MAX_UNITS) restartField()
+                            text = updated
+                            onEditPagedEditor(updated)
+                            val anchor = if (value.text.length > EditorWindows.MAX_UNITS) maxOf(0, absoluteSelection.end - EditorWindows.MAX_UNITS / 2) else old.start.coerceAtMost(updated.length)
+                            showWindow(EditorWindows.atOffset(updated, anchor), absoluteSelection, absoluteComposition)
+                        }
+                        fun navigate(next: EditorWindow, requestedSection: Int? = null) {
+                            if (!canEdit()) return
+                            val selection = TextRange(window.start + field.selection.start, window.start + field.selection.end)
+                            val composition = field.composition?.let { TextRange(window.start + it.start, window.start + it.end) }
+                            restartField()
+                            showWindow(next, selection, composition, requestedSection)
+                        }
+                        key(fieldSession) {
+                            val session = fieldSession
+                            val focusRequester = remember { FocusRequester() }
+                            LaunchedEffect(session) {
+                                if (restoreFieldFocus) {
+                                    restoreFieldFocus = false
+                                    focusRequester.requestFocus()
+                                }
+                            }
+                            OutlinedTextField(value = field, onValueChange = { if (editEnabled && session == fieldSession) replaceWindow(it) }, enabled = editEnabled,
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("questionEditorField")
+                                    .focusRequester(focusRequester).onFocusChanged { fieldFocused = it.hasFocus }
+                                    .then(rememberQuestionFieldKeys(text)), minLines = 4)
+                        }
+                        Text(stringResource(R.string.remote_paged_editor_position, window.start, window.end, text.length))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { if (canEdit()) navigate(EditorWindows.atOffset(text, 0)) }, enabled = editEnabled && window.start > 0, modifier = Modifier.testTag("pagedEditorFirst")) { Text(stringResource(R.string.remote_paged_editor_first)) }
+                            TextButton(onClick = { if (canEdit()) EditorWindows.previous(text, window)?.let { navigate(it) } }, enabled = editEnabled && window.start > 0, modifier = Modifier.testTag("pagedEditorPrevious")) { Text(stringResource(R.string.remote_paged_editor_previous)) }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { if (canEdit()) EditorWindows.next(text, window)?.let { navigate(it) } }, enabled = editEnabled && window.end < text.length, modifier = Modifier.testTag("pagedEditorNext")) { Text(stringResource(R.string.remote_paged_editor_next)) }
+                            TextButton(onClick = { if (canEdit()) navigate(EditorWindows.last(text)) }, enabled = editEnabled && window.end < text.length, modifier = Modifier.testTag("pagedEditorLast")) { Text(stringResource(R.string.remote_paged_editor_last)) }
+                        }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            OutlinedTextField(value = section, onValueChange = { if (canEdit() && it.length <= 9 && it.all(Char::isDigit)) section = it }, enabled = editEnabled,
+                                modifier = Modifier.weight(1f).testTag("pagedEditorSection"), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                label = { Text(stringResource(R.string.remote_paged_editor_section, EditorWindows.sectionCount(text))) })
+                            val requested = section.toIntOrNull()
+                            TextButton(onClick = { if (canEdit()) requested?.let { navigate(EditorWindows.atSection(text, it), it) } }, enabled = editEnabled && requested != null && requested in 1..EditorWindows.sectionCount(text), modifier = Modifier.testTag("pagedEditorJump")) { Text(stringResource(R.string.remote_paged_editor_jump)) }
+                        }
+                        if (pagedEditor.retentionWarning) Text(stringResource(R.string.remote_paged_editor_retention_warning))
+                        if (pagedEditor.capacityFull && !pagedEditor.quarantined) Text(stringResource(R.string.remote_paged_editor_capacity_full))
+                        pagedEditor.recoveryDraft?.let { recovery ->
+                            TextButton(onClick = { if (canEdit()) { restartField(); text = recovery; onEditPagedEditor(recovery); showWindow(EditorWindows.atOffset(recovery, 0)) } }, enabled = editEnabled) {
+                                Text(stringResource(R.string.remote_paged_editor_restore))
+                            }
+                        }
+                        Button(enabled = editEnabled && editorAvailable && !pagedEditor.quarantined && !pagedEditor.capacityFull && !pagedEditor.storagePending && !pagedEditor.storageFailed && validDraft,
+                            onClick = { if (active() && currentControlsEnabled && currentPagedSendAvailable && currentEditorAvailable && validEditorText(text, MAX_EDITOR_UPLOAD_BYTES)) onSubmitPagedEditor(text) }) {
+                            Text(stringResource(R.string.remote_send))
+                        }
+                    }
+                    TextButton(onClick = { if (active()) submit(Wire.objectOf("kind" to "cancel")) }, enabled = cancelEnabled) {
+                        Text(stringResource(R.string.remote_cancel))
+                    }
+                  }
+                } else if (prefill == null) {
+                    Text(stringResource(R.string.remote_local_required))
+                } else {
+                    var text by remember(EditorQuestionKey(question), editorScope) { mutableStateOf(prefill) }
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { if (controlsEnabled) text = it },
+                        enabled = controlsEnabled,
+                        modifier = Modifier.fillMaxWidth().testTag("questionEditorField").then(rememberQuestionFieldKeys(text)),
+                        minLines = 4,
+                    )
+                    Button(
+                        enabled = controlsEnabled && editorAvailable && validEditorText(text, 65536),
+                        onClick = {
+                            if (currentEditorAvailable && validEditorText(text, 65536)) submit(Wire.objectOf("kind" to "editor", "value" to text))
+                        },
+                    ) { Text(stringResource(R.string.remote_send)) }
+                }
+            }
             "questionnaire" ->
                 QuestionnaireForm(
                     question = question,
                     enabled = controlsEnabled,
                     pending = pending,
+                    cancelEnabled = cancelEnabled,
                     onAnswer = ::submit,
                 )
             else -> Text(stringResource(R.string.remote_local_required))
         }
-        if (kind in setOf("confirm", "select", "input"))
-            TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
+        if (kind in setOf("confirm", "select", "input", "editor") && !(kind == "editor" && pagedEditor != null && question.containsKey("editorUploadGrantId")))
+            TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = cancelEnabled) {
                 Text(stringResource(R.string.remote_cancel))
             }
         when (block) {
@@ -182,6 +382,7 @@ internal fun QuestionCard(
             null -> Unit
         }
     }
+    }
 }
 
 @Composable
@@ -190,10 +391,12 @@ internal fun QuestionnaireForm(
     enabled: Boolean,
     pending: Boolean = false,
     compactHeader: Boolean = false,
+    cancelEnabled: Boolean = enabled,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val controlsEnabled = enabled && !pending
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
+    val currentCancelEnabled by rememberUpdatedState(cancelEnabled && !pending)
     val questions = question.array("questions")
     val initial = remember(question.text("id")) { QuestionnaireAnswers.defaults(questions) }
     var selected by remember(question.text("id")) { mutableStateOf(initial.selected) }
@@ -376,8 +579,8 @@ internal fun QuestionnaireForm(
         )
     }
     TextButton(
-        onClick = { if (currentControlsEnabled) onAnswer(Wire.objectOf("kind" to "cancel")) },
-        enabled = controlsEnabled,
+        onClick = { if (currentCancelEnabled) onAnswer(Wire.objectOf("kind" to "cancel")) },
+        enabled = cancelEnabled && !pending,
     ) {
         Text(stringResource(R.string.remote_cancel))
     }

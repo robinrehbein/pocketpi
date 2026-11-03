@@ -42,7 +42,7 @@ internal fun replyText(text: CharSequence?): String? {
  */
 internal class CompletionReplier(
     private val pairedHost: suspend (String) -> PairedHost?,
-    private val live: suspend (String, suspend (MutationCommands) -> Unit) -> Unit?,
+    private val live: suspend (String, () -> Unit, suspend (MutationCommands) -> Unit) -> Unit?,
     private val background: suspend (PairedHost, suspend (MutationCommands) -> Unit) -> Unit,
     private val mutationId: () -> String = Wire::random,
     private val timeoutMillis: Long = REPLY_TIMEOUT_MILLIS,
@@ -64,7 +64,10 @@ internal class CompletionReplier(
             }
         val id = mutationId()
         val sent = AtomicBoolean(false)
-        val prompt: suspend (MutationCommands) -> Unit = { commands ->
+        val livePrompt: suspend (MutationCommands) -> Unit = { commands ->
+            commands.prompt(sessionId, encoded, id)
+        }
+        val backgroundPrompt: suspend (MutationCommands) -> Unit = { commands ->
             // Set before sending: a send that throws may still have reached the host.
             sent.set(true)
             try {
@@ -75,18 +78,19 @@ internal class CompletionReplier(
                 throw e
             }
         }
-        return withTimeoutOrNull(timeoutMillis) { attempt(routeId, prompt, sent) }
+        return withTimeoutOrNull(timeoutMillis) { attempt(routeId, livePrompt, backgroundPrompt, sent) }
             ?: if (sent.get()) ReplyOutcome.UNCERTAIN else ReplyOutcome.FAILED
     }
 
     private suspend fun attempt(
         routeId: String,
-        prompt: suspend (MutationCommands) -> Unit,
+        livePrompt: suspend (MutationCommands) -> Unit,
+        backgroundPrompt: suspend (MutationCommands) -> Unit,
         sent: AtomicBoolean,
     ): ReplyOutcome {
         val viaLive =
             try {
-                if (live(routeId, prompt) == null) Live.Skipped else Live.Sent
+                if (live(routeId, { sent.set(true) }, livePrompt) == null) Live.Skipped else Live.Sent
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -96,11 +100,11 @@ internal class CompletionReplier(
         when (viaLive) {
             Live.Sent -> return ReplyOutcome.SENT
             is Live.Failed -> if (sent.get()) return outcome(viaLive.error)
-            Live.Skipped -> Unit
+            Live.Skipped -> if (sent.get()) return ReplyOutcome.UNCERTAIN
         }
         val host = pairedHost(routeId) ?: return ReplyOutcome.FAILED
         return try {
-            background(host, prompt)
+            background(host, backgroundPrompt)
             ReplyOutcome.SENT
         } catch (e: CancellationException) {
             throw e

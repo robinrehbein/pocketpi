@@ -52,6 +52,7 @@ data class GitFile(
     val deletions: Int? = null,
     val binary: Boolean = false,
     val omitted: GitOmitted? = null,
+    val submodule: Boolean = false,
 )
 
 /**
@@ -274,7 +275,8 @@ private fun gitFile(value: JsonObject): GitFile {
     require(counted == (additions != null || deletions != null))
     require(counted != (binary || omitted != null))
     require(!(binary && omitted != null))
-    return GitFile(path, change, additions, deletions, binary, omitted)
+    val submodule = if (value.containsKey("submodule")) value.flag("submodule").also { require(it) } else false
+    return GitFile(path, change, additions, deletions, binary, omitted, submodule)
 }
 
 /** Validates a `git.status` result against the request that produced it. */

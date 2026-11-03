@@ -1,0 +1,19 @@
+# iOS Simulator remote backend: public API feasibility
+
+Read-only assessment; no simulator, build, runtime or input was started or tested. The selected Xcode beta and `xcrun --find simctl` availability were supplied by the parent task, not independently validated here.
+
+## Decision
+
+Proceed to a narrowly scoped proof of concept only. Do not claim a complete Android-equivalent remote backend or that `simctl io` injects touch input. The public documentation establishes individual capture and UI-testing primitives, not the proposed end-to-end remote protocol, latency, arbitrary system interactions, continuous streaming, or lifecycle guarantees.
+
+## Candidate 1: simulator capture plus XCTest / XCUIAutomation
+
+- Apple documents `xcrun simctl io <device> screenshot` and `recordVideo`; its WWDC session says video capture does not require Simulator.app to be running. This establishes file-based capture, not a low-latency stream: https://developer.apple.com/library/archive/documentation/IDEs/Conceptual/iOS_Simulator_Guide/InteractingwiththeiOSSimulator/InteractingwiththeiOSSimulator.html and https://developer.apple.com/videos/play/wwdc2020/10647/ . Apple notes that disabling framebuffer compositing prevents simctl screenshots and recording: https://developer.apple.com/documentation/Xcode-Release-Notes/xcode-11-release-notes .
+- A UI-test runner could receive commands over an application-owned bridge, then use public XCUICoordinate tap and press/drag APIs: https://developer.apple.com/documentation/xcuiautomation/xcuicoordinate/press%28forduration%3Athendragto%3Awithvelocity%3Athenholdforduration%3A%29 . XCUIAutomation is documented as a UI-testing framework: https://developer.apple.com/documentation/xcuiautomation .
+- `typeText` types strings but requires the element or descendant to have keyboard focus: https://developer.apple.com/documentation/xcuiautomation/xcuielement/typetext%28_%3A%29?changes=_3&language=objc . XCUIElement lists key APIs, but their availability and semantics for required iOS key events must be checked; do not assume arbitrary raw hardware-key support: https://developer.apple.com/documentation/xcuiautomation/xcuielement?changes=__5 . Physical device buttons have a separate public API: https://developer.apple.com/documentation/xcuiautomation/xcuidevice/press%28_%3A%29 .
+- Allocate a dedicated simulator, address it by UDID, and ensure capture and the test runner actually target the same instance. Parallel testing can create clones; Apple documents a separate clone per runner: https://developer.apple.com/documentation/xcode-release-notes/xcode-10-release-notes?changes=_3___5 . Ownership, cleanup and isolation must be explicitly implemented and validated; UDID alone does not enforce exclusive ownership.
+- Proof gates: runner longevity and command bridge; destination identity including clone behavior; coordinate scaling/orientation and safe-area mapping; keyboard focus and supported key set; permitted system-level interactions; startup and recovery; capture encoding/stream latency; simultaneous sessions and cleanup. These are untested.
+
+## Candidate 2: visible Device Hub with macOS input automation
+
+Apple documents interacting with the simulated device through Mac pointer and keyboard, including tap via click and drag: https://developer.apple.com/documentation/xcode/interacting-with-your-app-in-the-ios-or-ipados-simulator . A host-side automation layer may translate remote input to that interface, but this is an architectural possibility, not a validated implementation. It requires an interactive GUI session, appropriate macOS permissions, focus and coordinate management, and exclusive access to avoid interference; independent headless sessions are not established. Capture could still use the documented simctl mechanism per UDID, subject to verifying that the displayed window matches the captured device.

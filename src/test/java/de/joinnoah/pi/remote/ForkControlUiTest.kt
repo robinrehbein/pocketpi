@@ -48,7 +48,7 @@ class ForkControlUiTest {
         compose.onNodeWithContentDescription("Fork from this message").performClick()
         compose.onNodeWithTag("forkRetry").performClick()
         assertTrue(forks.isEmpty())
-        compose.onNodeWithText("Files on the Mac are not rewound", substring = true)
+        compose.onNodeWithText("Files on the computer are not rewound", substring = true)
             .assertIsDisplayed()
         compose.onNodeWithTag("forkConfirm").performClick()
         assertEquals(listOf("user-1" to ForkMode.RETRY), forks)

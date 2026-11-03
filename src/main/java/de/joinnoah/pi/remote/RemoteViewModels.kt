@@ -15,6 +15,9 @@ internal open class DestinationViewModel(
     protected val repository: RemoteRepository,
     val key: RemoteNavKey,
 ) : ViewModel() {
+    fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit =
+        repository.acquireNativeEditorPresence(selection)
+
     internal var cleared = false
         private set
 
@@ -189,6 +192,12 @@ internal open class DestinationViewModel(
 
     fun abort() = active(repository::abort)
 
+    fun loadQuestionDetails(questionId: String) = active { repository.loadQuestionDetails(questionId) }
+    fun loadPagedEditor(question: kotlinx.serialization.json.JsonObject) = active { repository.loadPagedEditor(question) }
+    fun editPagedEditor(question: kotlinx.serialization.json.JsonObject, draft: String) = active { repository.editPagedEditor(question, draft) }
+    fun submitPagedEditor(question: kotlinx.serialization.json.JsonObject, draft: String) = active { repository.submitPagedEditor(question, draft) }
+    fun retryPagedEditorStorage() = editing(repository::retryPagedEditorStorage)
+
     fun answer(questionId: String, answer: JsonObject) = active {
         repository.answer(questionId, answer)
     }
@@ -331,7 +340,57 @@ internal class ChatViewModel(
     key: RemoteNavKey.Chat,
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
+    val commitReview = GitCommitReviewController(repository, viewModelScope, key.selection())
+    val pushReview = GitPushReviewController(repository, viewModelScope, key.selection())
+    val pullRequestReview = GitPullRequestReviewController(repository, viewModelScope, key.selection())
+    fun openCommitReview() = active { pushReview.close(); pullRequestReview.close(); commitReview.prepare() }
+    fun openPushReview() = active { commitReview.close(); pullRequestReview.close(); pushReview.prepare() }
+    fun openPullRequestReview() = active { commitReview.close(); pushReview.close(); pullRequestReview.prepare() }
     val preferences = settings.state
+    fun canOpenPreview() = repository.canOpenPreview()
+    fun openPreview(port: Int) = repository.openPreview(port)
+    fun closePreview() = repository.closePreview()
+    fun acquirePreview() = repository.acquirePreview()
+    fun handoffPreview(ownerId: String) = repository.handoffPreview(ownerId)
+    fun newPreviewTab(url: String) = repository.newPreviewTab(url)
+    fun navigatePreview(url: String) = repository.navigatePreview(url)
+    fun selectPreviewTab(tabId: String) = repository.selectPreviewTab(tabId)
+    fun closePreviewTab(tabId: String) = repository.closePreviewTab(tabId)
+    fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String) = repository.resizePreview(width, height, deviceScale, orientation)
+    fun sendPreviewInput(input: BrowserInput) = repository.sendPreviewInput(input)
+    fun refreshPreview() = repository.refreshPreview()
+    fun setPreviewVisible(visible: Boolean) = repository.setPreviewVisible(visible)
+    fun canOpenEmulator() = repository.canOpenEmulator()
+    fun openEmulator() = repository.openEmulator()
+    fun selectEmulatorProfile(id: String) = repository.selectEmulatorProfile(id)
+    fun closeEmulator() = repository.closeEmulator()
+    fun acquireEmulator() = repository.acquireEmulator()
+    fun handoffEmulator(id: String) = repository.handoffEmulator(id)
+    fun stopEmulator() = repository.stopEmulator()
+    fun sendEmulatorInput(input: EmulatorInput) = repository.sendEmulatorInput(input)
+    fun refreshEmulator() = repository.refreshEmulator()
+    fun setEmulatorVisible(visible: Boolean) = repository.setEmulatorVisible(visible)
+    fun canOpenBrowser() = repository.canOpenBrowser()
+    fun openBrowser() = repository.openBrowser()
+    fun closeBrowser() = repository.closeBrowser()
+    fun acquireBrowser() = repository.acquireBrowser()
+    fun handoffBrowser(ownerId: String) = repository.handoffBrowser(ownerId)
+    fun newBrowserTab(url: String) = repository.newBrowserTab(url)
+    fun navigateBrowser(url: String) = repository.navigateBrowser(url)
+    fun selectBrowserTab(tabId: String) = repository.selectBrowserTab(tabId)
+    fun closeBrowserTab(tabId: String) = repository.closeBrowserTab(tabId)
+    fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String) = repository.resizeBrowser(width, height, deviceScale, orientation)
+    fun sendBrowserInput(input: BrowserInput) = repository.sendBrowserInput(input)
+    fun refreshBrowser() = repository.refreshBrowser()
+    fun setBrowserVisible(visible: Boolean) = repository.setBrowserVisible(visible)
+    fun canAttachTerminal() = repository.canAttachTerminal()
+    fun attachTerminal(cols: Int, rows: Int, generation: Long? = null) = repository.attachTerminal(cols, rows, generation)
+    fun detachTerminal() = repository.detachTerminal()
+    fun takeTerminalOutput() = repository.takeTerminalOutput()
+    fun sendTerminalInput(input: TerminalInput) = repository.sendTerminalInput(input)
+    /** The live attachment, without waiting for the screen's collected state to recompose. */
+    fun terminalViewNow(): TerminalView? = repository.state.value.let { if (matches(it) && !cleared) it.terminal else null }
+    fun resizeTerminal(cols: Int, rows: Int) = repository.resizeTerminal(cols, rows)
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 
@@ -469,6 +528,9 @@ internal class ChatViewModel(
 
     fun closeFiles() = repository.closeFiles()
 
+    fun searchFiles(query: String) = active { repository.searchFiles(query) }
+    fun openSearchHit(hit: FileSearchHit) = active { repository.openSearchHit(hit) }
+
     fun openFilesDir(path: String) = active { repository.openFilesDir(path) }
 
     fun openFilesFile(path: String?) = active { repository.openFilesFile(path) }
@@ -497,6 +559,10 @@ internal class ChatViewModel(
     fun updateFileEditorText(text: String) = editing { repository.updateFileEditorText(text) }
 
     fun saveFileEditor() = editing(repository::saveFileEditor)
+
+    fun restoreFileEditorDraft() = editing(repository::restoreFileEditorDraft)
+
+    fun discardFileEditorDraft() = editing(repository::discardFileEditorDraft)
 
     fun discardFileEditor() = repository.discardFileEditor()
 

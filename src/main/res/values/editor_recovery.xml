@@ -1,0 +1,33 @@
+<resources>
+    <string name="editor_recovery_open">Saved editor text</string>
+    <string name="editor_recovery_title">Saved editor text</string>
+    <string name="editor_recovery_close">Close</string>
+    <string name="editor_recovery_back">Back to list</string>
+    <string name="editor_recovery_loading">Loading saved text…</string>
+    <string name="editor_recovery_error">Saved text could not be read.</string>
+    <string name="editor_recovery_unavailable">Saved editor text is unavailable.</string>
+    <string name="editor_recovery_retry">Retry</string>
+    <string name="editor_recovery_empty">No saved editor text.</string>
+    <string name="editor_recovery_draft">Draft</string>
+    <string name="editor_recovery_uncertain">Uncertain submission</string>
+    <string name="editor_recovery_warning">This submission may have reached the computer. Review it before continuing; it will not be sent again automatically.</string>
+    <string name="editor_recovery_host">Computer: %1$s</string>
+    <string name="editor_recovery_unknown_host">Unknown computer (ID: %1$s)</string>
+    <string name="editor_recovery_session">Session ID: %1$s</string>
+    <string name="editor_recovery_question">Question ID: %1$s</string>
+    <string name="editor_recovery_first">First</string>
+    <string name="editor_recovery_previous">Previous</string>
+    <string name="editor_recovery_next">Next</string>
+    <string name="editor_recovery_last">Last</string>
+    <string name="editor_recovery_section">Section (1–%1$d)</string>
+    <string name="editor_recovery_jump">Go</string>
+    <string name="editor_recovery_copy">Copy this section</string>
+    <string name="editor_recovery_export">Export full text</string>
+    <string name="editor_recovery_binary">This text contains invalid Unicode. Export preserves its original UTF-16 code units in a .utf16 file.</string>
+    <string name="editor_recovery_export_saved">File saved.</string>
+    <string name="editor_recovery_export_failed">File could not be saved. Please retry.</string>
+    <string name="editor_recovery_export_lost">The export request was interrupted. Please retry.</string>
+    <string name="editor_recovery_export_pending">Waiting for file selection…</string>
+    <string name="editor_recovery_export_writing">Saving file…</string>
+    <string name="editor_recovery_export_interrupted">The export was interrupted. The file may be incomplete. Check it before exporting again.</string>
+</resources>

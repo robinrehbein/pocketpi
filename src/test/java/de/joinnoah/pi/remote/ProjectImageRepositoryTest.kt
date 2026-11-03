@@ -243,31 +243,31 @@ class ProjectImageRepositoryTest {
     private fun TestScope.transport() = Transport { testScheduler.currentTime }
 
     @Test
-    fun discoveryUsesTheV2RouteAndMergesTheMediaCapability() = runTest {
+    fun discoveryUsesTheV3RouteAndMergesTheMediaCapability() = runTest {
         val transport = transport()
         val repository = connected(transport)
-        assertTrue(transport.discoveries().first().text("requestId").startsWith("capabilities.v2:"))
+        assertTrue(transport.discoveries().first().text("requestId").startsWith("capabilities.v3:"))
         assertEquals(1, transport.discoveries().size)
         assertTrue(FILES_MEDIA_CAPABILITY in repository.state.value.capabilities)
     }
 
     @Test
-    fun aHostWithoutAListOnV2IsAskedOnceMoreOnV1() = runTest {
+    fun aLegacyHostIsAskedOnV3ThenV2ThenV1() = runTest {
         val transport = transport().apply { legacyHost = true; advertised = listOf(STEER_CAPABILITY) }
         val repository = connected(transport)
         val routes = transport.discoveries().map { it.text("requestId").substringBefore(':') }
-        assertEquals(listOf("capabilities.v2", "capabilities.v1"), routes.take(2))
+        assertEquals(listOf("capabilities.v3", "capabilities.v2", "capabilities.v1"), routes.take(3))
         assertTrue(STEER_CAPABILITY in repository.state.value.capabilities)
         assertTrue(repository.state.value.capabilitiesKnown)
         // Later discoveries go straight to v1: the host was found to be older.
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
-        assertTrue(transport.discoveries().drop(2).all { it.text("requestId").startsWith("capabilities.v1:") })
+        assertTrue(transport.discoveries().drop(3).all { it.text("requestId").startsWith("capabilities.v1:") })
     }
 
     @Test
-    fun theCapabilityListMayHoldThirtyTwoEntriesButNotThirtyThree() = runTest {
-        val filler = (1..31).map { "filler.$it" }
+    fun theV3CapabilityListMayHoldSixtyFourEntriesButNotSixtyFive() = runTest {
+        val filler = (1..63).map { "filler.$it" }
         for ((entries, expected) in listOf(filler + FILES_MEDIA_CAPABILITY to true, filler + FILES_MEDIA_CAPABILITY + "one-more" to false)) {
             val transport = transport().apply { advertised = entries }
             val repository = connected(transport)

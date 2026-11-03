@@ -1,5 +1,8 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -13,6 +16,10 @@ class GitChangesTest {
     private val fixture: JsonObject by lazy {
         Wire.json.parseToJsonElement(javaClass.getResource("/git-v1.json")!!.readText()).jsonObject
     }
+    private val pushFixture: JsonObject by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/git-push-v1.json")!!.readText()).jsonObject
+    }
+    private fun pushData(name: String): JsonObject = pushFixture.array("valid").single { it.text("name") == name }.obj("payload").obj("data")
 
     private fun entries(group: String) =
         fixture.getValue(group).jsonArray.map { it.jsonObject }
@@ -28,10 +35,14 @@ class GitChangesTest {
 
     private class Drafts : DraftStorage {
         var values = emptyMap<DraftKey, StoredDraft>()
+        var failSave = false
+        var onSave: ((Map<DraftKey, StoredDraft>) -> Unit)? = null
 
         override fun load() = values
 
         override fun save(drafts: Map<DraftKey, StoredDraft>) {
+            if (failSave) error("storage failed")
+            onSave?.invoke(drafts)
             values = drafts.toMap()
         }
     }
@@ -41,8 +52,9 @@ class GitChangesTest {
         val sent = mutableListOf<JsonObject>()
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
+        var authCapabilities: Set<String> = emptySet()
 
-        override fun connect(host: PairedHost) = listener.ready(emptySet())
+        override fun connect(host: PairedHost) = listener.ready(authCapabilities)
 
         override fun pair(value: JsonObject) {}
 
@@ -197,6 +209,363 @@ class GitChangesTest {
     }
 
     // ---- Repository ---------------------------------------------------------------------
+
+    @Test
+    fun pullRequestStatusWorksWithoutCreateAndLateRepliesAreAccepted() = runTest {
+        val transport = Transport().also { it.configure(gitCapabilities + SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY) { null } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", sessionId))
+        val pending = async { repo.gitPullRequestStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }
+        runCurrent()
+        val sent = transport.git().single()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertFalse(pending.isCompleted)
+        transport.result(sent, Wire.objectOf("kind" to "git.pull_request.status", "sessionId" to sessionId, "state" to "absent"))
+        runCurrent()
+        assertEquals(GitPullRequestStatus.ABSENT, pending.await().state)
+        assertTrue(runCatching { repo.gitPullRequestPrepare(sessionId) }.isFailure)
+        assertEquals(listOf("session.git.pull_request.status"), transport.git().map { it.text("type") })
+    }
+
+    @Test
+    fun pullRequestLateSuccessAndLostReplyKeepExactRequestWithoutRetry() = runTest {
+        val transport = Transport().also { it.configure(gitCapabilities + SESSION_GIT_PULL_REQUEST_CAPABILITY) { null } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", sessionId))
+        val token = "d3JpdGUtaWQtdG9rZW4tMQ"
+        var sent = false
+        val pending = async { repo.gitPullRequest(sessionId, token, "dev", "Title", "body", false, "fixed-pr") { sent = true } }
+        runCurrent(); assertTrue(sent)
+        val request = transport.git().single()
+        assertEquals("fixed-pr", request.text("requestId"))
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent(); assertFalse(pending.isCompleted)
+        transport.result(request, Wire.objectOf("kind" to "git.pull_request", "sessionId" to sessionId, "available" to true,
+            "created" to true, "number" to 12, "url" to "https://github.com/a/b/pull/12", "base" to "dev"))
+        runCurrent(); assertTrue(pending.await() is GitWriteResult.PullRequest.Available)
+        val lost = async { repo.gitPullRequest(sessionId, token, "dev", "Title", "", false, "lost-pr") }
+        runCurrent(); advanceTimeBy(GIT_PULL_REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertEquals(GitWriteResult.PullRequest.Unknown, lost.await())
+        assertEquals(listOf("fixed-pr", "lost-pr"), transport.git().map { it.text("requestId") })
+    }
+
+    @Test
+    fun pullRequestCapabilitiesFromAuthAndV2DoNotAuthorize() = runTest {
+        val caps = setOf(SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY)
+        val transport = Transport().also { it.authCapabilities = caps; it.configure(gitCapabilities + caps) { error("must not send") } }
+        val response = transport.response
+        transport.response = { request ->
+            val result = response(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(checkNotNull(result) - "capabilities") else result
+        }
+        val repo = repository(transport); repo.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(caps.intersect(repo.state.value.capabilities).isEmpty())
+        assertTrue(runCatching { repo.gitPullRequestPrepare(sessionId) }.isFailure)
+        assertTrue(runCatching { repo.gitPullRequestStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+    }
+
+    @Test
+    fun queuedComposerSnapshotPreservesPullRequestIntentAndRemoval() = runTest {
+        val storage = Drafts()
+        val transport = Transport().also { it.configure(gitCapabilities) { null } }
+        val repo = repository(transport, storage)
+        val selection = RemoteSelection("host", "project", sessionId); repo.activate(selection)
+        val intent = GitPullRequestIntent("feature", "a".repeat(40), "d3JpdGUtaWQtdG9rZW4tMQ", "fixed-pr", GitWriteTarget("origin", "feature", "github.com", "a/b"), "dev", "Title", "body", false)
+        var queued = false
+        storage.onSave = { values -> if (!queued && values[DraftKey("host", sessionId)]?.gitPullRequest != null) {
+            queued = true; repo.draft("composer"); backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { repo.flush() }
+        } }
+        repo.saveGitPullRequestIntent(selection, intent); runCurrent(); repo.flush()
+        assertTrue(queued); assertEquals(intent, storage.values[DraftKey("host", sessionId)]?.gitPullRequest)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        reopened.activate(selection); assertEquals(intent, reopened.gitPullRequestIntent(selection))
+        storage.onSave = null; repo.remove("host"); runCurrent(); repo.flush()
+        assertTrue(storage.values.keys.none { it.routeId == "host" })
+    }
+
+    @Test
+    fun pullRequestEditDraftQueuePreservesOtherIntentsAndForget() = runTest {
+        val storage = Drafts()
+        val repo = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        val selection = RemoteSelection("host", "project", sessionId); repo.activate(selection)
+        val intent = GitPullRequestIntent("feature", "a".repeat(40), "d3JpdGUtaWQtdG9rZW4tMQ", "fixed-pr", GitWriteTarget("origin", "feature", "github.com", "a/b"), "dev", "Title", "body", false)
+        repo.saveGitPullRequestIntent(selection, intent)
+        val edit = GitPullRequestDraft("dev", "", "saved body", false)
+        var queued = false
+        storage.onSave = { values -> if (!queued && values[DraftKey("host", sessionId)]?.gitPullRequestDraft != null) {
+            queued = true; repo.draft("composer"); backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { repo.flush() }
+        } }
+        repo.saveGitPullRequestDraft(selection, edit); runCurrent(); repo.flush()
+        val saved = storage.values.getValue(DraftKey("host", sessionId))
+        assertTrue(queued); assertEquals(edit, saved.gitPullRequestDraft); assertEquals(intent, saved.gitPullRequest); assertEquals("composer", saved.text)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage); reopened.activate(selection)
+        assertEquals(edit, reopened.gitPullRequestDraft(selection)); assertEquals(intent, reopened.gitPullRequestIntent(selection))
+        storage.onSave = null; repo.remove("host"); runCurrent(); repo.flush(); assertTrue(storage.values.keys.none { it.routeId == "host" })
+    }
+
+    @Test
+    fun pullRequestIntentRoundTripsAndOldDraftsRemainReadable() {
+        val intent = GitPullRequestIntent("feature", "a".repeat(40), "d3JpdGUtaWQtdG9rZW4tMQ", "fixed-pr", GitWriteTarget("origin", "feature", "github.com", "a/b"), "dev", "Title", "body", false)
+        assertEquals(intent, parseGitPullRequestIntent(intent.json()))
+        assertTrue(runCatching { parseGitPullRequestIntent(intent.copy(base = "/bad").json()) }.isFailure)
+        val bytes = JsonArray(listOf(Wire.objectOf("routeId" to "host", "sessionId" to sessionId, "text" to "composer", "gitPullRequest" to intent.json()))).toString().toByteArray()
+        assertEquals(intent, parseStoredDrafts(bytes).getValue(DraftKey("host", sessionId)).gitPullRequest)
+        val old = JsonArray(listOf(Wire.objectOf("routeId" to "host", "sessionId" to sessionId, "text" to "old"))).toString().toByteArray()
+        assertNull(parseStoredDrafts(old).getValue(DraftKey("host", sessionId)).gitPullRequest)
+    }
+
+    @Test
+    fun pushStatusWorksWhenWritesAreDisabledAndNeverSendsPush() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_STATUS_CAPABILITY) { request ->
+            assertEquals("session.git.push.status", request.text("type"))
+            pushData("push-status-matches")
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        val token = "d3JpdGUtaWQtdG9rZW4tMQ"
+        assertEquals(GitPushStatus.MATCHES, repository.gitPushStatus(sessionId, token).state)
+        assertTrue(runCatching { repository.gitPush(sessionId, token, "push-id") }.isFailure)
+        assertTrue(runCatching { repository.gitPushPrepare(sessionId) }.isFailure)
+        assertEquals(listOf("session.git.push.status"), transport.git().map { it.text("type") })
+    }
+
+    @Test
+    fun pushPreparationRequiresHeadAndPushKeepsTheRequestId() = runTest {
+        val transport = Transport()
+        val branchFixture = pushData("branch-head-sha1")
+        var includeHead = false
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { request ->
+            when (request.text("type")) {
+                "session.git.branch" -> if (includeHead) branchFixture else JsonObject(branchFixture - "head")
+                "session.git.push" -> Wire.objectOf("kind" to "git.push", "sessionId" to sessionId, "pushed" to true, "branch" to "feature", "remoteBranch" to "feature", "commit" to "a".repeat(40), "created" to false, "upstreamSet" to true)
+                else -> error("unexpected")
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(runCatching { repository.gitPushPrepare(sessionId) }.isFailure)
+        includeHead = true
+        val branch = repository.gitPushPrepare(sessionId) as GitWriteResult.Branch.Available
+        assertEquals("a".repeat(40), branch.head)
+        val pushed = repository.gitPush(sessionId, branch.writeId, "push-fixed-id") as GitWriteResult.Push.Pushed
+        assertEquals("a".repeat(40), pushed.commit)
+        val requests = transport.git()
+        assertEquals(JsonPrimitive(true), requests[0]["forPush"])
+        assertEquals("push-fixed-id", requests.last().text("requestId"))
+    }
+
+    @Test
+    fun pushCapabilitiesFromAuthOrV2NeverAuthorizeCommands() = runTest {
+        val transport = Transport()
+        transport.authCapabilities = setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY)
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY + GIT_PUSH_STATUS_CAPABILITY) { error("must not send") }
+        val response = transport.response
+        transport.response = { request ->
+            val result = response(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(checkNotNull(result) - "capabilities") else result
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        assertFalse(GIT_PUSH_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(GIT_PUSH_STATUS_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(runCatching { repository.gitPushPrepare(sessionId) }.isFailure)
+        assertTrue(runCatching { repository.gitPushStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+
+        val v1 = Transport().also { it.configure(gitCapabilities + GIT_PUSH_CAPABILITY + GIT_PUSH_STATUS_CAPABILITY) { error("must not send") } }
+        val original = v1.response
+        v1.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" &&
+                (request.text("requestId").startsWith("capabilities.v3:") || request.text("requestId").startsWith("capabilities.v2:")))
+                JsonObject(checkNotNull(result) - "capabilities") else result
+        }
+        val legacy = repository(v1)
+        legacy.activate(RemoteSelection("host", "project", sessionId))
+        assertFalse(GIT_PUSH_CAPABILITY in legacy.state.value.capabilities)
+        assertFalse(GIT_PUSH_STATUS_CAPABILITY in legacy.state.value.capabilities)
+        assertTrue(runCatching { legacy.gitPushPrepare(sessionId) }.isFailure)
+        assertTrue(v1.git().isEmpty())
+    }
+
+    @Test
+    fun lostPushReplyIsUnknownAndDoesNotRetry() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        var dispatched = false
+        val pending = async { repository.gitPush(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ", "push-unknown") { dispatched = true } }
+        runCurrent()
+        assertTrue(dispatched)
+        advanceTimeBy(GIT_PUSH_REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertEquals(GitWriteResult.Push.Unknown, pending.await())
+        assertEquals(listOf("push-unknown"), transport.git().map { it.text("requestId") })
+    }
+
+    @Test
+    fun pushReplyAfterDefaultTimeoutIsStillAccepted() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        val pending = async { repository.gitPush(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ", "late-push") }
+        runCurrent()
+        val sent = transport.git().single()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertFalse(pending.isCompleted)
+        transport.result(sent, Wire.objectOf("kind" to "git.push", "sessionId" to sessionId, "pushed" to true,
+            "branch" to "feature", "remoteBranch" to "feature", "commit" to "a".repeat(40), "created" to false, "upstreamSet" to true))
+        runCurrent()
+        assertTrue(pending.await() is GitWriteResult.Push.Pushed)
+        assertEquals(1, transport.git().size)
+    }
+
+    @Test
+    fun pushStatusReplyAfterDefaultTimeoutIsStillAccepted() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_STATUS_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        val pending = async { repository.gitPushStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }
+        runCurrent()
+        val sent = transport.git().single()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertFalse(pending.isCompleted)
+        transport.result(sent, pushData("push-status-matches"))
+        runCurrent()
+        assertEquals(GitPushStatus.MATCHES, pending.await().state)
+        assertEquals(1, transport.git().size)
+    }
+
+    @Test
+    fun queuedOlderDraftSnapshotCannotEraseNewCommitIntent() = runTest {
+        val storage = Drafts()
+        val transport = Transport().also { it.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { null } }
+        val repository = repository(transport, storage)
+        val selection = RemoteSelection("host", "project", sessionId)
+        repository.activate(selection)
+        val otherSelection = selection.copy(sessionId = "other-session")
+        val otherKey = DraftKey("host", "other-session")
+        val pending = GitCommitConfirmation("feature", listOf("a.kt"), "subject", "request-1", snapshotId)
+        var queued = false
+        storage.onSave = { values ->
+            if (!queued && values[otherKey]?.gitCommit?.pending != null) {
+                queued = true
+                // This captures the ordinary draft before the successful intent write publishes
+                // its new key in memory, but queues behind that write.
+                repository.draft("other edit")
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { repository.flush() }
+            }
+        }
+        repository.saveGitCommitDraft(otherSelection, GitCommitDraft("subject", pending))
+        runCurrent()
+        repository.flush()
+        assertTrue(queued)
+        assertEquals(pending, storage.values[otherKey]?.gitCommit?.pending)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        reopened.activate(selection)
+        assertEquals(pending, reopened.gitCommitDraft(otherSelection).pending)
+        repository.remove("host")
+        runCurrent()
+        repository.flush()
+        assertTrue(storage.values.keys.none { it.routeId == "host" })
+    }
+
+    @Test
+    fun failedCommitIntentClearKeepsPendingAcrossReopenAndUnrelatedSave() = runTest {
+        val storage = Drafts()
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { null }
+        val repository = repository(transport, storage)
+        val selection = RemoteSelection("host", "project", sessionId)
+        repository.activate(selection)
+        val pending = GitCommitConfirmation("feature", listOf("a.kt"), "subject", "request-1", snapshotId)
+        repository.saveGitCommitDraft(selection, GitCommitDraft("subject", pending))
+        storage.failSave = true
+        assertTrue(runCatching { repository.saveGitCommitDraft(selection, GitCommitDraft("subject")) }.isFailure)
+        assertEquals(pending, repository.gitCommitDraft(selection).pending)
+        storage.failSave = false
+        repository.draft("unrelated chat draft")
+        repository.flush()
+        assertEquals(pending, storage.values[DraftKey("host", sessionId)]?.gitCommit?.pending)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        reopened.activate(selection)
+        assertEquals(pending, reopened.gitCommitDraft(selection).pending)
+    }
+
+    @Test
+    fun commitReviewUsesExplicitHeadSnapshotAndRejectsMissingWriteCapability() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities) { error("must not be sent") }
+        val denied = repository(transport)
+        denied.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(runCatching { denied.gitCommitStatus(sessionId) }.isFailure)
+        assertTrue(transport.git().isEmpty())
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { request ->
+            JsonObject(withRequest(valid("status-head-without-dev-base"), request))
+        }
+        val allowed = repository(transport)
+        allowed.activate(RemoteSelection("host", "project", sessionId))
+        allowed.gitCommitStatus(sessionId)
+        val sent = transport.git().single()
+        assertEquals("head", sent.text("base"))
+        assertEquals(JsonPrimitive(true), sent["forCommit"])
+    }
+
+    @Test
+    fun commitStatusAcceptsOnlyTrueSubmoduleMarker() {
+        val original = valid("status-head-without-dev-base").obj("data")
+        val file = Wire.objectOf("path" to "module", "change" to "modified", "binary" to true, "submodule" to true)
+        val data = JsonObject(original + ("files" to JsonArray(listOf(file))))
+        assertTrue(parseGitStatus(data, sessionId, GitBase.HEAD).files.single().submodule)
+        val invalid = JsonObject(data + ("files" to JsonArray(listOf(JsonObject(file + ("submodule" to JsonPrimitive(false)))))))
+        assertTrue(runCatching { parseGitStatus(invalid, sessionId, GitBase.HEAD) }.isFailure)
+    }
+
+    @Test
+    fun selectiveCommitRequiresWriteCapabilityAndKeepsTheConfirmedRequest() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities) { error("commit must not be sent") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(runCatching { repository.gitCommit(sessionId, snapshotId, "subject", listOf("a.kt"), "commit-id") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { request ->
+            Wire.objectOf("kind" to "git.commit", "sessionId" to request.text("sessionId"), "committed" to true,
+                "branch" to "feature", "commit" to "a".repeat(40), "files" to 1,
+                "skipped" to JsonArray(emptyList()), "indexUpdated" to false)
+        }
+        val readyRepository = repository(transport)
+        readyRepository.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(GIT_WRITE_CAPABILITY in readyRepository.state.value.capabilities)
+        assertTrue(runCatching { readyRepository.gitCommit(sessionId, snapshotId, "subject", emptyList(), "commit-id") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+        val result = readyRepository.gitCommit(sessionId, snapshotId, "subject", listOf("a.kt"), "commit-id")
+        assertFalse((result as GitWriteResult.Commit.Committed).indexUpdated)
+        val sent = transport.git().single()
+        assertEquals("commit-id", sent.text("requestId"))
+        assertEquals(snapshotId, sent.text("snapshotId"))
+        assertEquals(listOf("a.kt"), sent.getValue("paths").jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun unansweredCommitIsUnknownAndNeverAutomaticallyResent() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        var dispatched = false
+        val result = async { repository.gitCommit(sessionId, snapshotId, "subject", listOf("a.kt"), "unknown-id") { dispatched = true } }
+        runCurrent()
+        assertTrue(dispatched)
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertEquals(GitWriteResult.Commit.Unknown, result.await())
+        assertEquals(listOf("unknown-id"), transport.git().map { it.text("requestId") })
+    }
 
     @Test
     fun sendsNoGitCommandWithoutTheCapability() = runTest {
@@ -476,7 +845,7 @@ class GitChangesTest {
             listOf(
                 ChatAction.FILES, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.RENAME,
                 ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.SETTINGS, ChatAction.NEW_SESSION,
-                ChatAction.SESSION_SETTINGS, ChatAction.HISTORY,
+                ChatAction.SESSION_SETTINGS, ChatAction.HISTORY, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR,
             ),
             layout.menu,
         )
@@ -515,7 +884,8 @@ class GitChangesTest {
         )
         val many = chatActionLayout(DEFAULT_CHAT_ACTIONS, ChatAction.entries.toSet() - ChatAction.HISTORY)
         assertEquals(many.shown, many.withHistory().shown)
-        assertEquals(many.menu + ChatAction.HISTORY, many.withHistory().menu)
+        val expected = many.menu.toMutableList().apply { add(indexOf(ChatAction.BROWSER), ChatAction.HISTORY) }
+        assertEquals(expected, many.withHistory().menu)
     }
 
     // ---- Review round 1 -----------------------------------------------------------------

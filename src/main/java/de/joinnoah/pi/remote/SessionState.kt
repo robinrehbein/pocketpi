@@ -241,6 +241,19 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
      */
     private val heardLive = LinkedHashSet<Long>()
 
+    private val closedQuestions = mutableListOf<JsonObject>()
+
+    /** Question instances closed as events actually apply, including buffered events. */
+    fun takeClosedQuestions(): List<JsonObject> = closedQuestions.toList().also { closedQuestions.clear() }
+
+    /** Discard a wait whose reply is known to belong to a retired journal. */
+    fun discardAwaiting() {
+        awaitingReply = false
+        pendingEvents.clear()
+        heldThrough = -1L
+        heardLive.clear()
+    }
+
     /**
      * Buffered events that [drainPending] applied and that did not reach the owner in full when
      * they arrived (not [heardLive]): the owner runs their side effects; see [takeDrained].
@@ -660,9 +673,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                 val question = event.obj("question")
                 questions = questions.filterNot { it.text("id") == question.text("id") } + question
             }
-            "question.closed" -> questions = questions.filterNot {
-                    it.text("id") == event.text("questionId")
-                }
+            "question.closed" -> {
+                val id = event.text("questionId")
+                closedQuestions.addAll(questions.filter { it.text("id") == id })
+                questions = questions.filterNot { it.text("id") == id }
+            }
             "session.compaction" -> compaction(event)
             "session.notice" -> Unit
             // A malformed suggestion is ignored; the next event or snapshot carries the value.

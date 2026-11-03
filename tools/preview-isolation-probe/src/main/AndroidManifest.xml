@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:name=".ProbeApplication" android:label="Preview isolation probe" android:allowBackup="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".ProbeActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
+        <service android:name=".ControlService" android:process=":control" android:exported="false" />
+        <service android:name=".IsolatedService" android:process=":isolated" android:isolatedProcess="true" android:exported="false" />
+    </application>
+</manifest>

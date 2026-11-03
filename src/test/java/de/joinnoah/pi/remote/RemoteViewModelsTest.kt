@@ -26,6 +26,23 @@ class RemoteViewModelsTest {
     }
 
     @Test
+    fun localPagedStorageRetryRunsWhileItsChatReconnectsButNotForAnotherChat() = runTest {
+        val backing = NavigationFakeRepository()
+        var retries = 0
+        val repository = object : RemoteRepository by backing {
+            override fun retryPagedEditorStorage() { retries++ }
+        }
+        val selection = RemoteSelection("host", "project", "session")
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
+        backing.state.value = RemoteState(selection = selection, loading = true, connected = false)
+        model.retryPagedEditorStorage()
+        assertEquals(1, retries)
+        backing.state.value = RemoteState(selection = selection.copy(sessionId = "other"), loading = true)
+        model.retryPagedEditorStorage()
+        assertEquals(1, retries)
+    }
+
+    @Test
     fun pickerResultWaitsForMatchingRestorationAndIsConsumedOnce() = runTest {
         val repository = NavigationFakeRepository()
         val selection = RemoteSelection("host", "project", "session")

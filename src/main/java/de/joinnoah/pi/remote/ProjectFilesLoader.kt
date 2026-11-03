@@ -6,15 +6,16 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-
-/** How many earlier unanswered saves an editor remembers ([FileEditor.superseded]). */
-private const val MAX_SUPERSEDED_WRITES = 4
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** How many folder listings [ProjectFilesLoader] keeps for an instant reopen. */
 private const val MAX_REMEMBERED_LISTINGS = 16
 
 /** The `session.files.*` commands. Implementations throw [RemoteRequestException] on errors. */
 internal interface FileSource {
+    suspend fun filesSearch(sessionId: String, query: String): FileSearchResult = throw RemoteRequestException.unsupported()
+
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing
 
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk
@@ -36,8 +37,17 @@ internal class ProjectFilesLoader(
     private val scope: CoroutineScope,
     private val source: FileSource,
     private val current: () -> RemoteState,
+    private val selectionIdentity: () -> Long = { 0L },
+    private val journal: FileDraftJournal? = null,
+    private val settleParkedDiscard: (FileDraftKey, FileEditor, Boolean?) -> Unit = { _, _, _ -> },
     private val update: ((RemoteState) -> RemoteState) -> Unit,
 ) {
+    private var searchJob: Job? = null
+    private var searchVersion = 0L
+    private data class PendingSearchHit(val hit: FileSearchHit, val sessionId: String, val routeId: String?, val selectionIdentity: Long, val editor: FileEditor)
+    private var pendingSearchHit: PendingSearchHit? = null
+    private var autoEditPath: String? = null
+    private var autoEditVersion: Long? = null
     private var listJob: Job? = null
     private var fileJob: Job? = null
     private var listVersion = 0L
@@ -49,6 +59,13 @@ internal class ProjectFilesLoader(
     private var drainingPreviews = false
     private var peekJob: Job? = null
     private var editorVersion = 0L
+    private val draftMutex = Mutex()
+    private val resolvedRequests = mutableSetOf<String>()
+    private val writesInFlight = mutableSetOf<FileDraftKey>()
+    private data class PendingAcknowledgement(val requestId: String, val written: FileWritten? = null, val content: String? = null)
+    private val pendingAcknowledgements = mutableMapOf<FileDraftKey, PendingAcknowledgement>()
+    private val snapshotGenerations = mutableMapOf<FileDraftKey, Long>()
+    private fun nextSnapshot(key: FileDraftKey): Long = ((snapshotGenerations[key] ?: 0L) + 1L).also { snapshotGenerations[key] = it }
     /** By Mac, session and folder. */
     private val remembered = NavigationMemoryCache<Triple<String?, String, String>, FileListing>(MAX_REMEMBERED_LISTINGS)
 
@@ -266,7 +283,60 @@ internal class ProjectFilesLoader(
      * Opens the browser at the session folder, or at its folder [path] with [file] open: the
      * browser as a return to the session left it. [lines] are picked in [file] and scrolled to.
      */
-    fun open(path: String = "", file: String? = null, lines: LineSelection? = null) {
+    fun search(query: String) {
+        val files = files() ?: return
+        searchJob?.cancel()
+        val version = ++searchVersion
+        val routeId = current().selection.routeId
+        val selection = selectionIdentity()
+        write(files.sessionId) { it.copy(search = FileSearchState(query = query, loading = validSearchQuery(query))) }
+        if (!validSearchQuery(query)) return
+        searchJob = scope.launch {
+            try {
+                val result = source.filesSearch(files.sessionId, query)
+                if (version == searchVersion && selectionIdentity() == selection && current().selection.routeId == routeId && files()?.search?.query == query) write(files.sessionId) { it.copy(search = FileSearchState(query = query, result = result)) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (version == searchVersion && selectionIdentity() == selection && current().selection.routeId == routeId && files()?.search?.query == query) write(files.sessionId) { it.copy(search = FileSearchState(query = query, failure = failure(e))) }
+            }
+        }
+    }
+
+    fun openSearchHit(hit: FileSearchHit) {
+        val files = files() ?: return
+        if (hit !in (files.search.result?.matches ?: emptyList()) || !isSessionPath(hit.path)) return
+        val editor = files.editor
+        if (editor != null && editor.changed) {
+            pendingSearchHit = PendingSearchHit(hit, files.sessionId, current().selection.routeId, selectionIdentity(), editor)
+            requestLeave(EditorLeave.SEARCH)
+        } else openSearchHitNow(hit)
+    }
+
+    fun canConfirmSearchHit(): Boolean {
+        val pending = pendingSearchHit ?: return false
+        val files = files() ?: return false
+        val editor = files.editor ?: return false
+        return selectionIdentity() == pending.selectionIdentity && current().selection.routeId == pending.routeId && files.sessionId == pending.sessionId &&
+            editor.path == pending.editor.path && editor.baseVersion == pending.editor.baseVersion &&
+            editor.buffer === pending.editor.buffer && editor.leaveRequest == EditorLeave.SEARCH &&
+            pending.hit in (files.search.result?.matches ?: emptyList())
+    }
+
+    fun confirmSearchHit() {
+        val hit = pendingSearchHit?.hit ?: return
+        pendingSearchHit = null
+        openSearchHitNow(hit)
+    }
+
+    private fun openSearchHitNow(hit: FileSearchHit) {
+        open(parentPath(hit.path), hit.path, LineSelection(hit.line), editAfterLoad = true)
+    }
+
+    fun open(path: String = "", file: String? = null, lines: LineSelection? = null, editAfterLoad: Boolean = false) {
+        searchJob?.cancel()
+        searchVersion++
+        autoEditPath = file.takeIf { editAfterLoad }
+        autoEditVersion = null
         stopList()
         stopFile()
         stopPreviews()
@@ -285,6 +355,7 @@ internal class ProjectFilesLoader(
             it.copy(
                 files = FilesState(
                     sessionId,
+                    searchEnabled = FILES_SEARCH_CAPABILITY in state.capabilities && FILES_SEARCH_CAPABILITY !in state.unavailableCapabilities,
                     path = path,
                     loading = failure == null && known == null,
                     listing = known,
@@ -310,6 +381,10 @@ internal class ProjectFilesLoader(
     }
 
     fun close() {
+        searchJob?.cancel()
+        searchVersion++
+        pendingSearchHit = null
+        autoEditPath = null
         stopList()
         stopFile()
         stopPreviews()
@@ -573,6 +648,7 @@ internal class ProjectFilesLoader(
 
     private fun read(sessionId: String, path: String, offset: Long, version: String?, reopen: Boolean) {
         val requestVersion = ++fileVersion
+        if (offset == 0L && autoEditPath == path) autoEditVersion = requestVersion
         fun active() =
             requestVersion == fileVersion &&
                 files()?.let { it.sessionId == sessionId && it.file?.path == path } == true
@@ -605,6 +681,10 @@ internal class ProjectFilesLoader(
                                 file.copy(content = file.content + chunk.content, nextOffset = chunk.nextOffset, moreLoading = false)
                         }
                     revealed(read)
+                }
+                if (autoEditPath == path && autoEditVersion == requestVersion && canEditFile(current())) {
+                    autoEditPath = null
+                    startEditing()
                 }
                 // The lines the chat opened the file at lie further on: read on to them.
                 val file = files()?.file?.takeIf { it.path == path }
@@ -678,15 +758,267 @@ internal class ProjectFilesLoader(
         val file = checkNotNull(files.file)
         stopEditor()
         val cursor = file.selection?.let { lineStartOffset(file.content, it.first) } ?: 0
+        val route = current().selection.routeId
+        val key = route?.let { FileDraftKey(it, files.sessionId, file.path) }
+        val version = editorVersion
+        val opened = FileEditor(file.path, checkNotNull(file.version), file.content, cursor = cursor,
+            recoveryLoading = journal != null)
+        fun active() = version == editorVersion && current().selection.routeId == route &&
+            files()?.let { it.sessionId == files.sessionId && it.editor?.buffer === opened.buffer } == true
         write(files.sessionId) {
-            it.copy(peek = null, editor = FileEditor(file.path, checkNotNull(file.version), file.content, cursor = cursor))
+            it.copy(peek = null, editor = opened)
+        }
+        if (journal != null) scope.launch {
+            try {
+                val draft = if (key != null) draftMutex.withLock {
+                    reconcileKnown(key, journal)
+                    journal.get(key)
+                } else error("missing route")
+                if (active()) writeEditor(files.sessionId, file.path) { it.copy(recoveryLoading = false, recovery = draft) }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                if (active()) writeEditor(files.sessionId, file.path) {
+                    it.copy(recoveryLoading = false, saveFailure = FilesFailure.STORAGE)
+                }
+            }
+        }
+    }
+
+    private fun editorActive(version: Long, key: FileDraftKey?): Boolean = key != null && version == editorVersion &&
+        current().selection.routeId == key.routeId && files()?.let { it.sessionId == key.sessionId && it.editor?.path == key.path } == true
+
+    private fun draftKey(sessionId: String, path: String): FileDraftKey? =
+        current().selection.routeId?.let { FileDraftKey(it, sessionId, path) }
+
+    private fun snapshot(editor: FileEditor, text: String = editor.latestText): StoredFileDraft =
+        StoredFileDraft(editor.baseVersion, editor.original, text, editor.superseded + listOfNotNull(editor.unconfirmed))
+
+    /** Apply a known reply before any other mutation of this key. Caller holds [draftMutex]. */
+    private suspend fun reconcileKnown(key: FileDraftKey, store: FileDraftJournal): PendingAcknowledgement? {
+        val ack = pendingAcknowledgements[key] ?: return null
+        val prior = store.get(key)
+        if (prior != null) {
+            val remaining = prior.pending.filterNot { it.requestId == ack.requestId }
+            val next = if (ack.written != null && ack.content != null)
+                prior.copy(baseVersion = ack.written.version, original = ack.content, pending = remaining)
+            else prior.copy(pending = remaining)
+            if (remaining.isEmpty() && next.text == next.original) store.remove(key) else store.put(key, next)
+        }
+        resolvedRequests += ack.requestId
+        pendingAcknowledgements.remove(key)
+        return ack
+    }
+
+    /** Merge unresolved receipts so a delayed text snapshot cannot erase a pending write. */
+    private suspend fun persist(key: FileDraftKey, draft: StoredFileDraft, generation: Long? = null): PendingAcknowledgement? {
+        val store = journal ?: return null
+        return draftMutex.withLock {
+            if (generation != null && generation != snapshotGenerations[key]) return@withLock null
+            val ack = reconcileKnown(key, store)
+            val adjusted = if (ack?.written != null && ack.content != null)
+                draft.copy(baseVersion = ack.written.version, original = ack.content) else draft
+            val previous = store.get(key)
+            val pending = (previous?.pending.orEmpty() + adjusted.pending).distinctBy { it.requestId }.filterNot { it.requestId in resolvedRequests }
+            if (pending.isEmpty() && adjusted.text == adjusted.original) {
+                if (previous != null) store.remove(key)
+            } else store.put(key, adjusted.copy(pending = pending))
+            ack
+        }
+    }
+
+    private suspend fun acknowledge(key: FileDraftKey, requestId: String, written: FileWritten? = null, content: String? = null, active: () -> Boolean = { false }) {
+        val store = journal ?: return
+        draftMutex.withLock {
+            val prior = store.get(key) ?: return@withLock
+            val remaining = prior.pending.filterNot { it.requestId == requestId }
+            // Read under the lock: a snapshot may have completed while acknowledgement waited.
+            val live = if (active()) files()?.editor else null
+            val next = if (written != null && content != null)
+                prior.copy(baseVersion = written.version, original = content, text = live?.latestText ?: prior.text, pending = remaining)
+            else prior.copy(pending = remaining)
+            if (remaining.isEmpty() && next.text == next.original) store.remove(key) else store.put(key, next)
+            resolvedRequests += requestId
+        }
+    }
+
+    private fun discardPersistedText(after: () -> Unit) {
+        val files = files() ?: return
+        val editor = files.editor ?: return
+        if (journal == null) { after(); return }
+        val key = draftKey(files.sessionId, editor.path) ?: run {
+            writeEditor(files.sessionId, editor.path) { it.copy(saveFailure = FilesFailure.STORAGE) }
+            return
+        }
+        val version = editorVersion
+        val generation = nextSnapshot(key)
+        val discardedText = editor.latestText
+        fun active() = editorActive(version, key) && files()?.editor?.buffer === editor.buffer
+        fun unchanged() = snapshotGenerations[key] == generation && editor.latestText == discardedText
+        writeEditor(key.sessionId, key.path) { it.copy(saving = true, saveFailure = null) }
+        scope.launch {
+            try {
+                val discarded = draftMutex.withLock {
+                    if (!active() || snapshotGenerations[key] != generation) return@withLock false
+                    reconcileKnown(key, journal)
+                    val prior = journal.get(key)
+                    if (prior != null) {
+                        if (prior.pending.isEmpty()) journal.remove(key)
+                        else journal.put(key, prior.copy(text = prior.original))
+                    }
+                    true
+                }
+                // The field can change before its watcher publishes a new snapshot. If that
+                // happened while IO was suspended, restore the newer text to the journal.
+                if (discarded && snapshotGenerations[key] == generation && editor.latestText != discardedText) {
+                    val newerGeneration = nextSnapshot(key)
+                    persist(key, snapshot(editor), newerGeneration)
+                }
+                if (active()) {
+                    if (discarded && unchanged()) after()
+                    else writeEditor(key.sessionId, key.path) { it.copy(saving = false) }
+                } else if (discarded) settleParkedDiscard(key, editor, if (unchanged()) true else null)
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                if (active()) writeEditor(key.sessionId, key.path) { it.copy(saving = false, saveFailure = FilesFailure.STORAGE) }
+                else settleParkedDiscard(key, editor, false)
+            }
         }
     }
 
     fun updateEditorText(text: String) {
         val files = files() ?: return
         val editor = files.editor ?: return
+        if (editor.recoveryLoading || editor.recovery != null) return
         if (editor.text != text) writeEditor(files.sessionId, editor.path) { it.copy(text = text) }
+        val key = draftKey(files.sessionId, editor.path) ?: return
+        val version = editorVersion
+        val generation = nextSnapshot(key)
+        fun active() = editorActive(version, key) && files()?.editor?.buffer === editor.buffer
+        if (journal != null) scope.launch {
+            try {
+                val reconciled = persist(key, snapshot(editor, text), generation)
+                if (reconciled != null && active()) writeEditor(key.sessionId, key.path) {
+                    val host = files()?.file?.takeIf { file -> file.path == key.path }
+                    it.copy(
+                        baseVersion = reconciled.written?.version ?: it.baseVersion,
+                        original = reconciled.content ?: it.original,
+                        conflict = if (reconciled.written != null && host != null && host.version == reconciled.written.version && host.content == reconciled.content) false else it.conflict,
+                        saveFailure = it.saveFailure.takeUnless { failure -> failure == FilesFailure.STORAGE },
+                        unconfirmed = it.unconfirmed?.takeUnless { pending -> pending.requestId == reconciled.requestId },
+                        superseded = it.superseded.filterNot { pending -> pending.requestId == reconciled.requestId })
+                }
+            }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (active()) writeEditor(key.sessionId, key.path) { it.copy(saveFailure = FilesFailure.STORAGE) }
+            }
+        }
+    }
+
+    fun restoreEditorDraft() {
+        val files = files() ?: return
+        val editor = files.editor ?: return
+        val offered = editor.recovery ?: return
+        val key = draftKey(files.sessionId, editor.path) ?: return
+        val version = editorVersion
+        val generation = nextSnapshot(key)
+        fun active() = editorActive(version, key) && files()?.editor?.buffer === editor.buffer
+        fun restore(draft: StoredFileDraft?) {
+            if (!active()) return
+            if (draft == null) {
+                writeEditor(key.sessionId, key.path) { it.copy(recovery = null, recoveryLoading = false) }
+                return
+            }
+            val pending = draft.pending
+            writeEditor(key.sessionId, key.path) {
+                it.copy(baseVersion = draft.baseVersion, original = draft.original, text = draft.text,
+                    conflict = editor.baseVersion != draft.baseVersion || editor.original != draft.original,
+                    unconfirmed = pending.lastOrNull(), superseded = pending.dropLast(1), recovery = null,
+                    recoveryLoading = false, buffer = EditorBuffer())
+            }
+        }
+        val store = journal
+        if (store == null) { restore(offered); return }
+        writeEditor(key.sessionId, key.path) { it.copy(recoveryLoading = true) }
+        scope.launch {
+            try {
+                val draft = draftMutex.withLock {
+                    if (!active() || snapshotGenerations[key] != generation) return@withLock null
+                    reconcileKnown(key, store)
+                    store.get(key)
+                }
+                if (active() && snapshotGenerations[key] == generation) restore(draft)
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                if (active()) writeEditor(key.sessionId, key.path) { it.copy(recoveryLoading = false, saveFailure = FilesFailure.STORAGE) }
+            }
+        }
+    }
+
+    fun discardEditorDraft() {
+        val files = files() ?: return
+        val editor = files.editor ?: return
+        if (editor.recovery == null) return
+        val key = draftKey(files.sessionId, editor.path) ?: return
+        val version = editorVersion
+        val generation = nextSnapshot(key)
+        fun active() = editorActive(version, key) && files()?.editor?.buffer === editor.buffer
+        scope.launch {
+            try {
+                val pending = draftMutex.withLock {
+                    if (!active() || snapshotGenerations[key] != generation) return@withLock null
+                    val store = journal ?: return@withLock null
+                    reconcileKnown(key, store)
+                    val current = store.get(key)
+                    if (!active() || snapshotGenerations[key] != generation) return@withLock null
+                    if (current != null) {
+                        if (current.pending.isEmpty()) store.remove(key)
+                        else store.put(key, current.copy(text = current.original))
+                    }
+                    current?.pending.orEmpty()
+                }
+                if (pending != null && active() && snapshotGenerations[key] == generation) writeEditor(key.sessionId, key.path) {
+                    it.copy(recovery = null, unconfirmed = pending.lastOrNull(), superseded = pending.dropLast(1), saveFailure = null)
+                }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                if (active()) writeEditor(key.sessionId, key.path) { it.copy(saveFailure = FilesFailure.STORAGE) }
+            }
+        }
+    }
+
+    private fun retryAcknowledgement(key: FileDraftKey, editor: FileEditor) {
+        val ack = pendingAcknowledgements[key] ?: return
+        if (!synchronized(writesInFlight) { writesInFlight.add(key) }) {
+            writeEditor(key.sessionId, key.path) { it.copy(saveFailure = FilesFailure.BUSY) }
+            return
+        }
+        val version = editorVersion
+        fun sameEditor() = editorActive(version, key) && files()?.editor?.buffer === editor.buffer
+        fun active() = sameEditor()
+        writeEditor(key.sessionId, key.path) { it.copy(saving = true, saveFailure = FilesFailure.STORAGE) }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            var success = false
+            try {
+                acknowledge(key, ack.requestId, ack.written, ack.content, ::active)
+                pendingAcknowledgements.remove(key)
+                success = true
+                if (active()) writeEditor(key.sessionId, key.path) {
+                    it.copy(saving = false, saveFailure = null,
+                        unconfirmed = it.unconfirmed?.takeUnless { pending -> pending.requestId == ack.requestId },
+                        superseded = it.superseded.filterNot { pending -> pending.requestId == ack.requestId })
+                }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                if (sameEditor()) writeEditor(key.sessionId, key.path) { it.copy(saving = false, saveFailure = FilesFailure.STORAGE) }
+            } finally {
+                if (sameEditor() && (!active() || !success)) writeEditor(key.sessionId, key.path) {
+                    it.copy(saving = false, saveFailure = if (success) null else FilesFailure.STORAGE)
+                }
+                synchronized(writesInFlight) { writesInFlight.remove(key) }
+                if (success && active()) saveEditor()
+            }
+        }
     }
 
     /**
@@ -702,10 +1034,15 @@ internal class ProjectFilesLoader(
     fun saveEditor() {
         val files = files() ?: return
         val editor = files.editor ?: return
-        if (editor.saving) return
+        if (editor.saving || editor.recoveryLoading || editor.recovery != null) return
         val sessionId = files.sessionId
         val path = editor.path
         val content = editor.latestText
+        val reconciliationKey = draftKey(sessionId, path)
+        if (reconciliationKey != null && pendingAcknowledgements.containsKey(reconciliationKey)) {
+            retryAcknowledgement(reconciliationKey, editor)
+            return
+        }
         if (content == editor.original) {
             writeEditor(sessionId, path) { it.copy(text = content, saveFailure = null, conflict = false) }
             return
@@ -730,10 +1067,19 @@ internal class ProjectFilesLoader(
         // An unanswered save of other text may still have reached the host: remember it.
         val superseded =
             if (previous == null || resent != null) editor.superseded
-            else (editor.superseded.filter { it.content != previous.content } + previous).takeLast(MAX_SUPERSEDED_WRITES)
+            else (editor.superseded + previous).distinctBy { it.requestId }
         var requestId = resent?.requestId ?: Wire.random()
         val version = editorVersion
-        fun active() = version == editorVersion && files()?.let { it.sessionId == sessionId && it.editor?.path == path } == true
+        val draftKey = draftKey(sessionId, path)
+        val routeId = current().selection.routeId
+        val identity = selectionIdentity()
+        fun sameEditor() = version == editorVersion && current().selection.routeId == routeId &&
+            files()?.let { it.sessionId == sessionId && it.editor?.path == path && it.editor.buffer === editor.buffer } == true
+        fun active() = selectionIdentity() == identity && sameEditor()
+        if (draftKey != null && !synchronized(writesInFlight) { writesInFlight.add(draftKey) }) {
+            writeEditor(sessionId, path) { it.copy(text = content, saveFailure = FilesFailure.BUSY) }
+            return
+        }
         writeEditor(sessionId, path) {
             it.copy(
                 text = content,
@@ -744,29 +1090,79 @@ internal class ProjectFilesLoader(
             )
         }
         // Not cancelled by navigation: the host may already have the write, so only the reply is dropped.
-        scope.launch {
+        val writeJob = scope.launch {
             var baseVersion = firstBase
             var rebased = false
             try {
                 while (true) {
                     try {
+                        if (journal != null) {
+                            try {
+                                val key = requireNotNull(draftKey)
+                                val currentEditor = files()?.editor?.takeIf { active() } ?: return@launch
+                                persist(key, snapshot(currentEditor).copy(pending = currentEditor.superseded + PendingWrite(requestId, baseVersion, content)))
+                            } catch (e: CancellationException) { throw e
+                            } catch (e: Exception) {
+                                if (active()) writeEditor(sessionId, path) { it.copy(saving = false, saveFailure = FilesFailure.STORAGE) }
+                                return@launch
+                            }
+                        }
                         val written = source.filesWrite(sessionId, path, baseVersion, content, requestId)
-                        if (active()) saved(sessionId, path, content, written)
+                        if (active()) {
+                            draftKey?.let { nextSnapshot(it) }
+                            saved(sessionId, path, content, written, saving = journal != null)
+                        }
+                        var storageFailed = false
+                        if (journal != null && draftKey != null) {
+                            try { acknowledge(draftKey, requestId, written, content, ::active) }
+                            catch (e: CancellationException) { throw e }
+                            catch (e: Exception) {
+                                pendingAcknowledgements[draftKey] = PendingAcknowledgement(requestId, written, content)
+                                storageFailed = true
+                            }
+                        }
+                        if (active()) writeEditor(sessionId, path) {
+                            it.copy(saving = false, saveFailure = if (storageFailed) FilesFailure.STORAGE else null)
+                        }
                         return@launch
                     } catch (e: CancellationException) {
                         // The repository also throws this when the selection changes under a live
                         // request (a reconnect): the write may or may not have happened.
                         if (!isActive) throw e
-                        if (active()) saveFailed(sessionId, path, requestId, FilesFailure.OFFLINE, answered = false)
+                        if (sameEditor()) saveFailed(sessionId, path, requestId, FilesFailure.OFFLINE, answered = false)
                         return@launch
                     } catch (e: Exception) {
                         Diagnostics.caught("files.write", e)
+                        val answered = e.hostCode.let { it != null && it != "offline" }
+                        if (answered && draftKey != null && journal != null) {
+                            try { acknowledge(draftKey, requestId) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (storage: Exception) {
+                                pendingAcknowledgements[draftKey] = PendingAcknowledgement(requestId)
+                                if (active()) writeEditor(sessionId, path) { it.copy(saving = false, saveFailure = FilesFailure.STORAGE) }
+                                return@launch
+                            }
+                        }
                         if (!active()) return@launch
                         val reason = failure(e)
                         val host = if (reason == FilesFailure.CONFLICT) wholeFile(sessionId, path) else null
                         if (!active()) return@launch
                         if (host != null && host.content == content) {
-                            saved(sessionId, path, content, FileWritten(path, host.version, host.size))
+                            val written = FileWritten(path, host.version, host.size)
+                            draftKey?.let { nextSnapshot(it) }
+                            saved(sessionId, path, content, written, saving = journal != null)
+                            var storageFailed = false
+                            if (journal != null && draftKey != null) {
+                                try { acknowledge(draftKey, requestId, written, content, ::active) }
+                                catch (cancelled: CancellationException) { throw cancelled }
+                                catch (storage: Exception) {
+                                    pendingAcknowledgements[draftKey] = PendingAcknowledgement(requestId, written, content)
+                                    storageFailed = true
+                                }
+                            }
+                            if (active()) writeEditor(sessionId, path) {
+                                it.copy(saving = false, saveFailure = if (storageFailed) FilesFailure.STORAGE else null)
+                            }
                             return@launch
                         }
                         val ours =
@@ -774,23 +1170,27 @@ internal class ProjectFilesLoader(
                                 files()?.editor?.superseded?.any { it.content == chunk.content }
                             } == true
                         if (host == null || !ours) {
-                            saveFailed(sessionId, path, requestId, reason, answered = e.hostCode.let { it != null && it != "offline" })
+                            saveFailed(sessionId, path, requestId, reason, answered = answered)
                             return@launch
                         }
                         // The host holds an earlier save of ours: send this text again on top of it, once.
                         rebased = true
                         baseVersion = host.version
                         requestId = Wire.random()
+                        draftKey?.let { nextSnapshot(it) }
                         rebase(sessionId, path, host, PendingWrite(requestId, baseVersion, content))
                     }
                 }
             } finally {
                 // Whatever ended the save, the editor never stays "saving".
-                if (active()) writeEditor(sessionId, path) {
-                    if (it.saving && it.unconfirmed?.requestId == requestId) it.copy(saving = false, saveFailure = FilesFailure.OFFLINE)
+                if (sameEditor()) writeEditor(sessionId, path) {
+                    if (it.saving) it.copy(saving = false, saveFailure = FilesFailure.OFFLINE)
                     else it
                 }
             }
+        }
+        writeJob.invokeOnCompletion {
+            if (draftKey != null) synchronized(writesInFlight) { writesInFlight.remove(draftKey) }
         }
     }
 
@@ -818,7 +1218,7 @@ internal class ProjectFilesLoader(
                     original = host.content,
                     conflict = false,
                     unconfirmed = pending,
-                    superseded = emptyList(),
+                    superseded = if (journal == null) emptyList() else current.superseded,
                 ),
                 file = state.file?.takeIf { it.path == path }?.copy(
                     version = host.version,
@@ -830,19 +1230,19 @@ internal class ProjectFilesLoader(
             )
         }
 
-    private fun saved(sessionId: String, path: String, content: String, written: FileWritten) =
+    private fun saved(sessionId: String, path: String, content: String, written: FileWritten, saving: Boolean = false) =
         write(sessionId) { state ->
             val current = state.editor?.takeIf { it.path == path } ?: return@write state
             state.copy(
                 editor = current.copy(
                     baseVersion = written.version,
                     original = content,
-                    saving = false,
+                    saving = saving,
                     saveFailure = null,
                     conflict = false,
                     savedAt = current.savedAt + 1,
                     unconfirmed = null,
-                    superseded = emptyList(),
+                    superseded = if (journal == null) emptyList() else current.superseded,
                 ),
                 file = state.file?.takeIf { it.path == path }?.copy(
                     version = written.version,
@@ -868,18 +1268,15 @@ internal class ProjectFilesLoader(
             )
         }
 
-    /** Leaves the editor for the read-only file; its text is dropped. */
-    fun discardEditor() {
-        val files = files() ?: return
-        if (files.editor == null) return
+    /** Leaves the editor only after its discarded text is durably removed. */
+    fun discardEditor() = discardPersistedText {
+        val files = files() ?: return@discardPersistedText
         stopEditor()
         write(files.sessionId) { it.copy(editor = null) }
     }
 
-    /** Drops the edit and reads the open file again, after a save found it changed. */
-    fun reloadAfterConflict() {
-        val files = files() ?: return
-        val path = files.editor?.path ?: return
+    fun reloadAfterConflict() = discardPersistedText {
+        val path = files()?.editor?.path ?: return@discardPersistedText
         stopEditor()
         openFile(path)
     }
@@ -896,14 +1293,19 @@ internal class ProjectFilesLoader(
         return true
     }
 
-    /** Discards the edit and returns the action that waited for it, if any. */
-    fun confirmLeave(): EditorLeave? {
+    /** Continues the waiting action only after the discard is durable. */
+    fun confirmLeave(complete: (EditorLeave?) -> Unit) {
         val leave = files()?.editor?.leaveRequest
-        discardEditor()
-        return leave
+        discardPersistedText {
+            val files = files() ?: return@discardPersistedText
+            stopEditor()
+            write(files.sessionId) { it.copy(editor = null) }
+            complete(leave)
+        }
     }
 
     fun cancelLeave() {
+        pendingSearchHit = null
         val files = files() ?: return
         val editor = files.editor ?: return
         writeEditor(files.sessionId, editor.path) { it.copy(leaveRequest = null) }

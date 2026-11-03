@@ -21,6 +21,7 @@ class TaskRepositoryTest {
         val sent = mutableListOf<JsonObject>()
         var v1Only = false
         var advertised = true
+        var routeCapabilities = setOf(SESSION_TASKS_CAPABILITY)
         var holdSnapshots = false
         var revision = 3
         var taskValue: JsonElement? = tasks("first")
@@ -46,9 +47,9 @@ class TaskRepositoryTest {
             val responseData = when (payload.text("type")) {
                 "projects.list" -> {
                     val base = Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(project)))
-                    if (v1Only && payload.text("requestId").startsWith("capabilities.v2:")) base
+                    if (v1Only && !payload.text("requestId").startsWith("capabilities.v1:")) base
                     else JsonObject(base + ("capabilities" to JsonArray(
-                        if (advertised) listOf(JsonPrimitive(SESSION_TASKS_CAPABILITY)) else emptyList(),
+                        if (advertised) routeCapabilities.map(::JsonPrimitive) else emptyList(),
                     )))
                 }
                 "sessions.list" -> Wire.objectOf("kind" to "sessions", "items" to JsonArray(listOf(session("session"), session("other"))))
@@ -82,6 +83,20 @@ class TaskRepositoryTest {
         assertTrue(transport.snapshots().isNotEmpty())
         assertTrue(transport.snapshots().all { "includeTasks" !in it })
         assertEquals(TaskFreshness.UNKNOWN, repo.state.value.tasks.freshness)
+    }
+
+    @Test fun mergedTaskAndTerminalCapabilitiesRequireV2() = runTest {
+        for (v1 in listOf(true, false)) {
+            val capabilities = setOf(SESSION_TASKS_CAPABILITY, SESSION_TERMINAL_CAPABILITY)
+            val transport = Transport().apply {
+                v1Only = v1
+                routeCapabilities = capabilities
+            }
+            val repo = repository(transport)
+            repo.activate(selection); runCurrent()
+            assertEquals(!v1, SESSION_TERMINAL_CAPABILITY in repo.state.value.capabilities)
+            assertEquals(!v1, transport.snapshots().any { it["includeTasks"] == JsonPrimitive(true) })
+        }
     }
 
     @Test fun lateV2DiscoveryRequestsFreshSnapshot() = runTest {

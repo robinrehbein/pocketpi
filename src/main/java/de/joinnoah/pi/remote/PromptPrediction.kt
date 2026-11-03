@@ -127,9 +127,17 @@ internal fun predictPrompt(
     if (messages.last().optionalText("state") == "streaming") return null
     val (events, lastUser) = toolEvents(messages)
     val reply = messages.withIndex().lastOrNull { it.index > lastUser && it.value.optionalText("role") == "assistant" }
-    // pi's own errors and the user's Stop both arrive as an empty error reply and can't be told
-    // apart, so only the host's interruption notice, which has text, suggests continuing.
-    if (reply?.value?.optionalText("state") == "error" && !reply.value.optionalText("text").isNullOrBlank()) {
+    // Legacy errors remain ambiguous. Explicit interruptions can also carry visible text in parts.
+    val replyMessage = reply?.value
+    val interruptedPartsHaveText = replyMessage?.optionalText("state") == "error" &&
+        replyMessage.optionalText("terminalOutcome") == "interrupted" &&
+        (replyMessage["parts"] as? JsonArray).orEmpty().any { part ->
+            val obj = part as? JsonObject
+            obj != null && obj.optionalText("type") == "text" &&
+                QuoteCodec.decode(AttachmentCodec.decode(obj.optionalText("text").orEmpty()).body).body.isNotBlank()
+        }
+    if (replyMessage?.optionalText("state") == "error" &&
+        (!replyMessage.optionalText("text").isNullOrBlank() || interruptedPartsHaveText)) {
         return PromptPrediction.Rule(PredictionRule.CONTINUE)
     }
     val latest = events.lastOrNull()

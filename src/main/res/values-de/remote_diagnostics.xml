@@ -1,5 +1,5 @@
 <resources>
-    <string name="remote_waiting_for_mac">Warte auf deinen Mac…</string>
+    <string name="remote_waiting_for_mac">Warte auf deinen Rechner…</string>
     <string name="remote_diagnostics_title">Diagnose</string>
     <string name="remote_diagnostics_help">Verbindungs- und Anfragezeiten auf diesem Handy, solange die App läuft. Eine Zusammenfassung bleibt für den nächsten Start gespeichert. Die Daten enthalten keine Nachrichten, IDs oder Schlüssel.</string>
     <string name="remote_diagnostics_open">Diagnose anzeigen</string>
@@ -11,7 +11,7 @@
     <string name="remote_diagnostics_connect_pending">Läuft</string>
     <string name="remote_diagnostics_milliseconds">%1$d ms</string>
     <string name="remote_diagnostics_phase_opening">Relay</string>
-    <string name="remote_diagnostics_phase_challenge">Antwort vom Mac</string>
+    <string name="remote_diagnostics_phase_challenge">Antwort vom Rechner</string>
     <string name="remote_diagnostics_phase_ready">Verschlüsselung</string>
     <string name="remote_diagnostics_phase_authenticating">Anmeldung</string>
     <string name="remote_diagnostics_phase_approval">Freigabe</string>

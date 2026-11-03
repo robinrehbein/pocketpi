@@ -5,6 +5,11 @@ import kotlinx.serialization.json.JsonObject
 
 internal class NavigationFakeRepository : RemoteRepository {
     override val state = MutableStateFlow(RemoteState())
+    val presenceEvents = mutableListOf<Pair<String, RemoteSelection>>()
+    override fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit {
+        presenceEvents += "acquire" to selection
+        return { presenceEvents += "release" to selection }
+    }
     val activations = mutableListOf<Pair<RemoteSelection, ActivationMode>>()
     var activation: suspend (RemoteSelection, ActivationMode) -> RemoteSelection = { selection, _ ->
         selection

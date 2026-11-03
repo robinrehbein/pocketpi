@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import androidx.annotation.VisibleForTesting
 import java.io.File
+import java.io.IOException
 import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -28,6 +29,8 @@ import javax.crypto.spec.GCMParameterSpec
  * [UnrecoverableKeyException]). Only the last two also delete the key: one bad file says nothing
  * about the key, and several files may share an alias (every attachment does). Any other failure,
  * an IOException above all, is thrown and leaves the file and the key alone.
+ * With [preserveUnreadable], these irrecoverable reads throw instead and leave both file and key
+ * untouched, allowing callers that hold unresolved evidence to fail closed across restarts.
  *
  * [onReset] runs before a quarantined file is deleted, while this store's lock is held, so caches
  * derived from the file go first.
@@ -37,6 +40,8 @@ class EncryptedFileStore(
     name: String,
     private val alias: String,
     private val onReset: () -> Unit = {},
+    private val preserveUnreadable: Boolean = false,
+    private val preserveIncompleteCommit: Boolean = false,
 ) {
     private val file = AtomicFile(File(context.noBackupFilesDir, name))
 
@@ -50,9 +55,13 @@ class EncryptedFileStore(
 
     fun read(): ByteArray? =
         synchronized(lock) {
-            if (!file.baseFile.exists()) return null
+            if (preserveIncompleteCommit) checkNoPendingCommit()
+            // AtomicFile.openRead restores a legacy backup, including when the base is absent.
+            if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
             val bytes = file.readFully()
+            if (File(file.baseFile.path + ".bak").exists()) throw IOException("Encrypted file backup recovery failed")
             if (bytes.size < IV_BYTES + TAG_BYTES) {
+                if (preserveUnreadable) throw java.io.IOException("Encrypted file is truncated")
                 Diagnostics.record(Diagnostics.Kind.CAUGHT, "store.quarantine", outcome = "truncated")
                 quarantine(dropKey = false)
                 return null
@@ -62,6 +71,7 @@ class EncryptedFileStore(
                 withKey { unseal(alias, bytes) }
             } catch (e: Exception) {
                 val unreadable = unreadable(e) ?: throw e.also { forgetKeyOn(alias, it) }
+                if (preserveUnreadable) throw e
                 Diagnostics.caught("store.quarantine", e)
                 quarantine(dropKey = unreadable == Unreadable.KEY)
                 null
@@ -76,20 +86,46 @@ class EncryptedFileStore(
                     withKey { seal(alias, value) }
                 } catch (e: Exception) {
                     if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(alias, it) }
+                    if (preserveUnreadable) throw e
                     // The file is replaced anyway, so a new key lets the write go through.
                     Diagnostics.caught("store.write.key", e)
                     dropKey(alias)
                     seal(alias, value)
                 }
+            if (preserveIncompleteCommit) checkNoPendingCommit()
             val stream = file.startWrite()
+            var finishAttempted = false
             try {
                 stream.write(bytes)
+                // AtomicFile.finishWrite logs sync and rename failures instead of throwing them.
+                stream.fd.sync()
+                finishAttempted = true
                 file.finishWrite(stream)
+                if (preserveIncompleteCommit) checkNoPendingCommit()
+                val committed = file.readFully()
+                if (File(file.baseFile.path + ".bak").exists() || !committed.contentEquals(bytes)) {
+                    throw IOException("Encrypted file commit failed")
+                }
             } catch (e: Exception) {
                 Diagnostics.caught("store.write", e)
-                file.failWrite(stream)
+                if (!preserveIncompleteCommit || !finishAttempted) {
+                    file.failWrite(stream)
+                } else {
+                    // The commit may have failed after touching disk; retain every artifact.
+                    try {
+                        stream.close()
+                    } catch (closeError: Exception) {
+                        e.addSuppressed(closeError)
+                    }
+                }
                 throw e
             }
+        }
+    }
+
+    private fun checkNoPendingCommit() {
+        if (File(file.baseFile.path + ".new").exists() || File(file.baseFile.path + ".bak").exists()) {
+            throw IOException("Unfinished encrypted file commit")
         }
     }
 

@@ -29,6 +29,9 @@ SOFTWARE.
 The app bundles Mermaid (MIT) to draw diagrams; its license, its notice and the
 licenses of the packages inside it are in src/main/assets/mermaid/.
 
+The app bundles xterm.js 6.0.0 (MIT) for the local terminal renderer. Its license,
+source package and integrity record are in src/main/assets/terminal/.
+
 The Synthwave app palette is adapted from SynthWave '84 by Robb Owen:
 https://github.com/robb0wen/synthwave-vscode
 

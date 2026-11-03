@@ -354,6 +354,9 @@ internal fun QuotePreview(
 @Composable
 internal fun ChatComposer(
     state: RemoteState,
+    presenceOwner: Any? = null,
+    presenceSelection: RemoteSelection? = null,
+    acquirePresence: ((RemoteSelection) -> () -> Unit)? = null,
     /** Where typed text goes when the caller does not hoist [draft]. */
     onDraft: (String) -> Unit = {},
     onSend: () -> Unit,
@@ -365,6 +368,11 @@ internal fun ChatComposer(
     onResumeChild: () -> Unit = {},
     onAbort: () -> Unit = onStop,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+    onLoadQuestionDetails: (String) -> Unit = {},
+    onLoadPagedEditor: (kotlinx.serialization.json.JsonObject) -> Unit = {},
+    onEditPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
+    onSubmitPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
+    onRetryPagedEditorStorage: () -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
     suggestions: @Composable ColumnScope.() -> Unit = {},
     onRemoveAttachment: (String) -> Unit = {},
@@ -401,6 +409,12 @@ internal fun ChatComposer(
     /** Offers the "Expand editor" control when set; it toggles the large editor. */
     onEditorExpanded: ((Boolean) -> Unit)? = null,
 ) {
+    if (presenceOwner != null && presenceSelection != null && acquirePresence != null) {
+        DisposableEffect(presenceOwner, presenceSelection) {
+            val release = acquirePresence(presenceSelection)
+            onDispose { release() }
+        }
+    }
     // Everything below reads the text on screen, which runs ahead of the repository's draft
     // while the user types.
     val repositoryState = state
@@ -513,7 +527,9 @@ internal fun ChatComposer(
                 keyTarget.type = {}
             }
         QuestionComposer(
-            state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true,
+            state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true, onLoadQuestionDetails = onLoadQuestionDetails,
+            onLoadPagedEditor = onLoadPagedEditor, onSubmitPagedEditor = onSubmitPagedEditor, onRetryPagedEditorStorage = onRetryPagedEditorStorage,
+            onEditPagedEditor = onEditPagedEditor,
         ) { questionId, answer ->
             val route = state.selection.routeId
             val session = state.selection.sessionId
@@ -1238,6 +1254,11 @@ private fun QuestionComposer(
     abortBlocked: Boolean = false,
     /** The first Esc asked for a second one to abort ([ChatKeyTarget.stopHint]). */
     stopHint: Boolean = false,
+    onLoadQuestionDetails: (String) -> Unit = {},
+    onLoadPagedEditor: (kotlinx.serialization.json.JsonObject) -> Unit = {},
+    onEditPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
+    onSubmitPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
+    onRetryPagedEditorStorage: () -> Unit = {},
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
     val abortEnabled = !abortBlocked && questionAbortEnabled(state)
@@ -1254,9 +1275,22 @@ private fun QuestionComposer(
                     val questionId = question.text("id")
                     QuestionCard(
                         question = question,
+                        editorScope = state.editorQuestionGeneration,
+                        editorAvailable = editorCapabilityAvailable(question, state) &&
+                            (!question.containsKey("editorUploadGrantId") || QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in state.unavailableCapabilities),
                         enabled = state.connected && questionId !in state.answering,
                         pending = questionId in state.answering,
                         block = state.questionBlocks[questionId],
+                        details = state.questionDetails[questionId],
+                        pagedEditor = if (question.containsKey("editorUploadGrantId") && (QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities || questionId in state.pagedQuarantines))
+                            state.pagedEditors[questionId] ?: PagedEditorView(quarantined = questionId in state.pagedQuarantines) else null,
+                        answerQuarantined = questionId in state.pagedQuarantines,
+                        journalState = PagedEditorView(storagePending = state.pagedStoragePending, storageFailed = state.pagedStorageFailed, storageRetryAvailable = state.pagedStorageRetryAvailable),
+                        onLoadPagedEditor = { onLoadPagedEditor(question) },
+                        onEditPagedEditor = { onEditPagedEditor(question, it) },
+                        onSubmitPagedEditor = { onSubmitPagedEditor(question, it) },
+                        onRetryPagedEditorStorage = onRetryPagedEditorStorage,
+                        onLoadDetails = { onLoadQuestionDetails(questionId) },
                         onAnswer = { answer -> onAnswer(questionId, answer) },
                     )
                 }

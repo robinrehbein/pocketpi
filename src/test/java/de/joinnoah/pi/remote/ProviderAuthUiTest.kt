@@ -93,7 +93,7 @@ class ProviderAuthUiTest {
         compose.onNodeWithTag("providerStatus:anthropic").assertIsDisplayed()
         compose.onNodeWithText("Signed in with an account").assertIsDisplayed()
         compose.onNodeWithText("Not signed in").assertIsDisplayed()
-        compose.onNodeWithText("Configured in models.json on the Mac").assertIsDisplayed()
+        compose.onNodeWithText("Configured in models.json on the computer").assertIsDisplayed()
         compose.onNodeWithTag("providerSignOut:anthropic").assertIsDisplayed()
         // A key from models.json can be neither replaced nor removed from the phone.
         compose.onNodeWithTag("providerSignIn:amazon-bedrock").assertDoesNotExist()

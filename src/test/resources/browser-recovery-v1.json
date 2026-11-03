@@ -1,0 +1,466 @@
+{
+  "version": 1,
+  "capability": "session.browser.recovery.v1",
+  "valid": [
+    {
+      "name": "owner document",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "viewer document",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        }
+      }
+    },
+    {
+      "name": "moving waiting",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame.waiting",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "streamId": "stream-fixture",
+        "generation": 3,
+        "viewportRevision": 6,
+        "reason": "moving"
+      }
+    },
+    {
+      "name": "open recovery opt-in",
+      "payload": {
+        "type": "browser.open",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "recovery": true
+      }
+    },
+    {
+      "name": "watch recovery opt-in",
+      "payload": {
+        "type": "browser.watch",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "viewportRevision": 6,
+        "recovery": true
+      }
+    },
+    {
+      "name": "legacy open",
+      "payload": {
+        "type": "browser.open",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture"
+      }
+    },
+    {
+      "name": "legacy watch",
+      "payload": {
+        "type": "browser.watch",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "viewportRevision": 6
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "document missing tab scope",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "document blank session scope",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "document equal revisions",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 4,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "document reversed revisions",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 3,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "control without owner",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "document unexpected field",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        },
+        "leaseId": "leaked-placeholder"
+      }
+    },
+    {
+      "name": "control unexpected field",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7,
+          "extra": true
+        }
+      }
+    },
+    {
+      "name": "sequence exceeds safe integer",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 9007199254740992
+        }
+      }
+    },
+    {
+      "name": "generation exceeds safe integer",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 9007199254740992,
+        "fromViewportRevision": 4,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "negative revision",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": -1,
+        "viewportRevision": 6,
+        "tabs": [
+          {
+            "id": "tab-fixture",
+            "title": "Fixture",
+            "url": "https://example.com/"
+          }
+        ],
+        "owner": {
+          "kind": "device",
+          "id": "device-fixture"
+        },
+        "control": {
+          "leaseId": "lease-placeholder",
+          "nextSequence": 7
+        }
+      }
+    },
+    {
+      "name": "waiting missing stream",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame.waiting",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "viewportRevision": 6,
+        "reason": "moving"
+      }
+    },
+    {
+      "name": "waiting wrong reason",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame.waiting",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "streamId": "stream-fixture",
+        "generation": 3,
+        "viewportRevision": 6,
+        "reason": "failed"
+      }
+    },
+    {
+      "name": "waiting unexpected field",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame.waiting",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "streamId": "stream-fixture",
+        "generation": 3,
+        "viewportRevision": 6,
+        "reason": "moving",
+        "sessionId": "session-fixture"
+      }
+    },
+    {
+      "name": "watch nonboolean opt-in",
+      "payload": {
+        "type": "browser.watch",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "viewportRevision": 6,
+        "recovery": "true"
+      }
+    },
+    {
+      "name": "open unexpected field",
+      "payload": {
+        "type": "browser.open",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "recovery": true,
+        "browserId": "browser-fixture"
+      }
+    }
+  ]
+}

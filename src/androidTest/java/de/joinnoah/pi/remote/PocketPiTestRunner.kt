@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.app.Application
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import androidx.test.runner.AndroidJUnitRunner
@@ -17,15 +18,38 @@ import androidx.test.runner.AndroidJUnitRunner
  */
 class PocketPiTestRunner : AndroidJUnitRunner() {
     private var hideErrorDialogs = false
+    private var startupArguments: Bundle? = null
 
     override fun onCreate(arguments: Bundle?) {
+        startupArguments = arguments?.let(::Bundle)
         hideErrorDialogs = arguments?.getString("hideErrorDialogs") == "true"
         super.onCreate(arguments)
     }
 
+    override fun callApplicationOnCreate(app: Application) {
+        val args = startupArguments
+        try {
+            if (args?.getString("productionEntryFixture") == "true") {
+                ProductionEntryBootstrap.install(app, args)
+            }
+            super.callApplicationOnCreate(app)
+            if (args?.getString("productionEntryFixture") == "true") ProductionEntryBootstrap.completed()
+        } catch (failure: Throwable) {
+            ProductionEntryBootstrap.close()
+            throw failure
+        } finally {
+            DebugTransportFixture.clear()
+        }
+    }
+
     override fun onStart() {
+        if (startupArguments?.getString("productionEntryFixture") == "true") ProductionEntryBootstrap.awaitStarted()
         if (hideErrorDialogs) runShell("settings put global hide_error_dialogs 1")
         super.onStart()
+    }
+
+    override fun finish(resultCode: Int, results: Bundle?) {
+        try { ProductionEntryBootstrap.close() } finally { super.finish(resultCode, results) }
     }
 
     private fun runShell(command: String) {

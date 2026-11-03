@@ -260,6 +260,33 @@ class SessionControlsTest {
     }
 
     @Test
+    fun nativeExportRequiresHostCapabilityAndQualifiedSession() {
+        val nativeCapability = "session.export.native.v1"
+        val base = chatState.copy(
+            capabilities = chatState.capabilities + EXPORT_CAPABILITY + nativeCapability,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        fun native(origin: String, qualified: Any? = true) =
+            Wire.objectOf("id" to "s1", "origin" to origin, "nativeExport" to qualified)
+        val worker = base.copy(session = native("worker"))
+        val terminalWorker = base.copy(session = native("tui"))
+        assertTrue(canExportSession(worker))
+        assertTrue(canExportSession(terminalWorker))
+        assertTrue(LocalCommand.EXPORT in chatMenuLocalCommands(worker))
+        assertFalse(canExportSession(worker.copy(capabilities = base.capabilities - nativeCapability)))
+        assertFalse(canExportSession(worker.copy(capabilities = base.capabilities - EXPORT_CAPABILITY)))
+        assertFalse(canExportSession(worker.copy(unavailableCapabilities = setOf(nativeCapability))))
+        assertFalse(canExportSession(worker.copy(unavailableCapabilities = setOf(EXPORT_CAPABILITY))))
+        assertFalse(canExportSession(base.copy(session = native("worker", false))))
+        assertFalse(canExportSession(base.copy(session = Wire.objectOf("id" to "s1", "origin" to "tui"))))
+        assertFalse(canExportSession(base.copy(session = native("history"))))
+        assertFalse(canExportSession(worker.copy(status = "offline")))
+        assertFalse(canExportSession(worker.copy(connected = false)))
+        assertFalse(canExportSession(worker.copy(loading = true)))
+        assertFalse(canExportSession(worker.copy(selection = RemoteSelection())))
+    }
+
+    @Test
     fun reloadRunsOnlyForHostOwnedIdleSessionsAndExplainsItselfInTheTerminal() {
         val reloadable = chatState.copy(
             capabilities = chatState.capabilities + RELOAD_CAPABILITY,

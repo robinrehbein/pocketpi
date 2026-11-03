@@ -1,19 +1,19 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
     <!-- Pairing: the wait for the Mac's approval. -->
-    <string name="remote_pairing_wait_title">Waiting for your Mac</string>
+    <string name="remote_pairing_wait_title">Waiting for your computer</string>
     <string name="remote_pairing_time_left">Time left: %1$s</string>
     <string name="remote_pairing_cancel">Cancel pairing</string>
 
     <!-- First run on the Macs page. -->
-    <string name="remote_onboarding_step_1">On your Mac, start pi and type /remote.</string>
+    <string name="remote_onboarding_step_1">On your computer, start pi and type /remote.</string>
     <string name="remote_onboarding_step_2">Scan the QR code pi shows, or copy its pairing code and paste it here.</string>
-    <string name="remote_onboarding_step_3">Approve this phone on your Mac.</string>
+    <string name="remote_onboarding_step_3">Approve this phone on your computer.</string>
     <string name="remote_onboarding_scan">Scan QR code</string>
     <string name="remote_onboarding_paste">Paste code</string>
-    <string name="remote_onboarding_setup">Set up your Mac</string>
-    <string name="remote_onboarding_setup_body">PocketPi works with pi on your Mac through pi Remote. Your Mac needs pi with the remote extension, and it has to stay awake and online while you use the app.</string>
-    <string name="remote_onboarding_setup_projects">Only projects you share on the Mac appear here. You can remove a pairing at any time, here or on the Mac.</string>
+    <string name="remote_onboarding_setup">Set up your computer</string>
+    <string name="remote_onboarding_setup_body">PocketPi works with pi on your computer through pi Remote. Your computer needs pi with the remote extension, and it has to stay awake and online while you use the app.</string>
+    <string name="remote_onboarding_setup_projects">Only projects you share on the computer appear here. You can remove a pairing at any time, here or on the computer.</string>
     <string name="remote_onboarding_setup_done">Got it</string>
 
     <!-- The revoked device card. -->
@@ -38,14 +38,14 @@
     <string name="remote_settings_hide_offline_help">Applies to every project\'s session list, like the switch in its filter.</string>
 
     <!-- Settings: devices. -->
-    <string name="remote_settings_paired_macs">Paired Macs</string>
-    <string name="remote_settings_paired_none">No Mac paired yet</string>
+    <string name="remote_settings_paired_macs">Paired computers</string>
+    <string name="remote_settings_paired_none">No computer paired yet</string>
     <plurals name="remote_settings_paired_count">
-        <item quantity="one">%d Mac paired</item>
-        <item quantity="other">%d Macs paired</item>
+        <item quantity="one">%d computer paired</item>
+        <item quantity="other">%d computers paired</item>
     </plurals>
     <string name="remote_settings_watch">Watch</string>
-    <string name="remote_settings_watch_help">Open PocketPi on your watch and tap \"%1$s\". This phone then scans the Mac\'s QR code for the watch, and the watch gets a pairing of its own.</string>
+    <string name="remote_settings_watch_help">Open PocketPi on your watch and tap \"%1$s\". This phone then scans the computer\'s QR code for the watch, and the watch gets a pairing of its own.</string>
 
     <!-- Settings: about. -->
     <string name="remote_settings_version">Version %1$s (%2$d)</string>

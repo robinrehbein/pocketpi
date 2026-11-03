@@ -9,6 +9,26 @@ installations, device keys, pairings and drafts**. The watch uses the existing
 Android protocol, encrypted transport and repository implementation. No host or
 relay protocol changes are required.
 
+## Feature selection
+
+The primary development clients are the Galaxy S25 and Galaxy Tab S11. Wear OS
+offers a smaller set of interactions chosen for watch use; phone feature parity
+is not an acceptance criterion. Its scope is not limited to messages and questions.
+
+For each new feature, assess whether its purpose and current state fit on the
+watch display, whether the user can make the decision with the context shown,
+and whether input and confirmation remain practical with touch or dictation.
+Prefer brief status checks and deliberate actions such as approvals, short
+replies, starting a supported task or stopping running work. Longer reading can
+use bounded pages where that remains useful; complex editing, terminal work and
+spatial browser/emulator interaction should offer phone or tablet handoff.
+Availability in the shared repository does not by itself justify a watch UI.
+
+Watch acceptance must include round-screen clipping, large text, navigation,
+accidental activation and background/battery behavior. No Wear emulator is
+required for the current Android-focused work; local checks do not replace the
+physical-watch checks below.
+
 ## Small-screen interaction
 
 - Dark Wear Compose surfaces, generous side margins, full-width chips and scroll

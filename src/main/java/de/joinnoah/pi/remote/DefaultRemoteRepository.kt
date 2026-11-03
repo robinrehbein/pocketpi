@@ -64,8 +64,16 @@ private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
 private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
-/** The v2 list holds the v1 entries plus newer ones; installed apps accept 16, this one 32. */
-private const val MAX_ROUTE_CAPABILITIES = 32
+private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
+private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"
+
+private fun capabilityRevision(route: String): Int = when {
+    route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
+    route.startsWith(CAPABILITIES_V2_ROUTE) -> 2
+    route.startsWith(CAPABILITIES_V1_ROUTE) -> 1
+    else -> 0
+}
 
 /** Sessions whose unsaved editor is kept while another session is open; the oldest goes first. */
 private const val MAX_PARKED_EDITORS = 4
@@ -153,6 +161,11 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
+/** Host push and remote-status operations have longer bounded network budgets. */
+internal const val GIT_PULL_REQUEST_TIMEOUT_MILLIS = 150_000L
+internal const val GIT_PULL_REQUEST_STATUS_TIMEOUT_MILLIS = 90_000L
+internal const val GIT_PUSH_REQUEST_TIMEOUT_MILLIS = 150_000L
+internal const val GIT_PUSH_STATUS_REQUEST_TIMEOUT_MILLIS = 90_000L
 
 /** Connection-bound requests (folder, fan-out, background) that may be outstanding at once. */
 private const val MAX_CONNECTION_REQUESTS = 32
@@ -280,15 +293,47 @@ class DefaultRemoteRepository(
     private val jitter: () -> Double = { Random.nextDouble() },
     /** Sent and project images kept on disk between runs; null keeps them in memory only. */
     private val media: MediaDiskCache? = null,
+    private val terminalNow: () -> Long = android.os.SystemClock::elapsedRealtime,
     /**
      * Whether a live run keeps the process in the background (the [LiveRunService] runs), which
      * is the only case where a push wake leaves its socket open at the window's end.
      */
     private val liveRunKept: () -> Boolean = { false },
+    private val pagedEditorTestGate: Boolean = false,
+    private val fileDraftStorage: FileDraftStorage? = null,
+    private val pagedEditorStorage: PagedEditorStorage? = null,
+    private val positiveOutcomeTestGate: Boolean = false,
+    private val nativePagedEditorEnabled: Boolean = false,
+    private val nativePositiveOutcomeEnabled: Boolean = false,
 ) : RemoteRepository {
+    override suspend fun loadEditorRecovery(): EditorRecoveryLoad {
+        val journal = pagedJournal ?: return EditorRecoveryLoad.Unavailable
+        return try {
+            val snapshot = journal.snapshot()
+            val hosts = state.value.hosts.associateBy { it.routeId }
+            val drafts = snapshot.drafts.map { (key, draft) ->
+                EditorRecoveryEntry(key, EditorRecoveryKind.DRAFT, draft.text, draft.editedAt, hostName = hosts[key.routeId]?.name)
+            }
+            val attempts = snapshot.attempts.values.map { attempt ->
+                EditorRecoveryEntry(attempt.key, EditorRecoveryKind.UNCERTAIN_ATTEMPT, attempt.text, attempt.createdAt, attempt.attemptId, hosts[attempt.key.routeId]?.name)
+            }
+            EditorRecoveryLoad.Ready((drafts + attempts).sortedWith(compareByDescending<EditorRecoveryEntry> { it.savedAt }.thenBy { it.id }))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            EditorRecoveryLoad.Failed
+        }
+    }
+
     private val routeCapabilities =
         setOf(
             STEER_CAPABILITY,
+            PROMPT_DELIVERY_CAPABILITY,
+            QUESTION_DETAILS_CAPABILITY,
+            QUESTION_EDITOR_CAPABILITY,
+            NATIVE_EDITOR_CAPABILITY,
+            QUESTION_PAGED_EDITOR_CAPABILITY,
+            QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY,
             // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
             COMPACT_CAPABILITY,
             SETTINGS_CAPABILITY,
@@ -301,35 +346,143 @@ class DefaultRemoteRepository(
             PROJECT_OPEN_CAPABILITY,
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
+            GIT_WRITE_CAPABILITY,
+            GIT_PUSH_CAPABILITY,
+            GIT_PUSH_STATUS_CAPABILITY,
+            SESSION_GIT_PULL_REQUEST_CAPABILITY,
+            SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY,
             FILES_CAPABILITY,
-            // Only on the capabilities.v2 route, and only when the host enables writes.
+            FILES_SEARCH_CAPABILITY,
+            // Only on capability routes v2 and later, and only when the host enables writes.
             FILES_WRITE_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
+            NATIVE_EXPORT_CAPABILITY,
             SESSION_TREE_CAPABILITY,
-            // Advertised only on the capabilities.v2 route, which the first projects.list uses.
+            // Advertised on capability routes v2 and later.
             FILES_MEDIA_CAPABILITY,
             FILES_ARTIFACT_CAPABILITY,
             RELOAD_CAPABILITY,
             ARTIFACTS_CAPABILITY,
-            // Only on the capabilities.v2 route, and only while the Mac's switch is on.
+            // Only on capability routes v2 and later, and only while the Mac's switch is on.
             SESSION_BASH_CAPABILITY,
-            // Also v2 only: it lets terminal sessions and host workers run them as well.
+            SESSION_TERMINAL_CAPABILITY,
+            SESSION_TERMINAL_KEYS_CAPABILITY,
+            // Also v2 and later: lets terminal sessions and host workers run them as well.
             SESSION_BASH_WORKER_CAPABILITY,
-            // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
+            // Only on capability routes v2 and later; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
-            // Only on the capabilities.v2 route: focus, `after`, ping and acks.
+            // Browser commands additionally require a successfully negotiated v3 route.
+            SESSION_PREVIEW_CAPABILITY,
+            SESSION_EMULATOR_CAPABILITY,
+            SESSION_EMULATOR_RECOVERY_CAPABILITY,
+            SESSION_BROWSER_CAPABILITY,
+            SESSION_BROWSER_RECOVERY_CAPABILITY,
+            // Capability routes v2 and later support focus, `after`, ping and acks.
             STREAM_CAPABILITY,
-            // Only on the capabilities.v2 route, which gives extension sessions their controls.
+            // Capability routes v2 and later give extension sessions their controls.
             HOST_WORKER_V2_CAPABILITY,
         )
-    /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
-    private var capabilityRoute = CAPABILITIES_V2_ROUTE
+    /** The projects.list route falls back through v2 to v1 only when a list is absent. */
+    private var terminalRouteOffered = false
+    private var capabilityRoute = CAPABILITIES_V3_ROUTE
     private var tasksCapabilityKnown = false
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
+    private var nativePresenceOwner: Any? = null
+    private var nativePresenceSelection: RemoteSelection? = null
+    private var nativePresenceJob: Job? = null
+    private var nativePresenceConnection = -1L
+    private var nativePresenceSession: String? = null
+    private var nativePresenceUnsupportedOn = -1L
+    private var nativePromotionJob: Job? = null
+    private var nativeFirstPagesInFlight = 0
+
+    override fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit {
+        checkMainThread()
+        val token = Any()
+        nativePresenceOwner = token
+        nativePresenceSelection = selection
+        reconcileNativePresence()
+        return {
+            checkMainThread()
+            if (nativePresenceOwner === token) {
+                nativePresenceOwner = null
+                nativePresenceSelection = null
+                reconcileNativePresence()
+            }
+        }
+    }
+
+    private fun reconcileNativePresence() {
+        val current = state.value
+        val selection = nativePresenceSelection
+        val eligible = nativePresenceOwner != null && selection != null && selection == current.selection &&
+            selection.sessionId != null && !inBackground && current.connected && current.capabilitiesKnown &&
+            capabilityRevision(capabilityRoute) == 3 && nativePresenceUnsupportedOn != generation &&
+            QUESTION_EDITOR_CAPABILITY in current.capabilities && NATIVE_EDITOR_CAPABILITY in current.capabilities &&
+            QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities && NATIVE_EDITOR_CAPABILITY !in current.unavailableCapabilities
+        val desiredSession = if (eligible) selection?.sessionId else null
+        if (nativePresenceJob != null && (desiredSession != nativePresenceSession || nativePresenceConnection != generation)) {
+            val oldSession = nativePresenceSession
+            val oldConnection = nativePresenceConnection
+            nativePresenceJob?.cancel()
+            nativePromotionJob?.cancel()
+            nativePromotionJob = null
+            nativePresenceJob = null
+            nativePresenceSession = null
+            // Never carry the old session across a connection or host boundary.
+            if (oldSession != null && oldConnection == generation && current.connected && nativePresenceUnsupportedOn != generation) {
+                scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try { request("session.editor.presence", selectionEpoch, "sessionId" to oldSession, "active" to false) }
+                    catch (_: CancellationException) { throw CancellationException() }
+                    catch (_: Exception) { }
+                }
+            }
+        }
+        if (desiredSession == null || nativePresenceJob != null) return
+        val connection = generation
+        nativePresenceConnection = connection
+        nativePresenceSession = desiredSession
+        nativePresenceJob = scope.launch {
+            var promoted = false
+            while (isActive && connection == generation) {
+                try {
+                    val reply = request("session.editor.presence", selectionEpoch, "sessionId" to desiredSession, "active" to true)
+                    if (!promoted && reply.optionalText("kind") == "accepted" && reply.optionalText("sessionId") == desiredSession &&
+                        connection == generation && nativePresenceSession == desiredSession) {
+                        promoted = true
+                        val ownerSelection = selection
+                        nativePromotionJob = scope.launch {
+                            while (isActive && connection == generation && nativePresenceSession == desiredSession &&
+                                (nativeFirstPagesInFlight > 0 || snapshotPending != null || state.value.loading || timeline == null)) delay(10)
+                            if (connection == generation && nativePresenceSession == desiredSession && state.value.selection == ownerSelection &&
+                                state.value.questions.any { it.optionalText("kind") == "local_required" }) snapshotAsync()
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    // Selection invalidation cancels the in-flight request's completion, but
+                    // may leave this exact chat visible (for example, a refused fork). Keep
+                    // the same sequential heartbeat alive in that case. A canceled job still
+                    // exits immediately when the owner, connection, or foreground changes.
+                    if (!isActive) throw e
+                    continue
+                }
+                catch (e: RemoteRequestException) {
+                    if (e.kind == RemoteRequestException.Kind.UNSUPPORTED) {
+                        nativePresenceUnsupportedOn = connection
+                        nativePresenceJob = null
+                        nativePresenceSession = null
+                        return@launch
+                    }
+                } catch (_: Exception) { }
+                delay(5000)
+            }
+        }
+    }
+
     private val attachmentMutex = Mutex()
     private var importJob: Job? = null
     private var sendJob: Job? = null
@@ -404,6 +557,161 @@ class DefaultRemoteRepository(
      * become uncertain, as a lost connection would have left them.
      */
     private val followUpsToRecheck = mutableMapOf<DraftKey, Set<String>>()
+    private val emulatorClient by lazy {
+        EmulatorClient(scope,
+            { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
+            { connection, type, fields ->
+                check(generation == connection && connectionRequestsOpen())
+                connectionRequest(type, *fields)
+            },
+            { emulator -> update { it.copy(emulator = emulator) } },
+            { state.value.host?.deviceId },
+            { connection -> state.value.connected && generation == connection },
+            { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
+        )
+    }
+    override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
+    override fun openEmulator() = canOpenEmulator() && emulatorClient.open(requireNotNull(state.value.selection.sessionId), generation)
+    override fun selectEmulatorProfile(id: String) = emulatorClient.selectProfile(id)
+    override fun closeEmulator() = emulatorClient.close()
+    override fun acquireEmulator() = emulatorClient.acquire()
+    override fun handoffEmulator(id: String) = emulatorClient.handoff(id)
+    override fun stopEmulator() = emulatorClient.stop()
+    override fun sendEmulatorInput(input: EmulatorInput) = emulatorClient.input(input)
+    override fun refreshEmulator() = emulatorClient.refresh()
+    override fun setEmulatorVisible(visible: Boolean) = emulatorClient.setVisible(visible)
+    private val browserClient by lazy {
+        BrowserClient(scope,
+            { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
+            { connection, type, fields ->
+                check(generation == connection && connectionRequestsOpen())
+                connectionRequest(type, *fields)
+            },
+            { browser -> update { it.copy(browser = browser) } },
+            { state.value.host?.deviceId },
+            { connection -> state.value.connected && generation == connection },
+            { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+        )
+    }
+    override fun canOpenBrowser(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities
+    override fun openBrowser(): Boolean = canOpenBrowser() && browserClient.open(requireNotNull(state.value.selection.sessionId), generation)
+    override fun closeBrowser() = browserClient.close()
+    override fun acquireBrowser() = browserClient.acquire()
+    override fun handoffBrowser(ownerId: String) = browserClient.handoff(ownerId)
+    override fun newBrowserTab(url: String) = browserClient.newTab(url)
+    override fun navigateBrowser(url: String) = browserClient.navigate(url)
+    override fun selectBrowserTab(tabId: String) = browserClient.selectTab(tabId)
+    override fun closeBrowserTab(tabId: String) = browserClient.closeTab(tabId)
+    override fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String) = browserClient.resize(width, height, deviceScale, orientation)
+    override fun sendBrowserInput(input: BrowserInput) = browserClient.input(input)
+    override fun refreshBrowser() = browserClient.refresh()
+    override fun setBrowserVisible(visible: Boolean) = browserClient.setVisible(visible)
+    private val previewClient by lazy {
+        BrowserClient(scope,
+            { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
+            { connection, type, fields ->
+                check(generation == connection && connectionRequestsOpen())
+                connectionRequest(type, *fields)
+            },
+            { browser -> update { it.copy(previewBrowser = browser) } },
+            { state.value.host?.deviceId },
+            { connection -> state.value.connected && generation == connection },
+            { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+        )
+    }
+    override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
+    override fun openPreview(port: Int): Boolean = canOpenPreview() && port in 1..65535 && previewClient.open(requireNotNull(state.value.selection.sessionId), generation, port)
+    override fun closePreview() = previewClient.close()
+    override fun acquirePreview() = previewClient.acquire()
+    override fun handoffPreview(ownerId: String) = previewClient.handoff(ownerId)
+    override fun newPreviewTab(url: String) = previewClient.newTab(url)
+    override fun navigatePreview(url: String) = previewClient.navigate(url)
+    override fun selectPreviewTab(tabId: String) = previewClient.selectTab(tabId)
+    override fun closePreviewTab(tabId: String) = previewClient.closeTab(tabId)
+    override fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String) = previewClient.resize(width, height, deviceScale, orientation)
+    override fun sendPreviewInput(input: BrowserInput) = previewClient.input(input)
+    override fun refreshPreview() = previewClient.refresh()
+    override fun setPreviewVisible(visible: Boolean) = previewClient.setVisible(visible)
+    private val detailsAuthority = QuestionDetailsAuthority()
+    private var detailsQuestion: JsonObject? = null
+    private var editorAuthorityGeneration = 0L
+    private var detailsLoadToken = 0L
+    private var pagedState: EditorSourceState? = null
+    private var pagedQuestion: JsonObject? = null
+    private var pagedToken = 0L
+    private var pagedUploading = false
+    private data class PagedDraft(val route: String, val session: String, val id: String, val text: String, val editedAt: Long) {
+        val bytes: Long get() = text.length.toLong() * 2
+    }
+    private data class PagedReceipt(val route: String, val session: String, val id: String, val question: JsonObject, val grant: String, val connection: Long, val attemptId: String? = null)
+    private val pagedJournal = pagedEditorStorage?.let { PagedEditorJournal(it, io) }
+    private val nativePagedConfigured: Boolean get() = nativePagedEditorEnabled && pagedJournal != null
+    private val pagedConfigured: Boolean get() = pagedEditorTestGate || nativePagedConfigured
+    private val positiveConfigured: Boolean get() = pagedJournal != null &&
+        (pagedEditorTestGate && positiveOutcomeTestGate || nativePagedConfigured && nativePositiveOutcomeEnabled)
+    private val pagedProjectionMutex = Mutex()
+    private var pagedJournalSnapshot = PagedJournalSnapshot()
+    private var pagedStoragePending = pagedJournal != null
+    private var pagedStorageFailed = false
+    private var pagedReleaseCapacityBlocked = false
+    private val pagedCleanupProofs = mutableSetOf<String>()
+    private val pagedReleaseProofs = mutableMapOf<String, StoredPagedAttempt>()
+    private var pagedReleaseJob: Job? = null
+    private var pagedReleaseContext: Pair<Long, Long>? = null
+    private val pagedQueried = mutableSetOf<Triple<Long, Long, String>>()
+    private val pagedPendingDrafts = mutableMapOf<PagedJournalKey, StoredPagedDraft>()
+    private val pagedDrafts = java.util.IdentityHashMap<JsonObject, PagedDraft>()
+    private val pagedReceipts = mutableListOf<PagedReceipt>()
+    private val pagedDraftLimit = 32
+    private val pagedDraftBytes = 8L * 1024 * 1024
+    private val pagedDraftOneBytes = 4L * 1024 * 1024
+    private val pagedDraftHistoryMillis = 15 * 60_000L
+    private val pagedReceiptLimit = 32
+    private fun pagedDraftActive(question: JsonObject, draft: PagedDraft): Boolean =
+        state.value.selection.routeId == draft.route && state.value.selection.sessionId == draft.session && state.value.questions.any { it === question }
+    private fun prunePagedDrafts() {
+        val time = now()
+        pagedDrafts.entries.removeAll { (question, draft) ->
+            !pagedDraftActive(question, draft) && time >= draft.editedAt && time - draft.editedAt >= pagedDraftHistoryMillis
+        }
+    }
+    private fun retainPagedDraft(question: JsonObject, draft: PagedDraft): Boolean {
+        prunePagedDrafts()
+        // Never leave an older stored value masquerading as the latest visible draft.
+        pagedDrafts.remove(question)
+        if (draft.bytes > pagedDraftOneBytes) return false
+        val removable = pagedDrafts.entries.filter { (other, stored) -> !pagedDraftActive(other, stored) }.sortedBy { it.value.editedAt }
+        var bytes = pagedDrafts.values.sumOf { it.bytes }
+        for (entry in removable) {
+            if (pagedDrafts.size < pagedDraftLimit && bytes + draft.bytes <= pagedDraftBytes) break
+            bytes -= entry.value.bytes
+            pagedDrafts.remove(entry.key)
+        }
+        if (pagedDrafts.size >= pagedDraftLimit || bytes + draft.bytes > pagedDraftBytes) return false
+        pagedDrafts[question] = draft
+        return true
+    }
+    private fun pagedQuarantined(selection: RemoteSelection, id: String): Boolean = pagedJournalSnapshot.attempts.values.any {
+        it.key.routeId == selection.routeId && it.key.sessionId == selection.sessionId && it.key.questionId == id
+    } || pagedReceipts.any {
+        it.route == selection.routeId && it.session == selection.sessionId && it.id == id
+    }
+    private fun closePagedReceipt(session: String, question: JsonObject) {
+        val id = question.optionalText("id") ?: return
+        val route = state.value.selection.routeId
+        pagedReceipts.removeAll { receipt -> receipt.attemptId == null && receipt.route == route && receipt.session == session && receipt.id == id &&
+            (receipt.question === question || receipt.connection == generation && question.optionalText("editorUploadGrantId") == receipt.grant) }
+        pagedDrafts.remove(question)
+    }
+    private fun clearQuestionDetails() {
+        detailsLoadToken++
+        detailsAuthority.clear()
+        detailsQuestion = null
+        update { it.copy(questionDetails = emptyMap()) }
+    }
     private var selectionEpoch = 0L
     private var generation = 0L
     // Connection-scoped attempts and UI owners start at the send tap.
@@ -639,6 +947,11 @@ class DefaultRemoteRepository(
      * it buffers waits for it instead of asking for one more.
      */
     private var snapshotPending: Timeline? = null
+    private var epochRefreshPending: Timeline? = null
+    private var epochRefreshEpoch: String? = null
+    private var epochRefreshThrough = -1L
+    private var epochRefreshRetryUsed = false
+    private var epochObservationSerial = 0L
 
     /**
      * A snapshot read before select() made its chat's Timeline: a restore reads it alongside the
@@ -704,13 +1017,27 @@ class DefaultRemoteRepository(
         /** Needs state a replay cannot carry, so the host always answers with a snapshot. */
         FRESH,
     }
+    private var promptDeliveryGeneration: Long? = null
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
+    private val committedGitDrafts = mutableMapOf<DraftKey, GitCommitDraft>()
+    private val committedPullRequestDrafts = mutableMapOf<DraftKey, GitPullRequestDraft>()
+    private val committedPullRequestIntents = mutableMapOf<DraftKey, GitPullRequestIntent?>()
+    private val committedPushIntents = mutableMapOf<DraftKey, GitPushIntent?>()
+    private val gitDraftWrites = Mutex()
     private data class ComposerVersions(val text: Long = 0, val quote: Long = 0, val attachments: Long = 0)
     private val composerVersions = mutableMapOf<DraftKey, ComposerVersions>()
+    private val restoredPromptVersions = mutableMapOf<DraftKey, ComposerVersions>()
     private fun composerVersion(key: DraftKey) = composerVersions[key] ?: ComposerVersions()
     private fun composerEdited(key: DraftKey, field: String) {
+        drafts[key]?.takeIf { it.mutationId != null && it.submittedDelivery in setOf(null, "prompt") }?.let {
+            drafts[key] = when (field) {
+                "text" -> it.copy(promptTextState = "edited")
+                "quote" -> it.copy(promptQuoteState = "edited")
+                else -> it.copy(promptAttachmentsState = "edited")
+            }
+        }
         val version = composerVersion(key)
         composerVersions[key] = when (field) {
             "text" -> version.copy(text = version.text + 1)
@@ -735,6 +1062,10 @@ class DefaultRemoteRepository(
     private data class Write(
         val values: Map<DraftKey, StoredDraft>?,
         val done: CompletableDeferred<Unit>,
+        val gitUpdate: Pair<DraftKey, GitCommitDraft>? = null,
+        val pushUpdate: Pair<DraftKey, GitPushIntent?>? = null,
+        val pullRequestUpdate: Pair<DraftKey, GitPullRequestIntent?>? = null,
+        val pullRequestDraftUpdate: Pair<DraftKey, GitPullRequestDraft>? = null,
     )
 
     /**
@@ -754,6 +1085,22 @@ class DefaultRemoteRepository(
     private val pairingWrites = Mutex()
 
     init {
+        if (pagedJournal != null) scope.launch {
+            try {
+                pagedProjectionMutex.withLock { pagedJournalSnapshot = pagedJournal.snapshot() }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                pagedStorageFailed = true
+            } finally {
+                pagedStoragePending = false
+                update { state -> state.copy(pagedEditors = state.pagedEditors.mapValues { (id, view) ->
+                    val route = state.selection.routeId
+                    val session = state.selection.sessionId
+                    val recovery = if (route != null && session != null && view.text != null && pagedQuestion != null && pagedDrafts[pagedQuestion] == null)
+                        pagedJournalSnapshot.drafts[PagedJournalKey(route, session, id)]?.text else view.recoveryDraft
+                    view.copy(storagePending = false, storageFailed = pagedStorageFailed, storageRetryAvailable = pagedStorageFailed, recoveryDraft = recovery)
+                }) }
+            }
+        }
         scope.launch {
             // Independent disk reads overlap. Capture failures so one corrupt store does not
             // cancel initialization or prevent another store from being recovered.
@@ -787,11 +1134,18 @@ class DefaultRemoteRepository(
             }
             try {
                 val (storedDrafts, draftsReset) = loadedDrafts.await().getOrThrow()
-                drafts.putAll(storedDrafts.mapValues { (_, value) ->
-                    value.restoringSubmitted().copy(followUps = value.followUps.map { entry ->
+                drafts.putAll(storedDrafts.mapValues { (key, value) ->
+                    val restored = value.restoringSubmitted()
+                    if (value.submittedDelivery in setOf(null, "prompt") && restored.promptComposerRestored())
+                        restoredPromptVersions[key] = composerVersion(key)
+                    restored.copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
                 })
+                committedGitDrafts.putAll(drafts.mapNotNull { (key, value) -> value.gitCommit?.let { key to it } })
+                committedPullRequestDrafts.putAll(drafts.mapNotNull { (key, value) -> value.gitPullRequestDraft?.let { key to it } })
+                committedPullRequestIntents.putAll(drafts.mapNotNull { (key, value) -> value.gitPullRequest?.let { key to it } })
+                committedPushIntents.putAll(drafts.mapNotNull { (key, value) -> value.gitPush?.let { key to it } })
                 persistedAttachmentIds = journalAttachmentIds(drafts)
                 journalQueued = drafts.journals()
                 draftsAvailable = true
@@ -837,8 +1191,46 @@ class DefaultRemoteRepository(
             for (write in writes) {
                 try {
                     if (write.values != null) {
-                        withContext(io) { draftStorage.save(write.values) }
-                        persistedAttachmentIds = journalAttachmentIds(write.values)
+                        val values = write.values.filterKeys { it.routeId !in removedRoutes }
+                            .mapValues { (key, value) -> value.copy(gitCommit = committedGitDrafts[key], gitPush = committedPushIntents[key], gitPullRequest = committedPullRequestIntents[key], gitPullRequestDraft = committedPullRequestDrafts[key]) }.toMutableMap()
+                        for ((key, draft) in committedGitDrafts) {
+                            if (key.routeId !in removedRoutes)
+                                values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitCommit = draft)
+                        }
+                        for ((key, intent) in committedPushIntents) {
+                            if (key.routeId !in removedRoutes && intent != null)
+                                values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitPush = intent)
+                        }
+                        for ((key, draft) in committedPullRequestDrafts) {
+                            if (key.routeId !in removedRoutes)
+                                values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitPullRequestDraft = draft)
+                        }
+                        write.pullRequestDraftUpdate?.let { (key, draft) ->
+                            check(key.routeId !in removedRoutes) { "Host was removed" }
+                            values[key] = (values[key] ?: StoredDraft()).copy(gitPullRequestDraft = draft)
+                        }
+                        for ((key, intent) in committedPullRequestIntents) {
+                            if (key.routeId !in removedRoutes && intent != null)
+                                values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitPullRequest = intent)
+                        }
+                        write.pullRequestUpdate?.let { (key, intent) ->
+                            check(key.routeId !in removedRoutes) { "Host was removed" }
+                            values[key] = (values[key] ?: StoredDraft()).copy(gitPullRequest = intent)
+                        }
+                        write.pushUpdate?.let { (key, intent) ->
+                            check(key.routeId !in removedRoutes) { "Host was removed" }
+                            values[key] = (values[key] ?: StoredDraft()).copy(gitPush = intent)
+                        }
+                        write.gitUpdate?.let { (key, draft) ->
+                            check(key.routeId !in removedRoutes) { "Host was removed" }
+                            values[key] = (values[key] ?: StoredDraft()).copy(gitCommit = draft)
+                        }
+                        withContext(io) { draftStorage.save(values) }
+                        write.gitUpdate?.let { (key, draft) -> if (key.routeId !in removedRoutes) committedGitDrafts[key] = draft }
+                        write.pullRequestDraftUpdate?.let { (key, draft) -> if (key.routeId !in removedRoutes) committedPullRequestDrafts[key] = draft }
+                        write.pullRequestUpdate?.let { (key, intent) -> if (key.routeId !in removedRoutes) committedPullRequestIntents[key] = intent }
+                        write.pushUpdate?.let { (key, intent) -> if (key.routeId !in removedRoutes) committedPushIntents[key] = intent }
+                        persistedAttachmentIds = journalAttachmentIds(values)
                         storageFailure = null
                     } else storageFailure?.let { throw it }
                     write.done.complete(Unit)
@@ -901,14 +1293,15 @@ class DefaultRemoteRepository(
                     // The backoff resets only once this connection proves itself, so a host that
                     // accepts and then drops connections at once does not cause a tight loop.
                     connectionReady()
-                    capabilityRoute = CAPABILITIES_V2_ROUTE
+                    capabilityRoute = CAPABILITIES_V3_ROUTE
+                    promptDeliveryGeneration = null
+                    terminalRouteOffered = false
                     tasksCapabilityKnown = false
                     taskRefreshPending = false
                     update {
                         it.copy(
                             connected = true,
-                            // Only the capabilities.v2 route may advertise host worker controls.
-                            capabilities = capabilities - HOST_WORKER_V2_CAPABILITY,
+                            capabilities = capabilities - setOf(PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -982,8 +1375,65 @@ class DefaultRemoteRepository(
 
     private fun update(block: (RemoteState) -> RemoteState) {
         checkMainThread()
-        val before = mutable.value
-        mutable.value = reconcileSubagents(before, block(before))
+        val previous = mutable.value
+        val next = reconcileSubagents(previous, block(previous))
+        if (previous.selection != next.selection && nativePresenceSelection == previous.selection) {
+            nativePresenceOwner = null
+            nativePresenceSelection = null
+        }
+        fun reviewAuthority(value: RemoteState) = listOf(value.selection, value.connected,
+            GIT_CAPABILITY in value.capabilities, GIT_CAPABILITY in value.unavailableCapabilities,
+            GIT_WRITE_CAPABILITY in value.capabilities, GIT_WRITE_CAPABILITY in value.unavailableCapabilities,
+            GIT_PUSH_CAPABILITY in value.capabilities, GIT_PUSH_CAPABILITY in value.unavailableCapabilities,
+            GIT_PUSH_STATUS_CAPABILITY in value.capabilities, GIT_PUSH_STATUS_CAPABILITY in value.unavailableCapabilities,
+            SESSION_GIT_PULL_REQUEST_CAPABILITY in value.capabilities, SESSION_GIT_PULL_REQUEST_CAPABILITY in value.unavailableCapabilities,
+            SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY in value.capabilities, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY in value.unavailableCapabilities)
+        val invalidateDetails = previous.connected && !next.connected || previous.selection != next.selection ||
+            (QUESTION_DETAILS_CAPABILITY in previous.capabilities && QUESTION_DETAILS_CAPABILITY !in next.capabilities) ||
+            (QUESTION_DETAILS_CAPABILITY !in previous.unavailableCapabilities && QUESTION_DETAILS_CAPABILITY in next.unavailableCapabilities)
+        if (invalidateDetails) { detailsLoadToken++; detailsAuthority.clear(); detailsQuestion = null }
+        val editorAuthorityChanged = previous.connected != next.connected || previous.selection != next.selection ||
+            previous.capabilitiesKnown != next.capabilitiesKnown ||
+            (QUESTION_EDITOR_CAPABILITY in previous.capabilities) != (QUESTION_EDITOR_CAPABILITY in next.capabilities) ||
+            (QUESTION_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_EDITOR_CAPABILITY in next.unavailableCapabilities) ||
+            (NATIVE_EDITOR_CAPABILITY in previous.capabilities) != (NATIVE_EDITOR_CAPABILITY in next.capabilities) ||
+            (NATIVE_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (NATIVE_EDITOR_CAPABILITY in next.unavailableCapabilities)
+        if (editorAuthorityChanged) editorAuthorityGeneration++
+        val oldEditors = previous.questions.filter { it.optionalText("kind") == "editor" }
+        val newEditors = next.questions.filter { it.optionalText("kind") == "editor" }
+        val editorsChanged = oldEditors.size != newEditors.size || oldEditors.zip(newEditors).any { (a, b) -> a !== b }
+        val invalidatePaged = editorAuthorityChanged || editorsChanged ||
+            (QUESTION_PAGED_EDITOR_CAPABILITY in previous.capabilities) != (QUESTION_PAGED_EDITOR_CAPABILITY in next.capabilities) ||
+            (QUESTION_PAGED_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_PAGED_EDITOR_CAPABILITY in next.unavailableCapabilities)
+        if (invalidatePaged) { pagedToken++; pagedState?.clear(); pagedState = null; pagedQuestion = null; pagedUploading = false }
+        val visiblePaged = if (invalidatePaged) emptyMap() else next.pagedEditors.mapValues { (id, view) ->
+            view.copy(quarantined = pagedQuarantined(next.selection, id), capacityFull = maxOf(pagedReceipts.size, pagedJournalSnapshot.attempts.size) >= pagedReceiptLimit,
+                storagePending = pagedStoragePending, storageFailed = pagedStorageFailed, storageRetryAvailable = pagedStorageFailed && !pagedStoragePending)
+        }
+        val visibleBlocks = next.questionBlocks.toMutableMap()
+        val visibleQuarantines = mutableSetOf<String>()
+        for (question in next.questions) {
+            val id = question.optionalText("id") ?: continue
+            if (pagedQuarantined(next.selection, id)) {
+                visibleQuarantines += id
+                if (pagedReceipts.any { it.route == next.selection.routeId && it.session == next.selection.sessionId && it.id == id })
+                    visibleBlocks.putIfAbsent(id, QuestionBlock.UNCERTAIN)
+            }
+        }
+        mutable.value = next.copy(
+            editorQuestionGeneration = previous.editorQuestionGeneration + if (editorsChanged || editorAuthorityChanged) 1 else 0,
+            questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
+            pagedEditors = visiblePaged,
+            pagedQuarantines = visibleQuarantines,
+            pagedStoragePending = pagedStoragePending,
+            pagedStorageFailed = pagedStorageFailed,
+            pagedStorageRetryAvailable = pagedStorageFailed && !pagedStoragePending,
+            questionBlocks = visibleBlocks,
+            gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
+        )
+        reconcileNativePresence()
+        schedulePagedOutcomeQueries()
+        schedulePagedReleases()
     }
 
     /**
@@ -1733,7 +2183,12 @@ class DefaultRemoteRepository(
 
     private var preparedSource: DraftKey? = null
 
-    override fun cancelSelection() {
+    override fun cancelSelection() = cancelSelection(preserveBrowser = false, preservePreview = false)
+
+    private fun cancelSelection(preserveBrowser: Boolean, preservePreview: Boolean = false, preserveEmulator: Boolean = false) {
+        if (!preserveEmulator) emulatorClient.close()
+        if (!preserveBrowser) browserClient.close()
+        if (!preservePreview) previewClient.close()
         preparedSource = null
         update { it.copy(preparedText = null) }
         cacheCurrentScreen(immediate = true)
@@ -1744,6 +2199,7 @@ class DefaultRemoteRepository(
         if (state.value.attachmentProgress != null) sendJob?.cancel()
         stopToolOutput()
         sessionRefreshJob?.cancel()
+        clearQuestionDetails()
         selectionEpoch++
         taskActivationEpoch = null
         configurationVersion++
@@ -1880,6 +2336,15 @@ class DefaultRemoteRepository(
         unverifyProjectSessions()
         // A connection replaced on purpose is no failure.
         connectionEnded()
+        emulatorClient.disconnected()
+        browserClient.disconnected()
+        previewClient.disconnected()
+        clearQuestionDetails()
+        nativePresenceJob?.cancel()
+        nativePromotionJob?.cancel()
+        nativePromotionJob = null
+        nativePresenceJob = null
+        nativePresenceSession = null
         generation++
         clearLateAcknowledgements()
         failConnectionRequests()
@@ -1941,6 +2406,7 @@ class DefaultRemoteRepository(
         draft: String? = null,
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
+        validateBeforeSend: (() -> Unit)? = null,
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         // Runs once the request went out, for one that follows it without waiting for its reply.
         thenSend: (() -> Unit)? = null,
@@ -1949,7 +2415,11 @@ class DefaultRemoteRepository(
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val id = if (type == "projects.list") "$capabilityRoute$requestId" else sessionsListRequestId(type, requestId)
+        val optIn = if (capabilityRevision(capabilityRoute) == 3) {
+            if (pagedConfigured) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN" +
+                (if (positiveConfigured) "+$QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN" else "") + ":" else QUESTION_DETAILS_OPT_IN
+        } else ""
+        val id = if (type == "projects.list") "$capabilityRoute$optIn$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         recordIssuedRequest(id)
         val completion = CompletableDeferred<JsonObject>()
@@ -1971,11 +2441,16 @@ class DefaultRemoteRepository(
         var outcome = "failed"
         var ended: Long? = null
         val connection = generation
-        val inboundAtSend = inboundFrames
+        var inboundAtSend = -1L
         try {
-            // Set before sending: a send that throws may still have reached the host.
-            onSent?.invoke()
-            transport.send(payload)
+            transport.sendGuarded(payload) {
+                checkEpoch(epoch)
+                check(state.value.connected && connection == generation)
+                validateBeforeSend?.invoke()
+                inboundAtSend = inboundFrames
+                // Set immediately before a possible write: a send that throws may have reached the host.
+                onSent?.invoke()
+            }
             thenSend?.invoke()
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
@@ -2003,33 +2478,61 @@ class DefaultRemoteRepository(
             connectionProven()
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
-                if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
-                    // A host that predates the v2 route treats the ID as opaque and sends no list.
-                    capabilityRoute = CAPABILITIES_V1_ROUTE
-                    // The retry records its own round trip; this one ends here.
-                    outcome = "retry.v1"
+                val revision = capabilityRevision(id)
+                if (!result.containsKey("capabilities") && revision > 1) {
+                    if (connection == generation) promptDeliveryGeneration = null
+                    // Old hosts treat unknown route IDs as opaque and omit the list.
+                    capabilityRoute = if (revision == 3) CAPABILITIES_V2_ROUTE else CAPABILITIES_V1_ROUTE
+                    outcome = "retry.v${revision - 1}"
                     ended = Diagnostics.now()
                     return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
-                val advertised = (result["capabilities"] as? JsonArray)
-                    ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
-                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-                    .orEmpty()
-                val merged = routeCapabilities.filter {
-                    it in advertised && ((it != SESSION_TASKS_CAPABILITY && it != HOST_WORKER_V2_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
+                val maxCapabilities = when (revision) { 3 -> 64; 2 -> 32; else -> 16 }
+                val rawCapabilities = result["capabilities"]
+                val advertised = if (rawCapabilities == null) {
+                    // A v1 host may predate capability advertisement altogether.
+                    emptyList()
+                } else {
+                    val list = rawCapabilities as? JsonArray
+                        ?: throw IllegalArgumentException("Invalid capability list")
+                    require(list.size <= maxCapabilities && list.all {
+                        it is JsonPrimitive && it.isString && it.content.isNotEmpty() &&
+                            it.content.toByteArray(Charsets.UTF_8).size <= 64
+                    }) { "Invalid capability list" }
+                    list.map { (it as JsonPrimitive).content }
                 }
+                if (connection == generation) {
+                    promptDeliveryGeneration = if (revision == 3 && PROMPT_DELIVERY_CAPABILITY in advertised) connection else null
+                }
+                if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
+                // Fixture capabilities keep their historical behavior; production requires the
+                // independently negotiated base and Native capabilities as well.
+                val pagedEligible = revision == 3 && pagedConfigured &&
+                    (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
+                val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
+                val merged = routeCapabilities.filter {
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                }
+                if (revision < 3)
+                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
                 val hadTasks = canReadTasks()
-                if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
+                if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
                 if (merged.isNotEmpty()) {
                     // Capabilities merge in additively as later projects.list replies arrive; a list
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = it.capabilities + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
+                // A snapshot can arrive while capability discovery is still in flight.
+                if (promptDeliveryGeneration == generation) timeline?.let { current ->
+                    if (current.sessionId == currentDraftKey()?.sessionId)
+                        current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+                }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
                     drainTaskRefresh()
@@ -2313,7 +2816,15 @@ class DefaultRemoteRepository(
                 "event" -> receiveEvent(payload)
                 "host.event" ->
                     try {
-                        if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
+                        if (payload.optionalText("kind") in setOf("emulator.frame", "emulator.frame.waiting")) emulatorClient.frame(payload)
+                        else if (payload.optionalText("kind") == "emulator.state") emulatorClient.state(payload)
+                        else if (payload.optionalText("kind") in setOf("browser.frame", "browser.document", "browser.frame.waiting")) {
+                            val browserId = payload.optionalText("browserId")
+                            if (browserId != null && browserId == browserClient.view?.browserId) browserClient.frame(payload)
+                            if (browserId != null && browserId == previewClient.view?.browserId) previewClient.frame(payload)
+                        } else if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
+                            receiveTerminalEvent(payload)
+                        } else if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
                             receiveProviderAuthEvent(payload)
                         } else {
                             cloneEvent(payload)?.let(::applyCloneUpdate)
@@ -2398,6 +2909,7 @@ class DefaultRemoteRepository(
     private fun timelineEvent(current: Timeline, event: JsonObject, heard: Boolean = true) {
         // Out of focus: the host leaves its upserts out, so its gaps mean nothing until the refocus
         // resumes it. Its side effects ran on arrival, so the resume does not run them again.
+        if (!timelineEpochApplies(current, event)) return
         if (current.detached) {
             if (heard) current.heardWhileDetached(event)
             return
@@ -2416,11 +2928,39 @@ class DefaultRemoteRepository(
             Diagnostics.caught("repo.receive.timeline", malformed)
             current.unknownKindSeen = true
         }
+        closeTimelineQuestions(current)
         resyncAfterUnknownEvents(current)
         // Another session's event cannot change this chat.
         if ((event["sessionId"] as? JsonPrimitive)?.content != current.sessionId) return
         if ((event["kind"] as? JsonPrimitive)?.content == "message.upsert") publishStreamingTimeline(current)
         else publishTimeline()
+    }
+
+    private fun closeTimelineQuestions(current: Timeline) {
+        current.takeClosedQuestions().forEach { closePagedReceipt(current.sessionId, it) }
+    }
+
+    /** Do not mix revisions from distinct journals; an unseen epoch needs a fresh page. */
+    private fun timelineEpochApplies(current: Timeline, event: JsonObject): Boolean {
+        if (event.optionalText("sessionId") != current.sessionId) return true
+        val epoch = (event["epoch"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(::isJournalEpoch) ?: return true
+        val known = sessionListEpochs[current.sessionId]
+        if (known != null && (epoch in known.retired || epoch in known.superseded)) return false
+        if (current.hasSnapshot && current.journalEpoch == null) return true // legacy host
+        if (current.hasSnapshot && epoch == current.journalEpoch) return true
+        val revision = (event["revision"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: return false
+        val first = epochRefreshPending !== current
+        val changed = first || epochRefreshEpoch != epoch
+        if (changed) {
+            epochRefreshPending = current
+            epochRefreshEpoch = epoch
+            epochRefreshThrough = -1L
+            epochRefreshRetryUsed = false
+        }
+        epochRefreshThrough = maxOf(epochRefreshThrough, revision)
+        epochObservationSerial++
+        if (changed && !resynchronizing && snapshotPending !== current && !current.detached) snapshotAsync()
+        return false
     }
 
     /**
@@ -2514,13 +3054,29 @@ class DefaultRemoteRepository(
             require(revision >= 0 && title.encodeToByteArray().size <= 4096)
             if (eventEpochApplies(payload) && revision > (sessionTitleRevisions[id] ?: -1L)) {
                 sessionTitleRevisions[id] = revision
-                sessionTitleOverrides[id] = title
+                val epochs = sessionListEpochs[id]
+                val eventEpoch = (payload["epoch"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(::isJournalEpoch)
+                if (epochs?.savedTitleEpoch != null && eventEpoch == null) {
+                    epochs.savedTitle = title
+                    epochs.deferredTitleEpoch = null
+                    epochs.deferredTitle = null
+                    epochs.deferredTitleRevision = -1L
+                }
+                val defer = epochs?.savedTitleEpoch != null && epochs.savedTitle == null &&
+                    eventEpoch != null && eventEpoch != epochs.savedTitleEpoch
+                if (defer) {
+                    epochs!!.deferredTitleEpoch = eventEpoch
+                    epochs.deferredTitle = title
+                    epochs.deferredTitleRevision = revision
+                } else {
+                    sessionTitleOverrides[id] = title
+                }
                 if (sessionTitleRevisions.size > 4096) {
                     val oldest = sessionTitleRevisions.keys.first()
                     sessionTitleRevisions.remove(oldest)
                     sessionTitleOverrides.remove(oldest)
                 }
-                updateSessionTitle(id, title)
+                if (!defer) updateSessionTitle(id, title)
             }
         }
         if (payload.text("kind") == "message.upsert") {
@@ -2594,8 +3150,42 @@ class DefaultRemoteRepository(
         val id = (metadata["requestId"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
         val delivery = (metadata["delivery"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
         if (id.isEmpty() || id.toByteArray().size > 256 || id.any { it.code <= 32 || it.code == 127 } ||
-            delivery !in setOf("steer", "follow_up")) return
-        applyFollowUpReceipt(sessionId, id, delivery, "delivered")
+            delivery !in setOf("steer", "follow_up", "prompt")) return
+        if (delivery == "prompt") applyPromptDeliveryReceipt(sessionId, id)
+        else applyFollowUpReceipt(sessionId, id, delivery, "delivered")
+    }
+
+    /** A consumed source user message is proof for this exact prompt journal, including on replay. */
+    private fun applyPromptDeliveryReceipt(sessionId: String, id: String) {
+        if (promptDeliveryGeneration != generation) return
+        val key = DraftKey(activeHost?.routeId ?: return, sessionId)
+        if (currentDraftKey() != key) return
+        val latest = drafts[key] ?: return
+        if (latest.mutationId != id || latest.submittedText == null ||
+            latest.submittedDelivery !in setOf(null, "prompt")) return
+        // Only a composer restored by this repository, and untouched since, belongs to the send.
+        // A later edit, including one that happens to equal the submitted value, stays with the user.
+        val restored = restoredPromptVersions[key] == composerVersion(key) &&
+            restoredPromptVersions.containsKey(key) && latest.text == latest.submittedText &&
+            latest.quote == latest.submittedQuote && latest.attachments == latest.submittedAttachments
+        val attachments = if (restored) emptyList() else latest.attachments
+        val resolved = latest.copy(
+            text = if (restored) "" else latest.text,
+            quote = if (restored) null else latest.quote,
+            attachments = attachments,
+            uploads = latest.uploads.filter { upload -> attachments.any { it.id == upload.localId } },
+            mutationId = null, submittedText = null, submittedQuote = null,
+            submittedAttachments = emptyList(), submittedDelivery = null,
+            promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
+        )
+        drafts[key] = resolved
+        restoredPromptVersions.remove(key)
+        journalOwners.remove(key)
+        persist()
+        update { state -> state.copy(
+            draft = resolved.text, quote = resolved.quote, attachments = resolved.attachments,
+            uncertain = false, pendingSend = state.pendingSend?.takeIf { it.mutationId != id },
+        ) }
     }
 
     private fun mergedFollowUpStatus(previous: String, incoming: String): String = when {
@@ -2610,6 +3200,7 @@ class DefaultRemoteRepository(
         val key = DraftKey(activeHost?.routeId ?: return, sessionId)
         val latest = drafts[key] ?: return
         if (latest.followUps.none { it.requestId == id && it.delivery == delivery }) {
+            if (latest.submittedDelivery == "prompt") return
             // Only the in-flight mutation can receive a receipt before its acknowledgement.
             if (latest.mutationId != id) return
             if (status == "delivered" && latest.submittedText != null) {
@@ -2627,6 +3218,7 @@ class DefaultRemoteRepository(
                     submittedQuote = null,
                     submittedAttachments = emptyList(),
                     submittedDelivery = null,
+                    promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
                     followUps = latest.followUps + PendingFollowUp(id, latest.submittedText, "delivered", delivery),
                 )
                 drafts[key] = confirmed
@@ -2665,6 +3257,16 @@ class DefaultRemoteRepository(
         } ?: session
 
     private fun updateSessionTitle(sessionId: String, title: String, expected: String? = null) {
+        val epochs = sessionListEpochs[sessionId]
+        val localRenameApplies = expected != null && (state.value.sessions.any {
+            it.optionalText("id") == sessionId && it.optionalText("title") == expected
+        } || state.value.session?.let { it.optionalText("id") == sessionId && it.optionalText("title") == expected } == true)
+        if (epochs?.savedTitleEpoch != null && (epochs.current == epochs.savedTitleEpoch || localRenameApplies)) {
+            epochs.savedTitle = title
+            epochs.deferredTitleEpoch = null
+            epochs.deferredTitle = null
+            epochs.deferredTitleRevision = -1L
+        }
         fun renamed(session: JsonObject): JsonObject =
             if (session.text("id") == sessionId &&
                 (expected == null || session.text("title") == expected))
@@ -2721,32 +3323,62 @@ class DefaultRemoteRepository(
         /** The lists knew no epoch of the session. */
         FIRST,
         SAME,
-        /** A new epoch: the one before is retired. */
+        /** A different epoch; event observations remain provisional until a page confirms one. */
         CHANGED,
         /** An epoch the session already left: a late page or event of an older incarnation. */
         RETIRED,
     }
 
     private class ListEpochs(var current: String) {
+        var confirmed: String? = null
+        var savedTitleEpoch: String? = null
+        var savedTitle: String? = null
+        var deferredTitleEpoch: String? = null
+        var deferredTitle: String? = null
+        var deferredTitleRevision: Long = -1L
         val retired = ArrayDeque<String>()
+        val superseded = ArrayDeque<String>()
     }
 
-    /** Places [epoch] for [sessionId]'s lists and records it when it is new. */
-    private fun seeListEpoch(sessionId: String, epoch: String): EpochSeen {
+    private fun rememberEpoch(epochs: ArrayDeque<String>, epoch: String) {
+        epochs.remove(epoch)
+        epochs.addLast(epoch)
+        while (epochs.size > RETIRED_LIST_EPOCHS) epochs.removeFirst()
+    }
+
+    /** Events are provisional; only an accepted first page confirms a journal incarnation. */
+    private fun seeListEpoch(sessionId: String, epoch: String, confirm: Boolean = false): EpochSeen {
         val known = sessionListEpochs.remove(sessionId)
-        val seen =
-            when {
-                known == null -> EpochSeen.FIRST
-                known.current == epoch -> EpochSeen.SAME
-                epoch in known.retired -> EpochSeen.RETIRED
-                else -> {
-                    known.retired.addLast(known.current)
-                    while (known.retired.size > RETIRED_LIST_EPOCHS) known.retired.removeFirst()
-                    known.current = epoch
-                    EpochSeen.CHANGED
-                }
+        if (known == null) {
+            sessionListEpochs[sessionId] = ListEpochs(epoch).also { if (confirm) it.confirmed = epoch }
+            if (sessionListEpochs.size > 4096) sessionListEpochs.remove(sessionListEpochs.keys.first())
+            return EpochSeen.FIRST
+        }
+        val seen = when {
+            epoch in known.retired -> EpochSeen.RETIRED
+            !confirm && epoch in known.superseded -> EpochSeen.RETIRED
+            known.current == epoch -> EpochSeen.SAME
+            else -> EpochSeen.CHANGED
+        }
+        if (seen != EpochSeen.RETIRED) {
+            if (!confirm && known.current == known.confirmed && epoch != known.confirmed && known.savedTitleEpoch == null) {
+                known.savedTitleEpoch = known.confirmed
+                known.savedTitle = sessionTitleOverrides[sessionId]
+                    ?: state.value.sessions.firstOrNull { it.optionalText("id") == sessionId }?.optionalText("title")
+                    ?: state.value.session?.takeIf { it.optionalText("id") == sessionId }?.optionalText("title")
             }
-        sessionListEpochs[sessionId] = known ?: ListEpochs(epoch)
+            if (confirm) {
+                known.confirmed?.takeIf { it != epoch }?.let { rememberEpoch(known.retired, it) }
+                if (known.current != epoch && known.current != known.confirmed)
+                    rememberEpoch(known.superseded, known.current)
+                known.superseded.remove(epoch)
+                known.confirmed = epoch
+            } else if (known.current != epoch && known.current != known.confirmed) {
+                rememberEpoch(known.superseded, known.current)
+            }
+            known.current = epoch
+        }
+        sessionListEpochs[sessionId] = known
         if (sessionListEpochs.size > 4096) sessionListEpochs.remove(sessionListEpochs.keys.first())
         return seen
     }
@@ -2786,8 +3418,28 @@ class DefaultRemoteRepository(
      * reconnect; only an epoch on the events can tell.
      */
     private fun pageEpoch(sessionId: String, epoch: String, revision: Long, status: String) {
-        if (seeListEpoch(sessionId, epoch) != EpochSeen.CHANGED) return
-        forgetListRevisions(sessionId)
+        val epochs = sessionListEpochs[sessionId]
+        val restoreTitle = epochs?.takeIf { it.savedTitleEpoch == epoch }?.savedTitle
+        val deferredTitle = epochs?.takeIf { it.deferredTitleEpoch == epoch }?.deferredTitle
+        val deferredRevision = epochs?.deferredTitleRevision ?: -1L
+        val seen = seeListEpoch(sessionId, epoch, confirm = true)
+        if (seen != EpochSeen.RETIRED && epochs?.savedTitleEpoch != null) {
+            epochs.savedTitleEpoch = null
+            epochs.savedTitle = null
+            epochs.deferredTitleEpoch = null
+            epochs.deferredTitle = null
+            epochs.deferredTitleRevision = -1L
+            val title = restoreTitle ?: deferredTitle
+            if (title != null) {
+                sessionTitleOverrides[sessionId] = title
+                updateSessionTitle(sessionId, title)
+                if (restoreTitle == null) sessionTitleRevisions[sessionId] = deferredRevision
+            }
+        }
+        if (seen == EpochSeen.CHANGED) {
+            forgetListRevisions(sessionId)
+            if (restoreTitle == null && deferredTitle != null) sessionTitleRevisions[sessionId] = deferredRevision
+        } else if (seen != EpochSeen.SAME || revision <= (sessionStatusRevisions[sessionId] ?: -1L)) return
         val known =
             sessionStatusOverrides[sessionId]
                 ?: state.value.sessions.firstOrNull { it.optionalText("id") == sessionId }?.optionalText("status")
@@ -2905,6 +3557,7 @@ class DefaultRemoteRepository(
         val previous = state.value.status
         if (t.status != previous) state.value.selection.sessionId?.let(::dropStaleChildControl)
         val open = t.questions.map { it.text("id") }.toSet()
+        if (detailsQuestion != null && t.questions.none { it === detailsQuestion }) clearQuestionDetails()
         update {
             // Before its first snapshot the Timeline holds no messages yet: what is on screen (a
             // cached or the last-known chat) stays until the snapshot replaces it.
@@ -2955,6 +3608,16 @@ class DefaultRemoteRepository(
         retryStaleCursor: Boolean = true,
     ) {
         val current = timeline ?: return
+        // A reconnect clears list tracking, but a continued Timeline still proves its own
+        // snapshot epoch. Preserve that evidence before a new first page can replace it.
+        if (!older && current.hasSnapshot) current.journalEpoch?.let { prior ->
+            val epochs = sessionListEpochs.getOrPut(current.sessionId) { ListEpochs(prior) }
+            if (epochs.confirmed == null && prior !in epochs.retired) {
+                epochs.confirmed = prior
+                epochs.superseded.remove(prior)
+            }
+        }
+        val observationAtStart = epochObservationSerial
         val cursor = if (older) current.nextCursor ?: return else null
         // Cleared before anything else: activation relies on it once the snapshot started.
         if (snapshotPending === current) snapshotPending = null
@@ -2983,12 +3646,14 @@ class DefaultRemoteRepository(
         var answered = false
         // The first page the reread asked for replaced what the Timeline showed.
         var replaced = false
+        var rejectedPage = false
         var cancelled = false
         // A drop ends this read with the connection already gone, though `connected` turns false
         // only after the awaiter ran on an immediate dispatcher; see [queuedReadFailed].
         val connection = generation
         // Which first page this is; a later one, scheduled or running, owns the queued prompt.
         val firstPage = if (older) -1L else ++firstPageReads
+        if (!older) nativeFirstPagesInFlight++
         try {
             // Cleared as the request goes out: a focus that excludes the session again while it is
             // awaited lapses it again.
@@ -3044,36 +3709,61 @@ class DefaultRemoteRepository(
                 // A host answers a replay only to a request that named a base.
                 checkNotNull(base)
                 Diagnostics.count(Diagnostics.Counter.RESUMES_REPLAYED)
-                refetch = !applyReplay(current, sessionEventsReply(data))
+                val reply = sessionEventsReply(data)
+                if (reply.epoch in (sessionListEpochs[current.sessionId]?.retired ?: emptyList<String>())) {
+                    rejectedPage = true
+                    if (awaited) current.discardAwaiting()
+                    refetch = true
+                } else {
+                    refetch = !applyReplay(current, reply)
+                }
             } else {
                 // A resume the host could not serve from its journal comes back as a snapshot.
                 if (!older && base != null) Diagnostics.count(Diagnostics.Counter.RESUMES_SNAPSHOT)
-                val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
-                drainedEffects(current)
-                // The Timeline's revision and status include the events it held for this page.
-                if (accepted) current.journalEpoch?.let { pageEpoch(current.sessionId, it, current.revision, current.status) }
-                replaced = accepted
-                val sameSession = data.optionalText("sessionId") == current.sessionId
-                // The same epoch's snapshot at a lower revision: one from another epoch starts over.
-                val outdated = !older && sameSession && !accepted
-                if (accepted && includedTasks && !current.needsSnapshot) {
-                    taskRefreshPending = false
-                    val tasks = parseSessionTasks(data["tasks"])
-                    current.tasksKnown = tasks.freshness == TaskFreshness.LIVE
-                    update { it.copy(tasks = tasks) }
-                } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
-                    taskRefreshPending = true
+                val pageJournalEpoch = if (!older) snapshotEpoch(data) else null
+                val retiredPage = pageJournalEpoch != null && pageJournalEpoch in (sessionListEpochs[current.sessionId]?.retired ?: emptyList<String>())
+                val pendingEpoch = !older && epochRefreshPending === current
+                val overtaken = held != null || epochObservationSerial != observationAtStart
+                val provisional = pendingEpoch && (pageJournalEpoch == null ||
+                    if (pageJournalEpoch == epochRefreshEpoch) data.long("revision") < epochRefreshThrough else overtaken)
+                if (retiredPage || provisional) {
+                    rejectedPage = true
+                    if (awaited) current.discardAwaiting()
+                    // Retry a stale resume once as a fresh page; a stale fresh page leaves recovery
+                    // for a later read instead of looping against an unchanged host.
+                    refetch = (base != null || held != null || epochRefreshPending === current) && !epochRefreshRetryUsed
+                    if (refetch) epochRefreshRetryUsed = true
+                } else {
+                    val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
+                    closeTimelineQuestions(current)
+                    drainedEffects(current)
+                    if (accepted && pendingEpoch) epochRefreshPending = null
+                    if (accepted) current.journalEpoch?.let {
+                        pageEpoch(current.sessionId, it, current.revision, current.status)
+                    }
+                    replaced = accepted
+                    val sameSession = data.optionalText("sessionId") == current.sessionId
+                    // The same epoch's snapshot at a lower revision: one from another epoch starts over.
+                    val outdated = !older && sameSession && !accepted
+                    if (accepted && includedTasks && !current.needsSnapshot) {
+                        taskRefreshPending = false
+                        val tasks = parseSessionTasks(data["tasks"])
+                        current.tasksKnown = tasks.freshness == TaskFreshness.LIVE
+                        update { it.copy(tasks = tasks) }
+                    } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
+                        taskRefreshPending = true
+                    }
+                    current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+                    if (!older) recheckFollowUps(current.sessionId)
+                    publishTimeline(persist = !older)
+                    // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
+                    // settled either way.
+                    if (!older) settleUncertainQuestions()
+                    // The chat on screen is read again, also when the activation after a reconnect failed
+                    // to read it and a later refresh did.
+                    if (!older && state.value.connected) staleReplaced()
+                    resyncAfterUnknownEvents(current)
                 }
-                current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
-                if (!older) recheckFollowUps(current.sessionId)
-                publishTimeline(persist = !older)
-                // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
-                // settled either way.
-                if (!older) settleUncertainQuestions()
-                // The chat on screen is read again, also when the activation after a reconnect failed
-                // to read it and a later refresh did.
-                if (!older && state.value.connected) staleReplaced()
-                resyncAfterUnknownEvents(current)
             }
             answered = true
         } catch (e: RemoteRequestException) {
@@ -3085,12 +3775,15 @@ class DefaultRemoteRepository(
             cancelled = true
             throw e
         } finally {
+            if (!older) nativeFirstPagesInFlight--
             // A reply that never came or was not taken: the events held for it apply now.
             val heldArrivals = awaited && current.heldArrivals
             val drained = awaited && current.endAwaiting()
-            // A Timeline replaced meanwhile (a re-activation continued it) is resumed by its
-            // successor, whose replay carries these events again.
-            if (drained) if (current === timeline) drainedEffects(current) else current.takeDrained()
+            if (drained) {
+                closeTimelineQuestions(current)
+                // A successor resumes a replaced Timeline and replays its events.
+                if (current === timeline) drainedEffects(current) else current.takeDrained()
+            }
             if (drained && current === timeline) publishTimeline()
             if (epoch == selectionEpoch) resynchronizing = false
             // A reread that failed leaves the Timeline lapsed for the next focus change or read.
@@ -3116,12 +3809,16 @@ class DefaultRemoteRepository(
         // A prompt typed offline goes out now that the chat is read again (not when another read follows).
         // Not from a reconnect a push woke in the background: Robin does not see that prompt go out,
         // so it waits for the foreground, whose read (see [resumeTier]) releases it.
-        if (!older && !refetch && !inBackground && epoch == selectionEpoch && current === timeline)
+        if (!older && !refetch && !rejectedPage && epochRefreshPending !== current && !inBackground && epoch == selectionEpoch && current === timeline)
             releaseQueuedPrompt(current)
         // Taken in any case: a fresh snapshot that follows covers what the resume would fetch.
         val owedResume = current.takeOwedResume()
         if (epoch == selectionEpoch) {
-            if (refetch || current.needsSnapshot) {
+            if (epochRefreshPending === current && !replaced && !older && (base != null || held != null) && !epochRefreshRetryUsed) {
+                epochRefreshRetryUsed = true
+                refetch = true
+            }
+            if (refetch || current.needsSnapshot && !rejectedPage) {
                 taskRefreshPending = false
                 snapshotAsync()
             } else if (owedResume) snapshotAsync(intent = SnapshotIntent.RESUME)
@@ -3170,7 +3867,7 @@ class DefaultRemoteRepository(
     /** Settles the question blocks whose answer was uncertain: the host's reply says what is still open. */
     private fun settleUncertainQuestions() =
         update {
-            it.copy(questionBlocks = it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN })
+            it.copy(questionBlocks = it.questionBlocks.filter { (id, block) -> block != QuestionBlock.UNCERTAIN || pagedQuarantined(it.selection, id) })
         }
 
     /**
@@ -3185,6 +3882,7 @@ class DefaultRemoteRepository(
      */
     private fun applyReplay(current: Timeline, reply: SessionEventsReply): Boolean {
         val result = current.replay(reply)
+        closeTimelineQuestions(current)
         var advisorReplayed = false
         for (event in result.applied) {
             if (event.optionalText("kind") == "session.notice") continue
@@ -3245,6 +3943,29 @@ class DefaultRemoteRepository(
      */
     private val parkedFiles = LinkedHashMap<DraftKey, FilesState>()
 
+    /** Complete a durable discard against only the editor that initiated it. */
+    private fun settleParkedDiscard(key: FileDraftKey, original: FileEditor, success: Boolean?) {
+        fun settle(files: FilesState): FilesState {
+            val editor = files.editor ?: return files
+            if (editor.path != key.path || editor.buffer !== original.buffer) return files
+            return files.copy(editor = when (success) {
+                true -> null
+                false -> editor.copy(saving = false, saveFailure = FilesFailure.STORAGE)
+                null -> editor.copy(saving = false, saveFailure = editor.saveFailure.takeUnless { it == FilesFailure.OFFLINE })
+            })
+        }
+        val selected = state.value.selection
+        if (selected.routeId == key.routeId && selected.sessionId == key.sessionId) {
+            update { current ->
+                val files = current.files
+                if (files?.sessionId == key.sessionId) current.copy(files = settle(files)) else current
+            }
+        } else {
+            val parkedKey = DraftKey(key.routeId, key.sessionId)
+            parkedFiles[parkedKey]?.let { parkedFiles[parkedKey] = settle(it) }
+        }
+    }
+
     /**
      * Parks the file browser of [previous] when its editor holds unsaved changes, and returns the
      * one parked for [selection], ready to show again: nothing loading, and a save that was still
@@ -3256,7 +3977,7 @@ class DefaultRemoteRepository(
         if (previousRoute != null && leaving != null && leaving.sessionId == previous.sessionId && leaving.editor?.changed == true) {
             val key = DraftKey(previousRoute, leaving.sessionId)
             parkedFiles.remove(key)
-            parkedFiles[key] = leaving
+            parkedFiles[key] = leaving.copy(search = FileSearchState())
             if (parkedFiles.size > MAX_PARKED_EDITORS) {
                 while (parkedFiles.size > MAX_PARKED_EDITORS) parkedFiles.remove(parkedFiles.keys.first())
                 // The oldest edit is gone for good: say so once instead of losing it silently.
@@ -3266,15 +3987,16 @@ class DefaultRemoteRepository(
         val routeId = selection.routeId ?: return null
         val sessionId = selection.sessionId ?: return null
         val parked = parkedFiles.remove(DraftKey(routeId, sessionId)) ?: return null
-        val editor = checkNotNull(parked.editor)
+        val editor = parked.editor
         return parked.copy(
             loading = false,
             failure = parked.failure ?: if (parked.listing == null) FilesFailure.FAILED else null,
             moreLoading = false,
             previews = emptyMap(),
             peek = null,
+            search = FileSearchState(),
             file = parked.file?.copy(loading = false, moreLoading = false),
-            editor = editor.copy(
+            editor = editor?.copy(
                 saving = false,
                 saveFailure = if (editor.saving) FilesFailure.OFFLINE else editor.saveFailure,
                 leaveRequest = null,
@@ -3350,6 +4072,10 @@ class DefaultRemoteRepository(
         sessionsReused: Boolean = false,
     ) {
         val previous = state.value.selection
+        if (selection != previous && emulatorClient.view != null) emulatorClient.close()
+        if (selection != previous && browserClient.view != null) browserClient.close()
+        if (selection != previous && previewClient.view != null) previewClient.close()
+        if (selection.routeId != previous.routeId || selection.sessionId != previous.sessionId) endTerminal("left", sendDetach = true)
         // The same chat of the same Mac selected again (a reconnect, a resume, a restore): what it
         // shows stays until the snapshot and the reads after it replace it.
         val sameSession = selection.sessionId != null && selection.routeId == previous.routeId &&
@@ -3562,7 +4288,13 @@ class DefaultRemoteRepository(
         )
             return selection
         cacheCurrentScreen()
-        if (!force) cancelSelection()
+        if (!force) cancelSelection(
+            preserveEmulator = mode == ActivationMode.RESTORE && selection == previousSelection && emulatorClient.isDisconnectedFor(selection.sessionId),
+            preserveBrowser = mode == ActivationMode.RESTORE && selection == previousSelection &&
+                browserClient.isDisconnectedFor(selection.sessionId),
+            preservePreview = mode == ActivationMode.RESTORE && selection == previousSelection &&
+                previewClient.isDisconnectedFor(selection.sessionId),
+        )
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
         stopReconnectTimer()
@@ -3847,6 +4579,18 @@ class DefaultRemoteRepository(
                 outcome = "snapshot_failed"
                 return parent
             }
+            // A lost transport retains an open browser pane, but its old lease and connection
+            // cannot be reused. Rebind only after this same selection and its capabilities are
+            // confirmed; a user close or navigation during activation leaves nothing to reopen.
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical &&
+                state.value.selection == canonical && canOpenBrowser()) {
+                browserClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
+            }
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical &&
+                state.value.selection == canonical && canOpenPreview()) {
+                previewClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
+            }
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical && state.value.selection == canonical && canOpenEmulator()) emulatorClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             refreshPanes()
             outcome = "ok"
             return canonical
@@ -3888,6 +4632,7 @@ class DefaultRemoteRepository(
                     snapshotPending = null
                     // A held resume whose reply is dropped: the events held for it apply now.
                     pending.endAwaiting()
+                    closeTimelineQuestions(pending)
                     drainedEffects(pending)
                     if (pending.needsSnapshot && state.value.connected) snapshotAsync(intent = SnapshotIntent.RESUME)
                 }
@@ -4365,6 +5110,12 @@ class DefaultRemoteRepository(
         ArtifactThumbnails.clear()
         retry?.cancel()
         connectionEnded()
+        clearQuestionDetails()
+        nativePresenceJob?.cancel()
+        nativePromotionJob?.cancel()
+        nativePromotionJob = null
+        nativePresenceJob = null
+        nativePresenceSession = null
         generation++
         clearLateAcknowledgements()
         transport.close()
@@ -4404,6 +5155,10 @@ class DefaultRemoteRepository(
         ArtifactThumbnails.clear()
         followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
+        committedGitDrafts.keys.removeAll { it.routeId == routeId }
+        committedPushIntents.keys.removeAll { it.routeId == routeId }
+        committedPullRequestIntents.keys.removeAll { it.routeId == routeId }
+        committedPullRequestDrafts.keys.removeAll { it.routeId == routeId }
         parkedFiles.keys.removeAll { it.routeId == routeId }
         detachedTimelines.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
@@ -4483,6 +5238,15 @@ class DefaultRemoteRepository(
         }
         cancelHostWaitHint()
         deferredRecovery = null
+        emulatorClient.disconnected()
+        browserClient.disconnected()
+        previewClient.disconnected()
+        clearQuestionDetails()
+        nativePresenceJob?.cancel()
+        nativePromotionJob?.cancel()
+        nativePromotionJob = null
+        nativePresenceJob = null
+        nativePresenceSession = null
         generation++
         clearLateAcknowledgements()
         folderVersion++
@@ -4743,6 +5507,9 @@ class DefaultRemoteRepository(
      * never proven, and lost within [SHORT_LIVED_CONNECTION_MILLIS].
      */
     private fun connectionEnded(): Boolean {
+        endTerminal("offline", sendDetach = false)
+        pendingTerminal = null
+        terminalRouteOffered = false
         val lived = readyAt?.let { now() - it }
         val shortLived = lived != null && !connectionProven && lived < SHORT_LIVED_CONNECTION_MILLIS
         readyAt = null
@@ -4823,6 +5590,7 @@ class DefaultRemoteRepository(
         backgroundFocusTimer?.cancel()
         backgroundFocusTimer = null
         inBackground = !foreground
+        reconcileNativePresence()
         backgroundGraceOver = false
         if (!foreground) {
             backgroundFocusTimer = scope.launch {
@@ -5665,7 +6433,7 @@ class DefaultRemoteRepository(
         val stored = drafts[key] ?: StoredDraft()
         if (stored.text == text) return
         composerEdited(key, "text")
-        drafts[key] = stored.copy(text = text)
+        drafts[key] = (drafts[key] ?: stored).copy(text = text)
         if (preparedSource == key) update { it.copy(preparedText = text.takeIf(String::isNotEmpty)) }
         persist()
     }
@@ -5746,7 +6514,7 @@ class DefaultRemoteRepository(
                             val attachments = latest.attachments + imported
                             require(validAttachmentSet(attachments))
                             composerEdited(key, "attachments")
-                            drafts[key] = latest.copy(attachments = attachments)
+                            drafts[key] = (drafts[key] ?: latest).copy(attachments = attachments)
                             persistNow()
                             update { it.copy(attachments = attachments) }
                         } catch (e: Exception) {
@@ -5792,7 +6560,7 @@ class DefaultRemoteRepository(
         val latest = drafts[key] ?: return
         if (latest.attachments.none { it.id == id }) return
         composerEdited(key, "attachments")
-        drafts[key] = latest.copy(attachments = latest.attachments.filterNot { it.id == id })
+        drafts[key] = (drafts[key] ?: latest).copy(attachments = latest.attachments.filterNot { it.id == id })
         update { it.copy(attachments = drafts.getValue(key).attachments) }
         val epoch = selectionEpoch
         scope.launch {
@@ -6204,7 +6972,14 @@ class DefaultRemoteRepository(
                         submittedQuote = current.quote,
                         submittedAttachments = current.attachments,
                         submittedDelivery = kind,
+                        promptTextState = if (!plain) null else if (resend != null && stored.mutationId == id)
+                            stored.promptTextState else if (clearText) "cleared" else "edited",
+                        promptQuoteState = if (!plain) null else if (resend != null && stored.mutationId == id)
+                            stored.promptQuoteState else if (clearQuote) "cleared" else "edited",
+                        promptAttachmentsState = if (!plain) null else if (resend != null && stored.mutationId == id)
+                            stored.promptAttachmentsState else if (clearAttachments) "cleared" else "edited",
                     )
+                restoredPromptVersions.remove(key)
                 journalOwners[key] = attempt
                 persistNow()
                 checkEpoch(epoch)
@@ -6325,6 +7100,7 @@ class DefaultRemoteRepository(
                                 submittedQuote = null,
                                 submittedAttachments = emptyList(),
                                 submittedDelivery = null,
+                                promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
                             )
                         if (journalOwners[key] === attempt) journalOwners.remove(key)
                         persist()
@@ -6412,7 +7188,11 @@ class DefaultRemoteRepository(
                 submittedQuote = current.quote,
                 submittedAttachments = emptyList(),
                 submittedDelivery = "prompt",
+                promptTextState = if (clear) "cleared" else "edited",
+                promptQuoteState = if (clear) "cleared" else "edited",
+                promptAttachmentsState = "cleared",
             )
+        restoredPromptVersions.remove(key)
         journalOwners[key] = attempt
         promptOwners[key] = attempt
         persist()
@@ -6571,6 +7351,7 @@ class DefaultRemoteRepository(
                     submittedQuote = null,
                     submittedAttachments = emptyList(),
                     submittedDelivery = null,
+                    promptTextState = null, promptQuoteState = null, promptAttachmentsState = null,
                 )
             journalOwners.remove(key)
             persist()
@@ -6625,6 +7406,10 @@ class DefaultRemoteRepository(
                 followUps = if (queued) latest.followUps + PendingFollowUp(id, submitted.draft,
                     earlyFollowUpReceipts[receiptKey] ?: "accepted", delivery) else latest.followUps,
                 reviewComments = latest.reviewComments,
+                gitCommit = latest.gitCommit,
+                gitPush = latest.gitPush,
+                gitPullRequest = latest.gitPullRequest,
+                gitPullRequestDraft = latest.gitPullRequestDraft,
             )
         }
         val before = drafts[key] ?: return false
@@ -6716,11 +7501,17 @@ class DefaultRemoteRepository(
         )
         else before
         // A merged composer holds typed text too, so a late acknowledgement never clears it.
-        val ownership = if (restoreText) RestoredComposer(version, restoreQuote, restoreAttachments)
-            else if (mergeQueued && before!!.text.isEmpty()) RestoredComposer(version, cleared!!.quote, false)
+        val proven = restored?.copy(
+            promptTextState = if (restoreText && before?.promptTextState == "cleared") "restored" else before?.promptTextState,
+            promptQuoteState = if (restoreQuote && before?.promptQuoteState == "cleared") "restored" else before?.promptQuoteState,
+            promptAttachmentsState = if (restoreAttachments && before?.promptAttachmentsState == "cleared") "restored" else before?.promptAttachmentsState,
+        )
+        val ownership = if (proven?.promptComposerRestored() == true && restoreText)
+            RestoredComposer(version, restoreQuote, restoreAttachments)
             else null
-        if (restored != null) {
-            drafts[key] = restored
+        if (ownership != null) restoredPromptVersions[key] = version
+        if (proven != null) {
+            drafts[key] = proven
             persist()
         }
         if (currentDraftKey() != key) return ownership
@@ -7300,8 +8091,9 @@ class DefaultRemoteRepository(
         fields: Array<out Pair<String, Any?>>,
         timeoutMillis: Long,
         record: Boolean,
+        onSent: (() -> Unit)? = null,
     ): JsonObject =
-        awaitConnectionReply(Wire.objectOf("type" to type, "requestId" to requestId, *fields), timeoutMillis, record)
+        awaitConnectionReply(Wire.objectOf("type" to type, "requestId" to requestId, *fields), timeoutMillis, record, onSent = onSent)
 
     /**
      * Sends [payload], a command with its `requestId`, bound to the connection, and waits for its
@@ -7313,6 +8105,7 @@ class DefaultRemoteRepository(
         timeoutMillis: Long,
         record: Boolean,
         liveness: Boolean = false,
+        onSent: (() -> Unit)? = null,
     ): JsonObject {
         val requestId = payload.text("requestId")
         val type = payload.text("type")
@@ -7321,10 +8114,15 @@ class DefaultRemoteRepository(
         connectionCompletions[requestId] = completion
         val started = Diagnostics.now()
         val connection = generation
-        val inboundAtSend = inboundFrames
+        val route = activeHost?.routeId
+        var inboundAtSend = -1L
         var outcome = "failed"
         try {
-            transport.send(payload)
+            transport.sendGuarded(payload) {
+                if (!state.value.connected || connection != generation || activeHost?.routeId != route) throw MutationNotSentException()
+                inboundAtSend = inboundFrames
+                onSent?.invoke()
+            }
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
@@ -7367,7 +8165,7 @@ class DefaultRemoteRepository(
      */
     private suspend fun connectionRequest(type: String, vararg fields: Pair<String, Any?>): JsonObject {
         check(connectionRequestsOpen())
-        return awaitConnectionReply(sessionsListRequestId(type, Wire.random()), type, fields, REQUEST_TIMEOUT_MILLIS, record = true)
+        return awaitConnectionReply(sessionsListRequestId(type, Wire.random()), type, fields, if (type == "emulator.open") 180_000L else REQUEST_TIMEOUT_MILLIS, record = true)
     }
 
     /** Thrown inside [withHealthyConnection] when a plain request's connection went or changed: the caller falls back. */
@@ -7415,12 +8213,21 @@ class DefaultRemoteRepository(
                         requestId in connectionCompletions
                 )
                     throw MutationNotSentException()
-                onSent()
+                var dispatched = false
                 try {
-                    awaitConnectionReply(requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false)
+                    awaitConnectionReply(requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false, onSent = {
+                        dispatched = true
+                        onSent()
+                    })
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: RemoteRequestException) {
                     // The host answered: its code means the same on any connection.
                     if (e.answered) throw RemoteCommandException(e.code)
+                    if (!dispatched) throw MutationNotSentException()
+                    throw e
+                } catch (e: Exception) {
+                    if (!dispatched) throw MutationNotSentException()
                     throw e
                 }
             }
@@ -8029,6 +8836,382 @@ class DefaultRemoteRepository(
         }
     }
 
+    override fun loadQuestionDetails(questionId: String) {
+        val current = state.value
+        val question = current.questions.firstOrNull { it.optionalText("id") == questionId } ?: return
+        val descriptor = runCatching { parseQuestionDetails(question.obj("details")) }.getOrNull() ?: return
+        val sessionId = current.selection.sessionId ?: return
+        if (!current.connected || !current.capabilitiesKnown || QUESTION_DETAILS_CAPABILITY !in current.capabilities || QUESTION_DETAILS_CAPABILITY in current.unavailableCapabilities || current.questionDetails.values.any { it.loading }) return
+        clearQuestionDetails()
+        detailsQuestion = question
+        val selection = current.selection
+        val epoch = selectionEpoch
+        val connection = generation
+        val loadToken = detailsLoadToken
+        update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(loading = true))) }
+        scope.launch {
+            fun valid(): Boolean = loadToken == detailsLoadToken && epoch == selectionEpoch && connection == generation && state.value.connected && state.value.selection == selection && state.value.questions.any { it === question } && state.value.capabilitiesKnown && QUESTION_DETAILS_CAPABILITY in state.value.capabilities && QUESTION_DETAILS_CAPABILITY !in state.value.unavailableCapabilities
+            try {
+                val assembler = QuestionDetailsAssembler(sessionId, questionId, descriptor)
+                while (assembler.offset < descriptor.totalBytes) {
+                    check(valid())
+                    val page = request("session.question.details.get", epoch, "sessionId" to sessionId, "questionId" to questionId, "detailsId" to descriptor.id, "offset" to assembler.offset, validateBeforeSend = { check(valid()) })
+                    check(valid())
+                    assembler.append(page)
+                }
+                val text = assembler.finish()
+                check(valid())
+                detailsAuthority.verify(connection, selection, question, descriptor, text)
+                update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(text = text))) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (valid()) update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(failed = true))) }
+            }
+        }
+    }
+
+    private fun positiveOutcomeAvailable(current: RemoteState, allowCapacityBlocked: Boolean = false): Boolean =
+        positiveConfigured && !pagedStoragePending && (!pagedStorageFailed || allowCapacityBlocked && pagedReleaseCapacityBlocked) &&
+            (pagedEditorTestGate && positiveOutcomeTestGate ||
+                QUESTION_EDITOR_CAPABILITY in current.capabilities && QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
+                NATIVE_EDITOR_CAPABILITY in current.capabilities && NATIVE_EDITOR_CAPABILITY !in current.unavailableCapabilities) &&
+            current.connected && current.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 &&
+            QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
+            QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in current.capabilities && QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY !in current.unavailableCapabilities
+
+    private fun outcomeStillCurrent(attempt: StoredPagedAttempt, connection: Long, epoch: Long): Boolean {
+        val current = state.value
+        return connection == generation && epoch == selectionEpoch && positiveOutcomeAvailable(current) &&
+            current.selection.routeId == attempt.key.routeId && current.host?.routeId == attempt.key.routeId &&
+            current.host?.deviceId == attempt.outcomeBinding?.deviceId
+    }
+
+    private fun releaseStillCurrent(release: StoredPagedRelease, connection: Long, epoch: Long): Boolean {
+        val current = state.value
+        return connection == generation && epoch == selectionEpoch && positiveOutcomeAvailable(current, allowCapacityBlocked = true) &&
+            current.selection.routeId == release.key.routeId && current.host?.routeId == release.key.routeId &&
+            current.host?.deviceId == release.deviceId && pagedJournalSnapshot.pendingReleases[release.releaseId] == release
+    }
+
+    private fun schedulePagedReleases() {
+        val context = generation to selectionEpoch
+        if (pagedReleaseContext != context || !positiveOutcomeAvailable(state.value, allowCapacityBlocked = true)) {
+            pagedReleaseJob?.cancel()
+            pagedReleaseJob = null
+            pagedReleaseContext = null
+        }
+        if (!positiveOutcomeAvailable(state.value, allowCapacityBlocked = true) || pagedReleaseJob?.isActive == true) return
+        if (pagedJournalSnapshot.pendingReleases.values.none { releaseStillCurrent(it, context.first, context.second) }) return
+        pagedReleaseContext = context
+        pagedReleaseJob = scope.launch {
+            while (true) {
+                val release = pagedJournalSnapshot.pendingReleases.values.firstOrNull { releaseStillCurrent(it, context.first, context.second) } ?: break
+                try {
+                    val result = request("session.question.editor.outcome.release", context.second, "receipt" to PagedEditorWire.receipt(release),
+                        validateBeforeSend = { check(releaseStillCurrent(release, context.first, context.second)) })
+                    require(result.keys == setOf("kind") && result.text("kind") == "editor_outcome_released")
+                    check(releaseStillCurrent(release, context.first, context.second))
+                    pagedProjectionMutex.withLock {
+                        check(releaseStillCurrent(release, context.first, context.second))
+                        val journal = requireNotNull(pagedJournal)
+                        journal.removeRelease(release)
+                        pagedJournalSnapshot = journal.snapshot()
+                    }
+                    update { it }
+                    if (pagedReleaseCapacityBlocked) retryPagedEditorStorage()
+                } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                    if (!releaseStillCurrent(release, context.first, context.second)) break
+                    delay(5_000)
+                }
+            }
+        }
+    }
+
+    private fun schedulePagedOutcomeQueries() {
+        if (!positiveOutcomeAvailable(state.value)) return
+        val connection = generation
+        val epoch = selectionEpoch
+        pagedQueried.removeAll { it.first != connection || it.second != epoch }
+        for (attempt in pagedJournalSnapshot.attempts.values) {
+            if (attempt.outcomeBinding == null || !outcomeStillCurrent(attempt, connection, epoch) || !pagedQueried.add(Triple(connection, epoch, attempt.attemptId))) continue
+            scope.launch {
+                try {
+                    val receipt = PagedEditorWire.receipt(attempt)
+                    val result = request("session.question.editor.outcome.get", epoch, "receipt" to receipt,
+                        validateBeforeSend = { check(outcomeStillCurrent(attempt, connection, epoch)) })
+                    check(outcomeStillCurrent(attempt, connection, epoch))
+                    if (result.keys == setOf("kind", "status") && result.text("kind") == "editor_outcome" && result.text("status") == "unknown") return@launch
+                    require(result.keys == setOf("kind", "status", "receipt") && result.text("kind") == "editor_outcome" && result.text("status") == "applied" && result.obj("receipt") == receipt)
+                    var removed = false
+                    pagedProjectionMutex.withLock {
+                        check(outcomeStillCurrent(attempt, connection, epoch))
+                        val journal = requireNotNull(pagedJournal)
+                        if (journal.snapshot().attempts[attempt.attemptId] == attempt) {
+                            pagedCleanupProofs.add(attempt.attemptId)
+                            pagedReleaseProofs[attempt.attemptId] = attempt
+                            try {
+                                journal.retireApplied(attempt)
+                                pagedJournalSnapshot = journal.snapshot()
+                                pagedCleanupProofs.remove(attempt.attemptId)
+                                pagedReleaseProofs.remove(attempt.attemptId)
+                                removed = true
+                            } catch (e: Exception) { pagedReleaseCapacityBlocked = e is PagedReleaseCapacityException; pagedStorageFailed = true; throw e }
+                        }
+                    }
+                    update { it }
+                    if (removed) schedulePagedReleases()
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { update { it } }
+            }
+        }
+    }
+
+    private fun pagedAvailable(question: JsonObject, current: RemoteState): Boolean =
+        (pagedEditorTestGate || nativePagedConfigured && question["native"] == JsonPrimitive(true)) &&
+            current.connected && !current.loading && current.questions.any { it === question } &&
+            current.questions.count { it.optionalText("id") == question.optionalText("id") } == 1 &&
+            editorCapabilityAvailable(question, current) && QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities &&
+            QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities && capabilityRevision(capabilityRoute) == 3
+
+    override fun loadPagedEditor(question: JsonObject) {
+        val current = state.value
+        if (!pagedAvailable(question, current)) return
+        val id = question.optionalText("id") ?: return
+        val selection = current.selection
+        val session = selection.sessionId ?: return
+        val route = selection.routeId ?: return
+        val epoch = selectionEpoch
+        val connection = generation
+        val source = runCatching { EditorSourceState(connection, selection, question) }.getOrNull() ?: return
+        pagedState?.clear()
+        // The new token invalidates the old attempt. Its finalizer cannot own this new editor.
+        pagedUploading = false
+        pagedState = source
+        pagedQuestion = question
+        val token = ++pagedToken
+        prunePagedDrafts()
+        fun view(text: String?, loading: Boolean = false): PagedEditorView {
+            val saved = pagedDrafts[question]?.text
+            val recovery = if (saved == null) pagedDrafts.entries.filter { (other, draft) -> other !== question && draft.route == route && draft.session == session && draft.id == id }.maxByOrNull { it.value.editedAt }?.value?.text
+                ?: pagedJournalSnapshot.drafts[PagedJournalKey(route, session, id)]?.text else null
+            return PagedEditorView(loading = loading, text = if (text != null) saved ?: text else null, recoveryDraft = if (text != null) recovery else null,
+                quarantined = pagedQuarantined(selection, id), capacityFull = maxOf(pagedReceipts.size, pagedJournalSnapshot.attempts.size) >= pagedReceiptLimit,
+                storagePending = pagedStoragePending, storageFailed = pagedStorageFailed, storageRetryAvailable = pagedStorageFailed && !pagedStoragePending)
+        }
+        update { it.copy(pagedEditors = mapOf(id to view(source.originalSource, source.originalSource == null))) }
+        if (source.originalSource != null) return
+        scope.launch {
+            fun valid() = token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value)
+            try {
+                val descriptor = PagedEditorWire.parseQuestionSource(question)
+                var offset = 0
+                while (offset < descriptor.totalBytes) {
+                    check(valid())
+                    val page = request("session.question.details.get", epoch, "sessionId" to session, "questionId" to id, "detailsId" to descriptor.id, "offset" to offset, validateBeforeSend = { check(valid()) })
+                    check(valid())
+                    source.append(page)
+                    offset += minOf(EDITOR_UPLOAD_CHUNK_BYTES, descriptor.totalBytes - offset)
+                }
+                source.finish()
+                check(valid())
+                update { it.copy(pagedEditors = mapOf(id to view(source.originalSource))) }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                if (valid()) { source.clear(); pagedState = null; update { it.copy(pagedEditors = mapOf(id to PagedEditorView(failed = true))) } }
+            }
+        }
+    }
+
+    override fun editPagedEditor(question: JsonObject, draft: String) {
+        val current = state.value
+        val id = question.optionalText("id") ?: return
+        val route = current.selection.routeId ?: return
+        val session = current.selection.sessionId ?: return
+        if (pagedQuestion !== question || pagedUploading || pagedStoragePending || !pagedAvailable(question, current) || pagedState?.originalSource == null) return
+        val retained = retainPagedDraft(question, PagedDraft(route, session, id, draft, now()))
+        update { state -> state.copy(pagedEditors = state.pagedEditors + (id to (state.pagedEditors[id] ?: PagedEditorView()).copy(text = draft, recoveryDraft = null, retentionWarning = !retained))) }
+        val journal = pagedJournal
+        if (journal != null && retained) {
+            val key = PagedJournalKey(route, session, id)
+            val stored = StoredPagedDraft(draft, now())
+            pagedPendingDrafts[key] = stored
+            if (pagedStorageFailed) return
+            scope.launch {
+                pagedProjectionMutex.withLock {
+                    try {
+                        journal.putDraft(key, stored)
+                        if (pagedPendingDrafts[key] == stored) pagedPendingDrafts.remove(key)
+                        pagedJournalSnapshot = journal.snapshot()
+                    } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                        pagedStorageFailed = true
+                        update { it }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun submitPagedEditor(question: JsonObject, draft: String) {
+        val current = state.value
+        val id = question.optionalText("id") ?: return
+        val source = pagedState ?: return
+        val selection = current.selection
+        val session = selection.sessionId ?: return
+        val epoch = selectionEpoch
+        val connection = generation
+        val token = pagedToken
+        if (pagedQuestion !== question || pagedUploading || pagedStoragePending || pagedStorageFailed || id in current.questionBlocks || pagedQuarantined(selection, id) || maxOf(pagedReceipts.size, pagedJournalSnapshot.attempts.size) >= pagedReceiptLimit || !pagedAvailable(question, current) || !PagedEditorWire.validText(draft, MAX_EDITOR_UPLOAD_BYTES)) return
+        source.edit(draft)
+        val action = source.capture() ?: return
+        if (!source.allows(action, connection, selection, question)) return
+        val owner = runCatching { PagedEditorWire.ownerIncarnationId(question) }.getOrElse { return }
+        val boundOwner = if (positiveOutcomeAvailable(current)) owner else null
+        val device = if (boundOwner != null) current.host?.takeIf { it.routeId == selection.routeId }?.deviceId ?: return else null
+        val bytes = draft.toByteArray(Charsets.UTF_8)
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        pagedUploading = true
+        update { it.copy(pagedEditors = it.pagedEditors + (id to (it.pagedEditors[id] ?: PagedEditorView(text = draft)).copy(loading = true, text = draft))) }
+        scope.launch {
+            var reservedId: String? = null
+            fun valid(): Boolean {
+                val block = state.value.questionBlocks[id]
+                return !pagedStoragePending && !pagedStorageFailed && token == pagedToken && epoch == selectionEpoch && connection == generation && state.value.selection == selection && pagedQuestion === question && pagedAvailable(question, state.value) && source.allows(action, connection, selection, question) && (boundOwner == null || positiveOutcomeAvailable(state.value) && state.value.host?.deviceId == device && PagedEditorWire.ownerIncarnationId(question) == boundOwner) && block == null
+            }
+            suspend fun send(payload: JsonObject, onSent: (() -> Unit)? = null): JsonObject {
+                check(valid())
+                val fields = payload.filterKeys { it != "type" && it != "requestId" }.map { it.key to it.value }.toTypedArray()
+                return request(payload.text("type"), epoch, *fields, requestId = payload.text("requestId"), onSent = onSent, validateBeforeSend = { check(valid()) })
+            }
+            var commitDispatched = false
+            var accepted = false
+            try {
+                val begun = send(PagedEditorWire.begin(Wire.random(), session, id, action.grantId, action.source, bytes.size, hash, boundOwner))
+                check(valid())
+                val uploadId = PagedEditorWire.validateBegun(begun, session, id)
+                var offset = 0
+                while (offset < bytes.size) {
+                    val end = minOf(offset + EDITOR_UPLOAD_CHUNK_BYTES, bytes.size)
+                    val reply = send(PagedEditorWire.chunk(Wire.random(), session, id, uploadId, offset, bytes.copyOfRange(offset, end)))
+                    check(valid())
+                    PagedEditorWire.validateAck(reply, session, id, uploadId, end)
+                    offset = end
+                }
+                check(valid())
+                val commitId = Wire.random()
+                val journal = pagedJournal
+                if (journal != null) {
+                    val attempt = StoredPagedAttempt(PagedJournalKey(requireNotNull(selection.routeId), session, id), Wire.random(), action.grantId, uploadId, commitId, draft, now(), boundOwner?.let { StoredPagedOutcomeBinding(requireNotNull(device), it, bytes.size, hash) })
+                    withContext(NonCancellable) {
+                        pagedProjectionMutex.withLock {
+                            check(valid())
+                            try {
+                                journal.reserve(attempt)
+                                reservedId = attempt.attemptId
+                                pagedQueried.add(Triple(connection, epoch, attempt.attemptId))
+                                pagedJournalSnapshot = journal.snapshot()
+                                update { it }
+                            } catch (e: Exception) {
+                                pagedStorageFailed = true
+                                update { it }
+                                throw e
+                            }
+                        }
+                    }
+                }
+                val result = send(PagedEditorWire.commit(commitId, session, id, uploadId, boundOwner)) {
+                    commitDispatched = true
+                    if (journal == null) pagedReceipts += PagedReceipt(requireNotNull(selection.routeId), session, id, question, action.grantId, connection)
+                    update { it }
+                }
+                require(result.text("kind") == "accepted" && result.text("sessionId") == session)
+                accepted = true
+                if (valid()) update { it.copy(answering = it.answering + id) }
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                if (valid()) {
+                    if (commitDispatched && pagedJournal == null) update { it.copy(questionBlocks = it.questionBlocks + (id to QuestionBlock.UNCERTAIN)) }
+                    else reportError(R.string.remote_request_error)
+                }
+            } finally {
+                val attemptId = reservedId
+                if (attemptId != null && (!commitDispatched || accepted)) withContext(NonCancellable) {
+                    pagedCleanupProofs.add(attemptId)
+                    val boundAttempt = pagedJournalSnapshot.attempts[attemptId]?.takeIf { accepted && it.outcomeBinding != null }
+                    if (boundAttempt != null) pagedReleaseProofs[attemptId] = boundAttempt
+                    try {
+                        pagedProjectionMutex.withLock {
+                            if (boundAttempt != null) requireNotNull(pagedJournal).retireApplied(boundAttempt)
+                            else requireNotNull(pagedJournal).removeAttempt(attemptId)
+                            pagedCleanupProofs.remove(attemptId)
+                            pagedReleaseProofs.remove(attemptId)
+                            pagedJournalSnapshot = pagedJournal.snapshot()
+                            update { it }
+                        }
+                        if (boundAttempt != null) schedulePagedReleases()
+                    } catch (e: Exception) {
+                        pagedReleaseCapacityBlocked = e is PagedReleaseCapacityException
+                        pagedStorageFailed = true
+                        update { it }
+                    }
+                }
+                if (token == pagedToken) {
+                    pagedUploading = false
+                    update { state -> state.copy(pagedEditors = state.pagedEditors[id]?.let { state.pagedEditors + (id to it.copy(loading = false)) } ?: state.pagedEditors) }
+                }
+            }
+        }
+    }
+
+    override fun retryPagedEditorStorage() {
+        val journal = pagedJournal ?: return
+        if (!pagedStorageFailed || pagedStoragePending) return
+        pagedStoragePending = true
+        update { it }
+        scope.launch {
+            pagedProjectionMutex.withLock {
+                try {
+                    pagedJournalSnapshot = journal.snapshot()
+                    for (id in pagedCleanupProofs.toList()) {
+                        val proof = pagedReleaseProofs[id]
+                        val matches = proof == null || journal.snapshot().attempts[id] == proof
+                        if (matches) {
+                            if (proof != null) journal.retireApplied(proof) else journal.removeAttempt(id)
+                        }
+                        pagedCleanupProofs.remove(id)
+                        pagedReleaseProofs.remove(id)
+                    }
+                    for ((key, draft) in pagedPendingDrafts.toMap()) {
+                        journal.putDraft(key, draft)
+                        if (pagedPendingDrafts[key] == draft) pagedPendingDrafts.remove(key)
+                    }
+                    pagedJournalSnapshot = journal.snapshot()
+                    pagedStorageFailed = false
+                    pagedReleaseCapacityBlocked = false
+                } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                    pagedStorageFailed = true
+                    pagedReleaseCapacityBlocked = e is PagedReleaseCapacityException
+                    // Preserve any successful removals in the projection even if a later write failed.
+                    pagedJournalSnapshot = runCatching { journal.snapshot() }.getOrDefault(pagedJournalSnapshot)
+                } finally {
+                    pagedStoragePending = false
+                    update { state ->
+                        val question = pagedQuestion
+                        val route = state.selection.routeId
+                        val session = state.selection.sessionId
+                        val verified = question != null && state.questions.any { it === question } &&
+                            pagedState?.originalSource != null && pagedDrafts[question] == null
+                        state.copy(pagedEditors = state.pagedEditors.mapValues { (id, view) ->
+                            val recovery = if (!pagedStorageFailed && verified && route != null && session != null &&
+                                question?.optionalText("id") == id && view.text != null)
+                                pagedJournalSnapshot.drafts[PagedJournalKey(route, session, id)]?.text ?: view.recoveryDraft
+                            else view.recoveryDraft
+                            view.copy(recoveryDraft = recovery)
+                        })
+                    }
+                }
+            }
+            schedulePagedReleases()
+        }
+    }
+
     override fun answer(questionId: String, answer: JsonObject) {
         val sessionId = state.value.selection.sessionId ?: return
         if (
@@ -8038,20 +9221,75 @@ class DefaultRemoteRepository(
                 questionId in state.value.answering
         )
             return
-        if (questionId in state.value.questionBlocks) return
+        val blocked = state.value.questionBlocks[questionId]
+        val pagedCancel = blocked == QuestionBlock.UNCERTAIN && answer.optionalText("kind") == "cancel" &&
+            pagedQuarantined(state.value.selection, questionId) && state.value.questions.any {
+                it.optionalText("id") == questionId && it.optionalText("kind") == "editor" && it.containsKey("editorUploadGrantId")
+            }
+        if (blocked != null && !pagedCancel) return
+        val positive = answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)
+        val editor = answer.optionalText("kind") == "editor"
+        val cancel = answer.optionalText("kind") == "cancel" ||
+            (answer.optionalText("kind") == "plan" && answer.optionalText("action") == "cancel" &&
+                state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull()?.optionalText("kind") == "plan")
+        val selection = state.value.selection
+        val connection = generation
+        val editorAuthority = editorAuthorityGeneration
+        val question = if (positive || editor || cancel) state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull() ?: return else null
+        fun positiveStillAllowed(): Boolean {
+            val current = state.value
+            if (cancel) {
+                val pending = current.questions.filter { it.optionalText("id") == questionId }.singleOrNull()
+                val currentBlock = current.questionBlocks[questionId]
+                val canCancelUncertain = currentBlock == QuestionBlock.UNCERTAIN &&
+                    pagedQuarantined(current.selection, questionId) && pending?.optionalText("kind") == "editor" && pending.containsKey("editorUploadGrantId")
+                return current.connected && !current.loading && generation == connection && current.selection == selection &&
+                    activeHost?.routeId == selection.routeId && pending === question && (currentBlock == null || canCancelUncertain)
+            }
+            if (pagedStoragePending || pagedStorageFailed || pagedQuarantined(current.selection, questionId)) return false
+            if (!positive && !editor) return true
+            if (!current.connected || current.loading || generation != connection || current.selection != selection ||
+                activeHost?.routeId != selection.routeId || questionId in current.questionBlocks) return false
+            val pending = current.questions.filter { it.optionalText("id") == questionId }.singleOrNull()
+            if (pending == null || pending !== question) return false
+            if (editor) {
+                val value = answer["value"] as? JsonPrimitive ?: return false
+                return editorAuthority == editorAuthorityGeneration && pending.optionalText("kind") == "editor" && editorPrefill(pending) != null &&
+                    value.isString && validEditorText(value.content, 65536) && editorCapabilityAvailable(pending, current)
+            }
+            if (pending.optionalText("kind") != "confirm") return false
+            if (!pending.containsKey("details")) return true
+            val descriptor = runCatching { parseQuestionDetails(pending.obj("details")) }.getOrNull() ?: return false
+            return current.capabilitiesKnown && QUESTION_DETAILS_CAPABILITY in current.capabilities &&
+                QUESTION_DETAILS_CAPABILITY !in current.unavailableCapabilities &&
+                detailsAuthority.allows(connection, selection, pending, descriptor, answer)
+        }
+        if (!positiveStillAllowed()) return
         update { it.copy(answering = it.answering + questionId) }
         val epoch = selectionEpoch
+        val answerDetailsToken = detailsLoadToken
         scope.launch {
             try {
+                if (!positiveStillAllowed() || epoch != selectionEpoch) return@launch
                 request(
                     "question.answer",
                     epoch,
                     "sessionId" to sessionId,
                     "questionId" to questionId,
                     "answer" to answer,
+                    validateBeforeSend = { check(positiveStillAllowed()) },
                 )
             } catch (_: CancellationException) {} catch (e: Exception) {
-                if (epoch == selectionEpoch) answerFailed(sessionId, questionId, e)
+                if (epoch == selectionEpoch) {
+                    val rejectedDetails = positive && question?.containsKey("details") == true &&
+                        (e as? RemoteRequestException)?.code == "forbidden" && connection == generation &&
+                        selection == state.value.selection && answerDetailsToken == detailsLoadToken &&
+                        state.value.questions.any { it === question }
+                    if (rejectedDetails) {
+                        clearQuestionDetails()
+                        update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(failed = true))) }
+                    } else answerFailed(sessionId, questionId, e)
+                }
             } finally {
                 if (epoch == selectionEpoch)
                     update { it.copy(answering = it.answering - questionId) }
@@ -8251,6 +9489,222 @@ class DefaultRemoteRepository(
 
     // ---- Git changes (session.git.v1) ----------------------------------------------------
 
+    private fun requireGitPushCapability(sessionId: String, capability: String) {
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        if (!current.capabilitiesKnown || capabilityRevision(capabilityRoute) != 3 ||
+            capability !in current.capabilities || capability in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
+    }
+
+    override suspend fun gitPullRequestPrepare(sessionId: String): GitWriteResult.Branch {
+        requireGitPushCapability(sessionId, SESSION_GIT_PULL_REQUEST_CAPABILITY)
+        val id = Wire.random()
+        encodeGitWriteCommand(GitWriteCommand.Branch(id, sessionId, forPush = true))
+        val data = request("session.git.branch", selectionEpoch, "sessionId" to sessionId, "forPush" to true, requestId = id)
+        val result = parseGitWriteResult(data, sessionId) as? GitWriteResult.Branch ?: error("Invalid branch result")
+        if (result is GitWriteResult.Branch.Available) require(result.head != null) { "Pull request preparation omitted HEAD" }
+        return result
+    }
+
+    override suspend fun gitPullRequestStatus(sessionId: String, writeId: String): GitWriteResult.PullRequestStatus {
+        requireGitPushCapability(sessionId, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY)
+        val id = Wire.random()
+        encodeGitWriteCommand(GitWriteCommand.PullRequestStatus(id, sessionId, writeId))
+        val data = request("session.git.pull_request.status", selectionEpoch, "sessionId" to sessionId, "writeId" to writeId, requestId = id,
+            timeoutMillis = GIT_PULL_REQUEST_STATUS_TIMEOUT_MILLIS)
+        return parseGitWriteResult(data, sessionId) as? GitWriteResult.PullRequestStatus ?: error("Invalid pull request status")
+    }
+
+    override suspend fun gitPullRequest(sessionId: String, writeId: String, base: String, title: String, body: String, draft: Boolean, requestId: String, onDispatch: () -> Unit): GitWriteResult.PullRequest {
+        encodeGitWriteCommand(GitWriteCommand.PullRequest(requestId, sessionId, writeId, base, title, body, draft))
+        requireGitPushCapability(sessionId, SESSION_GIT_PULL_REQUEST_CAPABILITY)
+        require(requestId !in completions) { "Request is already in flight" }
+        var dispatched = false
+        try {
+            val result = request("session.git.pull_request", selectionEpoch, "sessionId" to sessionId, "writeId" to writeId,
+                "base" to base, "title" to title, "body" to body, "draft" to draft,
+                requestId = requestId, onSent = { dispatched = true; onDispatch() }, timeoutMillis = GIT_PULL_REQUEST_TIMEOUT_MILLIS)
+            return parseGitWriteResult(result, sessionId) as? GitWriteResult.PullRequest ?: GitWriteResult.PullRequest.Unknown
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteRequestException) {
+            if (dispatched && (!error.answered || error.reason == "outcome_unknown" || error.code == "outcome_unknown")) return GitWriteResult.PullRequest.Unknown
+            throw error
+        } catch (error: Exception) {
+            if (dispatched) return GitWriteResult.PullRequest.Unknown
+            throw error
+        }
+    }
+
+    override suspend fun gitPullRequestDraft(selection: RemoteSelection): GitPullRequestDraft? {
+        initialized.await(); check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        return drafts[key]?.gitPullRequestDraft
+    }
+
+    override suspend fun saveGitPullRequestDraft(selection: RemoteSelection, draft: GitPullRequestDraft) {
+        initialized.await(); check(draftsAvailable)
+        parseGitPullRequestDraft(draft.json())
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        gitDraftWrites.withLock {
+            withContext(NonCancellable) {
+                val done = CompletableDeferred<Unit>()
+                check(writes.trySend(Write(drafts.toMap(), done, pullRequestDraftUpdate = key to draft)).isSuccess)
+                done.await()
+                check(key.routeId !in removedRoutes) { "Host was removed" }
+                drafts[key] = (drafts[key] ?: StoredDraft()).copy(gitPullRequestDraft = draft)
+            }
+        }
+    }
+
+    override suspend fun gitPullRequestIntent(selection: RemoteSelection): GitPullRequestIntent? {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        return drafts[key]?.gitPullRequest
+    }
+
+    override suspend fun saveGitPullRequestIntent(selection: RemoteSelection, intent: GitPullRequestIntent?) {
+        initialized.await()
+        check(draftsAvailable)
+        intent?.let { parseGitPullRequestIntent(it.json()) }
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        gitDraftWrites.withLock {
+            withContext(NonCancellable) {
+                val done = CompletableDeferred<Unit>()
+                check(writes.trySend(Write(drafts.toMap(), done, pullRequestUpdate = key to intent)).isSuccess)
+                done.await()
+                check(key.routeId !in removedRoutes) { "Host was removed" }
+                drafts[key] = (drafts[key] ?: StoredDraft()).copy(gitPullRequest = intent)
+            }
+        }
+    }
+
+    override suspend fun gitPushPrepare(sessionId: String): GitWriteResult.Branch {
+        requireGitPushCapability(sessionId, GIT_PUSH_CAPABILITY)
+        val id = Wire.random()
+        encodeGitWriteCommand(GitWriteCommand.Branch(id, sessionId, forPush = true))
+        val data = request("session.git.branch", selectionEpoch, "sessionId" to sessionId, "forPush" to true, requestId = id)
+        val result = parseGitWriteResult(data, sessionId) as? GitWriteResult.Branch ?: error("Invalid branch result")
+        if (result is GitWriteResult.Branch.Available) require(result.head != null) { "Push preparation omitted HEAD" }
+        return result
+    }
+
+    override suspend fun gitPushStatus(sessionId: String, writeId: String): GitWriteResult.PushStatus {
+        requireGitPushCapability(sessionId, GIT_PUSH_STATUS_CAPABILITY)
+        val id = Wire.random()
+        encodeGitWriteCommand(GitWriteCommand.PushStatus(id, sessionId, writeId))
+        val data = request("session.git.push.status", selectionEpoch, "sessionId" to sessionId, "writeId" to writeId, requestId = id,
+            timeoutMillis = GIT_PUSH_STATUS_REQUEST_TIMEOUT_MILLIS)
+        return parseGitWriteResult(data, sessionId) as? GitWriteResult.PushStatus ?: error("Invalid push status")
+    }
+
+    override suspend fun gitPush(sessionId: String, writeId: String, requestId: String, onDispatch: () -> Unit): GitWriteResult.Push {
+        encodeGitWriteCommand(GitWriteCommand.Push(requestId, sessionId, writeId))
+        requireGitPushCapability(sessionId, GIT_PUSH_CAPABILITY)
+        require(requestId !in completions) { "Request is already in flight" }
+        var dispatched = false
+        try {
+            val result = request("session.git.push", selectionEpoch, "sessionId" to sessionId, "writeId" to writeId,
+                requestId = requestId, onSent = { dispatched = true; onDispatch() }, timeoutMillis = GIT_PUSH_REQUEST_TIMEOUT_MILLIS)
+            return parseGitWriteResult(result, sessionId) as? GitWriteResult.Push ?: GitWriteResult.Push.Unknown
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteRequestException) {
+            if (dispatched && (!error.answered || error.reason == "outcome_unknown" || error.code == "outcome_unknown")) return GitWriteResult.Push.Unknown
+            throw error
+        } catch (error: Exception) {
+            if (dispatched) return GitWriteResult.Push.Unknown
+            throw error
+        }
+    }
+
+    override suspend fun gitCommitStatus(sessionId: String): GitStatus {
+        requireGit(sessionId)
+        val current = state.value
+        if (GIT_WRITE_CAPABILITY !in current.capabilities || GIT_WRITE_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
+        val data = request("session.git.status", selectionEpoch, "sessionId" to sessionId, "base" to "head", "forCommit" to true)
+        return parseGitStatus(data, sessionId, GitBase.HEAD)
+    }
+
+    override suspend fun gitPushIntent(selection: RemoteSelection): GitPushIntent? {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        return drafts[key]?.gitPush
+    }
+
+    override suspend fun saveGitPushIntent(selection: RemoteSelection, intent: GitPushIntent?) {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        gitDraftWrites.withLock {
+            withContext(NonCancellable) {
+                val done = CompletableDeferred<Unit>()
+                check(writes.trySend(Write(drafts.toMap(), done, pushUpdate = key to intent)).isSuccess)
+                done.await()
+                check(key.routeId !in removedRoutes) { "Host was removed" }
+                drafts[key] = (drafts[key] ?: StoredDraft()).copy(gitPush = intent)
+            }
+        }
+    }
+
+    override suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        return drafts[key]?.gitCommit ?: GitCommitDraft()
+    }
+
+    override suspend fun saveGitCommitDraft(selection: RemoteSelection, draft: GitCommitDraft) {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        gitDraftWrites.withLock {
+            withContext(NonCancellable) {
+                val done = CompletableDeferred<Unit>()
+                check(writes.trySend(Write(drafts.toMap(), done, key to draft)).isSuccess)
+                done.await()
+                check(key.routeId !in removedRoutes) { "Host was removed" }
+                drafts[key] = (drafts[key] ?: StoredDraft()).copy(gitCommit = draft)
+            }
+        }
+    }
+
+    override suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit): GitWriteResult.Commit {
+        val selectedPaths = paths.toList()
+        require(selectedPaths.isNotEmpty())
+        val encoded = encodeGitWriteCommand(GitWriteCommand.Commit(requestId, sessionId, snapshotId, message, selectedPaths))
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        if (GIT_WRITE_CAPABILITY !in current.capabilities || GIT_WRITE_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
+        require(requestId !in completions) { "Request is already in flight" }
+        var dispatched = false
+        try {
+            val result = request("session.git.commit", selectionEpoch,
+                "sessionId" to sessionId, "snapshotId" to snapshotId, "message" to message,
+                "paths" to encoded.getValue("paths"), requestId = requestId,
+                onSent = { dispatched = true; onDispatch() })
+            return parseGitWriteResult(result, sessionId) as? GitWriteResult.Commit
+                ?: GitWriteResult.Commit.Unknown
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteRequestException) {
+            if (dispatched && (!error.answered || error.reason == "outcome_unknown" || error.code == "outcome_unknown"))
+                return GitWriteResult.Commit.Unknown
+            throw error
+        } catch (error: Exception) {
+            if (dispatched) return GitWriteResult.Commit.Unknown
+            throw error
+        }
+    }
+
     private fun requireGit(sessionId: String) {
         val current = state.value
         if (!current.connected) throw RemoteRequestException("offline")
@@ -8393,6 +9847,15 @@ class DefaultRemoteRepository(
         if (FILES_CAPABILITY !in current.capabilities ||
             FILES_CAPABILITY in current.unavailableCapabilities || sessionId.isEmpty()
         ) throw RemoteRequestException.unsupported()
+    }
+
+    override suspend fun filesSearch(sessionId: String, query: String): FileSearchResult {
+        requireFiles(sessionId)
+        val current = state.value
+        if (FILES_SEARCH_CAPABILITY !in current.capabilities || FILES_SEARCH_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(validSearchQuery(query))
+        return parseFilesSearch(request("session.files.search", selectionEpoch, "sessionId" to sessionId, "query" to query), sessionId, query)
     }
 
     override suspend fun filesList(sessionId: String, path: String, after: String?): FileListing {
@@ -9040,8 +10503,7 @@ class DefaultRemoteRepository(
         if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
             return ExportResult.Failed(ExportFailure.FAILED)
         if (!current.connected) return ExportResult.Failed(ExportFailure.OFFLINE)
-        if (current.session?.optionalText("origin") != "rpc" || EXPORT_CAPABILITY !in current.capabilities ||
-            EXPORT_CAPABILITY in current.unavailableCapabilities)
+        if (!exportSupported(current))
             return ExportResult.Failed(ExportFailure.UNSUPPORTED)
         val epoch = selectionEpoch
         return try {
@@ -9109,6 +10571,217 @@ class DefaultRemoteRepository(
         commandsVersion++
         update { it.copy(commandsLoading = false) }
         refreshCommands()
+    }
+
+    // ---- Terminal v1: connection-owned, never automatically reattached -----------------------
+    private data class PendingTerminal(val session: String, val connection: Long, val early: MutableList<TerminalEvent> = mutableListOf(), var bytes: Int = 0, var abandoned: Boolean = false)
+    private var pendingTerminal: PendingTerminal? = null
+    private var terminalAttachment: TerminalAttachment? = null
+    private var terminalInputBusy = false
+    private var terminalInputJob: Job? = null
+    private val terminalSendMutex = Mutex()
+    private var terminalNextSendAt: Long? = null
+    private var terminalResizeJob: Job? = null
+    private var terminalResize: Pair<Int, Int>? = null
+
+    private suspend fun paceTerminal() {
+        val wait = terminalNextSendAt?.let { (it - terminalNow()).coerceIn(0, 125) } ?: 0
+        if (wait > 0) delay(wait)
+        terminalNextSendAt = terminalNow() + 125
+    }
+
+    private fun terminalKeysEnabled() = capabilityRevision(capabilityRoute) >= 2 &&
+        terminalRouteOffered && SESSION_TERMINAL_KEYS_CAPABILITY in state.value.capabilities &&
+        SESSION_TERMINAL_KEYS_CAPABILITY !in state.value.unavailableCapabilities
+    private val terminalOutputLimit = 256 * 1024
+
+    override fun canAttachTerminal(): Boolean {
+        val current = state.value
+        return current.connected && !current.stale && activeHost?.routeId == current.selection.routeId &&
+            terminalRouteOffered && SESSION_TERMINAL_CAPABILITY in current.capabilities && capabilityRevision(capabilityRoute) >= 2 &&
+            current.session?.let(::isHostWorker) == true && current.selection.sessionId == current.session?.optionalText("id")
+    }
+
+    override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
+        val current = state.value
+        val session = current.selection.sessionId ?: return false
+        if (!current.connected || current.stale || activeHost?.routeId != current.selection.routeId ||
+            !terminalRouteOffered || SESSION_TERMINAL_CAPABILITY !in current.capabilities || capabilityRevision(capabilityRoute) < 2 ||
+            current.session?.let(::isHostWorker) != true || cols !in 20..500 || rows !in 5..300 ||
+            (takeoverGeneration != null && takeoverGeneration !in 0..9_007_199_254_740_991L) ||
+            pendingTerminal != null || terminalAttachment != null) return false
+        val pending = PendingTerminal(session, generation)
+        pendingTerminal = pending
+        update { it.copy(terminal = TerminalView(session)) }
+        scope.launch {
+            if (pendingTerminal !== pending || pending.abandoned || pending.connection != generation || !state.value.connected) {
+                if (pendingTerminal === pending) pendingTerminal = null
+                return@launch
+            }
+            try {
+                val fields = mutableListOf<Pair<String, Any?>>("sessionId" to session, "cols" to cols, "rows" to rows)
+                if (takeoverGeneration != null) { fields += "takeover" to true; fields += "expectedAttachmentGeneration" to takeoverGeneration }
+                val result = parseTerminalResult(connectionRequest("session.terminal.attach", *fields.toTypedArray()), session)
+                if (pendingTerminal === pending) pendingTerminal = null
+                if (result is TerminalResult.Attached && pending.connection == generation && state.value.connected) {
+                    if (pending.abandoned || state.value.selection.sessionId != session) {
+                        sendTerminalDetach(session, result.generation, pending.connection)
+                    } else {
+                        terminalAttachment = TerminalAttachment(pending.connection.toString(), session, result.generation)
+                        update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, keysEnabled = terminalKeysEnabled())) }
+                        pending.early.forEach { acceptTerminalEvent(it) }
+                    }
+                } else if (!pending.abandoned && pending.connection == generation && result is TerminalResult.Held) {
+                    update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, holder = result.holder)) }
+                }
+            } catch (e: Exception) {
+                if (pendingTerminal === pending) pendingTerminal = null
+                if (!pending.abandoned && pending.connection == generation) endTerminal("failed", sendDetach = false)
+                // A lost or malformed attach reply may hide a successful attach. Closing the connection releases it.
+                if (pending.connection == generation && state.value.connected && (e !is RemoteRequestException || e.kind != RemoteRequestException.Kind.HOST_ERROR))
+                    connectionStale("session.terminal.attach")
+            }
+        }
+        return true
+    }
+
+    private fun receiveTerminalEvent(payload: JsonObject) {
+        val event = try { parseTerminalEvent(payload) } catch (e: Exception) {
+            endTerminal("protocol", sendDetach = true); return
+        }
+        val pending = pendingTerminal
+        if (pending != null && pending.connection == generation && event.sessionId == pending.session && !pending.abandoned) {
+            val bytes = if (event is TerminalEvent.Data) event.text.toByteArray().size else 0
+            if (pending.early.size >= 256 || pending.bytes + bytes > terminalOutputLimit) {
+                pending.abandoned = true
+                update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = "overflow")) }
+            } else { pending.bytes += bytes; pending.early += event }
+            return
+        }
+        acceptTerminalEvent(event)
+    }
+
+    private fun acceptTerminalEvent(event: TerminalEvent) {
+        val attachment = terminalAttachment ?: return
+        val view = state.value.terminal ?: return
+        if (event.sessionId != view.sessionId) return
+        if (event.generation != view.generation) {
+            if (view.generation != null && event.generation > view.generation) endTerminal("ownership", sendDetach = true)
+            return
+        }
+        if (!attachment.receive(generation.toString(), event)) {
+            endTerminal("sequence", sendDetach = true); return
+        }
+        when (event) {
+            is TerminalEvent.Detached -> {
+                terminalAttachment = null
+                terminalInputJob?.cancel()
+                terminalInputJob = null
+                terminalResize = null
+                terminalResizeJob?.cancel()
+                terminalResizeJob = null
+                terminalInputBusy = false
+                update { it.copy(terminal = it.terminal?.copy(inputPending = false, ended = event.reason, exitCode = event.exitCode)) }
+            }
+            is TerminalEvent.Data -> {
+                val size = view.output.sumOf { it.toByteArray().size } + event.text.toByteArray().size
+                if (size > terminalOutputLimit || view.output.size >= 256) endTerminal("overflow", sendDetach = true)
+                else update { it.copy(terminal = it.terminal?.copy(output = it.terminal.output + event.text)) }
+            }
+        }
+    }
+
+    private fun sendTerminalDetach(session: String, attachedGeneration: Long, connection: Long) {
+        scope.launch {
+            if (generation != connection || !state.value.connected) return@launch
+            try {
+                validatedBashAborted(connectionRequest("session.terminal.detach", "sessionId" to session, "attachmentGeneration" to attachedGeneration), session)
+            } catch (_: Exception) {
+                if (generation == connection && state.value.connected) connectionStale("session.terminal.detach")
+            }
+        }
+    }
+    private fun endTerminal(reason: String, sendDetach: Boolean) {
+        pendingTerminal?.abandoned = true
+        val view = state.value.terminal ?: return
+        val attachment = terminalAttachment
+        terminalAttachment = null
+        terminalInputBusy = false
+        terminalInputJob?.cancel()
+        terminalInputJob = null
+        terminalResize = null
+        terminalResizeJob?.cancel()
+        terminalResizeJob = null
+        if (attachment != null && sendDetach && view.generation != null) sendTerminalDetach(view.sessionId, view.generation, generation)
+        if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = reason)) }
+    }
+    override fun detachTerminal() = endTerminal("detached", sendDetach = true)
+    override fun takeTerminalOutput(): List<String> {
+        val output = state.value.terminal?.output.orEmpty()
+        update { it.copy(terminal = it.terminal?.copy(output = emptyList())) }
+        return output
+    }
+    override fun sendTerminalInput(input: TerminalInput): Boolean {
+        val field = terminalInputField(input) ?: return false
+        if (input is TerminalInput.Chord && !terminalKeysEnabled()) return false
+        val attachment = terminalAttachment ?: return false
+        val view = state.value.terminal ?: return false
+        if (terminalInputBusy || !state.value.connected || view.ended != null) return false
+        val connection = generation
+        terminalInputBusy = true
+        update { it.copy(terminal = it.terminal?.copy(inputPending = true)) }
+        terminalInputJob = scope.launch {
+            var rejected = false
+            try {
+                terminalSendMutex.withLock {
+                    if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@withLock
+                    paceTerminal()
+                    if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@withLock
+                    if (input is TerminalInput.Chord && !terminalKeysEnabled()) return@withLock
+                    val seq = attachment.nextInputSequence(connection.toString()) ?: return@withLock
+                    val type = if (input is TerminalInput.Chord) "session.terminal.key" else "session.terminal.input"
+                    val result = connectionRequest(type, "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "inputSeq" to seq, field)
+                    validatedBashAborted(result, view.sessionId)
+                }
+            } catch (e: Exception) {
+                if (connection == generation && terminalAttachment === attachment) {
+                    if (input is TerminalInput.Chord && e is RemoteRequestException &&
+                        e.kind == RemoteRequestException.Kind.UNSUPPORTED && e.code == "unsupported") rejected = true
+                    else endTerminal("input_failed", sendDetach = true)
+                }
+            } finally { if (connection == generation && terminalAttachment === attachment) {
+                terminalInputBusy = false
+                update { state -> state.copy(terminal = state.terminal?.let { terminal ->
+                    terminal.copy(inputPending = false, inputRejected = terminal.inputRejected + if (rejected) 1 else 0)
+                }) }
+            } }
+        }
+        return true
+    }
+    override fun resizeTerminal(cols: Int, rows: Int): Boolean {
+        val attachment = terminalAttachment ?: return false
+        val view = state.value.terminal ?: return false
+        if (!state.value.connected || view.ended != null || cols !in 20..500 || rows !in 5..300) return false
+        val connection = generation
+        terminalResize = cols to rows
+        if (terminalResizeJob?.isActive == true) return true
+        terminalResizeJob = scope.launch {
+            try {
+                while (terminalResize != null) {
+                    terminalSendMutex.withLock {
+                        if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+                        paceTerminal()
+                        if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+                        val (width, height) = terminalResize ?: return@withLock
+                        terminalResize = null
+                        val result = connectionRequest("session.terminal.resize", "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "cols" to width, "rows" to height)
+                        validatedBashAborted(result, view.sessionId)
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (terminalAttachment === attachment) endTerminal("resize_failed", sendDetach = true) }
+        }
+        return true
     }
 
     // ---- Shell commands (session.bash.v1) -------------------------------------------------
@@ -9309,6 +10982,9 @@ class DefaultRemoteRepository(
         ProjectFilesLoader(
             scope,
             object : FileSource {
+                override suspend fun filesSearch(sessionId: String, query: String) =
+                    this@DefaultRemoteRepository.filesSearch(sessionId, query)
+
                 override suspend fun filesList(sessionId: String, path: String, after: String?) =
                     this@DefaultRemoteRepository.filesList(sessionId, path, after)
 
@@ -9324,7 +11000,10 @@ class DefaultRemoteRepository(
                 ) = this@DefaultRemoteRepository.filesWrite(sessionId, path, baseVersion, content, requestId)
             },
             { state.value },
-            ::update,
+            { selectionEpoch },
+            journal = fileDraftStorage?.let { FileDraftJournal(it, io) },
+            settleParkedDiscard = ::settleParkedDiscard,
+            update = ::update,
         )
 
     override fun openFiles() = openFiles(exclusive = true)
@@ -9338,6 +11017,8 @@ class DefaultRemoteRepository(
     }
 
     override fun closeFiles() = filesLoader.close()
+    override fun searchFiles(query: String) = filesLoader.search(query)
+    override fun openSearchHit(hit: FileSearchHit) = filesLoader.openSearchHit(hit)
 
     override fun openFilesDir(path: String) = filesLoader.openDir(path)
 
@@ -9371,6 +11052,10 @@ class DefaultRemoteRepository(
 
     override fun saveFileEditor() = filesLoader.saveEditor()
 
+    override fun restoreFileEditorDraft() = filesLoader.restoreEditorDraft()
+
+    override fun discardFileEditorDraft() = filesLoader.discardEditorDraft()
+
     override fun discardFileEditor() = filesLoader.discardEditor()
 
     override fun reloadFileAfterConflict() = filesLoader.reloadAfterConflict()
@@ -9378,9 +11063,13 @@ class DefaultRemoteRepository(
     override fun fileEditorPrompt(intro: String?) = filesLoader.editorPrompt(intro)
 
     override fun confirmFileEditorLeave() {
-        when (filesLoader.confirmLeave()) {
-            EditorLeave.CHANGES -> openChanges()
-            null -> {}
+        if (state.value.files?.editor?.leaveRequest == EditorLeave.SEARCH && !filesLoader.canConfirmSearchHit()) return
+        filesLoader.confirmLeave { leave ->
+            when (leave) {
+                EditorLeave.CHANGES -> openChanges()
+                EditorLeave.SEARCH -> filesLoader.confirmSearchHit()
+                null -> {}
+            }
         }
     }
 
@@ -9437,13 +11126,29 @@ private fun Map<DraftKey, StoredDraft>.journals(): Map<DraftKey, SendJournal> =
  */
 private fun StoredDraft.restoringSubmitted(): StoredDraft {
     val submitted = submittedText ?: return this
-    if (mutationId == null || text.isNotEmpty()) return this
+    if (mutationId == null) return this
+    // Older journals have no field ownership. Keep their historical text restoration, but do
+    // not treat it as proof that a matching composer can be erased by a later receipt.
+    if (promptTextState == null && promptQuoteState == null && promptAttachmentsState == null) {
+        if (text.isNotEmpty()) return this
+        return copy(text = submitted, quote = quote ?: submittedQuote,
+            attachments = attachments.ifEmpty { submittedAttachments })
+    }
+    val restoreText = promptTextState == "cleared" && text.isEmpty()
+    val restoreQuote = promptQuoteState == "cleared" && quote == null
+    val restoreAttachments = promptAttachmentsState == "cleared" && attachments.isEmpty()
     return copy(
-        text = submitted,
-        quote = quote ?: submittedQuote,
-        attachments = attachments.ifEmpty { submittedAttachments },
+        text = if (restoreText) submitted else text,
+        quote = if (restoreQuote) submittedQuote else quote,
+        attachments = if (restoreAttachments) submittedAttachments else attachments,
+        promptTextState = if (restoreText) "restored" else promptTextState,
+        promptQuoteState = if (restoreQuote) "restored" else promptQuoteState,
+        promptAttachmentsState = if (restoreAttachments) "restored" else promptAttachmentsState,
     )
 }
+
+private fun StoredDraft.promptComposerRestored() = promptTextState == "restored" &&
+    promptQuoteState == "restored" && promptAttachmentsState == "restored"
 
 /**
  * The pending prompt once the timeline may show the host's copy of it: a confirmed prompt leaves

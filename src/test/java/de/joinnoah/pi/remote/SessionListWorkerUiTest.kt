@@ -37,8 +37,8 @@ class SessionListWorkerUiTest {
                 SessionListRow(item = item, enabled = true, closeAvailable = true, onClick = {}, onClose = {})
             }
         }
-        compose.onNodeWithText("Started by the Mac", substring = true, useUnmergedTree = true).assertExists()
-        compose.onNodeWithText("Running in the Mac terminal", substring = true, useUnmergedTree = true)
+        compose.onNodeWithText("Started by the computer", substring = true, useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("Running in the computer terminal", substring = true, useUnmergedTree = true)
             .assertDoesNotExist()
     }
 }

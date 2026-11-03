@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "valid": [
+    {"name":"search-command", "payload":{"type":"session.files.search","requestId":"r","sessionId":"s","query":"needle"}},
+    {"name":"search-result", "payload":{"type":"result","requestId":"r","ok":true,"data":{"kind":"files.search","sessionId":"s","query":"needle","matches":[{"path":"src/a.ts","line":2,"column":4,"snippet":"😀 needle here"}],"truncated":false}}}
+  ],
+  "invalid": [
+    {"name":"empty-query", "payload":{"type":"session.files.search","requestId":"r","sessionId":"s","query":""}},
+    {"name":"multiline-query", "payload":{"type":"session.files.search","requestId":"r","sessionId":"s","query":"a\nb"}},
+    {"name":"zero-line", "payload":{"type":"result","requestId":"r","ok":true,"data":{"kind":"files.search","sessionId":"s","query":"x","matches":[{"path":"a","line":0,"column":1,"snippet":"x"}],"truncated":false}}},
+    {"name":"denied-path", "payload":{"type":"result","requestId":"r","ok":true,"data":{"kind":"files.search","sessionId":"s","query":"x","matches":[{"path":".git/config","line":1,"column":1,"snippet":"x"}],"truncated":false}}}
+  ]
+}

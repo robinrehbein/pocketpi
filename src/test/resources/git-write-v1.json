@@ -1,0 +1,3017 @@
+{
+  "version": 1,
+  "note": "session.git.write.v1 wire examples. The app must see session.git.write.v1 in the projects.list capabilities.v2 route before sending any session.git.branch, session.git.commit, session.git.push or session.git.pull_request command. The host advertises the capability only while its gitWrites switch is on.",
+  "valid": [
+    {
+      "name": "branch-command",
+      "payload": {
+        "type": "session.git.branch",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+      }
+    },
+    {
+      "name": "commit-command-all",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect"
+      }
+    },
+    {
+      "name": "commit-command-selection",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect\n\nUsers now land on the page they came from.\n",
+        "paths": [
+          "src/app.ts",
+          "docs/readme.md"
+        ]
+      }
+    },
+    {
+      "name": "commit-command-crlf-message",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix\r\n\r\nBody"
+      }
+    },
+    {
+      "name": "push-command",
+      "payload": {
+        "type": "session.git.push",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ"
+      }
+    },
+    {
+      "name": "pull-request-command",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-draft-empty-body",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "release/next",
+        "title": "Fix the login redirect",
+        "body": "",
+        "draft": true
+      }
+    },
+    {
+      "name": "branch-available",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-available-full",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "ahead",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": [
+            "pre-commit",
+            "commit-msg",
+            "pre-push"
+          ],
+          "upstream": {
+            "remote": "origin",
+            "branch": "dev"
+          },
+          "suggestedTitle": "Fix the login redirect"
+        }
+      }
+    },
+    {
+      "name": "branch-remote-tip-equal",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "equal",
+          "ahead": 0,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-remote-tip-behind",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "behind",
+          "ahead": 1,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-remote-tip-diverged",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "diverged",
+          "ahead": 1,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-ipv6-host-no-bases",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "[2001:db8::1]",
+            "repo": "group/sub.group/repo"
+          },
+          "pullRequestBases": [],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-git_unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "git_unavailable"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-not_a_repository",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "not_a_repository"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-session_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "session_unsupported"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-detached_head",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "detached_head"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-unborn_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "unborn_branch"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-operation_in_progress",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "operation_in_progress"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-protected_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "protected_branch"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-no_origin",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "no_origin"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-unsupported_remote",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "unsupported_remote"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-lfs_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "lfs_unsupported"
+        }
+      }
+    },
+    {
+      "name": "commit-committed",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 2,
+          "skipped": [],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "commit-committed-skipped-index-not-updated",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 2,
+          "skipped": [
+            {
+              "path": ".env.local",
+              "reason": "denied"
+            },
+            {
+              "path": "big.bin",
+              "reason": "omitted"
+            },
+            {
+              "path": "vendor/lib",
+              "reason": "submodule"
+            }
+          ],
+          "indexUpdated": false
+        }
+      }
+    },
+    {
+      "name": "commit-refused-git_unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "git_unavailable"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-not_a_repository",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "not_a_repository"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-session_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "session_unsupported"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-detached_head",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "detached_head"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-unborn_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "unborn_branch"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-operation_in_progress",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "operation_in_progress"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-protected_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "protected_branch"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-lfs_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "lfs_unsupported"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-nothing_to_commit",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "nothing_to_commit"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-identity_missing",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "identity_missing"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-signing_failed",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "signing_failed"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-local_transport_config",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "local_transport_config"
+        }
+      }
+    },
+    {
+      "name": "push-pushed-created",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": true,
+          "branch": "tooling-1-x",
+          "remoteBranch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "created": true,
+          "upstreamSet": true
+        }
+      }
+    },
+    {
+      "name": "push-pushed-existing",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": true,
+          "branch": "tooling-1-x",
+          "remoteBranch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "created": false,
+          "upstreamSet": false
+        }
+      }
+    },
+    {
+      "name": "push-refused-git_unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "git_unavailable"
+        }
+      }
+    },
+    {
+      "name": "push-refused-not_a_repository",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "not_a_repository"
+        }
+      }
+    },
+    {
+      "name": "push-refused-session_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "session_unsupported"
+        }
+      }
+    },
+    {
+      "name": "push-refused-detached_head",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "detached_head"
+        }
+      }
+    },
+    {
+      "name": "push-refused-unborn_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "unborn_branch"
+        }
+      }
+    },
+    {
+      "name": "push-refused-operation_in_progress",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "operation_in_progress"
+        }
+      }
+    },
+    {
+      "name": "push-refused-protected_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "protected_branch"
+        }
+      }
+    },
+    {
+      "name": "push-refused-no_origin",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "no_origin"
+        }
+      }
+    },
+    {
+      "name": "push-refused-unsupported_remote",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "unsupported_remote"
+        }
+      }
+    },
+    {
+      "name": "push-refused-lfs_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "lfs_unsupported"
+        }
+      }
+    },
+    {
+      "name": "push-refused-local_transport_config",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "local_transport_config"
+        }
+      }
+    },
+    {
+      "name": "push-refused-up_to_date",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "up_to_date"
+        }
+      }
+    },
+    {
+      "name": "push-refused-auth_failed",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "auth_failed"
+        }
+      }
+    },
+    {
+      "name": "push-refused-host_key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "host_key"
+        }
+      }
+    },
+    {
+      "name": "push-refused-network",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "network"
+        }
+      }
+    },
+    {
+      "name": "push-refused-rejected_non_fast_forward",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "rejected_non_fast_forward"
+        }
+      }
+    },
+    {
+      "name": "push-refused-rejected_remote",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "rejected_remote"
+        }
+      }
+    },
+    {
+      "name": "pull-request-created",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 42,
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-existing",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": false,
+          "number": 42,
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-git_unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "git_unavailable"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-not_a_repository",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "not_a_repository"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-session_unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "session_unsupported"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-detached_head",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "detached_head"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-unborn_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "unborn_branch"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-operation_in_progress",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "operation_in_progress"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-protected_branch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "protected_branch"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-no_origin",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "no_origin"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-unsupported_remote",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "unsupported_remote"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-not_pushed",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "not_pushed"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-gh_unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "gh_unavailable"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-gh_auth",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "gh_auth"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-not_github",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "not_github"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-rejected",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "rejected"
+        }
+      }
+    },
+    {
+      "name": "projects-git-write-capability",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v2:req-7",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.git.v1",
+            "tickets.v1",
+            "session.git.write.v1"
+          ]
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "branch-command-extra-key",
+      "payload": {
+        "type": "session.git.branch",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "base": "head"
+      }
+    },
+    {
+      "name": "commit-command-extra-key",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect",
+        "force": true
+      }
+    },
+    {
+      "name": "commit-command-ref-instead-of-snapshot",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "message": "Fix the login redirect",
+        "ref": "HEAD"
+      }
+    },
+    {
+      "name": "commit-command-bad-snapshot-id",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "not-a-snapshot",
+        "message": "Fix the login redirect"
+      }
+    },
+    {
+      "name": "commit-command-missing-message",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ"
+      }
+    },
+    {
+      "name": "commit-command-empty-message",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": ""
+      }
+    },
+    {
+      "name": "commit-command-message-too-long",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Subject\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "commit-command-message-first-line-too-long",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "commit-command-message-blank-first-line",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "\nBody without a subject"
+      }
+    },
+    {
+      "name": "commit-command-message-whitespace-first-line",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "   \t \nBody without a subject"
+      }
+    },
+    {
+      "name": "commit-command-message-nul",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix\u0000 it"
+      }
+    },
+    {
+      "name": "commit-command-message-lone-surrogate",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix\ud800"
+      }
+    },
+    {
+      "name": "commit-command-message-not-string",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": 7
+      }
+    },
+    {
+      "name": "commit-command-empty-paths",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect",
+        "paths": []
+      }
+    },
+    {
+      "name": "commit-command-paths-not-array",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect",
+        "paths": "src/app.ts"
+      }
+    },
+    {
+      "name": "commit-command-duplicate-paths",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect",
+        "paths": [
+          "src/app.ts",
+          "docs/readme.md",
+          "src/app.ts"
+        ]
+      }
+    },
+    {
+      "name": "commit-command-empty-path",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect",
+        "paths": [
+          ""
+        ]
+      }
+    },
+    {
+      "name": "commit-command-nul-path",
+      "payload": {
+        "type": "session.git.commit",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+        "message": "Fix the login redirect",
+        "paths": [
+          "a\u0000b"
+        ]
+      }
+    },
+    {
+      "name": "push-command-extra-key",
+      "payload": {
+        "type": "session.git.push",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "remote": "origin"
+      }
+    },
+    {
+      "name": "push-command-branch-instead-of-write-id",
+      "payload": {
+        "type": "session.git.push",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "branch": "main"
+      }
+    },
+    {
+      "name": "push-command-short-write-id",
+      "payload": {
+        "type": "session.git.push",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "c2hvcnQ"
+      }
+    },
+    {
+      "name": "push-command-write-id-bad-alphabet",
+      "payload": {
+        "type": "session.git.push",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "V3JpdGUtaWQtdG9rZW4tMQ=="
+      }
+    },
+    {
+      "name": "push-command-write-id-too-long",
+      "payload": {
+        "type": "session.git.push",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQA"
+      }
+    },
+    {
+      "name": "pull-request-command-extra-key",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false,
+        "reviewers": [
+          "a"
+        ]
+      }
+    },
+    {
+      "name": "pull-request-command-bad-write-id",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "write-id",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-base-slash-prefix",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "/dev",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-base-dash-prefix",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "--force",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-base-empty",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-base-space",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "de v",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-empty-title",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-title-newline",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix\nthe redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-title-control-character",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix\u0007 the redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-title-c1-control-character",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-title-too-long",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-title-lone-surrogate",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "a\udc00b",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-body-lone-surrogate",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "a\udc00b",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-body-nul",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "a\u0000b",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-body-missing",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "draft": false
+      }
+    },
+    {
+      "name": "pull-request-command-draft-missing",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from."
+      }
+    },
+    {
+      "name": "pull-request-command-draft-not-boolean",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": "true"
+      }
+    },
+    {
+      "name": "branch-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": [],
+          "remoteUrl": "https://github.com/a/b.git"
+        }
+      }
+    },
+    {
+      "name": "branch-missing-write-id",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-bad-write-id",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "abc",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-unknown-remote-tip",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "unknown",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-negative-ahead",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": -1,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-upstream-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": [],
+          "upstream": {
+            "remote": "origin",
+            "branch": "dev",
+            "url": "x"
+          }
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-user-info",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "robin@github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-user-password",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "robin:token@github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-port",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com:8443",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-scheme",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "https://github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-repo-dot-git",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo.git"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-repo-query",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo?token=x"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-repo-leading-slash",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "/robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-repo-dot-dot",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/../noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-other-remote",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "upstream",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-push-target-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo",
+            "url": "https://github.com/a/b"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-base-slash-prefix",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "/dev"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-duplicate-bases",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "dev"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-base-object",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            {
+              "name": "dev"
+            }
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "branch-unknown-hook",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": [
+            "post-commit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "branch-duplicate-hooks",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": [
+            "pre-push",
+            "pre-push"
+          ]
+        }
+      }
+    },
+    {
+      "name": "branch-suggested-title-newline",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": [],
+          "suggestedTitle": "Fix\nit"
+        }
+      }
+    },
+    {
+      "name": "branch-unknown-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "no_such_reason"
+        }
+      }
+    },
+    {
+      "name": "branch-reason-from-push",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "auth_failed"
+        }
+      }
+    },
+    {
+      "name": "branch-unavailable-with-write-id",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "no_origin",
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ"
+        }
+      }
+    },
+    {
+      "name": "commit-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 2,
+          "skipped": [],
+          "indexUpdated": true,
+          "message": "Fix"
+        }
+      }
+    },
+    {
+      "name": "commit-zero-files",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 0,
+          "skipped": [],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "commit-short-sha",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456",
+          "files": 2,
+          "skipped": [],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "commit-missing-index-updated",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 2,
+          "skipped": []
+        }
+      }
+    },
+    {
+      "name": "commit-skipped-unknown-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 2,
+          "skipped": [
+            {
+              "path": "a",
+              "reason": "ignored"
+            }
+          ],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "commit-skipped-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "files": 2,
+          "skipped": [
+            {
+              "path": "a",
+              "reason": "denied",
+              "rule": "env"
+            }
+          ],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "commit-unknown-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "hook_failed"
+        }
+      }
+    },
+    {
+      "name": "commit-reason-from-push",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "up_to_date"
+        }
+      }
+    },
+    {
+      "name": "commit-refused-with-commit",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": false,
+          "reason": "nothing_to_commit",
+          "commit": "0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    },
+    {
+      "name": "push-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": true,
+          "branch": "tooling-1-x",
+          "remoteBranch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "created": true,
+          "upstreamSet": true,
+          "stderr": "fatal: x"
+        }
+      }
+    },
+    {
+      "name": "push-missing-upstream-set",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": true,
+          "branch": "tooling-1-x",
+          "remoteBranch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "created": true
+        }
+      }
+    },
+    {
+      "name": "push-created-not-boolean",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": true,
+          "branch": "tooling-1-x",
+          "remoteBranch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "created": "yes",
+          "upstreamSet": true
+        }
+      }
+    },
+    {
+      "name": "push-unknown-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "forced"
+        }
+      }
+    },
+    {
+      "name": "push-reason-from-commit",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "nothing_to_commit"
+        }
+      }
+    },
+    {
+      "name": "push-reason-from-pull-request",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.push",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "pushed": false,
+          "reason": "not_pushed"
+        }
+      }
+    },
+    {
+      "name": "pull-request-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 42,
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42",
+          "base": "dev",
+          "draft": false
+        }
+      }
+    },
+    {
+      "name": "pull-request-zero-number",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 0,
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-http-url",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 42,
+          "url": "http://github.com/a/b/pull/1",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-url-with-space",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 42,
+          "url": "https://github.com/a/b/pull/1 x",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-base-slash-prefix",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 42,
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42",
+          "base": "/dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-missing-created",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "number": 42,
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unknown-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "no_reviewers"
+        }
+      }
+    },
+    {
+      "name": "pull-request-reason-from-push",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "network"
+        }
+      }
+    },
+    {
+      "name": "pull-request-unavailable-with-url",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": false,
+          "reason": "rejected",
+          "url": "https://github.com/robinrehbein/noah-monorepo/pull/42"
+        }
+      }
+    },
+    {
+      "name": "sha-trailing-lf",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567\n",
+          "files": 2,
+          "skipped": [],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "base-trailing-lf",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev\n",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "host-trailing-lf",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com\n",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "repo-trailing-lf",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo\n"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "command-base-trailing-lf",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev\n",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "sha-trailing-cr",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567\r",
+          "files": 2,
+          "skipped": [],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "base-trailing-cr",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev\r",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "host-trailing-cr",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com\r",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "repo-trailing-cr",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo\r"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "command-base-trailing-cr",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev\r",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    },
+    {
+      "name": "sha-trailing-line-separator",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.commit",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "committed": true,
+          "branch": "tooling-1-x",
+          "commit": "0123456789abcdef0123456789abcdef01234567\u2028",
+          "files": 2,
+          "skipped": [],
+          "indexUpdated": true
+        }
+      }
+    },
+    {
+      "name": "base-trailing-line-separator",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev\u2028",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "host-trailing-line-separator",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com\u2028",
+            "repo": "robinrehbein/noah-monorepo"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "repo-trailing-line-separator",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.branch",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+          "branch": "tooling-1-x",
+          "remoteTip": "absent",
+          "ahead": 2,
+          "pushTarget": {
+            "remote": "origin",
+            "branch": "tooling-1-x",
+            "host": "github.com",
+            "repo": "robinrehbein/noah-monorepo\u2028"
+          },
+          "pullRequestBases": [
+            "dev",
+            "main"
+          ],
+          "hooksSkipped": []
+        }
+      }
+    },
+    {
+      "name": "command-base-trailing-line-separator",
+      "payload": {
+        "type": "session.git.pull_request",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "base": "dev\u2028",
+        "title": "Fix the login redirect",
+        "body": "Sends users back to the page they came from.",
+        "draft": false
+      }
+    }
+  ]
+}
