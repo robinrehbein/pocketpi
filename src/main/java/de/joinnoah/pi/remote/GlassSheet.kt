@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -236,7 +237,10 @@ private tailrec fun Context.sheetActivity(): Activity? =
 private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     Box(
+        // The copy is drawn at the whole window's size; clipping keeps it to this part, or the
+        // content's copy would paint over the handle above it without the tint.
         Modifier.matchParentSize()
+            .clipToBounds()
             .onGloballyPositioned { origin = it.positionOnScreen() }
             .drawBehind {
                 drawImage(
