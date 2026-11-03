@@ -395,12 +395,13 @@ internal class FileMutationController(
             val record = source.mutate(request) { sent = true }
             withContext(NonCancellable) { settle(target, request, record, poll = true) }
         } catch (e: Throwable) {
-            val answered = (e as? RemoteRequestException)?.answered == true
+            val code = (e as? RemoteRequestException)?.takeIf { it.answered }?.code
             withContext(NonCancellable) {
                 when {
-                    // The host answered with an error before recording anything, or the frame never
-                    // left: nothing ran.
-                    answered || !sent -> {
+                    // The frame never left, or the host refused it before reserving anything (a
+                    // reused ID or its store full): nothing ran. Any other error after sending, such
+                    // as authority lost after the host's reservation, may hide an effect.
+                    !sent || code in SAFE_ERRORS -> {
                         Diagnostics.caught("files.mutation.send", e)
                         val code = (e as? RemoteRequestException)?.code ?: "not_sent"
                         val receipt = runCatching {
@@ -410,8 +411,11 @@ internal class FileMutationController(
                         if (receipt.isFailure) write(target) { it.copy(storageFailed = true) }
                         showOutcome(target, request, FileMutationStatus.FAILED, failure = failure(e))
                     }
-                    // No answer: the host may have it. Only its status is asked for later.
-                    else -> Diagnostics.caught("files.mutation.unanswered", e)
+                    // No usable answer: the host may have it. Only its status is asked for, later.
+                    else -> {
+                        Diagnostics.caught("files.mutation.unanswered", e)
+                        addRecovery(target, item(request).copy(pending = true))
+                    }
                 }
             }
             if (e is CancellationException) throw e
@@ -493,13 +497,33 @@ internal class FileMutationController(
         state.copy(recovery = state.recovery.filter { it.operationId != operationId })
     }
 
+    /**
+     * The host's record of [request], or null when its current journal holds no such operation
+     * (`not_found`: another epoch, or never reserved). Then the outcome is lost; nothing is resent.
+     */
+    private suspend fun statusOf(target: Scope, request: FileMutationRequest): FileMutationRecord? =
+        try {
+            source.mutationStatus(request)
+        } catch (e: RemoteRequestException) {
+            if (e.hostCode != "not_found") throw e
+            try {
+                journal.markLost(FileMutationKey(request.deviceId, request.operationId))
+            } catch (storage: Exception) {
+                Diagnostics.caught("files.mutation.lost", storage)
+                write(target) { it.copy(storageFailed = true) }
+            }
+            addRecovery(target, item(request, lost = true))
+            showOutcome(target, request, FileMutationStatus.UNKNOWN)
+            null
+        }
+
     private fun poll(target: Scope, request: FileMutationRequest) {
         scope.launch {
             repeat(MAX_POLLS) {
                 delay(pollDelayMillis)
                 if (scopeOf() != target || !current().connected) return@launch
                 val record = try {
-                    work.withLock { source.mutationStatus(request) }
+                    work.withLock { statusOf(target, request) } ?: return@launch
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -578,7 +602,11 @@ internal class FileMutationController(
             }
             when (entry.state) {
                 FileMutationState.RESERVED -> {
-                    val record = source.mutationStatus(request)
+                    val record = statusOf(target, request)
+                    if (record == null) {
+                        recovery += item(request, lost = true)
+                        continue
+                    }
                     // A pending one is asked about again shortly, and stays listed until then.
                     settle(target, request, record, poll = true)
                     when {
@@ -629,8 +657,14 @@ internal class FileMutationController(
                 val key = FileMutationKey(target.deviceId, operationId)
                 try {
                     if (!item.lost) {
-                        val record = source.acknowledge(target.sessionId, item)
-                        check(record.state == FileMutationHostState.UNKNOWN && record.acknowledged) { "Not acknowledged" }
+                        // not_found: the host's current journal does not hold it, so there is nothing to acknowledge there.
+                        val record = try {
+                            source.acknowledge(target.sessionId, item)
+                        } catch (e: RemoteRequestException) {
+                            if (e.hostCode != "not_found") throw e
+                            null
+                        }
+                        if (record != null) check(record.state == FileMutationHostState.UNKNOWN && record.acknowledged) { "Not acknowledged" }
                     }
                     // An operation only the host lists has nothing to change here. Once acknowledged, the
                     // host keeps the tombstone (or a lost epoch can never run again): drop it here.
@@ -673,9 +707,15 @@ internal class FileMutationController(
                     val request = if (item.local) journal.pending(target.routeId, target.deviceId, target.sessionId)
                         .firstOrNull { it.request.operationId == operationId }?.request else null
                     if (request != null) {
-                        settle(target, request, source.mutationStatus(request), poll = false)
+                        statusOf(target, request)?.let { settle(target, request, it, poll = false) }
                     } else {
-                        val record = source.itemStatus(target.sessionId, item)
+                        val record = try {
+                            source.itemStatus(target.sessionId, item)
+                        } catch (e: RemoteRequestException) {
+                            if (e.hostCode != "not_found") throw e
+                            addRecovery(target, item.copy(pending = false, checking = false, lost = true, failure = null))
+                            return@withLock
+                        }
                         when (record.state) {
                             FileMutationHostState.PENDING -> mark(false, null)
                             FileMutationHostState.UNKNOWN ->
@@ -737,6 +777,8 @@ internal class FileMutationController(
     }
 
     private companion object {
+        /** Errors the host answers before it reserves anything, so the operation never ran. */
+        val SAFE_ERRORS = setOf("invalid_request", "busy")
         const val MAX_POLLS = 5
         const val MAX_LIST_PAGES = 20
     }

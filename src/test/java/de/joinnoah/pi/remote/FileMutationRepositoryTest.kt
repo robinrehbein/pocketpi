@@ -64,6 +64,8 @@ class FileMutationRepositoryTest {
         var fileVersion = version
         var listEpoch = epoch
         var listOperations: List<JsonObject> = emptyList()
+        /** Answers the capabilities.v3 route without a list, as a host without it does. */
+        var withoutV3 = false
 
         override fun connect(host: PairedHost) = listener.ready(emptySet())
         override fun pair(value: JsonObject) {}
@@ -87,7 +89,9 @@ class FileMutationRepositoryTest {
 
         private fun response(request: JsonObject): JsonObject? =
             when (request.text("type")) {
-                "projects.list" -> Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))),
+                "projects.list" -> if (withoutV3 && request.text("requestId").startsWith("capabilities.v3:"))
+                    Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))))
+                else Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))),
                     "capabilities" to JsonArray(advertised.map(::JsonPrimitive)))
                 "sessions.list" -> Wire.objectOf("kind" to "sessions", "items" to JsonArray(listOf(session())))
                 "sessions.open" -> Wire.objectOf("kind" to "session", "session" to session())
@@ -156,6 +160,16 @@ class FileMutationRepositoryTest {
         repository.prepareFileDelete("a.txt")
         runCurrent()
         assertNull(repository.dialog())
+    }
+
+    @Test
+    fun mutationCapabilitiesCountOnlyOnTheV3Route() = runTest {
+        val transport = Transport(all).apply { withoutV3 = true }
+        val repository = opened(repository(transport))
+        assertTrue(FILES_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(listOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY)
+            .none { it in repository.state.value.capabilities })
+        assertEquals(FileMutationAccess(), FileMutationAccess.of(repository.state.value))
     }
 
     @Test
@@ -550,6 +564,80 @@ class FileMutationRepositoryTest {
         runCurrent()
         assertEquals(1, transport.types().count { it == "session.files.create" })
         assertEquals(FileMutationStatus.APPLIED, repository.outcome()?.status)
+    }
+
+    @Test
+    fun anErrorAfterSendingOtherThanASafeRefusalKeepsTheOperationReserved() = runTest {
+        for (code in listOf("forbidden", "unsupported", "internal")) {
+            val transport = Transport(all)
+            val journal = Journal()
+            transport.error = { if (it.text("type") == "session.files.create") code else null }
+            val repository = opened(repository(transport, journal))
+            repository.prepareFileCreate("")
+            repository.confirmFileMutation("x.md")
+            runCurrent()
+            // Authority may have been lost after the host's reservation: the outcome is not "nothing ran".
+            assertEquals(code, FileMutationState.RESERVED, journal.entries.values.single().state)
+            assertNotEquals(code, FileMutationStatus.FAILED, repository.outcome()?.status)
+            assertTrue(code, fileMutationsOf(repository.state.value)!!.recovery.single().pending)
+            assertEquals(1, transport.types().count { it == "session.files.create" })
+        }
+    }
+
+    @Test
+    fun invalidRequestIsSafeToSettleAsNothingRan() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        transport.error = { if (it.text("type") == "session.files.create") "invalid_request" else null }
+        val repository = opened(repository(transport, journal))
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("x.md")
+        runCurrent()
+        assertEquals(FileMutationStatus.FAILED, repository.outcome()?.status)
+        assertTrue(journal.entries.isEmpty())
+    }
+
+    @Test
+    fun statusNotFoundMeansLostAndIsNeverResent() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        val request = pendingDelete()
+        val key = FileMutationKey("device", request.operationId)
+        journal.entries = mapOf(key to FileMutationEntry(request, FileMutationState.RESERVED))
+        transport.error = { if (it.text("type") == "session.files.mutation.status" || it.text("type") == "session.files.mutation.acknowledge") "not_found" else null }
+        val repository = opened(repository(transport, journal))
+        assertEquals(FileMutationState.LOST, journal.entries.getValue(key).state)
+        val item = fileMutationsOf(repository.state.value)!!.recovery.single()
+        assertTrue(item.lost && !item.pending)
+        repository.acknowledgeFileMutation(item.operationId)
+        runCurrent()
+        assertTrue(journal.entries.isEmpty())
+        assertTrue(fileMutationsOf(repository.state.value)!!.recovery.isEmpty())
+        assertTrue(transport.types().none { it in mutationTypes })
+    }
+
+    @Test
+    fun acknowledgeNotFoundIsAcknowledgedHere() = runTest {
+        val transport = Transport(all)
+        val journal = Journal()
+        val request = pendingDelete()
+        journal.entries = mapOf(FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.UNKNOWN))
+        transport.error = { if (it.text("type") == "session.files.mutation.acknowledge") "not_found" else null }
+        val repository = opened(repository(transport, journal))
+        val item = fileMutationsOf(repository.state.value)!!.recovery.single()
+        repository.acknowledgeFileMutation(item.operationId)
+        runCurrent()
+        assertEquals(1, transport.types().count { it == "session.files.mutation.acknowledge" })
+        assertTrue(journal.entries.isEmpty())
+        assertTrue(fileMutationsOf(repository.state.value)!!.recovery.isEmpty())
+    }
+
+    @Test
+    fun acknowledgedUnknownsTheHostListsNeedNoAction() = runTest {
+        val transport = Transport(all)
+        transport.listOperations = listOf(Wire.objectOf("operationId" to "b3BlcmF0aW9uLTAwMDQtZA", "operation" to "delete", "path" to "a.txt", "state" to "unknown", "acknowledged" to true))
+        val repository = opened(repository(transport))
+        assertTrue(fileMutationsOf(repository.state.value)!!.recovery.isEmpty())
     }
 
     @Test
