@@ -135,6 +135,8 @@ class ToolDetailScreenUiTest {
         }
         compose.onNodeWithTag("toolDetailLoadFull").assertExists()
         compose.onNodeWithTag("toolDetailAskFix").assertExists()
+        // The overview card opens the page, so the output section may start below the screen.
+        compose.onNodeWithTag("toolDetailContent").performScrollToNode(hasTestTag("toolDetailLoadFull"))
         compose.onNode(hasClickAction() and hasAnyAncestor(hasTestTag("toolDetailLoadFull"))).performClick()
         assertEquals(1, loads)
 

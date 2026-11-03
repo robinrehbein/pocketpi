@@ -3542,6 +3542,10 @@ internal fun RemoteScreen(
                 ScrollToLatestSlot(!autoFollow, ::scrollToLatestItem)
             }
         if (key is RemoteNavKey.Chat) {
+            // A composable lambda of its own: R8 compiles it into a method of its own. Inline in the
+            // chat's content lambda, that method grew past what R8 compiles correctly, and ART
+            // rejected the class (a VerifyError in the minified app).
+            val floatingComposer: @Composable BoxWithConstraintsScope.() -> Unit = {
             Box(
                 Modifier.align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -3551,70 +3555,23 @@ internal fun RemoteScreen(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.error?.let { error ->
-                        // Floats over the chat with the composer, so it is tinted glass like it.
-                        FloatingSurface(
-                            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
-                                .fillMaxWidth().padding(horizontal = 16.dp).testTag("errorCard"),
-                            shape = MaterialTheme.shapes.medium,
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        ) {
-                            Column(Modifier.padding(16.dp)) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    verticalAlignment = Alignment.Top,
-                                ) {
-                                    Icon(Icons.Default.ErrorOutline, contentDescription = null)
-                                    Text(stringResource(error), Modifier.weight(1f))
-                                }
-                                ReconnectCountdown(state.reconnectAt)
-                                // Close, Remove and Pair again do not fit a phone's card in one row; they wrap.
-                                FlowRow(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    itemVerticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    TextButton(
-                                        onClick = model::dismissError,
-                                        colors = ButtonDefaults.textButtonColors(
-                                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                                        ),
-                                    ) {
-                                        Text(stringResource(R.string.remote_error_close))
-                                    }
-                                    if (error == R.string.remote_device_revoked)
-                                        state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
-                                            FilledTonalButton(
-                                                onClick = { removing = host },
-                                                modifier = Modifier.testTag("removePairing"),
-                                            ) {
-                                                Text(stringResource(R.string.remote_remove))
-                                            }
-                                        }
-                                    // As on the list pages: the scanned code pairs from the computers page.
-                                    if (error == R.string.remote_device_revoked)
-                                        FilledTonalButton(
-                                            onClick = {
-                                                model.dismissError()
-                                                scan = true
-                                            },
-                                            modifier = Modifier.testTag("pairAgain"),
-                                        ) {
-                                            Text(stringResource(R.string.remote_pair_again))
-                                        }
-                                    if (!state.loading && error in RETRYABLE_ERRORS)
-                                        FilledTonalButton(
-                                            onClick = {
-                                                model.dismissError()
-                                                model.refresh()
-                                            },
-                                            modifier = Modifier.testTag("reconnectNow"),
-                                        ) {
-                                            Text(retryLabel(state.reconnectAt))
-                                        }
-                                }
-                            }
-                        }
+                        // Its own function: inline here it grew the chat's content lambda past what
+                        // R8 compiles into code ART accepts (a VerifyError in the minified app).
+                        ChatErrorCard(
+                            error = error,
+                            state = state,
+                            onDismiss = model::dismissError,
+                            onRemove = { host -> removing = host },
+                            onPairAgain = {
+                                model.dismissError()
+                                scan = true
+                            },
+                            onReconnect = {
+                                model.dismissError()
+                                model.refresh()
+                            },
+                            modifier = Modifier.align(Alignment.CenterHorizontally),
+                        )
                     }
                     val chipJobs = if (insightSheet == InsightSheetKind.JOBS) sheetJobs else statusJobs
                     val insightsShown =
@@ -3905,6 +3862,8 @@ internal fun RemoteScreen(
                     }
                 }
             }
+            }
+            floatingComposer()
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp).testTag("chatSnackbar"),
@@ -5017,5 +4976,69 @@ private fun PaneOverlays(
             val placeable = measurable.measure(constraints)
             layout(placeable.width, placeable.height) { }
         }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { terminalContent() } }
+    }
+}
+
+/** The chat's error, floating over it with the composer as tinted glass, with what can be done about it. */
+@Composable
+private fun ChatErrorCard(
+    error: Int,
+    state: RemoteState,
+    onDismiss: () -> Unit,
+    onRemove: (PairedHost) -> Unit,
+    onPairAgain: () -> Unit,
+    onReconnect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FloatingSurface(
+        modifier = modifier.widthIn(max = PROSE_READING_WIDTH + 32.dp)
+            .fillMaxWidth().padding(horizontal = 16.dp).testTag("errorCard"),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(Icons.Default.ErrorOutline, contentDescription = null)
+                Text(stringResource(error), Modifier.weight(1f))
+            }
+            ReconnectCountdown(state.reconnectAt)
+            // Close, Remove and Pair again do not fit a phone's card in one row; they wrap.
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+                ) {
+                    Text(stringResource(R.string.remote_error_close))
+                }
+                if (error == R.string.remote_device_revoked)
+                    state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
+                        FilledTonalButton(
+                            onClick = { onRemove(host) },
+                            modifier = Modifier.testTag("removePairing"),
+                        ) {
+                            Text(stringResource(R.string.remote_remove))
+                        }
+                    }
+                // As on the list pages: the scanned code pairs from the computers page.
+                if (error == R.string.remote_device_revoked)
+                    FilledTonalButton(onClick = onPairAgain, modifier = Modifier.testTag("pairAgain")) {
+                        Text(stringResource(R.string.remote_pair_again))
+                    }
+                if (!state.loading && error in RETRYABLE_ERRORS)
+                    FilledTonalButton(onClick = onReconnect, modifier = Modifier.testTag("reconnectNow")) {
+                        Text(retryLabel(state.reconnectAt))
+                    }
+            }
+        }
     }
 }
