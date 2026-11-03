@@ -27,7 +27,7 @@ class GitWriteModelsTest {
 
     @Test fun canonicalHostResultsAcceptEverySuccessAndRefusal() {
         val examples = results("valid")
-        assertEquals(65, examples.size)
+        assertEquals(67, examples.size)
         examples.forEach { (name, data) -> assertNotNull(name, parseGitWriteResult(data, session)) }
         val branch = parseGitWriteResult(examples.single { it.first == "branch-available" }.second, session)
         assertTrue(branch is GitWriteResult.Branch.Available)

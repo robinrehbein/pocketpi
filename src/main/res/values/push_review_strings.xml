@@ -38,6 +38,7 @@
     <string name="remote_push_reason_no_origin">The repository has no origin.</string>
     <string name="remote_push_reason_unsupported_remote">This remote destination is not supported.</string>
     <string name="remote_push_reason_lfs_unsupported">Git LFS is not supported by this push.</string>
+    <string name="remote_push_reason_lfs_scan_limit">Too much unpublished history to check for Git LFS. Push from the computer instead.</string>
     <string name="remote_push_reason_local_transport_config">Local repository settings prevent this push.</string>
     <string name="remote_push_reason_up_to_date">The remote branch is already up to date.</string>
     <string name="remote_push_reason_auth_failed">Authentication with the remote failed.</string>

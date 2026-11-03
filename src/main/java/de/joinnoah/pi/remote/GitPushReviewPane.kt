@@ -140,6 +140,7 @@ private fun pushReasonText(reason: GitPushReason): Int = when (reason) {
     GitPushReason.NO_ORIGIN -> R.string.remote_push_reason_no_origin
     GitPushReason.UNSUPPORTED_REMOTE -> R.string.remote_push_reason_unsupported_remote
     GitPushReason.LFS_UNSUPPORTED -> R.string.remote_push_reason_lfs_unsupported
+    GitPushReason.LFS_SCAN_LIMIT -> R.string.remote_push_reason_lfs_scan_limit
     GitPushReason.LOCAL_TRANSPORT_CONFIG -> R.string.remote_push_reason_local_transport_config
     GitPushReason.UP_TO_DATE -> R.string.remote_push_reason_up_to_date
     GitPushReason.AUTH_FAILED -> R.string.remote_push_reason_auth_failed
