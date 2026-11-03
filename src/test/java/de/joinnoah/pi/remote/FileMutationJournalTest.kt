@@ -349,7 +349,7 @@ class FileMutationJournalTest {
         val other = request.copy(operationId = "other", path = "other.txt")
         journal.reserve(other)
         journal.markUnknown(FileMutationKey("device-a", "other"))
-        journal.forgetAcknowledged("route-a", "device-a", "session-a")
+        journal.forgetSettled("route-a", "device-a", "session-a")
         assertEquals(FileMutationState.UNKNOWN, storage.entries.values.single().state)
     }
 

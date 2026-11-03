@@ -235,7 +235,8 @@ internal fun canWriteFiles(state: RemoteState): Boolean =
 internal fun canEditFile(state: RemoteState): Boolean {
     val file = state.files?.file ?: return false
     return canWriteFiles(state) && !file.loading && file.failure == null && file.version != null &&
-        !file.binary && !file.tooLarge && file.nextOffset == null && !writeDeniedPath(file.path)
+        !file.binary && !file.tooLarge && file.nextOffset == null && !writeDeniedPath(file.path) &&
+        !fileMutationHolds(state, file.path)
 }
 
 /** Folders whose files a tool runs on its own; the host refuses to write anywhere below them. */

@@ -47,6 +47,9 @@ data class FileMutationEntry(
     val result: FileMutationResult? = null,
 )
 
+/** The journal holds its maximum of entries; nothing new is reserved until some are settled. */
+class FileMutationJournalFull : IllegalStateException("Mutation journal is full")
+
 sealed class FileMutationReservation {
     data class New(val entry: FileMutationEntry) : FileMutationReservation()
     data class Existing(val entry: FileMutationEntry) : FileMutationReservation()
@@ -68,6 +71,9 @@ class FileMutationJournal(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val maxEntries: Int,
 ) {
+    /** The most entries the journal holds. */
+    val capacity: Int get() = maxEntries
+
     private val lockIdentity = storage.lockIdentity
     private val mutex = mutexFor(lockIdentity)
 
@@ -106,7 +112,7 @@ class FileMutationJournal(
                 check(existing.request == request) { "Operation ID already reserved for another request" }
                 FileMutationReservation.Existing(existing)
             } else {
-                check(current.size < maxEntries) { "Mutation journal is full" }
+                if (current.size >= maxEntries) throw FileMutationJournalFull()
                 val entry = FileMutationEntry(request, FileMutationState.RESERVED)
                 persist(current + (key to entry))
                 FileMutationReservation.New(entry)
@@ -142,7 +148,8 @@ class FileMutationJournal(
     suspend fun markLost(key: FileMutationKey): Unit = withContext(dispatcher) {
         mutex.withLock {
             val current = entries()
-            val entry = checkNotNull(current[key]) { "Mutation is not reserved" }
+            // Settled elsewhere meanwhile: nothing is left to mark.
+            val entry = current[key] ?: return@withLock
             if (entry.state == FileMutationState.RESERVED || entry.state == FileMutationState.UNKNOWN) {
                 persist(current + (key to entry.copy(state = FileMutationState.LOST)))
             }
@@ -164,17 +171,27 @@ class FileMutationJournal(
         }
     }
 
-    /** Drops every acknowledged entry of one route, device and session; see [forget]. */
-    suspend fun forgetAcknowledged(routeId: String, deviceId: String, sessionId: String): Unit = withContext(dispatcher) {
+    /**
+     * Drops every settled entry a run left behind: terminal receipts of any session, and the
+     * acknowledged entries of one route, device and session; see [forget].
+     */
+    suspend fun forgetSettled(routeId: String, deviceId: String, sessionId: String): Unit = withContext(dispatcher) {
         mutex.withLock {
             val current = entries()
             val kept = current.filterValues { entry ->
-                !(entry.state == FileMutationState.ACKNOWLEDGED_UNKNOWN && entry.request.routeId == routeId &&
-                    entry.request.deviceId == deviceId && entry.request.sessionId == sessionId)
+                entry.state != FileMutationState.TERMINAL &&
+                    !(entry.state == FileMutationState.ACKNOWLEDGED_UNKNOWN && entry.request.routeId == routeId &&
+                        entry.request.deviceId == deviceId && entry.request.sessionId == sessionId)
             }
             if (kept.size != current.size) persist(kept)
         }
     }
+
+    /** The entry of [key], or null when the journal holds none. */
+    suspend fun get(key: FileMutationKey): FileMutationEntry? = withContext(dispatcher) { mutex.withLock { entries()[key] } }
+
+    /** How many entries the journal holds, settled or not, against its capacity. */
+    suspend fun size(): Int = withContext(dispatcher) { mutex.withLock { entries().size } }
 
     /**
      * Starts over with an empty journal after the user confirmed the local record is lost. The

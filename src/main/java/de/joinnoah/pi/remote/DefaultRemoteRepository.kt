@@ -1433,6 +1433,9 @@ class DefaultRemoteRepository(
                     visibleBlocks.putIfAbsent(id, QuestionBlock.UNCERTAIN)
             }
         }
+        // A blocking edit saved or discarded: an open rename or delete prompt checks again.
+        if (previous.files?.editor != next.files?.editor && next.fileMutations?.dialog?.blocked == true)
+            scope.launch { mutationController?.draftsChanged() }
         mutable.value = next.copy(
             editorQuestionGeneration = previous.editorQuestionGeneration + if (editorsChanged || editorAuthorityChanged) 1 else 0,
             questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
@@ -9877,12 +9880,17 @@ class DefaultRemoteRepository(
                 return parseFileMutationList(request("session.files.mutation.list", selectionEpoch, *fields.toTypedArray()), sessionId)
             }
 
-            override suspend fun mutate(operation: FileMutationRequest, onSent: () -> Unit): FileMutationRecord {
+            override suspend fun mutate(operation: FileMutationRequest, connection: Long, onSent: () -> Unit): FileMutationRecord {
                 requireMutation(operation.sessionId, operation.kind.capability)
                 requireMutation(operation.sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
                 require(validMutationRequest(operation))
                 val (type, fields) = fileMutationCommand(operation)
-                val data = request(type, selectionEpoch, *fields.toTypedArray(), onSent = onSent)
+                // Only on the connection and selection it was confirmed on; else it is not sent at all.
+                val data = request(type, selectionEpoch, *fields.toTypedArray(), onSent = onSent, validateBeforeSend = {
+                    check(connection == generation)
+                    val selection = state.value.selection
+                    check(selection.routeId == operation.routeId && selection.sessionId == operation.sessionId)
+                })
                 return parseFileMutationRecord(data, operation)
             }
 
@@ -11023,9 +11031,10 @@ class DefaultRemoteRepository(
                 fileMutationSource,
                 FileMutationJournal(storage, io, MAX_FILE_MUTATION_JOURNAL_ENTRIES),
                 { state.value },
-                draftsHold = { sessionId, paths -> filesLoader.mutationHeld(sessionId, paths, ::parkedDraft) },
+                draftsHold = { routeId, sessionId, paths -> filesLoader.mutationHeld(routeId, sessionId, paths, ::parkedDraft) },
                 applied = filesLoader::mutationApplied,
                 update = ::update,
+                connection = { generation },
             )
         }
 

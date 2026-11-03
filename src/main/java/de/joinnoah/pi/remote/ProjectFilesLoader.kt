@@ -1326,8 +1326,8 @@ internal class ProjectFilesLoader(
      * being recorded, a kept draft (also of a parked editor, [parked]) or one a failed read leaves
      * unknown. Called on the main thread.
      */
-    suspend fun mutationHeld(sessionId: String, paths: List<String>, parked: (FileDraftKey) -> Boolean = { false }): Boolean {
-        val routeId = current().selection.routeId ?: return true
+    suspend fun mutationHeld(routeId: String, sessionId: String, paths: List<String>, parked: (FileDraftKey) -> Boolean = { false }): Boolean {
+        if (current().selection.routeId != routeId) return true
         val editor = files()?.takeIf { it.sessionId == sessionId }?.editor
         if (editor != null && editor.path in paths &&
             (editor.changed || editor.saving || editor.unconfirmed != null || editor.superseded.isNotEmpty() || editor.recovery != null)
@@ -1340,6 +1340,48 @@ internal class ProjectFilesLoader(
     }
 
     /**
+     * The host renamed or deleted the file of an editor that holds unsaved text: the text stays.
+     * After a rename the editor and its kept draft move to the new path; after a delete the editor
+     * says the file is gone and its draft stays for recovery.
+     */
+    private fun keepEditor(request: FileMutationRequest, editor: FileEditor) {
+        val routeId = current().selection.routeId ?: return
+        val text = editor.latestText
+        when (request.kind) {
+            FileMutationKind.RENAME -> {
+                val destination = checkNotNull(request.destinationPath)
+                stopEditor()
+                write(request.sessionId) {
+                    it.copy(
+                        editor = editor.copy(path = destination, text = text, saving = false),
+                        file = it.file?.takeIf { file -> file.path == request.path }?.copy(path = destination) ?: it.file,
+                    )
+                }
+                val store = journal ?: return
+                val from = FileDraftKey(routeId, request.sessionId, request.path)
+                val to = FileDraftKey(routeId, request.sessionId, destination)
+                scope.launch {
+                    try {
+                        // The new key is written before the old one goes, so a crash keeps one of them.
+                        draftMutex.withLock {
+                            val kept = store.get(from) ?: snapshot(editor, text)
+                            store.put(to, kept)
+                            store.remove(from)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Diagnostics.caught("files.mutation.moveDraft", e)
+                    }
+                }
+            }
+            FileMutationKind.DELETE ->
+                write(request.sessionId) { it.copy(editor = editor.copy(text = text, saving = false, saveFailure = FilesFailure.NOT_FOUND)) }
+            FileMutationKind.CREATE -> Unit
+        }
+    }
+
+    /**
      * Shows what an operation the host applied changed: the folder lists again, a created file
      * opens, a renamed open file opens under its new name and a deleted open file closes. Nothing
      * changes before the host confirmed it.
@@ -1348,7 +1390,18 @@ internal class ProjectFilesLoader(
         val files = files()?.takeIf { it.sessionId == request.sessionId } ?: return
         val folder = parentPath(request.path)
         remembered.remove(key(request.sessionId, folder))
-        if (files.editor != null || files.path != folder) return
+        val editor = files.editor
+        if (editor != null && editor.path == request.path && request.kind != FileMutationKind.CREATE) {
+            val held = editor.changed || editor.saving || editor.unconfirmed != null || editor.superseded.isNotEmpty()
+            if (held) {
+                keepEditor(request, editor)
+                return
+            }
+            // A clean editor closes; the file view follows below.
+            stopEditor()
+            write(request.sessionId) { it.copy(editor = null) }
+        } else if (editor != null) return
+        if (files.path != folder) return
         val open = files.file?.path
         when (request.kind) {
             FileMutationKind.CREATE -> {

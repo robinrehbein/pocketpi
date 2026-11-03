@@ -2,6 +2,8 @@ package de.joinnoah.pi.remote
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -75,6 +77,8 @@ data class FileMutationRecoveryItem(
     val checking: Boolean = false,
     /** This device's journal holds it; an operation only the host lists is false. */
     val local: Boolean = true,
+    /** The host's current journal never held it although its epoch is current: it never arrived, nothing ran. */
+    val neverReceived: Boolean = false,
 )
 
 data class FileMutationsState(
@@ -92,6 +96,10 @@ data class FileMutationsState(
     val journalUnreadable: Boolean = false,
     val resetConfirming: Boolean = false,
     val resetting: Boolean = false,
+    /** The journal holds its maximum of entries; [journalEntries] of [journalCapacity] are in use. */
+    val journalFull: Boolean = false,
+    val journalEntries: Int = 0,
+    val journalCapacity: Int = 0,
 )
 
 /** Whether [kind] can be offered: its capability, recovery, a connected session and this client's journal. */
@@ -107,6 +115,19 @@ internal fun canRecoverFileMutations(state: RemoteState): Boolean =
         FILES_MUTATION_RECOVERY_CAPABILITY in state.capabilities &&
         FILES_MUTATION_RECOVERY_CAPABILITY !in state.unavailableCapabilities
 
+/**
+ * Whether an operation that is unresolved, or being sent, holds [path]: editing it then would
+ * leave the editor on a file that may move or vanish.
+ */
+internal fun fileMutationHolds(state: RemoteState, path: String): Boolean {
+    val mutations = fileMutationsOf(state) ?: return false
+    val dialog = mutations.dialog?.takeIf { it.sending }
+    val outcome = mutations.outcome?.takeIf { it.status == FileMutationStatus.PENDING }
+    return mutations.recovery.any { path == it.path || path == it.destinationPath } ||
+        (dialog != null && dialog.path == path) ||
+        (outcome != null && (outcome.path == path || outcome.destinationPath == path))
+}
+
 /** The mutation state of the selected session, or null. */
 internal fun fileMutationsOf(state: RemoteState): FileMutationsState? =
     state.fileMutations?.takeIf {
@@ -118,7 +139,7 @@ internal interface FileMutationSource {
     suspend fun mutationList(sessionId: String, after: String?): FileMutationList
 
     /** Sends [request]; [onSent] runs right before the frame may leave, so its absence proves it did not. */
-    suspend fun mutate(request: FileMutationRequest, onSent: () -> Unit): FileMutationRecord
+    suspend fun mutate(request: FileMutationRequest, connection: Long, onSent: () -> Unit): FileMutationRecord
 
     suspend fun mutationStatus(request: FileMutationRequest): FileMutationRecord
 
@@ -144,13 +165,19 @@ internal class FileMutationController(
     private val journal: FileMutationJournal,
     private val current: () -> RemoteState,
     /** True when an edit, a pending save or a kept draft holds one of the paths. */
-    private val draftsHold: suspend (sessionId: String, paths: List<String>) -> Boolean,
+    private val draftsHold: suspend (routeId: String, sessionId: String, paths: List<String>) -> Boolean,
     private val applied: (FileMutationRequest) -> Unit,
     private val update: ((RemoteState) -> RemoteState) -> Unit,
     private val pollDelayMillis: Long = 1_000,
+    /** The connection a request goes out on; one confirmed on another is not sent. */
+    private val connection: () -> Long = { 0L },
 ) {
     private val work = Mutex()
     private var dialogVersion = 0L
+    /** At most one status poll per operation ID. */
+    private val polls = mutableMapOf<String, Job>()
+    /** The host's journal epoch as last listed, by route and session. */
+    private val knownEpochs = mutableMapOf<Pair<String, String>, String>()
 
     private data class Scope(val routeId: String, val deviceId: String, val sessionId: String)
 
@@ -252,7 +279,7 @@ internal class FileMutationController(
     /** Whether a draft or an unresolved operation holds any of [paths]; a failed check holds them. */
     private suspend fun holds(target: Scope, paths: List<String>): Boolean {
         val drafts = try {
-            draftsHold(target.sessionId, paths)
+            draftsHold(target.routeId, target.sessionId, paths)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -269,7 +296,26 @@ internal class FileMutationController(
             write(target) { it.copy(journalUnreadable = true) }
             return true
         }
-        return unresolved.any { entry -> listOfNotNull(entry.request.path, entry.request.destinationPath).any { it in paths } }
+        if (unresolved.any { entry -> listOfNotNull(entry.request.path, entry.request.destinationPath).any { it in paths } }) return true
+        // Also what only the host lists (after a reset, say): every unresolved operation shown.
+        val shown = current().fileMutations?.takeIf { it.routeId == target.routeId && it.sessionId == target.sessionId }?.recovery.orEmpty()
+        return shown.any { item -> listOfNotNull(item.path, item.destinationPath).any { it in paths } }
+    }
+
+    /** An edit was saved or discarded: a prompt it blocked checks again, rename and delete with a fresh read. */
+    fun draftsChanged() {
+        val state = current()
+        val target = scopeOf(state) ?: return
+        val dialog = fileMutationsOf(state)?.dialog ?: return
+        if (!dialog.blocked || dialog.checking || dialog.sending) return
+        if (dialog.kind != FileMutationKind.CREATE) prepare(dialog.kind, dialog.path)
+        else {
+            val version = dialogVersion
+            scope.launch {
+                val blocked = holds(target, listOf(dialog.path))
+                if (version == dialogVersion) write(target) { it.copy(dialog = it.dialog?.copy(blocked = blocked)) }
+            }
+        }
     }
 
     fun cancel() {
@@ -316,9 +362,10 @@ internal class FileMutationController(
             return
         }
         val version = ++dialogVersion
+        val link = connection()
         write(target) { it.copy(dialog = dialog.copy(sending = true, nameTaken = false, changed = false)) }
         scope.launch {
-            work.withLock { submit(target, version, dialog, path, destination) }
+            work.withLock { submit(target, link, version, dialog, path, destination) }
         }
     }
 
@@ -327,7 +374,10 @@ internal class FileMutationController(
         write(target) { it.copy(dialog = it.dialog?.let(block)?.copy(sending = false)) }
     }
 
-    private suspend fun submit(target: Scope, version: Long, dialog: FileMutationDialog, path: String, destination: String?) {
+    /** Whether [target] is still shown on connection [link]: else nothing is reserved or sent. */
+    private fun still(target: Scope, link: Long) = scopeOf() == target && connection() == link && current().connected
+
+    private suspend fun submit(target: Scope, link: Long, version: Long, dialog: FileMutationDialog, path: String, destination: String?) {
         if (holds(target, listOfNotNull(path, destination))) {
             reopen(target, version) { it.copy(blocked = true) }
             return
@@ -371,10 +421,19 @@ internal class FileMutationController(
             reopen(target, version) { it.copy(failure = FilesFailure.INVALID_PATH) }
             return
         }
+        if (!still(target, link)) {
+            reopen(target, version) { it.copy(failure = FilesFailure.OFFLINE) }
+            return
+        }
         try {
             journal.reserve(request)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: FileMutationJournalFull) {
+            Diagnostics.caught("files.mutation.full", e)
+            refreshCapacity(target)
+            reopen(target, version) { it.copy(failure = FilesFailure.STORAGE) }
+            return
         } catch (e: Exception) {
             // Never send what is not journaled.
             Diagnostics.caught("files.mutation.reserve", e)
@@ -386,13 +445,20 @@ internal class FileMutationController(
         write(target) {
             it.copy(outcome = FileMutationOutcome(request.kind, path, destination, FileMutationStatus.PENDING, operationId = request.operationId))
         }
-        send(target, request)
+        refreshCapacity(target)
+        send(target, request, link)
     }
 
-    private suspend fun send(target: Scope, request: FileMutationRequest) {
+    /** Shows how full the journal is; a full one offers its way out. */
+    private suspend fun refreshCapacity(target: Scope) {
+        val size = try { journal.size() } catch (e: CancellationException) { throw e } catch (e: Exception) { return }
+        write(target) { it.copy(journalFull = size >= journal.capacity, journalEntries = size, journalCapacity = journal.capacity) }
+    }
+
+    private suspend fun send(target: Scope, request: FileMutationRequest, link: Long) {
         var sent = false
         try {
-            val record = source.mutate(request) { sent = true }
+            val record = source.mutate(request, link) { sent = true }
             withContext(NonCancellable) { settle(target, request, record, poll = true) }
         } catch (e: Throwable) {
             val code = (e as? RemoteRequestException)?.takeIf { it.answered }?.code
@@ -440,6 +506,18 @@ internal class FileMutationController(
     /** Records what the host answered for [request]; a pending one is asked about again shortly. */
     private suspend fun settle(target: Scope, request: FileMutationRequest, record: FileMutationRecord, poll: Boolean) {
         val key = FileMutationKey(request.deviceId, request.operationId)
+        if (record.state != FileMutationHostState.PENDING) stopPoll(request.operationId)
+        // Settled meanwhile by another answer: nothing is recorded or shown twice.
+        val entry = try {
+            journal.get(key)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diagnostics.caught("files.mutation.settle", e)
+            write(target) { it.copy(journalUnreadable = true) }
+            return
+        }
+        if (entry == null || entry.state !in FileMutationJournal.UNRESOLVED) return
         try {
             when (record.state) {
                 FileMutationHostState.APPLIED -> {
@@ -512,28 +590,55 @@ internal class FileMutationController(
                 Diagnostics.caught("files.mutation.lost", storage)
                 write(target) { it.copy(storageFailed = true) }
             }
-            addRecovery(target, item(request, lost = true))
+            stopPoll(request.operationId)
+            val never = knownEpochs[target.routeId to target.sessionId] == request.epoch
+            addRecovery(target, item(request, lost = true).copy(neverReceived = never))
             showOutcome(target, request, FileMutationStatus.UNKNOWN)
             null
         }
 
+    private suspend fun stopPoll(operationId: String) {
+        val self = currentCoroutineContext()[Job]
+        polls.remove(operationId)?.let { if (it !== self) it.cancel() }
+    }
+
+    /** Asks for [request]'s status a few times while it stays reserved; one poll per operation. */
     private fun poll(target: Scope, request: FileMutationRequest) {
-        scope.launch {
-            repeat(MAX_POLLS) {
-                delay(pollDelayMillis)
-                if (scopeOf() != target || !current().connected) return@launch
-                val record = try {
-                    work.withLock { statusOf(target, request) } ?: return@launch
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Diagnostics.caught("files.mutation.poll", e)
-                    return@launch
+        if (polls[request.operationId]?.isActive == true) return
+        val key = FileMutationKey(request.deviceId, request.operationId)
+        lateinit var job: Job
+        job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                repeat(MAX_POLLS) {
+                    delay(pollDelayMillis)
+                    if (scopeOf() != target || !current().connected) return@launch
+                    val done = try {
+                        work.withLock {
+                            // Settled elsewhere: nothing left to ask about.
+                            if (journal.get(key)?.state != FileMutationState.RESERVED) true
+                            else {
+                                val record = statusOf(target, request)
+                                if (record == null) true
+                                else {
+                                    settle(target, request, record, poll = false)
+                                    record.state != FileMutationHostState.PENDING
+                                }
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Diagnostics.caught("files.mutation.poll", e)
+                        true
+                    }
+                    if (done) return@launch
                 }
-                settle(target, request, record, poll = false)
-                if (record.state != FileMutationHostState.PENDING) return@launch
+            } finally {
+                if (polls[request.operationId] === job) polls.remove(request.operationId)
             }
         }
+        polls[request.operationId] = job
+        job.start()
     }
 
     // ---- Recovery ----------------------------------------------------------------------------
@@ -572,6 +677,7 @@ internal class FileMutationController(
             after = page.nextAfter
         } while (after != null && pages.size < MAX_LIST_PAGES)
         val epoch = pages.first().epoch
+        knownEpochs[target.routeId to target.sessionId] = epoch
         val host = pages.flatMap { it.operations }.associateBy { it.operationId }
         // An unreadable journal still lets the host's own unresolved operations show.
         var unreadable: Exception? = null
@@ -585,7 +691,7 @@ internal class FileMutationController(
         }
         // Acknowledged entries left by an earlier run that stopped before dropping them.
         if (unreadable == null) try {
-            journal.forgetAcknowledged(target.routeId, target.deviceId, target.sessionId)
+            journal.forgetSettled(target.routeId, target.deviceId, target.sessionId)
         } catch (e: Exception) {
             Diagnostics.caught("files.mutation.release", e)
             write(target) { it.copy(storageFailed = true) }
@@ -604,7 +710,7 @@ internal class FileMutationController(
                 FileMutationState.RESERVED -> {
                     val record = statusOf(target, request)
                     if (record == null) {
-                        recovery += item(request, lost = true)
+                        recovery += item(request, lost = true).copy(neverReceived = true)
                         continue
                     }
                     // A pending one is asked about again shortly, and stays listed until then.
@@ -622,7 +728,8 @@ internal class FileMutationController(
                         } catch (e: Exception) { write(target) { it.copy(storageFailed = true) } }
                     } else recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, epoch = epoch)
                 FileMutationState.LOST ->
-                    recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, lost = true, epoch = request.epoch)
+                    recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, lost = true, epoch = request.epoch,
+                        neverReceived = request.epoch == epoch)
                 else -> Unit
             }
         }
@@ -637,6 +744,7 @@ internal class FileMutationController(
             state.copy(recovery = recovery.map { it.copy(acknowledging = it.operationId in acknowledging) })
         }
         if (unreadable != null) throw StorageFailure(unreadable)
+        refreshCapacity(target)
         return epoch
     }
 
@@ -673,6 +781,7 @@ internal class FileMutationController(
                         journal.forget(key)
                     }
                     write(target) { it.copy(recovery = it.recovery.filter { entry -> entry.operationId != operationId }) }
+                    refreshCapacity(target)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -739,7 +848,8 @@ internal class FileMutationController(
     /** Asks to confirm discarding an unreadable journal. */
     fun requestReset() {
         val target = scopeOf() ?: return
-        if (fileMutationsOf(current())?.journalUnreadable != true) return
+        val mutations = fileMutationsOf(current()) ?: return
+        if (!mutations.journalUnreadable && !mutations.journalFull) return
         write(target) { it.copy(resetConfirming = true) }
     }
 
@@ -756,14 +866,15 @@ internal class FileMutationController(
     fun confirmReset() {
         val target = scopeOf() ?: return
         val mutations = fileMutationsOf(current()) ?: return
-        if (!mutations.resetConfirming || !mutations.journalUnreadable || mutations.resetting) return
+        if (!mutations.resetConfirming || !(mutations.journalUnreadable || mutations.journalFull) || mutations.resetting) return
         write(target) { it.copy(resetting = true) }
         scope.launch {
             work.withLock {
                 try {
                     journal.reset()
                     journal.pending(target.routeId, target.deviceId, target.sessionId)
-                    write(target) { it.copy(journalUnreadable = false, storageFailed = false, resetConfirming = false, resetting = false, recovery = emptyList()) }
+                    write(target) { it.copy(journalUnreadable = false, storageFailed = false, resetConfirming = false, resetting = false, recovery = emptyList(), journalFull = false) }
+                    refreshCapacity(target)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
