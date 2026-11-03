@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -102,6 +103,17 @@ internal fun conversationItemWidth(item: ConversationItem): Dp =
         is ConversationItem.Activity -> WIDE_READING_WIDTH
         is ConversationItem.Subagent -> PROSE_READING_WIDTH
     }
+
+/**
+ * Chat rows can grow while streaming, and new tools can arrive before a queued prompt. Sliding
+ * rows to their new positions paints the old message through those new rows until it catches up.
+ * Keep only the arrival fade: removed rows must also stop drawing before their space is reused.
+ * This does not affect scroll animations or the motion of rows on other pages.
+ */
+internal fun Modifier.conversationItemMotion(item: LazyItemScope): Modifier =
+    if (ValueAnimator.areAnimatorsEnabled()) with(item) {
+        this@conversationItemMotion.animateItem(placementSpec = null, fadeOutSpec = null)
+    } else this
 
 /**
  * One chat item in its reading column, at most [conversationItemWidth] wide and anchored to the
