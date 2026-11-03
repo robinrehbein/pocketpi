@@ -3377,6 +3377,10 @@ internal fun RemoteScreen(
                 ScrollToLatestSlot(!autoFollow, ::scrollToLatestItem)
             }
         if (key is RemoteNavKey.Chat) {
+            // A composable lambda of its own: R8 compiles it into a method of its own. Inline in the
+            // chat's content lambda, that method grew past what R8 compiles correctly, and ART
+            // rejected the class (a VerifyError in the minified app).
+            val floatingComposer: @Composable BoxWithConstraintsScope.() -> Unit = {
             Box(
                 Modifier.align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -3685,6 +3689,8 @@ internal fun RemoteScreen(
                     }
                 }
             }
+            }
+            floatingComposer()
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp).testTag("chatSnackbar"),
