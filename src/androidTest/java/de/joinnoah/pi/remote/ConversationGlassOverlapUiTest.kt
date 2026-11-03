@@ -73,26 +73,37 @@ class ConversationGlassOverlapUiTest {
             repeat(8) {
                 compose.mainClock.advanceTimeByFrame()
                 if (replaceBubble) assertGapShowsBackground(background)
-                else {
-                    val bubbleBounds = compose.onNodeWithTag("messageBubble-image").getUnclippedBoundsInRoot()
-                    val cards = compose.onAllNodesWithTag("toolCard")
-                    repeat(cards.fetchSemanticsNodes().size) { index ->
-                        val cardBounds = cards[index].getUnclippedBoundsInRoot()
-                        assertTrue("Tool $cardBounds must not overlap bubble $bubbleBounds", cardBounds.bottom <= bubbleBounds.top)
-                    }
-                }
+                else assertToolsBeforeBubble()
             }
             compose.mainClock.autoAdvance = true
             compose.waitForIdle()
         }
-        assertGapShowsBackground(background)
+        if (insertBefore && !replaceBubble) assertToolsBeforeBubble()
+        assertGapShowsBackground(background, beforeBubble = insertBefore && !replaceBubble)
     }
 
-    private fun assertGapShowsBackground(background: androidx.compose.ui.graphics.Color) {
+    private fun assertToolsBeforeBubble() {
+        val bubbleBounds = compose.onNodeWithTag("messageBubble-image").getUnclippedBoundsInRoot()
+        val cards = compose.onAllNodesWithTag("toolCard")
+        val count = cards.fetchSemanticsNodes().size
+        assertTrue("Fixture expects at least one composed tool above the bubble", count > 0)
+        repeat(count) { index ->
+            val cardBounds = cards[index].getUnclippedBoundsInRoot()
+            assertTrue("Tool $cardBounds must not overlap bubble $bubbleBounds", cardBounds.bottom <= bubbleBounds.top)
+        }
+    }
+
+    private fun assertGapShowsBackground(background: androidx.compose.ui.graphics.Color, beforeBubble: Boolean = false) {
         val cards = compose.onAllNodesWithTag("toolCard").fetchSemanticsNodes()
         val fixture = compose.onNodeWithTag("chatFixture")
         val origin = fixture.fetchSemanticsNode().boundsInRoot.top
-        val gapY = ((cards[0].boundsInRoot.bottom + cards[1].boundsInRoot.top) / 2 - origin).toInt()
+        // Anchoring a tall bubble can leave only one tool composed on a small phone. The
+        // insertion boundary is tool-to-bubble, not a gap between two potentially absent tools.
+        val gapStart = if (beforeBubble) cards.maxOf { it.boundsInRoot.bottom } else cards[0].boundsInRoot.bottom
+        val gapEnd = if (beforeBubble) compose.onNodeWithTag("messageBubble-image").fetchSemanticsNode().boundsInRoot.top
+            else cards[1].boundsInRoot.top
+        assertTrue("Expected a visible gap between adjacent items", gapEnd > gapStart)
+        val gapY = ((gapStart + gapEnd) / 2 - origin).toInt()
         val pixels = fixture.captureToImage().toPixelMap()
         val pixel = pixels[pixels.width * 3 / 4, gapY]
         assertTrue("Gap must show page background $background, not stale bubble: $pixel",
