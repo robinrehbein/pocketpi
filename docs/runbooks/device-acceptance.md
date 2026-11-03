@@ -6,7 +6,8 @@ devcontainer with a bind-mounted project. CI's emulator tests do not cover Samsu
 management, real networks, push delivery or a second physical device. This checklist covers them.
 
 The phone stages follow the order of the emulator journey
-[`CombinedNativeJourneyEndToEndTest`](../../src/androidTest/java/de/joinnoah/pi/remote/CombinedNativeJourneyEndToEndTest.kt).
+[`CombinedNativeJourneyEndToEndTest`](../../src/androidTest/java/de/joinnoah/pi/remote/CombinedNativeJourneyEndToEndTest.kt),
+with its ticket start moved to the end and busy controls and the terminal added.
 Quoted labels are the English UI strings. Steps marked *(optional)* can be skipped without
 blocking acceptance.
 
@@ -34,18 +35,20 @@ Install and pair as described elsewhere. This runbook does not repeat those step
 - Host setup: `packages/pi-atlas/extensions/remote/README.md` in noah-monorepo, sections
   "Configure the Mac", "Run the host on Linux" and "Configure the host browser".
 
-Host switches and grants. Run these with `pnpm pi-remote:host` on the host, which must be running
-for every `grant`. **Grants are per device ID**, so the phone, the tablet and the watch each need
+Host switches and grants. Run these with `pnpm pi-remote:host` on the host. Set
+`browser-executable` first with the host stopped, then start the host for the rest: emulator
+profiles and emulator grants need a running host. **Grants are per device ID**, so the phone, the tablet and the watch each need
 their own. If a feature works on the phone but not on the tablet, check this first.
 
 ```sh
+pnpm pi-remote:host config browser-executable /absolute/path/to/chromium   # host stopped
+pnpm pi-remote:host start
 pnpm pi-remote:host devices list                     # device IDs of phone, tablet, watch
 pnpm pi-remote:host config bash-commands on          # ! shell commands
 pnpm pi-remote:host config file-writes on            # editor save, New file / Rename / Delete
 pnpm pi-remote:host config git-writes on             # commit, push, pull request
 pnpm pi-remote:host config terminal-control on
 pnpm pi-remote:host terminal grant <device-id> <project-id>
-pnpm pi-remote:host config browser-executable /absolute/path/to/chromium   # host stopped
 pnpm pi-remote:host config browser-control on
 pnpm pi-remote:host browser grant <device-id> <project-id>
 pnpm pi-remote:host config preview-control on
@@ -92,18 +95,18 @@ GitHub. Use a throwaway repository or branch: the run creates a real commit, pus
   Description, switch off "Create as draft", then "Review pull request" › "Create pull request".
   **Expect:** "Pull request #N created", and the PR exists on GitHub.
 - [ ] **1.10 PR/CI status.** Back in the chat, the chip shows "PR #N" with "checks running", then
-  "checks passed" (or failing checks) once CI finishes. **Expect:** "Open checks" and
-  "Open pull request" open the right pages.
+  "checks passed" (or failing checks) once CI finishes. Tapping the chip opens Changes.
+  **Expect:** on the pull request card, "Open pull request" and "Open checks" open the right pages.
 - [ ] **1.11 Browser.** Actions menu › "Browser" › "Take control" › "New tab". Enter an
   `https://` address and tap "Go", type into a page field via "Text to send" › "Send".
   **Expect:** "You have control", the page loads and the text arrives once.
 - [ ] **1.12 Preview.** Close the browser. Actions menu › "Preview", enter the "Port", tap "Open",
   then "Take control". **Expect:** the dev server's page from step 0.3 renders as "Preview · <port>".
 - [ ] **1.13 Emulator.** Actions menu › "Emulator" › "Choose a profile" › the profile. The first open
-  boots the AVD and can take up to two minutes. Then "Take control" › "Home". **Expect:** the screen
+  boots the AVD and can take up to two minutes. Then "Take control" › the Home key. **Expect:** the screen
   image updates and Home reaches the AVD. Opening alone joins as a reader.
-- [ ] **1.14 File create.** "Files" › a folder › the more-actions menu › "New file", enter a "File
-  name", tap "Create". **Expect:** "Done: Create <name>" and the new file opens.
+- [ ] **1.14 File create.** "Files" › a folder › the header's "New file" action (behind the
+  more-actions button on a narrow header), enter a "File name", tap "Create". **Expect:** "Done: Create <name>" and the new file opens.
 - [ ] **1.15 Rename refused.** Create `taken.txt` on the Mac. Rename the new file to `taken.txt`.
   **Expect:** "A file of that name exists already." or "Not done: the destination exists already."
   Both files are unchanged.
@@ -128,18 +131,19 @@ Use one running session on the S25 unless the step says otherwise.
   moved on meanwhile, it shows "Not confirmed" and the text returns to the composer.
 - [ ] **2.4 Terminal through a drop.** With "Terminal" open, toggle Wi-Fi. **Expect:** "Connection
   lost.". Reopen it by hand. Nothing typed earlier is replayed.
-- [ ] **2.5 Background.** Mid-run, go home for 2 min. **Expect:** an ongoing "pi is working"
-  notification (Samsung: also the Now Bar, unless "Live Updates are turned off…" is shown in
+- [ ] **2.5 Background.** Mid-run, go home for 2 min. **Expect:** an ongoing notification titled with
+  the session, or "pi is working" ("Keep runs live in the background", on by default; Samsung: also the Now Bar, unless "Live Updates are turned off…" is shown in
   Settings). On return the chat is current. "Stop updates" ends the notification.
 - [ ] **2.6 Killed and restored.** With a draft typed, swipe the app from Recents, or use Settings ›
   Apps › PocketPi › Force stop. Reopen. **Expect:** the same chat, the draft intact, and a send
   without an acknowledgement shown as "Not confirmed", never resent.
 - [ ] **2.7 File operation outcome unknown.** Start a Delete and immediately turn Wi-Fi off, or
   force-stop while it shows "Waiting for the computer: …". Reopen Files. **Expect:** "Unknown
-  outcomes" lists it. "Check again" resolves it, or "Acknowledge" clears it without repeating it.
+  outcomes" lists it. While the computer has not finished, "Check again" asks again; otherwise
+  "Acknowledge" clears it without repeating it.
 - [ ] **2.8 Emulator control through a drop.** Hold emulator control with no key in flight and
   toggle Wi-Fi. **Expect:** after the reconnect the pane has control again without tapping
-  "Take control", and "Home" is accepted. The emulator pane must stay visible during the drop.
+  "Take control", and the Home key is accepted. The emulator pane must stay visible during the drop.
 - [ ] **2.9 Second device keeps control.** Repeat 2.8. While the S25 is offline, tap "Take control"
   on the Tab S11. Turn the S25's Wi-Fi back on. **Expect:** the tablet keeps control and the S25
   stays a reader with no "Another participant has control" notice.
@@ -164,14 +168,15 @@ Use one running session on the S25 unless the step says otherwise.
 
 ## 3. Tablet and Samsung specifics
 
-- [ ] **3.1 Tablet layout.** On the Tab S11 open a chat. **Expect:** the inspector shows "Changes",
-  "Files" and "Terminal" as tabs beside the chat. "Widen side pane" / "Narrow side pane" work.
+- [ ] **3.1 Tablet layout.** On the Tab S11 open a chat, then open "Changes", "Files" and
+  "Terminal". **Expect:** each shows as an inspector tab beside the chat. "Widen side pane" / "Narrow side pane" work.
 - [ ] **3.2 Split screen.** Put PocketPi next to another app, resize the divider, and open the
   artifact preview, a picker and dictation. **Expect:** no reload. The open preview, picker and
   dictation stay.
 - [ ] **3.3 DeX / free-form window.** Start a run in a DeX or pop-up window, minimise it for 1 min,
   then restore it. **Expect:** the run kept streaming (live-run notification shown). The app does not
-  reload into a blank chat. Settings › "Layout" › "Reset layout" restores the column widths.
+  reload into a blank chat. In a two-pane window, Settings › "Layout" › "Reset layout" restores the
+  column widths.
 - [ ] **3.4 Hardware keyboard** *(optional, Book Cover keyboard)*. In the editor, Ctrl+S saves,
   Ctrl+F finds, and Esc closes find.
 - [ ] **3.5 Battery optimisation.** PocketPi asks for no battery exemption. Leave the S25 on the
@@ -181,8 +186,8 @@ Use one running session on the S25 unless the step says otherwise.
 - [ ] **3.6 Push when locked.** Lock the S25. Let a run finish and another ask a question.
   **Expect:** "pi has finished" and "pi needs an answer" arrive on the lock screen. Tapping opens
   the right session after unlock. Reply on a completion works only when the phone is unlocked.
-- [ ] **3.7 App lock** *(optional)*. Settings › "App lock" on. **Expect:** "Unlock PocketPi" on start
-  and after the timeout.
+- [ ] **3.7 App lock** *(optional)*. Settings › Privacy › "App lock" on. **Expect:** "PocketPi is
+  locked" with "Unlock" on start and after the timeout.
 - [ ] **3.8 Samsung font.** **Expect:** UI text uses the Samsung system font, and code stays
   monospace.
 
@@ -208,9 +213,9 @@ these items once it lands, and replace this list with real steps and labels:
 
 - [ ] Status tile and a watch-face complication. The tile exists, and no complication exists yet.
 - [ ] Notifications with actions.
-- [ ] Approve / deny from the notification or the watch. Today questions are answered in the app.
+- [ ] Approve / deny from the notification. Today questions are answered in the watch app.
 - [ ] Quick reply. Today the watch has no notification reply.
-- [ ] Stop a run from the notification or the tile. Today it is in the app only.
+- [ ] Stop a run from the notification or the tile. Today "Stop pi" is in the watch app only.
 
 ## 5. Linux host and devcontainer
 
@@ -222,7 +227,8 @@ This run is the first physical-device evidence for both.
 
 ### Independent Linux host
 
-- [ ] **5.1 Setup.** On the Linux machine: `setup <relay> <pi>`, `start`, `status`. **Expect:**
+- [ ] **5.1 Setup.** On the Linux machine, with `PI_REMOTE_HOST_TOKEN` exported: `setup <relay-url>
+  /absolute/path/to/pi`, then `start` and `status`. **Expect:**
   `~/.pi/remote/secrets.json` has mode 0600. `autostart` is refused on Linux, so restart by hand
   with `start`.
 - [ ] **5.2 Native mode.** `doctor` reports that `node-pty` loads. Pair the S25 with the Linux host
@@ -237,8 +243,9 @@ This run is the first physical-device evidence for both.
 
 ### Devcontainer with a bind-mounted project
 
-- [ ] **5.6 Setup.** Build the core image, run `prepare-devcontainer.mjs` with `--workspace` set to
-  the project on the Mac, then `run-devcontainer.mjs`. Then `docker exec … pocketpi-host setup` and
+- [ ] **5.6 Setup.** Build the core image, run `prepare-devcontainer.mjs` (`--image-ref`, `--image-id`,
+  `--instance`, `--output`, and `--workspace` set to the project on the Mac), then
+  `run-devcontainer.mjs`. Then `docker exec --env PI_REMOTE_HOST_TOKEN … pocketpi-host setup` and
   `status`. **Expect:** the project is at `/workspace` and the state volume is separate.
 - [ ] **5.7 Bind-mount file operations.** From the phone, edit and save a file, then New file,
   Rename and Delete in `/workspace`. **Expect:** each change appears in the Mac's checkout with the
@@ -248,7 +255,8 @@ This run is the first physical-device evidence for both.
 - [ ] **5.9 Restart.** `docker stop --time 30 <container>`, then rerun the driver with the same
   profile. **Expect:** same host identity and pairing (same state volume), and the phone reconnects.
 - [ ] **5.10** Browser, preview and emulator are N/A: the core image has no Chromium and no
-  Android SDK. *(Optional with the experimental `Dockerfile.browser`.)*
+  Android SDK. *(Optional: the experimental `Dockerfile.browser` adds Chromium for browser and
+  preview. The emulator stays N/A.)*
 
 ## Result
 
