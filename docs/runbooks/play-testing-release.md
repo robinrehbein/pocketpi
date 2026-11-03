@@ -97,7 +97,9 @@ test; it publishes as soon as the checks pass.
    the push; merging does not publish. When that push run is green, start the
    [release workflow](../../.github/workflows/release.yml) by hand on `main` (Actions → "Publish
    PocketPi to Play testing" → Run workflow). It refuses to run when `main` moved since it started
-   or when no successful Android CI push run exists for the current `main` commit.
+   or when no successful Android CI push run exists for the current `main` commit. A newer push
+   cancels the older run on `main`; do not re-run a cancelled run of an older commit, since it
+   would cancel the current commit's run in turn.
 2. The release job authenticates through OIDC and calls
    `python scripts/release/play_release.py prepare`. It reads Play track, bundle, and APK version
    codes and chooses the next integer. The initial Console upload uses `versionCode` 1; the first

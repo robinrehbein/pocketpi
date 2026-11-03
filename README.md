@@ -30,12 +30,13 @@ phone-only release; watch release artifacts require their own unused Play versio
 
 ## Continuous integration
 
-[`Android CI`](.github/workflows/ci.yml) checks the exact head commit of each pull request
-into `main` and each commit pushed to `main`. The workflow uses JDK 25, Android SDK platform
-37 and build tools 37.0.0, and runs five parallel jobs: `Unit tests and debug builds` (English
+[`Android CI`](.github/workflows/ci.yml) checks the head commit of each pull request into
+`main` and the newest commit pushed to `main`: a newer push cancels the older run, and closing or
+merging a pull request stops its checks. The workflow uses JDK 25, Android SDK platform
+37 and build tools 37.0.0, and runs six parallel jobs: `Unit tests and debug builds` (English
 and German resource keys, phone and watch unit tests and debug APKs), `Android Lint` (phone and
 watch, against the committed lint baselines), `Benchmark isolation` (benchmark APKs and fixture
-isolation), `Emulator tests` (the managed API 36 phone instrumentation tests, with the AVD and its
+isolation), `Minified smoke tests` (smoke tests of the R8-shrunk benchmark app), `Emulator tests` (the managed API 36 phone instrumentation tests, with the AVD and its
 boot snapshot cached) and `Tablet emulator tests` (the tests annotated `@LargeScreen` on a managed
 API 36 Pixel Tablet). Both emulator jobs share one cached API 36 system image, and each caches only
 its own AVD and boot snapshot; push runs on `main` save these entries. After a change to them, check
