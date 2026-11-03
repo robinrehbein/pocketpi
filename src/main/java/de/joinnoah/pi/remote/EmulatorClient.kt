@@ -30,7 +30,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         // The resume's Open reply calls this again once the view is current.
         if (!reacquire || view?.opening == true) return
         // Only a visible pane takes control back; a hidden one does not later on its own.
-        if (lease != null || !visible) reacquire = false else if (owner == null) { if (acquire()) reacquire = false } else if (owner != lostOwner) reacquire = false
+        if (lease != null || !visible) reacquire = false else if (owner == null) { if (acquire(automatic = true)) reacquire = false } else if (owner != lostOwner) reacquire = false
     }
     private var deadline: Job? = null
     private var stream: String? = null; private var assembler: EmulatorFrameAssembler? = null; private var watchToken = 0L; private var watching = false
@@ -119,10 +119,15 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("refresh") } }
         return true
     }
-    fun acquire(): Boolean {
+    // The token of an acquire in flight. Its generation bump can fail a watch sent just before it;
+    // the acquire's reply then watches again, so that watch failure is not fatal.
+    private var acquiring: Long? = null
+    // [automatic] is the re-acquire after a reconnect: a Busy reply then shows no notice, since the
+    // user did not ask.
+    fun acquire(automatic: Boolean = false): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val c = connection; val t = token
         if (pending || lease != null || !visible || !current(v.sessionId, c)) return false
-        pending = true
+        pending = true; acquiring = t
         scope.launch { try { when (val r = send(c, EmulatorCommand.Acquire(Wire.random(), v.sessionId, id, v.generation))) {
             is EmulatorResult.Lease -> {
                 if (!valid(t, v.sessionId, c) || !visible || r.emulatorId != id || r.generation < (view?.generation ?: 0) || r.owner.kind != "device") {
@@ -137,10 +142,10 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             }
             is EmulatorResult.Busy -> if (valid(t, v.sessionId, c) && r.emulatorId == id && r.generation >= (view?.generation ?: 0)) {
                 reacquire = false; val changed = r.generation != view?.generation
-                if (changed) dropStream(); set(view?.copy(generation = r.generation, owner = r.owner, image = if (changed) null else view?.image, notice = "busy")); watch()
+                if (changed) dropStream(); set(view?.copy(generation = r.generation, owner = r.owner, image = if (changed) null else view?.image, notice = if (automatic) view?.notice else "busy")); watch()
             }
             else -> error("unexpected")
-        } } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("acquire") } finally { if (valid(t, v.sessionId, c)) pending = false } }
+        } } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("acquire") } finally { if (acquiring == t) acquiring = null; if (valid(t, v.sessionId, c)) pending = false } }
         return true
     }
     fun input(input: EmulatorInput): Boolean {
@@ -181,17 +186,19 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     // At most one watch request per connection is in flight. The Host keeps the stream of whichever
     // watch of a generation it handles last and may handle two in flight out of order, so a stale
     // watch could replace the live one. A watch asked for meanwhile is sent when the reply arrives.
-    private var watchInFlight: Long? = null
-    private fun watchDone(c: Long) { if (watchInFlight == c) watchInFlight = null }
+    private var watchInFlight: Pair<Long, String>? = null
+    private fun watchDone(key: Pair<Long, String>) { if (watchInFlight == key) watchInFlight = null }
     private fun watch() {
         val v = view ?: return; val id = v.emulatorId ?: return; val inc = v.incarnation ?: return; val g = v.geometry ?: return
-        if (!visible || stream != null || watching || !current(v.sessionId,connection) || watchInFlight == connection) return
-        val c = connection; val t = token; val w = ++watchToken; watching = true; watchInFlight = c
+        if (!visible || stream != null || watching || !current(v.sessionId,connection) || watchInFlight == connection to id) return
+        val c = connection; val t = token; val w = ++watchToken; val key = c to id; watching = true; watchInFlight = key
         scope.launch {
             val r = try { send(c, EmulatorCommand.Watch(Wire.random(),v.sessionId,id,v.generation,recovery)) as EmulatorResult.Watching } catch (_: Exception) {
-                watchDone(c); if (valid(t,v.sessionId,c) && w == watchToken) fail("watch") else if (w != watchToken) watch(); return@launch
+                watchDone(key)
+                if (valid(t,v.sessionId,c) && w == watchToken) { if (acquiring == t) watching = false else fail("watch") } else if (w != watchToken) watch()
+                return@launch
             }
-            watchDone(c)
+            watchDone(key)
             if (!valid(t,v.sessionId,c) || w != watchToken || r.emulatorId != id || r.generation != v.generation) {
                 if (connectionAlive(c)) scope.launch { try { send(c,EmulatorCommand.Unwatch(Wire.random(),v.sessionId,id,r.streamId)) } catch (_: Exception) {} }
                 if (w != watchToken) watch(); return@launch
