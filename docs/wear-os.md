@@ -40,7 +40,7 @@ What a watch adds to a mobile agentic development environment, and where each li
 | Status on the watch face | Added | Complication: waiting or working count; top session with its checks |
 | Host connection status | Existing | Connection line on every host-bound screen; tile "Not paired" and age |
 | Question, completion, subagent and job notifications | Existing | Opt-in push, routed to the session |
-| Failed-run notifications | Not applicable | The protocol has no failure event; `*.stuck` is the closest. Host change first |
+| Failed-run notifications | Added | A `complete` push with `failure` (`push.run_failure.v1`, needs the host from noah-monorepo PR #60): title and reason, routed to the session |
 | Answer questions, confirm prompts, approve plans | Existing | Questions screen, one question at a time |
 | Short replies, dictated prompts | Existing | Composer with dictation; Send, Steer now or Send later |
 | Stop or interrupt a run | Existing | Controls, with confirmation; subagents and background jobs too |
