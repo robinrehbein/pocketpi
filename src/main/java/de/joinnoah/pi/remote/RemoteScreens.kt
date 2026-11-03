@@ -1792,6 +1792,8 @@ internal fun RemoteScreen(
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                     canEdit = canEditFile(state),
                     canSearch = FILES_SEARCH_CAPABILITY in state.capabilities && FILES_SEARCH_CAPABILITY !in state.unavailableCapabilities,
+                    mutations = fileMutationsOf(state),
+                    mutationAccess = FileMutationAccess.of(state),
                 )
             }
         }

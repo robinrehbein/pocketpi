@@ -282,6 +282,7 @@ class CombinedNativeJourneyEndToEndTest {
         if (fixture.optBoolean("journeyBrowser")) exerciseBrowser(head)
         if (fixture.optBoolean("journeyPreview")) exercisePreview(head)
         if (fixture.optBoolean("journeyEmulator")) exerciseEmulator(head)
+        if (fixture.optBoolean("journeyFileMutations")) exerciseFileMutations(head)
 
             assertFalse(ProductionEntryBootstrap.observerOverflow)
             scenario.onActivity { assertSame(activity, it) }
@@ -945,6 +946,228 @@ class CombinedNativeJourneyEndToEndTest {
             .put("deviceAcquires", observed.getInt("deviceAcquires")).put("deviceHomeInputs", observed.getInt("deviceHomeInputs"))
             .put("inputAccepted", true).put("homeObserved", true).put("settingsBeforeHome", true))
         record("emulator-complete")
+    }
+    private fun fileMutationStatus(): JSONObject? = statusOrNull()?.getJSONObject("fileMutations")
+    private fun mutationOutcome(): FileMutationOutcome? = fileMutationsOf(repository.state.value)?.outcome
+    private fun hostOperation(index: Int): JSONObject? =
+        fileMutationStatus()?.getJSONArray("operations")?.takeIf { it.length() > index }?.getJSONObject(index)
+    private fun headerAction(tag: String) {
+        compose.waitUntil(30_000) { exists(tag) || exists("filesMoreActions") }
+        if (!exists(tag)) compose.onNodeWithTag("filesMoreActions").performClick()
+        compose.onNodeWithTag(tag).performClick()
+    }
+    private fun rowAction(action: String, name: String) {
+        awaitTag("filesEntry:$name")
+        compose.onNodeWithTag("filesEntry:$name").performScrollTo()
+        compose.onNodeWithTag("fileActions:$name").performClick()
+        awaitTag("fileAction:$action:$name", 10_000)
+        compose.onNodeWithTag("fileAction:$action:$name").performClick()
+    }
+    /** Create and rename confirm only once a new name is typed; rename and delete also after a fresh read. */
+    private fun awaitConfirmable() {
+        compose.waitUntil(60_000) { runCatching { compose.onNodeWithTag("filesMutationConfirm").assertIsEnabled(); true }.getOrDefault(false) }
+    }
+    /** Confirms the open dialog and waits for the app's settled outcome of a new operation. */
+    private fun confirmMutation(previous: String?): FileMutationOutcome {
+        compose.onNodeWithTag("filesMutationConfirm").assertIsEnabled().performClick()
+        compose.waitUntil(60_000) {
+            mutationOutcome()?.let { it.operationId != null && it.operationId != previous && it.status != FileMutationStatus.PENDING } == true
+        }
+        return requireNotNull(mutationOutcome())
+    }
+    private fun dismissOutcome() {
+        if (exists("filesMutationDismiss")) compose.onNodeWithTag("filesMutationDismiss").performClick()
+        compose.waitUntil(10_000) { mutationOutcome() == null }
+    }
+    private fun entry(disk: JSONObject, key: String) = disk.getJSONObject(key)
+    private fun assertEntry(disk: JSONObject, key: String, exists: Boolean, bytes: Int? = null, sha256: String? = null) {
+        val value = entry(disk, key)
+        assertEquals("$key exists", exists, value.getBoolean("exists"))
+        if (exists) {
+            assertTrue("$key regular", value.getBoolean("regular"))
+            if (bytes != null) assertEquals("$key bytes", bytes, value.getInt("bytes"))
+            if (sha256 != null) assertEquals("$key sha256", sha256, value.getString("sha256"))
+        }
+    }
+    private fun assertHostOperation(index: Int, type: String, operationId: String, path: String, destination: String?, state: String, reason: String?): JSONObject {
+        compose.waitUntil(30_000) { hostOperation(index)?.let { !it.isNull("state") || !it.isNull("error") } == true }
+        val op = requireNotNull(hostOperation(index))
+        assertEquals(type, op.getString("type"))
+        assertEquals(operationId, op.getString("operationId"))
+        assertEquals(path, op.getString("path"))
+        assertEquals(destination, if (op.isNull("destinationPath")) null else op.getString("destinationPath"))
+        assertTrue("host error ${op.opt("error")}", op.isNull("error"))
+        assertEquals(state, op.getString("state"))
+        assertEquals(reason, if (op.isNull("reason")) null else op.getString("reason"))
+        return op.getJSONObject("disk")
+    }
+
+    /**
+     * Create, a refused rename, rename and delete of one file through the real Files UI, each
+     * checked against the Host's answer and the worktree on disk. Contents never leave the fixture.
+     */
+    private fun exerciseFileMutations(head: String) {
+        val paths = fixture.getJSONObject("fileMutationPaths")
+        val folder = paths.getString("folder")
+        val created = paths.getString("created")
+        val renamed = paths.getString("renamed")
+        val taken = paths.getString("taken")
+        val placeholder = paths.getString("placeholder")
+        for (path in listOf(placeholder, created, renamed, taken)) require(path.startsWith("$folder/") && path.count { it == '/' } == 1)
+        val createdName = created.substringAfter('/')
+        val renamedName = renamed.substringAfter('/')
+        val takenName = taken.substringAfter('/')
+        val before = requireNotNull(fileMutationStatus())
+        assertTrue(before.getBoolean("enabled"))
+        assertTrue("Host platform offers file mutations", before.getString("platform") in setOf("darwin", "linux"))
+        val advertised = before.getJSONArray("advertised").let { a -> (0 until a.length()).map(a::getString) }
+        for (capability in listOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY))
+            assertTrue("Host advertises $capability", capability in advertised)
+        assertEquals(0, before.getJSONArray("operations").length())
+        record("file-mutations")
+        try {
+            // A pane left open by an earlier stage covers the chat header on a phone.
+            if (exists("browserClose")) {
+                compose.onNodeWithTag("browserClose").performClick()
+                compose.waitUntil(30_000) { !exists("browserPane") }
+            }
+            if (exists("emulatorClose")) {
+                compose.onNodeWithTag("emulatorClose").performClick()
+                compose.waitUntil(30_000) { !exists("emulatorPane") }
+            }
+            compose.waitUntil(60_000) {
+                val state = repository.state.value
+                state.selection == selection && FileMutationKind.entries.all { canMutateFiles(state, it) }
+            }
+            action("file-mutations-prepare")
+            assertTrue(requireNotNull(fileMutationStatus()).getJSONObject("disk").getBoolean("folder"))
+            chatAction("files")
+            awaitTag("filesPane")
+            // Back to the session folder, then a fresh listing that shows the new folder.
+            run {
+                repeat(8) {
+                    val files = repository.state.value.files
+                    if (files != null && files.file == null && files.path.isEmpty()) return@run
+                    compose.onNodeWithTag(if (exists("filesEditorBack")) "filesEditorBack" else "filesBack").performClick()
+                    compose.waitForIdle()
+                }
+            }
+            compose.waitUntil(30_000) { repository.state.value.files?.let { it.file == null && it.path.isEmpty() && !it.loading } == true }
+            compose.onNodeWithTag("filesReload").performClick()
+            awaitTag("filesEntry:$folder")
+            compose.onNodeWithTag("filesEntry:$folder").performScrollTo().performClick()
+            compose.waitUntil(60_000) { repository.state.value.files?.let { it.path == folder && it.file == null && !it.loading && it.listing != null } == true }
+            assertEquals(listOf(placeholder.substringAfter('/')), requireNotNull(repository.state.value.files?.listing).entries.map { it.name })
+
+            // Create.
+            headerAction("filesCreate")
+            awaitTag("filesMutationDialog")
+            compose.onNodeWithTag("filesMutationName").performTextInput(createdName)
+            awaitConfirmable()
+            val create = confirmMutation(null)
+            assertEquals(FileMutationKind.CREATE, create.kind); assertEquals(created, create.path)
+            assertEquals(FileMutationStatus.APPLIED, create.status)
+            val createId = requireNotNull(create.operationId)
+            var disk = assertHostOperation(0, "session.files.create", createId, created, null, "applied", null)
+            assertTrue(disk.getBoolean("folder")); assertEntry(disk, "created", true, 0)
+            assertEntry(disk, "renamed", false); assertEntry(disk, "taken", false)
+            // An applied create opens the new file; back to the folder, whose listing holds it.
+            compose.waitUntil(30_000) { repository.state.value.files?.file?.path == created }
+            compose.onNodeWithTag("filesBack").performClick()
+            compose.waitUntil(30_000) {
+                repository.state.value.files?.let { files ->
+                    files.file == null && files.path == folder && !files.loading && files.listing?.entries?.any { it.name == createdName } == true
+                } == true
+            }
+            awaitTag("filesEntry:$createdName")
+            dismissOutcome()
+
+            // The Mac side adds a file after the app listed the folder; a rename onto its name
+            // must be refused by the Host and leave both files as they were.
+            action("file-mutations-plant")
+            val planted = requireNotNull(fileMutationStatus()).getJSONObject("planted")
+            val plantedBytes = planted.getInt("bytes"); val plantedSha = planted.getString("sha256")
+            assertTrue(plantedBytes > 0)
+            assertFalse("The app must not list the planted file yet", requireNotNull(repository.state.value.files?.listing).entries.any { it.name == takenName })
+            rowAction("rename", createdName)
+            awaitTag("filesMutationDialog")
+            compose.onNodeWithTag("filesMutationName").performTextReplacement(takenName)
+            awaitConfirmable()
+            val refused = confirmMutation(createId)
+            assertEquals(FileMutationKind.RENAME, refused.kind); assertEquals(created, refused.path); assertEquals(taken, refused.destinationPath)
+            assertEquals(FileMutationStatus.REFUSED, refused.status); assertEquals(FileMutationRefusal.EXISTS, refused.reason)
+            val refusedId = requireNotNull(refused.operationId)
+            disk = assertHostOperation(1, "session.files.rename", refusedId, created, taken, "refused", "exists")
+            assertEntry(disk, "created", true, 0); assertEntry(disk, "renamed", false)
+            assertEntry(disk, "taken", true, plantedBytes, plantedSha)
+            awaitTag("filesMutationOutcome:${FileMutationStatus.REFUSED.name}")
+            dismissOutcome()
+
+            // Rename.
+            rowAction("rename", createdName)
+            awaitTag("filesMutationDialog")
+            compose.onNodeWithTag("filesMutationName").performTextReplacement(renamedName)
+            awaitConfirmable()
+            val rename = confirmMutation(refusedId)
+            assertEquals(FileMutationKind.RENAME, rename.kind); assertEquals(created, rename.path); assertEquals(renamed, rename.destinationPath)
+            assertEquals(FileMutationStatus.APPLIED, rename.status)
+            val renameId = requireNotNull(rename.operationId)
+            disk = assertHostOperation(2, "session.files.rename", renameId, created, renamed, "applied", null)
+            assertEntry(disk, "created", false); assertEntry(disk, "renamed", true, 0)
+            assertEntry(disk, "taken", true, plantedBytes, plantedSha)
+            awaitTag("filesEntry:$renamedName")
+            compose.waitUntil(30_000) { !exists("filesEntry:$createdName") }
+            dismissOutcome()
+
+            // Delete, after a dialog that names the exact path.
+            rowAction("delete", renamedName)
+            awaitTag("filesMutationDialog")
+            awaitConfirmable()
+            compose.onNodeWithTag("filesDeletePath").assertTextEquals(app.getString(R.string.remote_files_delete_text, renamed))
+            val delete = confirmMutation(renameId)
+            assertEquals(FileMutationKind.DELETE, delete.kind); assertEquals(renamed, delete.path)
+            assertEquals(FileMutationStatus.APPLIED, delete.status)
+            val deleteId = requireNotNull(delete.operationId)
+            disk = assertHostOperation(3, "session.files.delete", deleteId, renamed, null, "applied", null)
+            assertEntry(disk, "created", false); assertEntry(disk, "renamed", false)
+            assertEntry(disk, "taken", true, plantedBytes, plantedSha)
+            compose.waitUntil(30_000) { !exists("filesEntry:$renamedName") }
+            dismissOutcome()
+
+            val ids = listOf(createId, refusedId, renameId, deleteId)
+            assertEquals(4, ids.distinct().size)
+            val after = requireNotNull(fileMutationStatus())
+            assertEquals(4, after.getJSONArray("operations").length())
+            assertEntry(after.getJSONObject("disk"), "created", false); assertEntry(after.getJSONObject("disk"), "renamed", false)
+            assertEntry(after.getJSONObject("disk"), "taken", true, plantedBytes, plantedSha)
+            assertTrue(fileMutationsOf(repository.state.value)?.recovery.orEmpty().isEmpty())
+            assertGuards(status(), head, head, 1, 1, 1)
+            backToComposer()
+            val operations = org.json.JSONArray()
+            for ((operation, state) in listOf(create to "applied", refused to "refused", rename to "applied", delete to "applied"))
+                operations.put(JSONObject().put("operationId", operation.operationId).put("operation", operation.kind.name.lowercase()).put("state", state)
+                    .put("reason", operation.reason?.wire ?: JSONObject.NULL))
+            proof.put("fileMutations", JSONObject().put("operations", operations).put("deletePathNamed", true)
+                .put("takenUnchanged", true).put("createdGone", true).put("renamedGone", true).put("recoveryEmpty", true))
+        } catch (failure: Throwable) {
+            runCatching {
+                val view = fileMutationsOf(repository.state.value)
+                val files = repository.state.value.files
+                val host = statusOrNull()?.optJSONObject("fileMutations")
+                proof.put("fileMutationsFailure", JSONObject().put("viewPresent", view != null)
+                    .put("dialogKind", view?.dialog?.kind?.name ?: JSONObject.NULL).put("dialogFailure", view?.dialog?.failure?.name ?: JSONObject.NULL)
+                    .put("dialogNameTaken", view?.dialog?.nameTaken ?: JSONObject.NULL).put("dialogBlocked", view?.dialog?.blocked ?: JSONObject.NULL)
+                    .put("outcomeStatus", view?.outcome?.status?.name ?: JSONObject.NULL).put("outcomeReason", view?.outcome?.reason?.name ?: JSONObject.NULL)
+                    .put("outcomeFailure", view?.outcome?.failure?.name ?: JSONObject.NULL).put("recovery", view?.recovery?.size ?: JSONObject.NULL)
+                    .put("storageFailed", view?.storageFailed ?: JSONObject.NULL).put("journalUnreadable", view?.journalUnreadable ?: JSONObject.NULL)
+                    .put("filesPath", files?.path ?: JSONObject.NULL).put("fileOpen", files?.file != null).put("filesLoading", files?.loading ?: JSONObject.NULL)
+                    .put("hostOperations", host?.optJSONArray("operations")?.length() ?: JSONObject.NULL).put("hostLastFailure", host?.opt("lastFailure") ?: JSONObject.NULL))
+                record(proof.optString("stage", "file-mutations"))
+            }
+            runCatching { UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(File(app.getExternalFilesDir(null), "combined-native-file-mutations-failure.png")) }
+            throw failure
+        }
+        record("file-mutations-complete")
     }
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }

@@ -41,6 +41,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.WrapText
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -144,6 +147,27 @@ internal class FilesActions(
     /** Discards the edit and runs what waited for it ([FileEditor.leaveRequest]). */
     val onConfirmLeave: () -> Unit = {},
     val onCancelLeave: () -> Unit = {},
+    /** Asks for a new file's name in the given folder. */
+    val onPrepareCreate: (String) -> Unit = {},
+    val onPrepareRename: (String) -> Unit = {},
+    val onPrepareDelete: (String) -> Unit = {},
+    /** Confirms the open create, rename or delete prompt with a name, or null for delete. */
+    val onConfirmMutation: (String?) -> Unit = {},
+    val onCancelMutation: () -> Unit = {},
+    val onDismissMutationOutcome: () -> Unit = {},
+    /** Acknowledges an unknown outcome; nothing is retried. */
+    val onAcknowledgeMutation: (String) -> Unit = {},
+    /** Asks the host again about a pending operation; nothing is resent. */
+    val onCheckMutation: (String) -> Unit = {},
+    val onRequestMutationReset: () -> Unit = {},
+    val onConfirmMutationReset: () -> Unit = {},
+    val onCancelMutationReset: () -> Unit = {},
+    /** A kept draft of a missing file: create the file and edit it, or discard the draft. */
+    val onOpenOrphanDraft: (String) -> Unit = {},
+    /** Asks to confirm discarding a kept draft; confirming re-reads the file first. */
+    val onDiscardOrphanDraft: (String) -> Unit = {},
+    val onConfirmDiscardOrphanDraft: () -> Unit = {},
+    val onCancelDiscardOrphanDraft: () -> Unit = {},
 )
 
 /**
@@ -161,6 +185,9 @@ internal fun FilesPane(
     projectName: String? = null,
     canEdit: Boolean = false,
     canSearch: Boolean = state.searchEnabled,
+    /** Create, rename and delete of this session; null where the client offers none. */
+    mutations: FileMutationsState? = null,
+    mutationAccess: FileMutationAccess = FileMutationAccess(),
 ) {
     val back = {
         when {
@@ -213,6 +240,9 @@ internal fun FilesPane(
             dismissButton = { TextButton(onClick = { searchOpen = false }) { Text(stringResource(R.string.remote_files_search_close)) } },
         )
     }
+    mutations?.dialog?.let { FileMutationPrompt(it, actions, mutations.journalFull, mutations.orphanDrafts) }
+    if (mutations?.resetConfirming == true) FileMutationResetPrompt(mutations, actions)
+    mutations?.orphanDiscard?.let { FileOrphanDiscardPrompt(it, mutations.orphanDiscarding, actions) }
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
         val editor = state.editor
@@ -231,18 +261,22 @@ internal fun FilesPane(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
+                val notices = mutations != null &&
+                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable || mutations.journalFull || mutations.orphanDrafts.isNotEmpty())
+                if (mutations != null && notices)
+                    FileMutationNotices(mutations, actions, Modifier.padding(top = if (prefillFailed) 0.dp else headerHeight))
                 // Backspace, or Left at the edge, goes up a folder or back from a file.
                 val parent = back.takeIf { state.peek == null && (state.file != null || state.path.isNotEmpty()) }
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
-                    val inset = if (prefillFailed) 0.dp else headerHeight
+                    val inset = if (prefillFailed || notices) 0.dp else headerHeight
                     val file = state.file
                     val onEdit = actions.onStartEditing.takeIf { canEdit }
                     when {
-                        file == null -> key(state.path) { FolderList(state, actions, inset, send) }
+                        file == null -> key(state.path) { FolderList(state, actions, inset, send, mutationAccess) }
                         // A wide pane keeps the folder's entries beside the open file.
                         maxWidth >= FILE_LIST_BESIDE_MIN_WIDTH ->
                             Row(Modifier.fillMaxSize()) {
-                                FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight())
+                                FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight(), mutationAccess)
                                 VerticalDivider()
                                 Box(Modifier.weight(1f).fillMaxHeight()) {
                                     key(file.path) { FileView(file, actions, send, ask, inset, onEdit, codeWrap.wrap) }
@@ -253,16 +287,30 @@ internal fun FilesPane(
                 }
             }
             Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
-                FilesTopBar(state, actions, back, projectName, codeWrap, canSearch) { searchOpen = true }
+                FilesTopBar(state, actions, back, projectName, codeWrap, canSearch, mutationAccess) { searchOpen = true }
             }
         }
     }
 }
 
 @Composable
-private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?, codeWrap: CodeWrapState, canSearch: Boolean, onSearch: () -> Unit) {
+private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?, codeWrap: CodeWrapState, canSearch: Boolean, mutationAccess: FileMutationAccess, onSearch: () -> Unit) {
     val nested = state.file != null || state.path.isNotEmpty()
     val wrapLabel = stringResource(R.string.remote_review_wrap_lines)
+    val file = state.file
+    // Rename and delete act on the open file, once it is read; create on the shown folder.
+    val shownFile = file?.takeIf { !it.loading && it.failure == null && it.version != null }
+    val mutationActions =
+        listOfNotNull(
+            PaneAction(stringResource(R.string.remote_files_create), Icons.Default.Add, "filesCreate") { actions.onPrepareCreate(state.path) }
+                .takeIf { mutationAccess.create && file == null && state.listing?.unavailable == null && state.failure == null },
+            shownFile?.takeIf { mutationAccess.rename }?.let {
+                PaneAction(stringResource(R.string.remote_files_rename), Icons.Default.DriveFileRenameOutline, "filesRename") { actions.onPrepareRename(it.path) }
+            },
+            shownFile?.takeIf { mutationAccess.delete }?.let {
+                PaneAction(stringResource(R.string.remote_files_delete), Icons.Default.Delete, "filesDelete") { actions.onPrepareDelete(it.path) }
+            },
+        )
     PaneHeader(
         title = stringResource(R.string.remote_files_title),
         subtitle = (state.file?.path ?: state.path).takeIf(String::isNotEmpty) ?: projectName?.takeIf(String::isNotBlank),
@@ -277,7 +325,8 @@ private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Un
         onReload = actions.onReload,
         actions =
             (if (canSearch) listOf(PaneAction(stringResource(R.string.remote_files_search_title), Icons.Default.Search, "filesSearch", onClick = onSearch)) else emptyList()) +
-                (if (state.file == null) emptyList() else listOf(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "filesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))),
+                (if (state.file == null) emptyList() else listOf(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "filesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))) +
+                mutationActions,
     )
 }
 
@@ -286,7 +335,7 @@ private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Un
  * in place of the one shown. Up and Down open the file above or below.
  */
 @Composable
-private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeight: Dp, modifier: Modifier) {
+private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeight: Dp, modifier: Modifier, mutationAccess: FileMutationAccess = FileMutationAccess()) {
     val entries = state.listing?.entries.orEmpty()
     val label = stringResource(R.string.remote_files_title)
     LazyColumn(
@@ -320,13 +369,16 @@ private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeigh
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                val rowActions = if (entry.type == FileEntryType.FILE) fileMutationItems(path, actions, mutationAccess) else emptyList()
+                if (rowActions.isNotEmpty()) FileRowActions(entry.name, rowActions)
             }
         }
     }
 }
 
-private fun failureText(failure: FilesFailure): Int =
+internal fun filesFailureText(failure: FilesFailure): Int =
     when (failure) {
         FilesFailure.UNSUPPORTED -> R.string.remote_files_failure_unsupported
         FilesFailure.OFFLINE -> R.string.remote_files_failure_offline
@@ -343,7 +395,7 @@ private fun failureText(failure: FilesFailure): Int =
 @Composable
 private fun FilesFailureNotice(failure: FilesFailure, onRetry: () -> Unit) {
     PaneFailureNotice(
-        stringResource(failureText(failure)),
+        stringResource(filesFailureText(failure)),
         stringResource(R.string.remote_files_retry),
         onRetry.takeIf { failure != FilesFailure.UNSUPPORTED && failure != FilesFailure.INVALID_PATH },
         Modifier.testTag("filesFailure"),
@@ -373,7 +425,7 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 }
 
 @Composable
-private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit) {
+private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit, mutationAccess: FileMutationAccess = FileMutationAccess()) {
     val resources = LocalResources.current
     val gridState = rememberLazyGridState()
     var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
@@ -456,6 +508,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                                 if (entry.type == FileEntryType.FILE) {
                                     { send(resources.getString(R.string.remote_files_reference_file, path)) }
                                 } else null,
+                            actions = if (entry.type == FileEntryType.FILE) fileMutationItems(path, actions, mutationAccess) else emptyList(),
                         )
                     }
                     if (listing.nextAfter != null)
@@ -900,3 +953,10 @@ internal fun filePrompt(
         language,
     )
 }
+
+/** Rename and delete of the file at [path], as offered by [access]. */
+internal fun fileMutationItems(path: String, actions: FilesActions, access: FileMutationAccess): List<MenuItem> =
+    listOfNotNull(
+        MenuItem(R.string.remote_files_rename, "rename") { actions.onPrepareRename(path) }.takeIf { access.rename },
+        MenuItem(R.string.remote_files_delete, "delete") { actions.onPrepareDelete(path) }.takeIf { access.delete },
+    )

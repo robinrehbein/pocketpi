@@ -14,6 +14,8 @@ data class FileMutationRequest(
     val deviceId: String,
     val sessionId: String,
     val operationId: String,
+    /** The host's journal epoch the operation was issued in, from `session.files.mutation.list`. */
+    val epoch: String,
     val kind: FileMutationKind,
     val path: String,
     val destinationPath: String? = null,
@@ -22,7 +24,17 @@ data class FileMutationRequest(
 
 data class FileMutationKey(val deviceId: String, val operationId: String)
 
-enum class FileMutationState { RESERVED, UNKNOWN, ACKNOWLEDGED_UNKNOWN, TERMINAL }
+enum class FileMutationState {
+    /** Persisted before sending; the host may or may not have it. Only its status is asked for. */
+    RESERVED,
+    /** The host recorded the outcome as unknown. */
+    UNKNOWN,
+    /** The host's journal epoch changed since the request: its journal was lost, the outcome is unknown. */
+    LOST,
+    /** The user acknowledged an unknown or lost outcome; the identity stays as a tombstone. */
+    ACKNOWLEDGED_UNKNOWN,
+    TERMINAL,
+}
 
 sealed class FileMutationResult {
     data object Applied : FileMutationResult()
@@ -35,6 +47,9 @@ data class FileMutationEntry(
     val result: FileMutationResult? = null,
 )
 
+/** The journal holds its maximum of entries; nothing new is reserved until some are settled. */
+class FileMutationJournalFull : IllegalStateException("Mutation journal is full")
+
 sealed class FileMutationReservation {
     data class New(val entry: FileMutationEntry) : FileMutationReservation()
     data class Existing(val entry: FileMutationEntry) : FileMutationReservation()
@@ -46,6 +61,9 @@ interface FileMutationStorage {
     val lockIdentity: Any
     fun load(): Map<FileMutationKey, FileMutationEntry>
     fun save(entries: Map<FileMutationKey, FileMutationEntry>)
+
+    /** Discards all evidence, also unreadable evidence, and starts an empty journal. */
+    fun reset(): Unit = throw UnsupportedOperationException("This journal cannot be reset")
 }
 
 class FileMutationJournal(
@@ -53,6 +71,9 @@ class FileMutationJournal(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val maxEntries: Int,
 ) {
+    /** The most entries the journal holds. */
+    val capacity: Int get() = maxEntries
+
     private val lockIdentity = storage.lockIdentity
     private val mutex = mutexFor(lockIdentity)
 
@@ -91,7 +112,7 @@ class FileMutationJournal(
                 check(existing.request == request) { "Operation ID already reserved for another request" }
                 FileMutationReservation.Existing(existing)
             } else {
-                check(current.size < maxEntries) { "Mutation journal is full" }
+                if (current.size >= maxEntries) throw FileMutationJournalFull()
                 val entry = FileMutationEntry(request, FileMutationState.RESERVED)
                 persist(current + (key to entry))
                 FileMutationReservation.New(entry)
@@ -105,7 +126,7 @@ class FileMutationJournal(
                 entries().values.filter { entry ->
                     entry.request.routeId == routeId && entry.request.deviceId == deviceId &&
                         entry.request.sessionId == sessionId &&
-                        (entry.state == FileMutationState.RESERVED || entry.state == FileMutationState.UNKNOWN)
+                        entry.state in UNRESOLVED
                 }
             }
         }
@@ -120,12 +141,72 @@ class FileMutationJournal(
         }
     }
 
+    /**
+     * Marks a reservation whose host journal epoch is no longer the host's: the host lost its
+     * journal, so the outcome can never be learned. Nothing is resent.
+     */
+    suspend fun markLost(key: FileMutationKey): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val current = entries()
+            // Settled elsewhere meanwhile: nothing is left to mark.
+            val entry = current[key] ?: return@withLock
+            if (entry.state == FileMutationState.RESERVED || entry.state == FileMutationState.UNKNOWN) {
+                persist(current + (key to entry.copy(state = FileMutationState.LOST)))
+            }
+        }
+    }
+
+    /**
+     * Drops a settled entry: a terminal receipt once its outcome was shown, or an unknown outcome
+     * once acknowledged (the host confirmed the acknowledgement and keeps the tombstone, or its
+     * epoch is gone). Operation IDs are random, so neither is replay evidence on this device.
+     * Reserved, unknown and lost entries are never dropped.
+     */
+    suspend fun forget(key: FileMutationKey): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val current = entries()
+            val entry = current[key] ?: return@withLock
+            check(entry.state in SETTLED) { "Only settled entries can be forgotten" }
+            persist(current - key)
+        }
+    }
+
+    /**
+     * Drops every settled entry a run left behind: terminal receipts of any session, and the
+     * acknowledged entries of one route, device and session; see [forget].
+     */
+    suspend fun forgetSettled(routeId: String, deviceId: String, sessionId: String): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val current = entries()
+            val kept = current.filterValues { entry ->
+                entry.state != FileMutationState.TERMINAL &&
+                    !(entry.state == FileMutationState.ACKNOWLEDGED_UNKNOWN && entry.request.routeId == routeId &&
+                        entry.request.deviceId == deviceId && entry.request.sessionId == sessionId)
+            }
+            if (kept.size != current.size) persist(kept)
+        }
+    }
+
+    /** The entry of [key], or null when the journal holds none. */
+    suspend fun get(key: FileMutationKey): FileMutationEntry? = withContext(dispatcher) { mutex.withLock { entries()[key] } }
+
+    /** How many entries the journal holds, settled or not, against its capacity. */
+    suspend fun size(): Int = withContext(dispatcher) { mutex.withLock { entries().size } }
+
+    /**
+     * Starts over with an empty journal after the user confirmed the local record is lost. The
+     * host keeps its own unresolved operations, which recovery still lists.
+     */
+    suspend fun reset(): Unit = withContext(dispatcher) {
+        mutex.withLock { storage.reset() }
+    }
+
     suspend fun acknowledgeUnknown(key: FileMutationKey): Unit = withContext(dispatcher) {
         mutex.withLock {
             val current = entries()
             val entry = checkNotNull(current[key]) { "Mutation is not reserved" }
             check(entry.state != FileMutationState.RESERVED) { "Mutation outcome is not marked unknown" }
-            if (entry.state == FileMutationState.UNKNOWN) {
+            if (entry.state == FileMutationState.UNKNOWN || entry.state == FileMutationState.LOST) {
                 persist(current + (key to entry.copy(state = FileMutationState.ACKNOWLEDGED_UNKNOWN)))
             }
         }
@@ -148,6 +229,12 @@ class FileMutationJournal(
     }
 
     companion object {
+        /** States whose outcome is not settled yet: shown for recovery and kept. */
+        val UNRESOLVED = setOf(FileMutationState.RESERVED, FileMutationState.UNKNOWN, FileMutationState.LOST)
+
+        /** States [forget] may drop. */
+        val SETTLED = setOf(FileMutationState.TERMINAL, FileMutationState.ACKNOWLEDGED_UNKNOWN)
+
         private val locks = mutableMapOf<Any, WeakReference<Mutex>>()
 
         private fun mutexFor(identity: Any): Mutex = synchronized(locks) {
@@ -181,7 +268,7 @@ class FileMutationJournal(
         }
 
         private fun validate(request: FileMutationRequest) {
-            require(listOf(request.routeId, request.deviceId, request.sessionId, request.operationId)
+            require(listOf(request.routeId, request.deviceId, request.sessionId, request.operationId, request.epoch)
                 .all { validText(it, 1024) })
             require(validPath(request.path))
             request.destinationPath?.let { require(validPath(it)) }

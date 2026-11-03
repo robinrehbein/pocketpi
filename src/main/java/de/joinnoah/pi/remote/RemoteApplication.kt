@@ -87,6 +87,7 @@ class RemoteApplication : Application() {
                 scope,
                 navigationStorage = stores.navigation,
                 fileDraftStorage = stores.fileDrafts,
+                fileMutationStorage = stores.fileMutations,
                 pagedEditorStorage = stores.pagedEditor,
                 nativePagedEditorEnabled = true,
                 nativePositiveOutcomeEnabled = true,
@@ -356,6 +357,13 @@ internal class AppStores(
     val drafts by lazy { DraftStore(app) }
 
     val fileDrafts by lazy { FileDraftStore(app) }
+
+    /**
+     * File creates, renames and deletes, journaled before they are sent. Provisioned on first use:
+     * losing payload and marker together loses only this device's view of pending operations, which
+     * the host still lists for recovery; losing one of them fails closed.
+     */
+    val fileMutations by lazy { FileMutationStore(app, MAX_FILE_MUTATION_JOURNAL_ENTRIES, expectProvisioned = false) }
 
     val pagedEditor by lazy { PagedEditorStore(app) }
 

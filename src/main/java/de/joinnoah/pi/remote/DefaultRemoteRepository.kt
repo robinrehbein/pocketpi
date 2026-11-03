@@ -161,6 +161,9 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
+
+/** File mutations journaled on this device at most; unknown and acknowledged ones count. */
+internal const val MAX_FILE_MUTATION_JOURNAL_ENTRIES = 256
 /** Host push and remote-status operations have longer bounded network budgets. */
 internal const val GIT_PULL_REQUEST_TIMEOUT_MILLIS = 150_000L
 internal const val GIT_PULL_REQUEST_STATUS_TIMEOUT_MILLIS = 90_000L
@@ -305,6 +308,11 @@ class DefaultRemoteRepository(
     private val positiveOutcomeTestGate: Boolean = false,
     private val nativePagedEditorEnabled: Boolean = false,
     private val nativePositiveOutcomeEnabled: Boolean = false,
+    /**
+     * Where file creates, renames and deletes are journaled before they are sent. Null (the watch)
+     * offers and sends none of them.
+     */
+    private val fileMutationStorage: FileMutationStorage? = null,
 ) : RemoteRepository {
     override suspend fun loadEditorRecovery(): EditorRecoveryLoad {
         val journal = pagedJournal ?: return EditorRecoveryLoad.Unavailable
@@ -355,6 +363,11 @@ class DefaultRemoteRepository(
             FILES_SEARCH_CAPABILITY,
             // Only on capability routes v2 and later, and only when the host enables writes.
             FILES_WRITE_CAPABILITY,
+            // Only on capability route v3; each needs the host's durable mutation journal.
+            FILES_CREATE_CAPABILITY,
+            FILES_RENAME_CAPABILITY,
+            FILES_DELETE_CAPABILITY,
+            FILES_MUTATION_RECOVERY_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
@@ -1420,6 +1433,9 @@ class DefaultRemoteRepository(
                     visibleBlocks.putIfAbsent(id, QuestionBlock.UNCERTAIN)
             }
         }
+        // A blocking edit saved or discarded: an open rename or delete prompt checks again.
+        if (previous.files?.editor != next.files?.editor && next.fileMutations?.dialog?.blocked == true)
+            scope.launch { mutationController?.draftsChanged() }
         mutable.value = next.copy(
             editorQuestionGeneration = previous.editorQuestionGeneration + if (editorsChanged || editorAuthorityChanged) 1 else 0,
             questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
@@ -2511,7 +2527,7 @@ class DefaultRemoteRepository(
                     (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
                 val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
                     update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
@@ -4051,6 +4067,8 @@ class DefaultRemoteRepository(
             changes != null -> changesLoader.refresh()
             files != null -> filesLoader.refresh()
         }
+        // An operation left without an answer is asked about again, never resent.
+        if (files != null && !unreadOnly) mutationController?.open()
     }
 
     private fun select(
@@ -9903,6 +9921,61 @@ class DefaultRemoteRepository(
         return parseFilesWritten(data, sessionId, path)
     }
 
+    // ---- File mutations (session.files.create/rename/delete.v1) ----------------------------
+
+    private fun requireMutation(sessionId: String, capability: String) {
+        requireFiles(sessionId)
+        val current = state.value
+        // The watch has no journal: it never sends a mutation, whatever the host advertises.
+        if (fileMutationStorage == null || capability !in current.capabilities || capability in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+    }
+
+    private val fileMutationSource =
+        object : FileMutationSource {
+            override suspend fun mutationList(sessionId: String, after: String?): FileMutationList {
+                requireMutation(sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
+                val fields = fileMutationListFields(sessionId, after)
+                return parseFileMutationList(request("session.files.mutation.list", selectionEpoch, *fields.toTypedArray()), sessionId)
+            }
+
+            override suspend fun mutate(operation: FileMutationRequest, connection: Long, onSent: () -> Unit): FileMutationRecord {
+                requireMutation(operation.sessionId, operation.kind.capability)
+                requireMutation(operation.sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
+                require(validMutationRequest(operation))
+                val (type, fields) = fileMutationCommand(operation)
+                // Only on the connection and selection it was confirmed on; else it is not sent at all.
+                val data = request(type, selectionEpoch, *fields.toTypedArray(), onSent = onSent, validateBeforeSend = {
+                    check(connection == generation)
+                    val selection = state.value.selection
+                    check(selection.routeId == operation.routeId && selection.sessionId == operation.sessionId)
+                })
+                return parseFileMutationRecord(data, operation)
+            }
+
+            override suspend fun mutationStatus(operation: FileMutationRequest): FileMutationRecord {
+                requireMutation(operation.sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
+                val fields = fileMutationStatusFields(operation.sessionId, operation.operationId, operation.epoch)
+                return parseFileMutationRecord(request("session.files.mutation.status", selectionEpoch, *fields.toTypedArray()), operation)
+            }
+
+            override suspend fun acknowledge(sessionId: String, item: FileMutationRecoveryItem): FileMutationRecord {
+                requireMutation(sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
+                val fields = fileMutationStatusFields(sessionId, item.operationId, item.epoch)
+                val data = request("session.files.mutation.acknowledge", selectionEpoch, *fields.toTypedArray())
+                return parseFileMutationRecord(data, sessionId, item.operationId, item.kind, item.path, item.destinationPath)
+            }
+
+            override suspend fun itemStatus(sessionId: String, item: FileMutationRecoveryItem): FileMutationRecord {
+                requireMutation(sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
+                val fields = fileMutationStatusFields(sessionId, item.operationId, item.epoch)
+                val data = request("session.files.mutation.status", selectionEpoch, *fields.toTypedArray())
+                return parseFileMutationRecord(data, sessionId, item.operationId, item.kind, item.path, item.destinationPath)
+            }
+
+            override suspend fun read(sessionId: String, path: String): FileChunk = filesRead(sessionId, path, 0, null)
+        }
+
     // ---- Sent attachment content (session.attachments.read.v1) ---------------------------
 
     private class AttachmentRead {
@@ -11006,6 +11079,56 @@ class DefaultRemoteRepository(
             update = ::update,
         )
 
+    /** Parked editors keep their unsaved text in memory only; one of them holds its path too. */
+    private fun parkedDraft(key: FileDraftKey): Boolean =
+        parkedFiles[DraftKey(key.routeId, key.sessionId)]?.editor?.let { it.path == key.path && it.changed } == true
+
+    private val mutationController =
+        fileMutationStorage?.let { storage ->
+            FileMutationController(
+                scope,
+                fileMutationSource,
+                FileMutationJournal(storage, io, MAX_FILE_MUTATION_JOURNAL_ENTRIES),
+                { state.value },
+                draftsHold = { routeId, sessionId, paths, kept -> filesLoader.mutationHeld(routeId, sessionId, paths, ::parkedDraft, kept) },
+                applied = { request, edit -> filesLoader.mutationApplied(request, edit) },
+                update = ::update,
+                connection = { generation },
+                keptDrafts = filesLoader::keptDraftPaths,
+                discardDraft = filesLoader::discardKeptDraft,
+            )
+        }
+
+    override fun prepareFileCreate(folder: String) { mutationController?.prepareCreate(folder) }
+
+    override fun prepareFileRename(path: String) { mutationController?.prepare(FileMutationKind.RENAME, path) }
+
+    override fun prepareFileDelete(path: String) { mutationController?.prepare(FileMutationKind.DELETE, path) }
+
+    override fun confirmFileMutation(name: String?) { mutationController?.confirm(name) }
+
+    override fun cancelFileMutation() { mutationController?.cancel() }
+
+    override fun dismissFileMutationOutcome() { mutationController?.dismissOutcome() }
+
+    override fun acknowledgeFileMutation(operationId: String) { mutationController?.acknowledge(operationId) }
+
+    override fun checkFileMutation(operationId: String) { mutationController?.checkAgain(operationId) }
+
+    override fun requestFileMutationReset() { mutationController?.requestReset() }
+
+    override fun confirmFileMutationReset() { mutationController?.confirmReset() }
+
+    override fun cancelFileMutationReset() { mutationController?.cancelReset() }
+
+    override fun openOrphanFileDraft(path: String) { mutationController?.openOrphan(path) }
+
+    override fun discardOrphanFileDraft(path: String) { mutationController?.discardOrphan(path) }
+
+    override fun confirmDiscardOrphanFileDraft() { mutationController?.confirmDiscardOrphan() }
+
+    override fun cancelDiscardOrphanFileDraft() { mutationController?.cancelDiscardOrphan() }
+
     override fun openFiles() = openFiles(exclusive = true)
 
     override fun openFiles(exclusive: Boolean) {
@@ -11014,6 +11137,7 @@ class DefaultRemoteRepository(
         if (current.files?.takeIf { it.sessionId == current.selection.sessionId }?.editor != null) return
         if (exclusive) changesLoader.close()
         filesLoader.open()
+        mutationController?.open()
     }
 
     override fun closeFiles() = filesLoader.close()

@@ -27,7 +27,7 @@ class FileMutationStoreTest {
     }
     private val payload get() = File(directory, "file-mutations.enc")
     private val alias = "pi-remote-file-mutations-v1"
-    private val request = FileMutationRequest("route", "device", "session", "operation", FileMutationKind.RENAME, "folder/old.txt", "folder/new.txt", "version")
+    private val request = FileMutationRequest("route", "device", "session", "operation", "epoch", FileMutationKind.RENAME, "folder/old.txt", "folder/new.txt", "version")
     private val key = FileMutationKey(request.deviceId, request.operationId)
     private val entry = FileMutationEntry(request, FileMutationState.UNKNOWN)
 
@@ -44,6 +44,13 @@ class FileMutationStoreTest {
         assertFalse(ciphertext.toString(Charsets.UTF_8).contains(request.operationId))
         EncryptedFileStore.forgetCachedKeys()
         assertEquals(mapOf(key to entry), store().load())
+    }
+
+    @Test fun epochAndLostStateSurviveStoreRecreation() {
+        val lost = FileMutationEntry(request.copy(epoch = "other-epoch"), FileMutationState.LOST)
+        store(expectProvisioned = false).save(mapOf(key to lost))
+        EncryptedFileStore.forgetCachedKeys()
+        assertEquals(mapOf(key to lost), store().load())
     }
 
     @Test fun missingProvisionedPayloadDoesNotBecomeEmptyOrAllowOverwrite() {
@@ -71,6 +78,20 @@ class FileMutationStoreTest {
         assertThrows(Exception::class.java) { store(expectProvisioned = false).save(emptyMap()) }
         assertArrayEquals(evidence, unfinished.readBytes())
         assertFalse(payload.exists())
+    }
+
+    @Test fun confirmedResetReprovisionsAnEmptyJournalFromUnreadableOrHalfLostEvidence() {
+        store(expectProvisioned = false).save(mapOf(key to entry))
+        payload.writeBytes(byteArrayOf(1, 2))
+        assertThrows(Exception::class.java) { store().load() }
+        store().reset()
+        assertEquals(emptyMap<FileMutationKey, FileMutationEntry>(), store().load())
+        // A payload without its marker fails closed until a reset, too.
+        store().save(mapOf(key to entry))
+        File(directory, "file-mutations-v1.provisioned").delete()
+        assertThrows(Exception::class.java) { store(expectProvisioned = false).load() }
+        store().reset()
+        assertEquals(emptyMap<FileMutationKey, FileMutationEntry>(), store().load())
     }
 
     @Test fun truncatedAndTamperedCiphertextIsPreserved() {

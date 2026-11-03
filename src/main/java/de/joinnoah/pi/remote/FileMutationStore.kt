@@ -20,7 +20,7 @@ class FileMutationStore(
     private val directory = context.noBackupFilesDir.canonicalFile
     private val payload = File(directory, "file-mutations.enc")
     private val marker = File(directory, "file-mutations-v1.provisioned")
-    private val encrypted = EncryptedFileStore(context, "file-mutations.enc", "pi-remote-file-mutations-v1", preserveUnreadable = true, preserveIncompleteCommit = true)
+    private val encrypted = EncryptedFileStore(context, "file-mutations.enc", ALIAS, preserveUnreadable = true, preserveIncompleteCommit = true)
     override val lockIdentity: Any = payload.canonicalPath
     private val lock = locks.computeIfAbsent(lockIdentity as String) { Any() }
 
@@ -35,6 +35,25 @@ class FileMutationStore(
         encrypted.write(encoded)
     }
 
+    /**
+     * Discards every local artifact, readable or not, and provisions an empty journal under a new
+     * key. Only after the user confirmed that the record of open operations is lost.
+     */
+    override fun reset() = synchronized(lock) {
+        listOf(payload, File(payload.path + ".new"), File(payload.path + ".bak"), marker).forEach {
+            if (it.exists() && !it.delete()) throw IOException("Could not discard ${it.name}")
+        }
+        EncryptedFileStore.dropKey(ALIAS)
+        provision()
+    }
+
+    private fun provision() {
+        encrypted.write(encode(emptyMap()))
+        // A failure here leaves a payload without a marker, which subsequent reads reject.
+        if (!marker.createNewFile()) throw IOException("Provisioning marker already exists")
+        FileOutputStream(marker).use { it.write(MARKER); it.fd.sync() }
+    }
+
     private fun read(): Map<FileMutationKey, FileMutationEntry> {
         // AtomicFile recovery can replace the base file. For unresolved mutation evidence,
         // preserve every partial/legacy artifact instead of letting a read or write recover it.
@@ -44,11 +63,7 @@ class FileMutationStore(
         val hasPayload = payload.exists()
         val hasMarker = marker.exists()
         if (!hasPayload && !hasMarker && !expectProvisioned) {
-            val empty = encode(emptyMap())
-            encrypted.write(empty)
-            // A failure here leaves a payload without a marker, which subsequent reads reject.
-            if (!marker.createNewFile()) throw IOException("Provisioning marker already exists")
-            FileOutputStream(marker).use { it.write(MARKER); it.fd.sync() }
+            provision()
         } else if (!hasPayload || !hasMarker) {
             throw IOException("Mutation store provisioning evidence is missing")
         }
@@ -65,12 +80,12 @@ class FileMutationStore(
         require(entries.size <= maxEntries)
         val output = StringWriter()
         JsonWriter(output).use { w ->
-            w.beginObject().name("version").value(1).name("entries").beginArray()
+            w.beginObject().name("version").value(VERSION).name("entries").beginArray()
             entries.forEach { (key, entry) ->
                 validate(key, entry)
                 val r = entry.request
                 w.beginObject().name("routeId").value(r.routeId).name("deviceId").value(r.deviceId)
-                    .name("sessionId").value(r.sessionId).name("operationId").value(r.operationId)
+                    .name("sessionId").value(r.sessionId).name("operationId").value(r.operationId).name("epoch").value(r.epoch)
                     .name("kind").value(r.kind.name).name("path").value(r.path)
                     .name("destinationPath").value(r.destinationPath).name("baseVersion").value(r.baseVersion)
                     .name("state").value(entry.state.name).name("result")
@@ -95,7 +110,7 @@ class FileMutationStore(
             var foundEntries = false
             r.beginObject()
             while (r.hasNext()) when (val name = uniqueName(r, fields)) {
-                "version" -> { require(r.peek() == JsonToken.NUMBER); require(r.nextString() == "1"); version = 1 }
+                "version" -> { require(r.peek() == JsonToken.NUMBER); require(r.nextString() == VERSION.toString()); version = VERSION }
                 "entries" -> {
                     foundEntries = true
                     r.beginArray()
@@ -111,7 +126,7 @@ class FileMutationStore(
                 else -> error("Unknown field: $name")
             }
             r.endObject()
-            require(version == 1 && foundEntries && r.peek() == JsonToken.END_DOCUMENT)
+            require(version == VERSION && foundEntries && r.peek() == JsonToken.END_DOCUMENT)
         }
         return result
     }
@@ -136,7 +151,7 @@ class FileMutationStore(
         r.endObject()
         require(fields.keys == ENTRY_FIELDS - "result" && hasResult)
         fun required(name: String) = requireNotNull(fields[name])
-        val request = FileMutationRequest(required("routeId"), required("deviceId"), required("sessionId"), required("operationId"),
+        val request = FileMutationRequest(required("routeId"), required("deviceId"), required("sessionId"), required("operationId"), required("epoch"),
             FileMutationKind.valueOf(required("kind")), required("path"), fields["destinationPath"], fields["baseVersion"])
         return FileMutationEntry(request, FileMutationState.valueOf(required("state")), result)
     }
@@ -161,7 +176,7 @@ class FileMutationStore(
     private fun validate(key: FileMutationKey, entry: FileMutationEntry) {
         val r = entry.request
         require(key == FileMutationKey(r.deviceId, r.operationId))
-        require(listOf(r.routeId, r.deviceId, r.sessionId, r.operationId).all { validText(it, 1024) })
+        require(listOf(r.routeId, r.deviceId, r.sessionId, r.operationId, r.epoch).all { validText(it, 1024) })
         require(validPath(r.path))
         r.destinationPath?.let { require(validPath(it)) }
         r.baseVersion?.let { require(validText(it, 1024)) }
@@ -199,9 +214,12 @@ class FileMutationStore(
 
     companion object {
         private val locks = ConcurrentHashMap<String, Any>()
+        private const val ALIAS = "pi-remote-file-mutations-v1"
+        /** 2 adds each operation's host journal epoch; no version 1 store was ever written by a release. */
+        private const val VERSION = 2
         private val MARKER = "pocketpi-file-mutations-v1\n".toByteArray(Charsets.UTF_8)
         private const val MAX_BYTES = 8 * 1024 * 1024
         private const val CIPHER_OVERHEAD = 12 + 16 // AES-GCM IV and tag
-        private val ENTRY_FIELDS = setOf("routeId", "deviceId", "sessionId", "operationId", "kind", "path", "destinationPath", "baseVersion", "state", "result")
+        private val ENTRY_FIELDS = setOf("routeId", "deviceId", "sessionId", "operationId", "epoch", "kind", "path", "destinationPath", "baseVersion", "state", "result")
     }
 }

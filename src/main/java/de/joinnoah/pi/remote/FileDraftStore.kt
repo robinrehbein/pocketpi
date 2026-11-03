@@ -78,6 +78,9 @@ class FileDraftJournal(
         }
     }
 
+    /** Every kept draft's key. */
+    suspend fun keys(): Set<FileDraftKey> = withContext(dispatcher) { mutex.withLock { current().keys.toSet() } }
+
     suspend fun remove(key: FileDraftKey) = withContext(dispatcher) {
         mutex.withLock {
             val updated = current() - key
