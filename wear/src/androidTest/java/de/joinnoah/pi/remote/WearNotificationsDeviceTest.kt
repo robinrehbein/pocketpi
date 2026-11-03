@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import android.service.notification.StatusBarNotification
 import androidx.test.core.app.ApplicationProvider
@@ -12,14 +13,16 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
  * Posts the watch's question, completion and failed-run notifications on a Wear emulator and reads
- * them back from the system. Run with `-Pandroid.testInstrumentationRunnerArguments.keepNotifications=true`
- * to leave the cards in the stream for screenshots (docs/wear-os.md, "Emulator smoke test").
+ * them back from the system. `adb shell am instrument -e keepNotifications true` leaves the cards in the
+ * stream for screenshots (docs/wear-os.md, "Emulator smoke test"); Gradle's connected run uninstalls the
+ * app afterwards, which removes them.
  */
 @RunWith(AndroidJUnit4::class)
 class WearNotificationsDeviceTest {
@@ -29,8 +32,10 @@ class WearNotificationsDeviceTest {
 
     @Before
     fun setUp() {
-        InstrumentationRegistry.getInstrumentation().uiAutomation
+        // The permission exists from API 33; the watch app supports API 30.
+        if (Build.VERSION.SDK_INT >= 33) InstrumentationRegistry.getInstrumentation().uiAutomation
             .grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+        assertTrue("Notifications are off for PocketPi on this device", RemoteNotifications.canPost(context))
         WearNotifications.createChannel(context)
         WearNotifications.forget(context, ROUTE)
     }

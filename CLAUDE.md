@@ -27,7 +27,8 @@ or `review-diff.ts`. The process is:
 ## Checks
 
 Before pushing, run `scripts/quick-check.sh`. It checks resource parity, then in one Gradle run
-compiles app main, unit tests, androidTest, the benchmark variant, the benchmarks module and wear,
+compiles app main, unit tests, androidTest, the benchmark variant, the benchmarks module and wear
+(unit and emulator tests),
 and runs the unit tests related to the changed files: tests named after a changed file or naming
 it or what it declares. A build file, Gradle setting, manifest or app resource change, or more than
 40 related classes, runs the whole suite; wear and benchmark changes add their own tests. It skips

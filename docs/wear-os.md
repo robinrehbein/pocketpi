@@ -238,7 +238,7 @@ Use JDK 25 and Android SDK platform 37, as for the phone:
 ```sh
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug \
-  :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug
+  :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:assembleDebugAndroidTest
 
 adb -s PHONE_SERIAL install build/outputs/apk/debug/pocketpi-debug.apk
 adb -s WATCH_SERIAL install wear/build/outputs/apk/debug/wear-debug.apk
@@ -255,10 +255,10 @@ Wear OS emulator (system image `android-36;android-wear-signed`). `WearNotificat
 posts a question, a completion and both failed-run notices and reads them back from the system:
 
 ```sh
-ANDROID_SERIAL=emulator-5720 ./gradlew :wear:connectedDebugAndroidTest
+ANDROID_SERIAL=WATCH_SERIAL ./gradlew :wear:connectedDebugAndroidTest
 ```
 
-To look at the cards, install both APKs and keep the notices in the stream:
+Gradle uninstalls the app afterwards. To look at the cards, install both APKs and keep the notices in the stream:
 
 ```sh
 ./gradlew :wear:assembleDebug :wear:assembleDebugAndroidTest
