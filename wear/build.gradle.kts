@@ -133,6 +133,7 @@ dependencies {
     implementation(libs.androidx.wear.tiles)
     implementation(libs.androidx.wear.protolayout)
     implementation(libs.androidx.wear.protolayout.material)
+    implementation(libs.androidx.wear.watchface.complications.data.source.ktx)
     implementation(libs.androidx.concurrent.futures.ktx)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

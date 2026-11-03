@@ -536,6 +536,20 @@
     <string name="wear_advisor_share">Kontextfreigabe-Anfrage entwerfen</string>
     <string name="wear_notifications">Uhr-Benachrichtigungen</string>
     <string name="wear_push_unconfigured">Push ist in diesem Build ohne Firebase-Konfiguration nicht verfügbar. Öffne die App zum Aktualisieren deiner Sitzungen.</string>
+    <string name="wear_complication_pair">Koppeln</string>
+    <string name="wear_complication_preview_title">Sitzung</string>
+    <plurals name="wear_complication_waiting">
+        <item quantity="one">wartet</item>
+        <item quantity="other">warten</item>
+    </plurals>
+    <plurals name="wear_complication_working">
+        <item quantity="one">arbeitet</item>
+        <item quantity="other">arbeiten</item>
+    </plurals>
+    <plurals name="wear_complication_working_description">
+        <item quantity="one">%d Sitzung arbeitet</item>
+        <item quantity="other">%d Sitzungen arbeiten</item>
+    </plurals>
     <string name="wear_tile_label">PocketPi-Status</string>
     <string name="wear_tile_description">Sitzungen, die dich brauchen oder arbeiten, mit den Checks ihres Pull Requests.</string>
     <string name="wear_tile_needs_you">braucht dich</string>
