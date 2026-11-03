@@ -77,6 +77,8 @@ class LoadingPreviewSafetyUiTest {
         compose.runOnIdle {
             base.state.value = base.state.value.copy(
                 capabilities = setOf(RENAME_CAPABILITY, SESSION_CLOSE_CAPABILITY, SESSION_FORK_CAPABILITY),
+                // Close needs a status this connection confirmed, not a last-known row.
+                sessionsFresh = true,
                 sessions = listOf(Wire.objectOf(
                     "id" to "live", "title" to "Live session", "origin" to "rpc", "status" to "idle",
                 )),
