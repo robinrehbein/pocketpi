@@ -448,7 +448,11 @@ internal class FileMutationController(
                 }
                 FileMutationHostState.UNKNOWN -> {
                     journal.markUnknown(key)
-                    if (record.acknowledged) journal.acknowledgeUnknown(key)
+                    // The host keeps the acknowledged tombstone; this device needs no record of it.
+                    if (record.acknowledged) {
+                        journal.acknowledgeUnknown(key)
+                        journal.forget(key)
+                    }
                 }
                 FileMutationHostState.PENDING -> Unit
             }
@@ -555,6 +559,13 @@ internal class FileMutationController(
             unreadable = e
             emptyList()
         }
+        // Acknowledged entries left by an earlier run that stopped before dropping them.
+        if (unreadable == null) try {
+            journal.forgetAcknowledged(target.routeId, target.deviceId, target.sessionId)
+        } catch (e: Exception) {
+            Diagnostics.caught("files.mutation.release", e)
+            write(target) { it.copy(storageFailed = true) }
+        }
         val recovery = mutableListOf<FileMutationRecoveryItem>()
         for (entry in local) {
             val request = entry.request
@@ -577,7 +588,10 @@ internal class FileMutationController(
                 }
                 FileMutationState.UNKNOWN ->
                     if (host[request.operationId]?.acknowledged == true) {
-                        try { journal.acknowledgeUnknown(key) } catch (e: Exception) { write(target) { it.copy(storageFailed = true) } }
+                        try {
+                            journal.acknowledgeUnknown(key)
+                            journal.forget(key)
+                        } catch (e: Exception) { write(target) { it.copy(storageFailed = true) } }
                     } else recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, epoch = epoch)
                 FileMutationState.LOST ->
                     recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, lost = true, epoch = request.epoch)
@@ -618,8 +632,12 @@ internal class FileMutationController(
                         val record = source.acknowledge(target.sessionId, item)
                         check(record.state == FileMutationHostState.UNKNOWN && record.acknowledged) { "Not acknowledged" }
                     }
-                    // An operation only the host lists has nothing to change here.
-                    if (item.local) journal.acknowledgeUnknown(key)
+                    // An operation only the host lists has nothing to change here. Once acknowledged, the
+                    // host keeps the tombstone (or a lost epoch can never run again): drop it here.
+                    if (item.local) {
+                        journal.acknowledgeUnknown(key)
+                        journal.forget(key)
+                    }
                     write(target) { it.copy(recovery = it.recovery.filter { entry -> entry.operationId != operationId }) }
                 } catch (e: CancellationException) {
                     throw e

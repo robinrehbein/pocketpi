@@ -150,15 +150,29 @@ class FileMutationJournal(
     }
 
     /**
-     * Drops a terminal receipt once its outcome was shown. Operation IDs are random, so a terminal
-     * entry is no replay evidence on this device; unknown and acknowledged entries are kept.
+     * Drops a settled entry: a terminal receipt once its outcome was shown, or an unknown outcome
+     * once acknowledged (the host confirmed the acknowledgement and keeps the tombstone, or its
+     * epoch is gone). Operation IDs are random, so neither is replay evidence on this device.
+     * Reserved, unknown and lost entries are never dropped.
      */
     suspend fun forget(key: FileMutationKey): Unit = withContext(dispatcher) {
         mutex.withLock {
             val current = entries()
             val entry = current[key] ?: return@withLock
-            check(entry.state == FileMutationState.TERMINAL) { "Only terminal receipts can be forgotten" }
+            check(entry.state in SETTLED) { "Only settled entries can be forgotten" }
             persist(current - key)
+        }
+    }
+
+    /** Drops every acknowledged entry of one route, device and session; see [forget]. */
+    suspend fun forgetAcknowledged(routeId: String, deviceId: String, sessionId: String): Unit = withContext(dispatcher) {
+        mutex.withLock {
+            val current = entries()
+            val kept = current.filterValues { entry ->
+                !(entry.state == FileMutationState.ACKNOWLEDGED_UNKNOWN && entry.request.routeId == routeId &&
+                    entry.request.deviceId == deviceId && entry.request.sessionId == sessionId)
+            }
+            if (kept.size != current.size) persist(kept)
         }
     }
 
@@ -200,6 +214,9 @@ class FileMutationJournal(
     companion object {
         /** States whose outcome is not settled yet: shown for recovery and kept. */
         val UNRESOLVED = setOf(FileMutationState.RESERVED, FileMutationState.UNKNOWN, FileMutationState.LOST)
+
+        /** States [forget] may drop. */
+        val SETTLED = setOf(FileMutationState.TERMINAL, FileMutationState.ACKNOWLEDGED_UNKNOWN)
 
         private val locks = mutableMapOf<Any, WeakReference<Mutex>>()
 

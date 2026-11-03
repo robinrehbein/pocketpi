@@ -310,7 +310,8 @@ class FileMutationRepositoryTest {
         // A lost operation's host journal is gone: acknowledging it is local, and sends no mutation.
         repository.acknowledgeFileMutation(item.operationId)
         runCurrent()
-        assertEquals(FileMutationState.ACKNOWLEDGED_UNKNOWN, journal.entries.getValue(key).state)
+        // Its epoch is gone, so the acknowledged record is dropped from the phone.
+        assertFalse(key in journal.entries)
         assertTrue(fileMutationsOf(repository.state.value)!!.recovery.isEmpty())
         assertTrue(transport.types().none { it in mutationTypes })
     }
@@ -348,7 +349,8 @@ class FileMutationRepositoryTest {
         runCurrent()
         val ack = transport.files().single { it.text("type") == "session.files.mutation.acknowledge" }
         assertEquals(setOf("type", "requestId", "sessionId", "operationId", "epoch"), ack.keys)
-        assertEquals(FileMutationState.ACKNOWLEDGED_UNKNOWN, journal.entries.values.single().state)
+        // The host confirmed it and keeps the tombstone: the phone drops its record.
+        assertTrue(journal.entries.isEmpty())
         assertEquals(1, transport.types().count { it == "session.files.delete" })
     }
 
@@ -519,7 +521,8 @@ class FileMutationRepositoryTest {
         journal.entries = (0 until MAX_FILE_MUTATION_JOURNAL_ENTRIES).associate { index ->
             val request = FileMutationRequest("host", "device", "other-session", Wire.encode(ByteArray(16) { index.toByte() }), epoch,
                 FileMutationKind.DELETE, "f$index.txt", baseVersion = version)
-            FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.ACKNOWLEDGED_UNKNOWN)
+            // Unresolved entries are kept, so a journal full of them fails closed.
+            FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.UNKNOWN)
         }
         val repository = opened(repository(transport, journal))
         repository.prepareFileCreate("")
@@ -528,6 +531,25 @@ class FileMutationRepositoryTest {
         assertTrue(transport.types().none { it in mutationTypes })
         assertEquals(FilesFailure.STORAGE, repository.dialog()?.failure)
         assertEquals(MAX_FILE_MUTATION_JOURNAL_ENTRIES, journal.entries.size)
+    }
+
+    @Test
+    fun acknowledgedEntriesAreDroppedSoTheJournalCannotStayFull() = runTest {
+        val transport = Transport(all)
+        transport.answer = { record(it, "applied") }
+        val journal = Journal()
+        journal.entries = (0 until MAX_FILE_MUTATION_JOURNAL_ENTRIES).associate { index ->
+            val request = FileMutationRequest("host", "device", sessionId, Wire.encode(ByteArray(16) { index.toByte() }), epoch,
+                FileMutationKind.DELETE, "f$index.txt", baseVersion = version)
+            FileMutationKey("device", request.operationId) to FileMutationEntry(request, FileMutationState.ACKNOWLEDGED_UNKNOWN)
+        }
+        val repository = opened(repository(transport, journal))
+        assertTrue(journal.entries.isEmpty())
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("new.md")
+        runCurrent()
+        assertEquals(1, transport.types().count { it == "session.files.create" })
+        assertEquals(FileMutationStatus.APPLIED, repository.outcome()?.status)
     }
 
     @Test

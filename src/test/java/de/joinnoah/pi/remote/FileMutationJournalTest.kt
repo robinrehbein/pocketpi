@@ -318,7 +318,7 @@ class FileMutationJournalTest {
         journal.reserve(request)
         journal.markLost(key)
         assertEquals(listOf(FileMutationEntry(request, FileMutationState.LOST)), journal.pending("route-a", "device-a", "session-a"))
-        // A lost outcome is not terminal evidence; forgetting it is refused.
+        // An unacknowledged lost outcome is kept; forgetting it is refused.
         expectFailure { journal.forget(key) }
         journal.acknowledgeUnknown(key)
         assertEquals(FileMutationState.ACKNOWLEDGED_UNKNOWN, storage.entries.getValue(key).state)
@@ -335,6 +335,22 @@ class FileMutationJournalTest {
         journal.forget(key)
         assertTrue(storage.entries.isEmpty())
         journal.forget(key)
+    }
+
+    @Test fun acknowledgedEntriesCanBeDroppedButUnknownOnesCannot() = runBlocking {
+        val storage = MemoryStorage()
+        val journal = journal(storage)
+        journal.reserve(request)
+        journal.markUnknown(key)
+        expectFailure { journal.forget(key) }
+        journal.acknowledgeUnknown(key)
+        journal.forget(key)
+        assertTrue(storage.entries.isEmpty())
+        val other = request.copy(operationId = "other", path = "other.txt")
+        journal.reserve(other)
+        journal.markUnknown(FileMutationKey("device-a", "other"))
+        journal.forgetAcknowledged("route-a", "device-a", "session-a")
+        assertEquals(FileMutationState.UNKNOWN, storage.entries.values.single().state)
     }
 
     private suspend fun expectFailure(block: suspend () -> Unit) {
