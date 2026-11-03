@@ -1,17 +1,58 @@
 package de.joinnoah.pi.remote
 
+import android.animation.ValueAnimator
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.annotation.StringRes
+import androidx.core.content.ContextCompat
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,12 +125,92 @@ internal fun ChatCurrentActivity(line: SessionActivityLine?) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusGlyph(line.glyphKind, MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
+        ActivityMarquee(text, Modifier.weight(1f), motionEnabled = activityMotionEnabled(), active = activityLifecycleResumed())
+    }
+}
+
+internal fun activityMarqueeDurationMs(distancePx: Int, density: Float): Int =
+    ((distancePx / density / 30f) * 1000).toInt().coerceAtLeast(1)
+
+@Composable
+private fun activityMotionEnabled(): Boolean {
+    val context = LocalContext.current
+    val resolver = context.contentResolver
+    var enabled by remember(context) { mutableStateOf(ValueAnimator.areAnimatorsEnabled()) }
+    DisposableEffect(context) {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                enabled = ValueAnimator.areAnimatorsEnabled()
+            }
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                enabled = ValueAnimator.areAnimatorsEnabled()
+            }
+        }
+        resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
+        ContextCompat.registerReceiver(
+            context, receiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        enabled = ValueAnimator.areAnimatorsEnabled()
+        onDispose {
+            context.unregisterReceiver(receiver)
+            resolver.unregisterContentObserver(observer)
+        }
+    }
+    return enabled
+}
+
+@Composable
+private fun activityLifecycleResumed(): Boolean {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var resumed by remember(lifecycle) { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, _ ->
+            resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        }
+        lifecycle.addObserver(observer)
+        resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    return resumed
+}
+
+@Composable
+internal fun ActivityMarquee(text: String, modifier: Modifier = Modifier, motionEnabled: Boolean, active: Boolean) {
+    val style = MaterialTheme.typography.labelSmall
+    val density = LocalDensity.current
+    val textWidth = rememberTextMeasurer().measure(text, style = style, maxLines = 1).size.width
+    var viewportWidth by remember { mutableIntStateOf(0) }
+    val distance = (textWidth - viewportWidth).coerceAtLeast(0)
+    val direction = LocalLayoutDirection.current
+    val offset = remember(text, viewportWidth, textWidth, motionEnabled, active, direction) { Animatable(0f) }
+    LaunchedEffect(offset, distance, motionEnabled, active, density.density, direction) {
+        if (motionEnabled && active && viewportWidth > 0 && distance > 0) {
+            val duration = activityMarqueeDurationMs(distance, density.density)
+            while (true) {
+                delay(1200)
+                val target = if (direction == LayoutDirection.Ltr) -distance.toFloat() else distance.toFloat()
+                offset.animateTo(target, tween(duration, easing = LinearEasing))
+                delay(1200)
+                offset.animateTo(0f, tween(duration, easing = LinearEasing))
+            }
+        }
+    }
+    Box(modifier.onSizeChanged { viewportWidth = it.width }.clipToBounds()
+        .semantics { this.text = AnnotatedString(text) }.testTag("activityMarquee")) {
+        val scrolling = motionEnabled && active && viewportWidth > 0 && distance > 0
         Text(
             text,
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            (if (scrolling) Modifier.wrapContentSize(Alignment.CenterStart, unbounded = true)
+                .requiredWidth(with(density) { textWidth.toDp() })
+                .graphicsLayer { translationX = offset.value }
+            else Modifier.fillMaxWidth()).clearAndSetSemantics { testTag = "activityMarqueeText" },
+            style = style,
+            maxLines = 1,
+            softWrap = false,
+            overflow = if (scrolling) TextOverflow.Clip else TextOverflow.Ellipsis,
         )
     }
 }

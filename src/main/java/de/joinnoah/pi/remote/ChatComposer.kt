@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,9 +46,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
@@ -735,33 +736,6 @@ internal fun ChatComposer(
                     resumeEnabled = canResumeChild,
                     onResume = onResumeChild,
                 )
-            // While pi runs, the busy row is the one place Stop lives. It also holds the send mode
-            // when a draft can be queued, so the choice is visible instead of hidden in a swipe.
-            if (busy) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (busyAction != null && hasDraft)
-                        SendModeChoice(
-                            selected = busyAction,
-                            steerEnabled = canSteerNow,
-                            followUpEnabled = canFollowUpNow,
-                            onSelect = { preferredBusyAction = it },
-                        )
-                    else Spacer(Modifier.weight(1f))
-                    ShortcutTooltip(stringResource(R.string.remote_stop), Shortcut.STOP) {
-                        IconButton(
-                            onClick = stop,
-                            enabled = state.connected && !state.loading,
-                            modifier = Modifier.testTag("stopRun"),
-                        ) {
-                            Icon(Icons.Default.Stop, stringResource(R.string.remote_stop))
-                        }
-                    }
-                }
-            }
             draft.longPaste?.let { held ->
                 LongPasteOffer(
                     onAttach = {
@@ -818,7 +792,7 @@ internal fun ChatComposer(
                 // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
                 Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
                 verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 leading()
                 if (ATTACHMENTS_CAPABILITY in state.capabilities)
@@ -1018,6 +992,39 @@ internal fun ChatComposer(
                         KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     shape = MaterialTheme.shapes.large,
                 )
+                if (busy) {
+                    ShortcutTooltip(stringResource(R.string.remote_stop), Shortcut.STOP) {
+                        IconButton(
+                            onClick = stop,
+                            enabled = state.connected && !state.loading,
+                            modifier = Modifier.size(48.dp).testTag("stopRun"),
+                        ) { Icon(Icons.Default.Stop, stringResource(R.string.remote_stop)) }
+                    }
+                }
+                if (showBusyAction && canSteerNow && canFollowUpNow) {
+                    var modeMenu by remember(state.selection) { mutableStateOf(false) }
+                    Box {
+                        val modeLabel = stringResource(R.string.remote_send_mode)
+                        val currentMode = stringResource(busyAction!!.labelRes())
+                        ShortcutTooltip("$modeLabel: $currentMode") {
+                            IconButton(
+                                onClick = { modeMenu = true },
+                                modifier = Modifier.size(48.dp).testTag("sendModeMenu")
+                                    .semantics { stateDescription = currentMode },
+                            ) { Icon(Icons.Default.MoreVert, modeLabel) }
+                        }
+                        DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                            listOf(BusyComposerAction.Steer, BusyComposerAction.FollowUp).forEach { mode ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(mode.labelRes())) },
+                                    onClick = { preferredBusyAction = mode; modeMenu = false },
+                                    modifier = Modifier.testTag(if (mode == BusyComposerAction.Steer) "sendNow" else "sendWhenDone")
+                                        .semantics { selected = mode == busyAction },
+                                )
+                            }
+                        }
+                    }
+                }
                 // Names what the primary button does now, and its key. While pi runs it never stops:
                 // with a draft it sends the chosen mode, and without one it stays a disabled Send.
                 val primaryTip: Pair<String, KeyChord?> =
@@ -1039,11 +1046,16 @@ internal fun ChatComposer(
                         },
                         busyAction = if (showBusyAction) busyAction else null,
                         busyActionEnabled = canQueue,
+                        canSwitchBusyAction = canSteerNow && canFollowUpNow,
+                        onSwitchBusyAction = {
+                            preferredBusyAction = if (busyAction == BusyComposerAction.Steer)
+                                BusyComposerAction.FollowUp else BusyComposerAction.Steer
+                        },
                         onBusyAction = {
                             recordPrompt()
                             if (busyAction == BusyComposerAction.Steer) onSteer() else onFollowUp()
                         },
-                        modifier = Modifier.padding(bottom = 6.dp).size(48.dp)
+                        modifier = Modifier.size(48.dp)
                             .testTag(
                                 when (if (showBusyAction) busyAction else null) {
                                     BusyComposerAction.Steer -> "steer"
@@ -1213,38 +1225,6 @@ internal fun BusyComposerAction.labelRes(): Int =
 /** The follow-ups a stop would discard: the ones still waiting for the run, or accepted into it. */
 internal fun queuedFollowUpCount(state: RemoteState): Int =
     state.followUps.count { it.status == "pending" || it.status == "accepted" }
-
-/** The busy draft's send mode as two plain choices; a mode the host cannot take is disabled. */
-@Composable
-private fun RowScope.SendModeChoice(
-    selected: BusyComposerAction,
-    steerEnabled: Boolean,
-    followUpEnabled: Boolean,
-    onSelect: (BusyComposerAction) -> Unit,
-) {
-    val modes = listOf(BusyComposerAction.Steer, BusyComposerAction.FollowUp)
-    val description = stringResource(R.string.remote_send_mode)
-    SingleChoiceSegmentedButtonRow(Modifier.weight(1f).height(IntrinsicSize.Min).semantics { contentDescription = description }) {
-        modes.forEachIndexed { index, mode ->
-            SegmentedButton(
-                selected = selected == mode,
-                onClick = { onSelect(mode) },
-                enabled = if (mode == BusyComposerAction.Steer) steerEnabled else followUpEnabled,
-                shape = SegmentedButtonDefaults.itemShape(index, modes.size),
-                modifier = Modifier.fillMaxHeight().testTag(if (mode == BusyComposerAction.Steer) "sendNow" else "sendWhenDone"),
-                icon = {},
-            ) {
-                Text(
-                    stringResource(mode.labelRes()),
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-        }
-    }
-}
 
 /** The question composer's abort can run, apart from a child stop or resume in flight. */
 private fun questionAbortEnabled(state: RemoteState): Boolean =
