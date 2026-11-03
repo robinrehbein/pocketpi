@@ -47,7 +47,10 @@ internal class WatchGlanceStore(
     private val file: WatchGlanceFile = EncryptedFileStore(context, "watch-glance.enc", "pi-remote-watch-glance-v1").let { store ->
         object : WatchGlanceFile { override fun read() = store.read(); override fun write(bytes: ByteArray) = store.write(bytes) }
     },
-    private val redraw: () -> Unit = { TileService.getUpdater(context).requestUpdate(WatchTileService::class.java) },
+    private val redraw: () -> Unit = {
+        TileService.getUpdater(context).requestUpdate(WatchTileService::class.java)
+        requestWatchComplicationUpdate(context)
+    },
 ) {
     private val mutex = Mutex()
     private var loaded = false
