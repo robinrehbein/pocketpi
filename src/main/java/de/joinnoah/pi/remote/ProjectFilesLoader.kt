@@ -1319,4 +1319,50 @@ internal class ProjectFilesLoader(
         val editor = files()?.editor ?: return null
         return de.joinnoah.pi.remote.editorPrompt(editor.path, editor.original, editor.latestText, intro ?: editorPromptIntro(editor.path))
     }
+
+    /**
+     * Whether an edit holds any of [paths] of [sessionId], so a rename or delete must wait: the
+     * open editor with unsaved or unconfirmed text or a save running, a save whose reply is still
+     * being recorded, a kept draft (also of a parked editor, [parked]) or one a failed read leaves
+     * unknown. Called on the main thread.
+     */
+    suspend fun mutationHeld(sessionId: String, paths: List<String>, parked: (FileDraftKey) -> Boolean = { false }): Boolean {
+        val routeId = current().selection.routeId ?: return true
+        val editor = files()?.takeIf { it.sessionId == sessionId }?.editor
+        if (editor != null && editor.path in paths &&
+            (editor.changed || editor.saving || editor.unconfirmed != null || editor.superseded.isNotEmpty() || editor.recovery != null)
+        ) return true
+        val keys = paths.map { FileDraftKey(routeId, sessionId, it) }
+        if (keys.any { it in writesInFlight || it in pendingAcknowledgements || parked(it) }) return true
+        val store = journal ?: return false
+        // A failed read throws: the caller treats it as held.
+        return draftMutex.withLock { keys.any { store.get(it) != null } }
+    }
+
+    /**
+     * Shows what an operation the host applied changed: the folder lists again, a created file
+     * opens, a renamed open file opens under its new name and a deleted open file closes. Nothing
+     * changes before the host confirmed it.
+     */
+    fun mutationApplied(request: FileMutationRequest) {
+        val files = files()?.takeIf { it.sessionId == request.sessionId } ?: return
+        val folder = parentPath(request.path)
+        remembered.remove(key(request.sessionId, folder))
+        if (files.editor != null || files.path != folder) return
+        val open = files.file?.path
+        when (request.kind) {
+            FileMutationKind.CREATE -> {
+                relist(request.sessionId, folder)
+                if (open == null) openFile(request.path)
+            }
+            FileMutationKind.RENAME -> {
+                relist(request.sessionId, folder)
+                if (open == request.path) openFile(request.destinationPath)
+            }
+            FileMutationKind.DELETE -> {
+                if (open == request.path) openFile(null)
+                relist(request.sessionId, folder)
+            }
+        }
+    }
 }

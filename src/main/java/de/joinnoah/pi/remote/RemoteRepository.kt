@@ -240,6 +240,11 @@ data class RemoteState(
     val changes: ChangesState? = null,
     /** The file browser of the selected session; null while it is closed. */
     val files: FilesState? = null,
+    /**
+     * Create, rename and delete in the file browser of the selected session; null where this client
+     * offers none (the watch) or before the browser opened.
+     */
+    val fileMutations: FileMutationsState? = null,
     /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
     val jobs: JobsState? = null,
     /** The shell command run from this phone in the selected session (`session.bash.v1`), if any. */
@@ -843,6 +848,28 @@ interface RemoteRepository {
 
     /** After a conflict: drops the edit and reads the file again. */
     fun reloadFileAfterConflict() {}
+
+    /**
+     * Asks for a new file's name in [folder] (`session.files.create`); only with
+     * [FILES_CREATE_CAPABILITY] on a client that journals mutations ([RemoteState.fileMutations]).
+     */
+    fun prepareFileCreate(folder: String) {}
+
+    /** Asks for a new name of [path] after reading it afresh; only with [FILES_RENAME_CAPABILITY]. */
+    fun prepareFileRename(path: String) {}
+
+    /** Asks to confirm deleting [path] after reading it afresh; only with [FILES_DELETE_CAPABILITY]. */
+    fun prepareFileDelete(path: String) {}
+
+    /** Sends the prompt's operation: [name] is the new file's or the new name, null for delete. */
+    fun confirmFileMutation(name: String?) {}
+
+    fun cancelFileMutation() {}
+
+    fun dismissFileMutationOutcome() {}
+
+    /** Acknowledges an unknown outcome (`session.files.mutation.acknowledge`); never retries it. */
+    fun acknowledgeFileMutation(operationId: String) {}
 
     /** Discards the unsaved edit and runs the action that waited for it ([FileEditor.leaveRequest]). */
     fun confirmFileEditorLeave() {}

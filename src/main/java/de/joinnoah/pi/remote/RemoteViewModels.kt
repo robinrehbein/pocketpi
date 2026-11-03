@@ -568,6 +568,20 @@ internal class ChatViewModel(
 
     fun reloadFileAfterConflict() = editing(repository::reloadFileAfterConflict)
 
+    fun prepareFileCreate(folder: String) = active { repository.prepareFileCreate(folder) }
+
+    fun prepareFileRename(path: String) = active { repository.prepareFileRename(path) }
+
+    fun prepareFileDelete(path: String) = active { repository.prepareFileDelete(path) }
+
+    fun confirmFileMutation(name: String?) = active { repository.confirmFileMutation(name) }
+
+    fun cancelFileMutation() = repository.cancelFileMutation()
+
+    fun dismissFileMutationOutcome() = repository.dismissFileMutationOutcome()
+
+    fun acknowledgeFileMutation(operationId: String) = active { repository.acknowledgeFileMutation(operationId) }
+
     fun confirmFileEditorLeave() = editing(repository::confirmFileEditorLeave)
 
     fun cancelFileEditorLeave() = repository.cancelFileEditorLeave()
