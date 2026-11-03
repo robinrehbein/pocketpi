@@ -148,7 +148,7 @@ class EmulatorClientTest {
         *listOfNotNull(owner?.let { "owner" to it }, leaseId?.let { "control" to Wire.objectOf("leaseId" to it, "nextSequence" to 0) }).toTypedArray())
     // A fake Host whose generation, owner and acquire reply the test controls. Calls are (connection, type, fields).
     private class FakeHost {
-        var generation = 1; var owner: JsonObject? = null; var acquireReply: CompletableDeferred<JsonObject>? = null
+        var generation = 1; var owner: JsonObject? = null; var acquireReply: CompletableDeferred<JsonObject>? = null; var busyOwner: JsonObject? = null
         val calls = mutableListOf<Triple<Long, String, Map<String, Any?>>>()
         fun count(type: String) = calls.count { it.second == type }
     }
@@ -164,7 +164,7 @@ class EmulatorClientTest {
                 "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to host.generation, "participants" to kotlinx.serialization.json.JsonArray(emptyList()))
                 "emulator.watch" -> Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream${host.count("emulator.watch")}")
                 "emulator.unwatch" -> Wire.objectOf("kind" to "emulator.unwatched", "emulatorId" to "e", "streamId" to map["streamId"])
-                "emulator.acquire" -> host.acquireReply?.await() ?: run {
+                "emulator.acquire" -> host.acquireReply?.await() ?: host.busyOwner?.let { Wire.objectOf("kind" to "emulator.busy", "emulatorId" to "e", "generation" to host.generation, "owner" to it) } ?: run {
                     host.generation++; host.owner = self
                     Wire.objectOf("kind" to "emulator.lease", "emulatorId" to "e", "generation" to host.generation, "geometry" to geometry, "owner" to self, "leaseId" to "lease$c", "nextSequence" to 0)
                 }
@@ -239,5 +239,43 @@ class EmulatorClientTest {
         assertTrue(client.resumeIfDisconnected("session", 2)); scope.runCurrent()
         assertEquals(0, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
         assertFalse(requireNotNull(client.view).ownsControl)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun resumeWaitsForTheHostToRevokeTheOldConnectionsLease() {
+        val scope = TestScope(); val host = FakeHost(); var connection = 1L
+        val client = hostClient(scope, host, { connection })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertTrue(client.acquire()); scope.runCurrent()
+        // A second drop while the resume opens must not lose the intent either.
+        client.disconnected(); connection = 2
+        assertTrue(client.resumeIfDisconnected("session", 2)); client.disconnected(); connection = 3; scope.runCurrent()
+        // The Host has not noticed the drop yet: it still shows the old connection as the owner.
+        assertTrue(client.resumeIfDisconnected("session", 3)); scope.runCurrent()
+        assertEquals(0, host.count("emulator.acquire") - 1)
+        host.generation++; host.owner = null
+        client.state(stateEvent(host.generation, null)); scope.runCurrent()
+        assertEquals(1, host.calls.count { it.first == 3L && it.second == "emulator.acquire" })
+        assertTrue(requireNotNull(client.view).ownsControl)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aBusyReacquireKeepsTheResumeWatch() {
+        val scope = TestScope(); val host = FakeHost(); var connection = 1L
+        val client = hostClient(scope, host, { connection })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertTrue(client.acquire()); scope.runCurrent()
+        client.disconnected(); connection = 2; host.generation++; host.owner = null
+        val other = Wire.objectOf("kind" to "device", "id" to "other"); host.busyOwner = other
+        assertTrue(client.resumeIfDisconnected("session", 2)); scope.runCurrent()
+        assertEquals(1, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
+        assertEquals(1, host.calls.count { it.first == 2L && it.second == "emulator.watch" })
+        assertEquals(0, host.calls.count { it.first == 2L && it.second == "emulator.unwatch" })
+        assertEquals("busy", client.view?.notice)
+        assertFalse(requireNotNull(client.view).ownsControl)
+        // Someone else has control now: a later free state does not take it back.
+        host.owner = null; host.busyOwner = null; host.generation++
+        client.state(stateEvent(host.generation, null)); scope.runCurrent()
+        assertEquals(1, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
     }
 }

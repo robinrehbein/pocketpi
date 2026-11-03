@@ -21,9 +21,15 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     var view: EmulatorView? = null; private set
     private var connection = 0L; private var token = 0L; private var lease: String? = null; private var sequence = 0L
     private var visible = true; private var disconnected = false; private var pending = false
-    // Set when a connection drop took this device's lease: the resume re-acquires once if nobody
-    // else took control meanwhile. A fail() or an uncertain input drop does not set it.
-    private var reacquire = false
+    // Set when a connection drop took this device's lease: the resume re-acquires once nobody holds
+    // control, and gives up when someone else does. [lostOwner] is the old connection's identity,
+    // which the Host may still show until it notices the drop. A fail() or an uncertain input drop
+    // does not set it.
+    private var reacquire = false; private var lostOwner: EmulatorOwner? = null
+    private fun reacquireIfFree(owner: EmulatorOwner?) {
+        if (!reacquire) return
+        if (lease != null) reacquire = false else if (owner == null) { if (acquire()) reacquire = false } else if (owner != lostOwner) reacquire = false
+    }
     private var deadline: Job? = null
     private var stream: String? = null; private var assembler: EmulatorFrameAssembler? = null; private var watchToken = 0L; private var watching = false
     private val early = linkedMapOf<String, JsonObject>(); private var retiredStream: String? = null
@@ -72,11 +78,11 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         val v = view; val c = connection; dropStream(); token++; lease = null; reacquire = false; pending = false; disconnected = false; set(null)
         if (v?.emulatorId != null && connectionAlive(c)) scope.launch { try { send(c, EmulatorCommand.Detach(Wire.random(), v.sessionId, v.emulatorId)) } catch (_: Exception) { if (connectionAlive(c)) closeConnection(c) } }
     }
-    fun disconnected() { if (lease != null) reacquire = view?.inputPending != true; disconnected = view != null; dropStream(); token++; lease = null; pending = false; view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = if (it.inputPending) "uncertain" else "disconnected")) } }
+    fun disconnected() { if (lease != null) { reacquire = view?.inputPending != true; lostOwner = view?.owner }; disconnected = view != null; dropStream(); token++; lease = null; pending = false; view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = if (it.inputPending) "uncertain" else "disconnected")) } }
     fun isDisconnectedFor(session: String?) = disconnected && session != null && view?.sessionId == session
     fun resumeIfDisconnected(session: String, c: Long): Boolean {
         if (!isDisconnectedFor(session) || !current(session, c)) return false
-        disconnected = false; connection = c; recovery = recoveryEnabled(); val t = ++token; val again = reacquire; reacquire = false; val v = view ?: return false
+        disconnected = false; connection = c; recovery = recoveryEnabled(); val t = ++token; val v = view ?: return false
         val id = v.emulatorId ?: return open(session, c)
         val profile = v.profileId ?: return false
         set(v.copy(opening = true, ownsControl = false, inputPending = false, image = null))
@@ -87,8 +93,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             if (r.emulatorId == id && r.incarnation == v.incarnation) check(r.generation >= v.generation)
             set(view?.copy(opening = false, emulatorId = r.emulatorId, incarnation = r.incarnation, label = r.label, generation = r.generation, geometry = r.geometry, owner = r.owner, ownsControl = false, image = null))
             refresh(); watch()
-            // The Host revoked the lease with the old connection; take it back unless someone else holds it.
-            if (again && r.emulatorId == id && r.incarnation == v.incarnation && r.owner == null) acquire()
+            // The Host revokes the lease with the old connection; take it back unless someone else holds it.
+            if (r.emulatorId != id || r.incarnation != v.incarnation) reacquire = false else reacquireIfFree(r.owner)
         } catch (_: Exception) { if (valid(t, session, c)) fail("resume") } }
         return true
     }
@@ -124,10 +130,13 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
                 // generation. A second watch of the same generation would race the first one on the
                 // Host, which keeps whichever it handles last, so the stream is kept when nothing changed.
                 val changed = r.generation != view?.generation || r.geometry != view?.geometry
-                lease = r.leaseId; sequence = r.nextSequence; if (changed) dropStream()
+                lease = r.leaseId; sequence = r.nextSequence; reacquire = false; if (changed) dropStream()
                 set(view?.copy(generation = r.generation, geometry = r.geometry, owner = r.owner, ownsControl = true, image = if (changed) null else view?.image, notice = null)); watch()
             }
-            is EmulatorResult.Busy -> if (valid(t, v.sessionId, c) && r.emulatorId == id && r.generation >= (view?.generation ?: 0)) { dropStream(); set(view?.copy(generation = r.generation, owner = r.owner, image = null, notice = "busy")); watch() }
+            is EmulatorResult.Busy -> if (valid(t, v.sessionId, c) && r.emulatorId == id && r.generation >= (view?.generation ?: 0)) {
+                reacquire = false; val changed = r.generation != view?.generation
+                if (changed) dropStream(); set(view?.copy(generation = r.generation, owner = r.owner, image = if (changed) null else view?.image, notice = "busy")); watch()
+            }
             else -> error("unexpected")
         } } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("acquire") } finally { if (valid(t, v.sessionId, c)) pending = false } }
         return true
@@ -237,5 +246,6 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             lease = e.control.leaseId; sequence = e.control.nextSequence
             set(v.copy(owner = e.owner, ownsControl = true)); watch()
         } else set(v.copy(owner = e.owner))
+        reacquireIfFree(e.owner)
     }
 }
