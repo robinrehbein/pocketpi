@@ -15,7 +15,7 @@ class RemoteRepositoryTest {
         origin: String = "rpc",
         status: String = "idle",
         projectId: String = "project",
-    ) = Wire.objectOf("id" to id, "origin" to origin, "status" to status, "projectId" to projectId)
+    ) = Wire.objectOf("id" to id, "title" to "Session $id", "origin" to origin, "status" to status, "projectId" to projectId)
 
     private class Pairings(var hosts: List<PairedHost>) : PairingStorage {
         /** Runs once after the next save, as if during the write. */
@@ -2465,7 +2465,7 @@ class RemoteRepositoryTest {
     }
 
     @Test
-    fun sessionsFreshOnlyWhenTheListWasActuallyFetchedThisTime() = runTest {
+    fun closureProofOnlyWhenTheListWasActuallyFetchedThisTime() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
@@ -2473,14 +2473,155 @@ class RemoteRepositoryTest {
             "The list was just fetched on this connection",
             repository.state.value.sessionsFresh,
         )
+        assertFalse(repository.state.value.sessionsReused)
+        assertTrue(homeInputs(repository.state.value).sessionsFresh)
         val listRequests = transport.sent.count { it.text("type") == "sessions.list" }
         // Same connection, same project: the cached list is reused rather than refetched.
         repository.activate(RemoteSelection("host", "project"))
         assertEquals(listRequests, transport.sent.count { it.text("type") == "sessions.list" })
+        // Read on this same live connection: current for display, so no row reads last known...
+        assertTrue(repository.state.value.sessionsFresh)
+        assertTrue(repository.state.value.sessionsReused)
+        repository.state.value.let {
+            val rows = sessionListItems(it.sessions, it.connected, it.loading, confirmed = it.sessionsFresh)
+            assertEquals(listOf("session"), rows.map { row -> row.id })
+            assertFalse(rows.single().lastKnown)
+        }
+        // ...but a reused list must not be trusted to declare a session closed.
         assertFalse(
             "A reused cached list must not be trusted to declare a session closed",
-            repository.state.value.sessionsFresh,
+            homeInputs(repository.state.value).sessionsFresh,
         )
+    }
+
+    @Test
+    fun anIdenticalListOnTheLiveConnectionConfirmsTheReusedOne() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertTrue(repository.state.value.sessionsReused)
+        val before = repository.state.value.sessions
+        advanceTimeBy(60_000)
+        repository.refreshSessions()
+        runCurrent()
+        assertEquals(before, repository.state.value.sessions)
+        assertTrue(repository.state.value.sessionsFresh)
+        assertFalse("A list fetched now proves closures again", repository.state.value.sessionsReused)
+        assertTrue(homeInputs(repository.state.value).sessionsFresh)
+    }
+
+    @Test
+    fun aDisconnectUnconfirmsTheListUntilTheNextConnectionsListAnswers() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val project = RemoteSelection("host", "project")
+        repository.activate(project)
+        runCurrent()
+        assertTrue(repository.state.value.sessionsFresh)
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse("A lost connection confirms no row", repository.state.value.sessionsFresh)
+
+        // The next connection's list is held: up again, but nothing stands behind the rows yet.
+        val answered = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") null.also { held += request } else answered(request)
+        }
+        val reopening = async { repository.activate(project) }
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse("Connected again, but its list has not answered", repository.state.value.sessionsFresh)
+
+        transport.result(held.single(), answered(held.single())!!)
+        assertEquals(project, reopening.await())
+        assertTrue(repository.state.value.sessionsFresh)
+    }
+
+    @Test
+    fun aReconnectBeforeItsListAnswersShowsNoRowAsLive() = runTest {
+        val running = session("tui", origin = "tui", status = "running")
+        val transport = Transport().also { configure(it, sessions = listOf(running)) }
+        val repository = repository(transport)
+        val project = RemoteSelection("host", "project")
+        repository.activate(project)
+        runCurrent()
+        // What the list screen and the shortcuts render from the repository's state.
+        fun rows() = repository.state.value.let {
+            visibleSessionListItems(
+                it.sessions, it.connected, it.loading, hideOffline = false, stale = it.stale, confirmed = it.sessionsFresh,
+            )
+        }
+        assertFalse(rows().single().lastKnown)
+        assertTrue(rows().single().liveMacTui)
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        val answered = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") null.also { held += request } else answered(request)
+        }
+        val reopening = async { repository.activate(project) }
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.sessionsFresh)
+        assertEquals(1, held.size)
+        // Not vacuous: the cached row is still shown, exactly once, but only as last known.
+        val shown = rows()
+        assertEquals(listOf(running.text("id")), shown.map { it.id })
+        shown.single().let {
+            assertTrue("Up again, but its list has not answered: ${it.id}", it.lastKnown)
+            assertEquals(SessionAvailability.RUNNING, it.availability)
+            assertFalse(it.liveMacTui)
+            assertNull(sessionBadgeGlyph(it.availability, it.lastKnown))
+            assertFalse(canCloseSession(it, connected = true, loading = false, repository.state.value.capabilities))
+        }
+
+        transport.result(held.single(), answered(held.single())!!)
+        assertEquals(project, reopening.await())
+        assertTrue(repository.state.value.sessionsFresh)
+        assertEquals(listOf(running.text("id")), rows().map { it.id })
+        assertFalse(rows().single().lastKnown)
+        assertTrue(rows().single().liveMacTui)
+    }
+
+    @Test
+    fun aListReplyOfAConnectionThatIsGoneConfirmsNothingAfterTheReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val project = RemoteSelection("host", "project")
+        repository.activate(project)
+        runCurrent()
+        val answered = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") null.also { held += request } else answered(request)
+        }
+        advanceTimeBy(60_000)
+        repository.refreshSessions()
+        runCurrent()
+        val old = held.single()
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        val reopening = async { repository.activate(project) }
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.sessionsFresh)
+
+        // The old connection's reply comes late, on the new connection.
+        transport.result(old, answered(old)!!)
+        runCurrent()
+        assertFalse("A reply to a connection that is gone confirms nothing", repository.state.value.sessionsFresh)
+
+        val current = held.last { it !== old }
+        transport.result(current, answered(current)!!)
+        assertEquals(project, reopening.await())
+        assertTrue(repository.state.value.sessionsFresh)
     }
 
     @Test
@@ -5235,6 +5376,79 @@ class RemoteRepositoryTest {
         assertTrue(state.connected)
         assertFalse(state.loading)
         assertEquals("session", state.session?.text("id"))
+    }
+
+    @Test
+    fun aFailedNotificationOpenRestoresTheChangesViewWithoutConfirmingItsSubagents() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also {
+            configure(
+                it,
+                sessions =
+                    listOf(
+                        session(status = "running"),
+                        JsonObject(session("child", status = "running") + ("parentSessionId" to JsonPrimitive("session"))),
+                    ),
+            )
+        }
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" ->
+                    JsonObject(original(request)!! + ("capabilities" to JsonArray(listOf(JsonPrimitive(GIT_CAPABILITY)))))
+                "session.git.status" ->
+                    Wire.objectOf(
+                        "kind" to "git.status",
+                        "sessionId" to request.text("sessionId"),
+                        "base" to request.text("base"),
+                        "available" to true,
+                        "snapshotId" to "Q2hhbmdlc1NuYXBzaG90MQ",
+                        "files" to JsonArray(listOf(Wire.objectOf("path" to "${request.text("sessionId")}.kt", "change" to "added", "additions" to 1, "deletions" to 0))),
+                        "truncated" to false,
+                        "branch" to "branch-${request.text("sessionId")}",
+                    )
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport, hosts = listOf(host, other), projectHint = { _, _ -> "project" })
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        repository.openChanges()
+        runCurrent()
+        val before = repository.state.value
+        assertTrue(before.sessionsFresh)
+        val loaded = before.changes!!.subagents.single()
+        assertEquals("child", loaded.sessionId)
+        assertTrue(loaded.running)
+        assertFalse(loaded.lastKnown)
+
+        // The Mac on screen is reconnected on a new connection whose list is not read yet.
+        transport.unreachable = setOf("other")
+        val sessionLists = transport.sent.count { it.text("type") == "sessions.list" }
+        val opening = async { repository.openNotification("other", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertNull(opening.await())
+        assertEquals("host", transport.route)
+        assertEquals(sessionLists, transport.sent.count { it.text("type") == "sessions.list" })
+        val restored = repository.state.value
+        assertEquals(selection, restored.selection)
+        assertTrue(restored.connected)
+        // The list read on the old connection comes back as last known, not confirmed.
+        assertFalse(restored.sessionsFresh)
+        assertFalse(restored.sessionsReused)
+        assertTrue(restored.projectSessions.values.none { it.verified })
+        // The restored changes view is judged by that list: the subagent no longer reads running.
+        val sub = restored.changes!!.subagents.single()
+        assertFalse(sub.running)
+        assertTrue(sub.lastKnown)
+
+        // A list read on the new connection confirms it again.
+        repository.refreshSessions()
+        runCurrent()
+        assertTrue(repository.state.value.sessionsFresh)
+        assertTrue(repository.state.value.changes!!.subagents.single().running)
     }
 
     @Test
@@ -18027,7 +18241,7 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project"))
             runCurrent()
-            val listed = sessionListItem(repository.state.value.sessions.single(), true, false)
+            val listed = sessionListItem(repository.state.value.sessions.single(), true, false, confirmed = true)
             assertEquals("$id with v2=$v2", closes, canCloseSession(listed, true, false, repository.state.value.capabilities))
             repository.closeSession(id)
             runCurrent()

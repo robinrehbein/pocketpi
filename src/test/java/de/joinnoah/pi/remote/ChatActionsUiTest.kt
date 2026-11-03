@@ -63,6 +63,8 @@ class ChatActionsUiTest {
                 project = project,
                 sessions = listOf(session),
                 session = session,
+                // The list was read on this connection, so its rows are confirmed.
+                sessionsFresh = true,
                 capabilities = setOf(SESSION_TREE_CAPABILITY, ARTIFACTS_CAPABILITY, EXPORT_CAPABILITY, RELOAD_CAPABILITY),
                 capabilitiesKnown = true,
             )
@@ -208,19 +210,31 @@ class ChatActionsUiTest {
     fun headerStatusHasAShapePerState() {
         render()
         val mark = compose.onNodeWithTag("chatStatusDot")
-        fun expect(shape: ChatStatusShape, text: Int) {
+        fun expect(shape: ChatStatusShape, text: Int, live: Boolean = false) {
             compose.waitForIdle()
             mark.assertContentDescriptionEquals(label(text))
                 .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, shape))
+                .assert(SemanticsMatcher.expectValue(ChatStatusLiveKey, live))
         }
         expect(ChatStatusShape.READY, R.string.remote_status_idle)
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
+        expect(ChatStatusShape.RUNNING, R.string.remote_status_running, live = true)
+        // Last-known, opening or previewed RUNNING keeps the static play mark: still running, not live.
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(stale = true) }
         expect(ChatStatusShape.RUNNING, R.string.remote_status_running)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(stale = false, loading = true) }
+        expect(ChatStatusShape.RUNNING, R.string.remote_status_running)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(loading = false, preview = true) }
+        expect(ChatStatusShape.RUNNING, R.string.remote_status_running)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(preview = false) }
+        expect(ChatStatusShape.RUNNING, R.string.remote_status_running, live = true)
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "waiting") }
         expect(ChatStatusShape.WAITING, R.string.remote_status_waiting)
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "unrecognized") }
         expect(ChatStatusShape.UNKNOWN, R.string.remote_status_unknown)
         compose.runOnIdle { repository.state.value = repository.state.value.copy(connected = false) }
+        expect(ChatStatusShape.OFFLINE, R.string.remote_status_offline)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
         expect(ChatStatusShape.OFFLINE, R.string.remote_status_offline)
     }
 

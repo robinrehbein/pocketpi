@@ -555,13 +555,20 @@ internal fun sessionListItems(
     connected: Boolean,
     loading: Boolean,
     stale: Boolean = false,
+    /** [RemoteState.sessionsFresh]; see [sessionListItem]. */
+    confirmed: Boolean,
 ): List<SessionListItem> =
-    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading, stale) }.getOrNull() }
+    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading, stale, confirmed) }.getOrNull() }
 
 internal fun SessionListItem.live(): Boolean =
     availability == SessionAvailability.RUNNING || availability == SessionAvailability.WAITING
 
 private fun AgentProgress.active(): Boolean = state == "running" || state == "queued"
+
+/** Live per a fresh report: a last-known RUNNING or WAITING is not current, so not abortable. */
+private fun SessionListItem.liveNow(): Boolean = live() && !lastKnown
+
+private val TERMINAL_AGENT_STATES = setOf("succeeded", "failed", "cancelled", "ended")
 
 private const val MAX_CHILD_CANDIDATES = 8
 
@@ -585,7 +592,7 @@ internal fun resolveSubagentChild(
                 var score = 0
                 if (task != null && child.title.contains(task, ignoreCase = true)) score += 2
                 if (child.title.contains(agent.name, ignoreCase = true)) score += 1
-                if (child.live() && agent.active()) score += 1
+                if (child.liveNow() && agent.active()) score += 1
                 child to score
             }
             .sortedWith(
@@ -606,6 +613,13 @@ internal data class SubagentStripEntry(
     val abortable: Boolean,
     /** Tappable only when the session list knows [sessionId]; otherwise opening it would fail. */
     val openable: Boolean = sessionId != null,
+    /**
+     * [state] is the child's last-known status from before the connection dropped, not a current
+     * one. Progress records without a matching child session carry no freshness of their own, so
+     * their active (running, queued, waiting) states are always last known: nothing proves the
+     * Mac still reports them. Their terminal states stay as recorded.
+     */
+    val lastKnown: Boolean = false,
 )
 
 internal data class SubagentStrip(
@@ -669,12 +683,21 @@ internal fun subagentStrip(
                     title = child.title,
                     state =
                         when {
+                            // A child waiting for input is not running, whatever its progress says.
+                            child.availability == SessionAvailability.WAITING -> "waiting"
+                            // A last-known RUNNING keeps the session's status; old progress must
+                            // not refine it into something the Mac never confirmed.
+                            child.lastKnown && child.availability == SessionAvailability.RUNNING -> "running"
                             child.live() -> agent?.state?.takeIf { it == "queued" } ?: "running"
-                            child.availability == SessionAvailability.OFFLINE -> agent?.state ?: "offline"
+                            // Offline: only a terminal outcome is still true; running, queued or
+                            // waiting progress is not current, so the child just reads offline.
+                            child.availability == SessionAvailability.OFFLINE ->
+                                agent?.state?.takeIf { it in TERMINAL_AGENT_STATES } ?: "offline"
                             else -> agent?.state?.takeUnless { agent.active() } ?: "ended"
                         },
                     activity = if (agent != null) agent.activity ?: agent.preview else child.preview,
-                    abortable = child.live(),
+                    abortable = child.liveNow(),
+                    lastKnown = child.lastKnown,
                 )
             )
         }
@@ -696,20 +719,23 @@ internal fun subagentStrip(
                     activity = agent.activity ?: agent.preview,
                     abortable = false,
                     openable = agent.sessionId != null && agent.sessionId in knownIds,
+                    // No session vouches for this record, so an active state is never current.
+                    lastKnown = agent.active() || agent.state == "waiting",
                 )
             )
         }
     }
     val ordered = entries.sortedBy {
         when (it.state) {
-            "running" -> 0
-            "queued" -> 1
-            else -> 2
+            "waiting" -> 0
+            "running" -> 1
+            "queued" -> 2
+            else -> 3
         }
     }
     return SubagentStrip(
         entries = ordered,
-        running = ordered.count { it.state == "running" },
+        running = ordered.count { it.state == "running" && !it.lastKnown },
         missingSessionIds = recent.mapNotNullTo(HashSet()) { r -> r.agent.sessionId?.takeIf { it !in knownIds } },
         unmatchedRunning = recent.count {
             it.agent.state == "running" && it.match == null && it.agent.sessionId !in childIds

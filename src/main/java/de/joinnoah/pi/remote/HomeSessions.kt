@@ -258,7 +258,10 @@ internal data class HomeInputs(
     val connectedToSelection: Boolean = false,
     val project: JsonObject? = null,
     val sessions: List<JsonObject> = emptyList(),
-    /** [sessions] came from a sessions.list on the current connection, not from a cache. */
+    /**
+     * [sessions] came from a sessions.list fetched on the current connection, not from a cache or
+     * a reused read, so a missing row proves the session closed.
+     */
     val sessionsFresh: Boolean = false,
     val projectChats: List<ProjectChatSummary> = emptyList(),
 )
@@ -290,7 +293,7 @@ internal fun homeInputs(state: RemoteState, previous: Pair<RemoteState, HomeInpu
         sessions =
             if (lastInputs != null && state.sessions === last?.sessions) lastInputs.sessions
             else state.sessions.map { it.only(HOME_SESSION_FIELDS) },
-        sessionsFresh = state.sessionsFresh,
+        sessionsFresh = state.sessionsFresh && !state.sessionsReused,
         projectChats =
             if (lastInputs != null && state.projectChats === last?.projectChats) lastInputs.projectChats
             else state.projectChats.map { it.copy(session = it.session.only(HOME_SESSION_FIELDS)) },

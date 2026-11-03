@@ -12,6 +12,7 @@
     <string name="remote_changes_this_session">Diese Sitzung</string>
     <string name="remote_changes_subagent_untitled">Subagent</string>
     <string name="remote_changes_subagent_running">Läuft · %1$s</string>
+    <string name="remote_changes_subagent_last_known">Status nicht bestätigt · %1$s</string>
     <string name="remote_changes_subagent_finished">Fertig, noch nicht übernommen · %1$s</string>
     <string name="remote_changes_subagent_file">Geändert von Subagent %1$s</string>
     <string name="remote_changes_base_head">HEAD</string>

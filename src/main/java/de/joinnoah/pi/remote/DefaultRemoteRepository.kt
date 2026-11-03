@@ -1376,7 +1376,7 @@ class DefaultRemoteRepository(
     private fun update(block: (RemoteState) -> RemoteState) {
         checkMainThread()
         val previous = mutable.value
-        val next = block(previous)
+        val next = reconcileSubagents(previous, block(previous))
         if (previous.selection != next.selection && nativePresenceSelection == previous.selection) {
             nativePresenceOwner = null
             nativePresenceSelection = null
@@ -1694,7 +1694,7 @@ class DefaultRemoteRepository(
      * gains no entry here: with many projects, those of the projects the user visited would make
      * way. When the project's list is on screen, it shows the new rows too.
      */
-    private fun applyProjectList(routeId: String, project: JsonObject, sessions: List<JsonObject>) {
+    private fun applyProjectList(routeId: String, project: JsonObject, sessions: List<JsonObject>, connection: Long) {
         val projectId = project.text("id")
         val name = project.optionalText("name").orEmpty()
         if (projectSessionsRoute != routeId) {
@@ -1710,10 +1710,17 @@ class DefaultRemoteRepository(
         if (cachedSessions?.let { it.routeId == routeId && it.projectId == projectId } == true) cachedSessions = entry
         else sessionCache.replace(routeId to projectId, entry)
         val current = state.value
+        val live = sessionsReadOnLiveConnection(connection)
         if (
             !current.loading && current.selection.routeId == routeId && current.selection.projectId == projectId &&
-                current.project?.optionalText("id") == projectId && current.sessions != sessions
-        ) update { it.copy(sessions = sessions, sessionsFresh = true) }
+                current.project?.optionalText("id") == projectId &&
+                // An identical list read on the live connection still confirms the shown one; a
+                // read of an older connection never does.
+                (current.sessions != sessions || (live && (!current.sessionsFresh || current.sessionsReused)))
+        ) update {
+            if (it.sessions == sessions && !live) it
+            else it.copy(sessions = sessions, sessionsFresh = live, sessionsReused = false)
+        }
         publishProjectChats(routeId)
         publishProjectSessions(routeId)
     }
@@ -1797,9 +1804,17 @@ class DefaultRemoteRepository(
         // A reply to a connection that is gone, or to another Mac, says nothing about this one.
         if (connection != generation || activeHost?.routeId != routeId) return null
         val rows = sessions.map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
-        applyProjectList(routeId, project, rows)
+        applyProjectList(routeId, project, rows, connection)
         return rows
     }
+
+    /**
+     * Whether a `sessions.list` reply read on [connection] (a [generation]) may confirm the rows as
+     * live: only while that connection is still the one up. A reply that arrives after a
+     * disconnect, or after a reconnect opened a new connection, confirms nothing.
+     */
+    private fun sessionsReadOnLiveConnection(connection: Long): Boolean =
+        connection == generation && state.value.connected
 
     /** Whether any list or screen of the connected Mac holds [sessionId]. */
     private fun knowsSession(sessionId: String): Boolean {
@@ -2357,6 +2372,8 @@ class DefaultRemoteRepository(
             val shown = if (keep) it else lastKnownCleared(it)
             shown.copy(
                 connected = false,
+                // The rows stay as last known; only a list read on the next connection confirms them.
+                sessionsFresh = false,
                 connection = line,
                 compaction = null,
                 suggestion = null,
@@ -4044,10 +4061,15 @@ class DefaultRemoteRepository(
         sessions: List<JsonObject> = emptyList(),
         session: JsonObject? = null,
         cachedChat: CachedChat? = null,
-        // True only when `sessions` was actually fetched from the host during this call, as
+        // True only when `sessions` was actually fetched from the host during this call, on the
+        // connection still up (see [sessionsReadOnLiveConnection]), as
         // opposed to a reused cache — a cached list may already be stale even on the same
         // connection, so it must never be trusted to declare a session closed.
         sessionsFresh: Boolean = false,
+        // `sessions` is a list reused from an earlier read on this same, still live connection:
+        // current enough to show without a last-known label, but no proof that a missing row was
+        // closed (see [RemoteState.sessionsReused]).
+        sessionsReused: Boolean = false,
     ) {
         val previous = state.value.selection
         if (selection != previous && emulatorClient.view != null) emulatorClient.close()
@@ -4151,6 +4173,7 @@ class DefaultRemoteRepository(
                 project = project,
                 sessions = sessions.map { withSessionTitle(withSessionStatus(it)) },
                 sessionsFresh = sessionsFresh,
+                sessionsReused = sessionsFresh && sessionsReused,
                 session = session?.let(::withSessionTitle),
                 messages = resumed?.messages ?: cachedChat?.messages ?: if (sameSession) it.messages else emptyList(),
                 questions = resumed?.questions ?: if (sameSession) it.questions else emptyList(),
@@ -4329,6 +4352,7 @@ class DefaultRemoteRepository(
                 update {
                     it.copy(
                         connected = false,
+                        sessionsFresh = false,
                         connection = line,
                         compaction = null,
                         suggestion = null,
@@ -4356,6 +4380,8 @@ class DefaultRemoteRepository(
                 selection.projectId?.takeIf { shownBeforeConnect }?.let { sessionCache[host.routeId to it] }
             val shownChat = selection.sessionId?.takeIf { shownBeforeConnect }?.let { chatCache[selection] }
             connect(host, epoch, closesCleanly = leavesLiveConnection)
+            // A list read below confirms the rows only while this connection is still the one up.
+            val sessionsConnection = generation
             if (showCache && shownBeforeConnect) {
                 restoreNavigation(host.routeId)
                 if (cachedProjects?.first != host.routeId) shownProjects?.let { cachedProjects = it }
@@ -4429,6 +4455,11 @@ class DefaultRemoteRepository(
                 return parent
             }
             var sessionsFetchedNow = false
+            // reusedSessions only hands out lists read on this same connection, so a reused list on
+            // a connection that is still up is current for display. It stays marked reused: only a
+            // list fetched now may prove that a session is gone.
+            fun sessionsConfirmed() = sessionsReadOnLiveConnection(sessionsConnection)
+            fun sessionsReused() = !sessionsFetchedNow
             val sessions =
                 earlySessions?.let { early -> early.await().getOrThrow().also { sessionsFetchedNow = true } }
                     ?: reusedSessions(project.text("id"))
@@ -4436,7 +4467,7 @@ class DefaultRemoteRepository(
             sessionsCached = !sessionsFetchedNow
             checkEpoch(epoch)
             cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions, generation)
-            if (sessionsFetchedNow) applyProjectList(host.routeId, project, sessions)
+            if (sessionsFetchedNow) applyProjectList(host.routeId, project, sessions, sessionsConnection)
             val session = sessions.find { it.text("id") == selection.sessionId }
             if (
                 session == null ||
@@ -4444,7 +4475,7 @@ class DefaultRemoteRepository(
                         (session.optionalText("origin") !in setOf("rpc", "tui") ||
                             session.text("status") == "offline"))
             ) {
-                select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                select(parent, host, projects, project, sessions, sessionsFresh = sessionsConfirmed(), sessionsReused = sessionsReused())
                 outcome = "parent"
                 return parent
             }
@@ -4465,7 +4496,7 @@ class DefaultRemoteRepository(
             val canonicalProject =
                 projects.find { it.text("id") == chosen.text("projectId") }
                     ?: run {
-                        select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                        select(parent, host, projects, project, sessions, sessionsFresh = sessionsConfirmed(), sessionsReused = sessionsReused())
                         outcome = "parent"
                         return parent
                     }
@@ -4480,7 +4511,8 @@ class DefaultRemoteRepository(
                 sessions,
                 chosen,
                 chatCache[canonical]?.takeIf { useCache },
-                sessionsFresh = sessionsFetchedNow,
+                sessionsFresh = sessionsConfirmed(),
+                sessionsReused = sessionsReused(),
             )
             if (mode == ActivationMode.USER_OPEN && selection.sessionId != canonical.sessionId) {
                 preparedSource = DraftKey(host.routeId, checkNotNull(selection.sessionId))
@@ -4541,7 +4573,7 @@ class DefaultRemoteRepository(
                 advisorVersion++
                 commandsVersion++
                 preparedSource = null
-                select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                select(parent, host, projects, project, sessions, sessionsFresh = sessionsConfirmed(), sessionsReused = sessionsReused())
                 update { it.copy(preparedText = null) }
                 reportError(R.string.remote_request_error)
                 outcome = "snapshot_failed"
@@ -4834,6 +4866,8 @@ class DefaultRemoteRepository(
             return null
         val host = state.value.hosts.find { it.routeId == routeId } ?: return null
         val previous = state.value
+        // The connection [previous] was read on: only it may still confirm previous's lists.
+        val previousGeneration = generation
         // A project known here opens the chat directly; the walk over every project is only for a
         // session the app never saw. A stale project (the session is not in it) lands on that
         // project's list or the projects, and the walk still finds the session.
@@ -4850,7 +4884,8 @@ class DefaultRemoteRepository(
             // A failed open (the Mac unreachable, a request refused) hands back the selection from
             // before it, which may be another Mac's: that is no answer to the tap. The walk would
             // only fail the same way, so the previous screen comes back as when the walk fails.
-            if (failed || opened.routeId != routeId) return restorePrevious(previous, routeId, selectionEpoch)
+            if (failed || opened.routeId != routeId)
+                return restorePrevious(previous, previousGeneration, routeId, selectionEpoch)
             val stale =
                 opened == RemoteSelection(routeId) ||
                     (opened == RemoteSelection(routeId, projectId) &&
@@ -4882,15 +4917,22 @@ class DefaultRemoteRepository(
             if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
         }
         if (resolved != null) return activate(resolved, ActivationMode.USER_OPEN)
-        return restorePrevious(previous, routeId, epoch)
+        return restorePrevious(previous, previousGeneration, routeId, epoch)
     }
 
     /**
      * After a notification's open failed: reconnects the Mac that was on screen before when the
      * notification was for another one, puts its [previous] state back, and returns null so the
-     * navigator restores its own stack.
+     * navigator restores its own stack. [previousGeneration] is the connection [previous] was read
+     * on: its lists stay confirmed only while that connection is still the current one; after a
+     * reconnect they come back as last known until a list read on the new connection confirms them.
      */
-    private suspend fun restorePrevious(previous: RemoteState, routeId: String, epoch: Long): RemoteSelection? {
+    private suspend fun restorePrevious(
+        previous: RemoteState,
+        previousGeneration: Long,
+        routeId: String,
+        epoch: Long,
+    ): RemoteSelection? {
         if (epoch == selectionEpoch && previous.host != null && previous.host.routeId != routeId) {
             try {
                 connect(previous.host, epoch)
@@ -4899,10 +4941,18 @@ class DefaultRemoteRepository(
                 reportError(R.string.remote_connection_error)
             }
             if (epoch == selectionEpoch) {
-                update { current ->
+                val sameConnection = previousGeneration == generation && state.value.connected
+                // Through update(): an open changes view's subagent groups are judged again by the
+                // restored list and connection, so none stays running on an unconfirmed list.
+                update {
                     previous.copy(
                         connected = state.value.connected,
                         connection = state.value.connection,
+                        sessionsFresh = previous.sessionsFresh && sameConnection,
+                        sessionsReused = previous.sessionsReused && sameConnection,
+                        projectSessions =
+                            if (sameConnection) previous.projectSessions
+                            else previous.projectSessions.mapValues { (_, entry) -> entry.unverified() },
                         followUps = currentDraftKey()?.let { drafts[it]?.followUps }.orEmpty(),
                         // connect() above cancelled any download; the snapshot re-derives compaction.
                         toolOutput = null,
@@ -4995,7 +5045,7 @@ class DefaultRemoteRepository(
         timedOutRoute = null
         cancelQuietReconnect()
         update {
-            it.copy(loading = true, connected = false, connection = R.string.remote_connecting, pairingDeadline = null)
+            it.copy(loading = true, connected = false, sessionsFresh = false, connection = R.string.remote_connecting, pairingDeadline = null)
         }
         try {
             // The transport's own pairing timer starts with the attempt, and so does the deadline.
@@ -5262,6 +5312,7 @@ class DefaultRemoteRepository(
                 else lastKnownCleared(it)
             shown.copy(
                 connected = false,
+                sessionsFresh = false,
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
@@ -5885,11 +5936,14 @@ class DefaultRemoteRepository(
                 refreshProjectChats(routeId, fresh)
                 return
             }
+            val connection = generation
             val sessions = listSessions(project.text("id"), epoch)
             checkEpoch(epoch)
-            if (!state.value.connected || activeHost?.routeId != routeId || state.value.selection != selection) return
+            if (!sessionsReadOnLiveConnection(connection) || activeHost?.routeId != routeId ||
+                state.value.selection != selection
+            ) return
             cachedSessions = CachedSessions(routeId, project.text("id"), project, sessions, generation)
-            applyProjectList(routeId, project, sessions)
+            applyProjectList(routeId, project, sessions, connection)
             val sessionId = selection.sessionId
             val session = sessionId?.let { id -> sessions.find { it.text("id") == id } }
             if (
@@ -5908,6 +5962,7 @@ class DefaultRemoteRepository(
                     project = project,
                     sessions = sessions,
                     sessionsFresh = true,
+                    sessionsReused = false,
                     session = session?.let(::withSessionTitle) ?: it.session,
                 )
             }
@@ -7784,19 +7839,21 @@ class DefaultRemoteRepository(
         lastSessionRefreshAt = now()
         sessionReadAttempt = Triple(routeId, projectId, generation) to now()
         val epoch = selectionEpoch
+        val connection = generation
         sessionRefreshJob = scope.launch {
             try {
                 val sessions = listSessions(projectId, epoch)
+                // A reply that outlived its connection says nothing about the one now up.
                 if (epoch != selectionEpoch || state.value.selection != selection ||
-                    activeHost?.routeId != routeId
+                    activeHost?.routeId != routeId || !sessionsReadOnLiveConnection(connection)
                 ) return@launch
                 cachedSessions?.takeIf { it.routeId == routeId && it.projectId == projectId }?.let {
                     cachedSessions = it.copy(sessions = sessions, readOn = generation)
                 }
                 current.project
                     ?.takeIf { it.text("id") == projectId }
-                    ?.let { applyProjectList(routeId, it, sessions) }
-                update { it.copy(sessions = sessions, sessionsFresh = true) }
+                    ?.let { applyProjectList(routeId, it, sessions, connection) }
+                update { it.copy(sessions = sessions, sessionsFresh = true, sessionsReused = false) }
                 cacheCurrentScreen()
             } catch (_: CancellationException) {} catch (swallowed: Exception) {
                 Diagnostics.caught("repo.refreshSessions", swallowed)

@@ -649,7 +649,7 @@ private fun LazyGridScope.subagentGroup(sub: SubagentChanges, actions: ChangesAc
             )
             Text(
                 stringResource(
-                    if (sub.running) R.string.remote_changes_subagent_running else R.string.remote_changes_subagent_finished,
+                    subagentChangesStatusLabel(sub),
                     sub.status.branch.orEmpty(),
                 ),
                 style = MaterialTheme.typography.bodySmall,
@@ -1439,4 +1439,11 @@ internal fun PullRequestCard(pr: PullRequestStatus, onOpen: (String) -> Unit) {
                 }
         }
     }
+}
+
+/** Last known is a third state: neither running nor finished. */
+internal fun subagentChangesStatusLabel(sub: SubagentChanges): Int = when {
+    sub.lastKnown -> R.string.remote_changes_subagent_last_known
+    sub.running -> R.string.remote_changes_subagent_running
+    else -> R.string.remote_changes_subagent_finished
 }

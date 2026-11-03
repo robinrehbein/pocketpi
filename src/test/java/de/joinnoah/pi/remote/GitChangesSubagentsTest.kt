@@ -53,8 +53,15 @@ class GitChangesSubagentsTest {
                 connected = true,
                 capabilities = setOf(GIT_CAPABILITY),
                 sessions = sessions,
+                // A list read on this connection: rows may claim to be live.
+                sessionsFresh = true,
             )
-        val loader = GitChangesLoader(scope, source, { state }) { state = it(state) }
+        val loader = GitChangesLoader(scope, source, { state }) { update(it) }
+
+        /** Like the repository's update: every write re-judges the subagent groups. */
+        fun update(block: (RemoteState) -> RemoteState) {
+            state = reconcileSubagents(state, block(state))
+        }
     }
 
     @Test
@@ -142,5 +149,60 @@ class GitChangesSubagentsTest {
         runCurrent()
         assertEquals(listOf("session"), h.source.statuses.map { it.first }.distinct())
         assertTrue(h.state.changes!!.subagents.isEmpty())
+    }
+
+    @Test
+    fun aDisconnectAfterTheLoadNeverLeavesRunningAndNeverReadsFinished() = runTest {
+        val h = Harness(backgroundScope, listOf(session("session", "running"), session("live", "running", parent = "session")))
+        h.loader.open(emptyList())
+        runCurrent()
+        val loaded = h.state.changes!!.subagents.single()
+        assertTrue(loaded.running)
+        assertFalse(loaded.lastKnown)
+        val asked = h.source.statuses.size
+
+        h.update { it.copy(connected = false, sessionsFresh = false) }
+        val offline = h.state.changes!!.subagents.single()
+        assertFalse(offline.running)
+        assertTrue(offline.lastKnown)
+        // The child dropping off the list is unknown too, not finished.
+        h.update { it.copy(sessions = listOf(session("session", "running"))) }
+        assertTrue(h.state.changes!!.subagents.single().lastKnown)
+        runCurrent()
+        assertEquals(asked, h.source.statuses.size)
+    }
+
+    @Test
+    fun aReconnectsConfirmedListReplacesLastKnown() = runTest {
+        val h = Harness(backgroundScope, listOf(session("session", "running"), session("live", "running", parent = "session")))
+        h.loader.open(emptyList())
+        runCurrent()
+        h.update { it.copy(connected = false, sessionsFresh = false) }
+        assertTrue(h.state.changes!!.subagents.single().lastKnown)
+        val asked = h.source.statuses.size
+
+        // Connected again, but the list is not read yet: still last known.
+        h.update { it.copy(connected = true) }
+        assertTrue(h.state.changes!!.subagents.single().lastKnown)
+        h.update {
+            it.copy(
+                sessions = listOf(session("session", "running"), session("live", "running", parent = "session")),
+                sessionsFresh = true,
+            )
+        }
+        val back = h.state.changes!!.subagents.single()
+        assertTrue(back.running)
+        assertFalse(back.lastKnown)
+        // A confirmed idle row is finished.
+        h.update { it.copy(sessions = listOf(session("session", "running"), session("live", "idle", parent = "session"))) }
+        val done = h.state.changes!!.subagents.single()
+        assertFalse(done.running)
+        assertFalse(done.lastKnown)
+        // An unrelated write keeps the same list instance.
+        val same = h.state.changes!!.subagents
+        h.update { it.copy(connection = it.connection) }
+        assertSame(same, h.state.changes!!.subagents)
+        runCurrent()
+        assertEquals(asked, h.source.statuses.size)
     }
 }

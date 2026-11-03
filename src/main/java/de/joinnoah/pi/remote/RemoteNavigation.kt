@@ -1200,6 +1200,7 @@ internal class RemoteNavigator(
             state.loading,
             hideOffline = hidesOfflineSessions(targets.hideOfflineSessions, state.connected, state.stale),
             stale = state.stale,
+            confirmed = state.sessionsFresh,
             marks = sessionMarksById(targets.sessionMarks, sessions.routeId),
             openSessionId = state.selection.sessionId,
         ).map { it.id }

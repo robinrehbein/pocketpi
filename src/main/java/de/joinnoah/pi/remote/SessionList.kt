@@ -13,11 +13,19 @@ import androidx.compose.material.icons.filled.LaptopMac
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -215,25 +223,41 @@ internal fun SessionListRow(
             ) {
                 Box(Modifier.size(44.dp).clearAndSetSemantics {}) {
                     GlassAvatar(size = 44.dp) {
-                        Text(
-                            stringResource(R.string.remote_design_pi_mark),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        // A subagent shows the robot mark; only the host's parentSessionId makes a
+                        // row one, nothing here guesses it from the title or origin.
+                        if (item.parentSessionId != null)
+                            Icon(
+                                Icons.Outlined.SmartToy,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        else
+                            Text(
+                                stringResource(R.string.remote_design_pi_mark),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                     }
-                    if (item.availability == SessionAvailability.RUNNING && !item.lastKnown) {
+                    // No backing disc. The badge straddles the avatar's edge, so half of it would sit
+                    // on the row background (secondaryContainer when selected). A thin contour in the
+                    // avatar's own color, following the badge's shape, keeps the badge on one known
+                    // color: the status colors are picked to reach 3:1 against surfaceContainerHighest.
+                    val halo = MaterialTheme.colorScheme.surfaceContainerHighest
+                    val badge = sessionBadgeGlyph(item.availability, item.lastKnown)
+                    if (badge != null) {
                         StatusGlyph(
-                            kind = StatusGlyphKind.SESSION_RUNNING,
+                            kind = badge,
                             color = statusColor,
-                            modifier = Modifier.align(Alignment.BottomEnd).size(16.dp)
-                                .background(MaterialTheme.colorScheme.background, CircleShape),
+                            modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).badgeHalo(halo),
                         )
                     } else {
                         Box(
                             Modifier.align(Alignment.BottomEnd)
-                                .size(12.dp)
-                                .background(MaterialTheme.colorScheme.background, CircleShape)
-                                .padding(2.dp)
+                                .padding(3.dp - BadgeHaloWidth)
+                                .size(10.dp + BadgeHaloWidth * 2)
+                                .background(halo, CircleShape)
+                                .padding(BadgeHaloWidth)
                                 .background(statusColor, CircleShape)
                         )
                     }
@@ -383,3 +407,35 @@ private fun SessionSwipeBackground(action: SwipeAction, atEnd: Boolean) {
  * room for its titles on a phone.
  */
 internal fun subagentIndent(depth: Int): Dp = 16.dp * depth.coerceIn(0, 2)
+
+internal val BadgeHaloWidth = 1.5.dp
+
+/**
+ * Draws the content's silhouette, offset in eight directions and tinted [color], under the content:
+ * a contour that follows the glyph's own shape instead of a backing disc.
+ */
+private fun Modifier.badgeHalo(color: Color, width: Dp = BadgeHaloWidth): Modifier =
+    drawWithContent {
+        val w = width.toPx()
+        val d = w * 0.7071f
+        val offsets = listOf(w to 0f, -w to 0f, 0f to w, 0f to -w, d to d, d to -d, -d to d, -d to -d)
+        val paint = Paint().apply { colorFilter = ColorFilter.tint(color, BlendMode.SrcIn) }
+        drawIntoCanvas { canvas ->
+            canvas.saveLayer(Rect(-w, -w, size.width + w, size.height + w), paint)
+            offsets.forEach { (dx, dy) -> translate(dx, dy) { this@drawWithContent.drawContent() } }
+            canvas.restore()
+        }
+        drawContent()
+    }
+
+/**
+ * The glyph on a session's avatar, or null for a plain status dot. Only a fresh report gets a
+ * glyph: a last-known RUNNING or WAITING must not look live, so it falls back to the muted dot.
+ */
+internal fun sessionBadgeGlyph(availability: SessionAvailability, lastKnown: Boolean): StatusGlyphKind? =
+    when {
+        lastKnown -> null
+        availability == SessionAvailability.RUNNING -> StatusGlyphKind.SESSION_RUNNING
+        availability == SessionAvailability.WAITING -> StatusGlyphKind.NEEDS_INPUT
+        else -> null
+    }
