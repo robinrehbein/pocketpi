@@ -474,7 +474,11 @@ private fun changeLabel(change: GitChange): Int =
     }
 
 @Composable
-private fun FailureNotice(failure: ChangesFailure, onRetry: () -> Unit, contentPadding: PaddingValues = PaddingValues(16.dp)) {
+private fun FailureNotice(
+    failure: ChangesFailure,
+    contentPadding: PaddingValues = PaddingValues(16.dp),
+    onRetry: () -> Unit,
+) {
     PaneFailureNotice(
         stringResource(failureText(failure)),
         stringResource(R.string.remote_changes_retry),
@@ -591,7 +595,7 @@ private fun ChangesOverview(
             }
             val failure = state.failure
             when {
-                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, actions.onReload, GRID_FAILURE_PADDING) }
+                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, GRID_FAILURE_PADDING, actions.onReload) }
                 state.loading || status == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { Loading(GRID_FAILURE_PADDING) }
                 status.unavailable != null ->
                     item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
@@ -676,7 +680,7 @@ private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry
     val failure = state.logFailure
     when {
         // A busy host (per-device or host-wide limit) clears up; the retry reloads status and log.
-        failure != null -> item(key = "commitsFailure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, onRetry, GRID_FAILURE_PADDING) }
+        failure != null -> item(key = "commitsFailure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, GRID_FAILURE_PADDING, onRetry) }
         state.logLoading || log == null -> item(key = "commitsLoading", span = { GridItemSpan(maxLineSpan) }) { Loading(GRID_FAILURE_PADDING) }
         log.unavailable != null ->
             item(key = "commitsUnavailable", span = { GridItemSpan(maxLineSpan) }) { GridNotice(stringResource(R.string.remote_changes_commits_unavailable)) }
