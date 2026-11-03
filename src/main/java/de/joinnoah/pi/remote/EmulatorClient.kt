@@ -21,6 +21,9 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     var view: EmulatorView? = null; private set
     private var connection = 0L; private var token = 0L; private var lease: String? = null; private var sequence = 0L
     private var visible = true; private var disconnected = false; private var pending = false
+    // Set when a connection drop took this device's lease: the resume re-acquires once if nobody
+    // else took control meanwhile. A fail() or an uncertain input drop does not set it.
+    private var reacquire = false
     private var deadline: Job? = null
     private var stream: String? = null; private var assembler: EmulatorFrameAssembler? = null; private var watchToken = 0L; private var watching = false
     private val early = linkedMapOf<String, JsonObject>(); private var retiredStream: String? = null
@@ -66,14 +69,14 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         if (id != null && v?.emulatorId != null && current(v.sessionId, c)) scope.launch { try { send(c, EmulatorCommand.Unwatch(Wire.random(), v.sessionId, v.emulatorId, id)) } catch (_: Exception) {} }
     }
     fun close() {
-        val v = view; val c = connection; dropStream(); token++; lease = null; pending = false; disconnected = false; set(null)
+        val v = view; val c = connection; dropStream(); token++; lease = null; reacquire = false; pending = false; disconnected = false; set(null)
         if (v?.emulatorId != null && connectionAlive(c)) scope.launch { try { send(c, EmulatorCommand.Detach(Wire.random(), v.sessionId, v.emulatorId)) } catch (_: Exception) { if (connectionAlive(c)) closeConnection(c) } }
     }
-    fun disconnected() { disconnected = view != null; dropStream(); token++; lease = null; pending = false; view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = if (it.inputPending) "uncertain" else "disconnected")) } }
+    fun disconnected() { if (lease != null) reacquire = view?.inputPending != true; disconnected = view != null; dropStream(); token++; lease = null; pending = false; view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = if (it.inputPending) "uncertain" else "disconnected")) } }
     fun isDisconnectedFor(session: String?) = disconnected && session != null && view?.sessionId == session
     fun resumeIfDisconnected(session: String, c: Long): Boolean {
         if (!isDisconnectedFor(session) || !current(session, c)) return false
-        disconnected = false; connection = c; recovery = recoveryEnabled(); val t = ++token; val v = view ?: return false
+        disconnected = false; connection = c; recovery = recoveryEnabled(); val t = ++token; val again = reacquire; reacquire = false; val v = view ?: return false
         val id = v.emulatorId ?: return open(session, c)
         val profile = v.profileId ?: return false
         set(v.copy(opening = true, ownsControl = false, inputPending = false, image = null))
@@ -84,12 +87,14 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             if (r.emulatorId == id && r.incarnation == v.incarnation) check(r.generation >= v.generation)
             set(view?.copy(opening = false, emulatorId = r.emulatorId, incarnation = r.incarnation, label = r.label, generation = r.generation, geometry = r.geometry, owner = r.owner, ownsControl = false, image = null))
             refresh(); watch()
+            // The Host revoked the lease with the old connection; take it back unless someone else holds it.
+            if (again && r.emulatorId == id && r.incarnation == v.incarnation && r.owner == null) acquire()
         } catch (_: Exception) { if (valid(t, session, c)) fail("resume") } }
         return true
     }
     fun setVisible(value: Boolean) { visible = value; if (!value) { dropStream(); view?.let { set(it.copy(image = null)) } } else watch() }
     // Closes the whole connection: the Host then releases this device's lease. [reason] is logged.
-    private fun fail(reason: String) { Diagnostics.record(Diagnostics.Kind.FAILURE, "emulator.closed", outcome = reason); lease = null; pending = false; dropStream(); view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null, notice = "uncertain")) }; if (connectionAlive(connection)) closeConnection(connection) }
+    private fun fail(reason: String) { Diagnostics.record(Diagnostics.Kind.FAILURE, "emulator.closed", outcome = reason); lease = null; reacquire = false; pending = false; dropStream(); view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null, notice = "uncertain")) }; if (connectionAlive(connection)) closeConnection(connection) }
     fun refresh(): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val c = connection; val t = token
         if (!current(v.sessionId, c)) return false
@@ -115,7 +120,12 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
                 if (!valid(t, v.sessionId, c) || !visible || r.emulatorId != id || r.generation < (view?.generation ?: 0) || r.owner.kind != "device") {
                     if (connectionAlive(c)) try { send(c, EmulatorCommand.Release(Wire.random(), v.sessionId, id, r.leaseId, r.generation)) } catch (_: Exception) { closeConnection(c) }; return@launch
                 }
-                lease = r.leaseId; sequence = r.nextSequence; dropStream(); set(view?.copy(generation = r.generation, geometry = r.geometry, owner = r.owner, ownsControl = true, image = null, notice = null)); watch()
+                // The Host's state event for this lease can arrive first and already rewatch the new
+                // generation. A second watch of the same generation would race the first one on the
+                // Host, which keeps whichever it handles last, so the stream is kept when nothing changed.
+                val changed = r.generation != view?.generation || r.geometry != view?.geometry
+                lease = r.leaseId; sequence = r.nextSequence; if (changed) dropStream()
+                set(view?.copy(generation = r.generation, geometry = r.geometry, owner = r.owner, ownsControl = true, image = if (changed) null else view?.image, notice = null)); watch()
             }
             is EmulatorResult.Busy -> if (valid(t, v.sessionId, c) && r.emulatorId == id && r.generation >= (view?.generation ?: 0)) { dropStream(); set(view?.copy(generation = r.generation, owner = r.owner, image = null, notice = "busy")); watch() }
             else -> error("unexpected")
@@ -143,7 +153,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     private fun control(command: (EmulatorView,String,String)->EmulatorCommand): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val l = lease ?: return false; val c = connection; val t = token
         if (pending || !current(v.sessionId,c)) return false
-        pending = true; lease = null; dropStream(); set(v.copy(ownsControl = false, image = null))
+        pending = true; lease = null; reacquire = false; dropStream(); set(v.copy(ownsControl = false, image = null))
         scope.launch { try {
             val r = send(c, command(v,id,l)); if (!valid(t,v.sessionId,c)) return@launch
             when (r) {
@@ -223,8 +233,9 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             dropStream()
             set(v.copy(generation = e.generation, geometry = e.geometry, owner = e.owner, ownsControl = handed, inputPending = false, image = null, notice = if (wasInputPending) "uncertain" else null)); watch()
         } else if (!pending && lease == null && e.control != null && e.owner?.kind == "device") {
-            lease = e.control.leaseId; sequence = e.control.nextSequence; dropStream()
-            set(v.copy(owner = e.owner, ownsControl = true, image = null)); watch()
+            // Same generation and geometry: the current stream and frame stay valid (see acquire).
+            lease = e.control.leaseId; sequence = e.control.nextSequence
+            set(v.copy(owner = e.owner, ownsControl = true)); watch()
         } else set(v.copy(owner = e.owner))
     }
 }
