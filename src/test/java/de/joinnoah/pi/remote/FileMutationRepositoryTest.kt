@@ -848,17 +848,57 @@ class FileMutationRepositoryTest {
         val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "gone.txt") to StoredFileDraft(version, "a", "edited")))
         val repository = opened(repository(transport, drafts = drafts))
         assertEquals(listOf("gone.txt"), fileMutationsOf(repository.state.value)!!.orphanDrafts)
+        // Asking is not discarding; cancel, the default, keeps the draft.
         repository.discardOrphanFileDraft("gone.txt")
+        runCurrent()
+        assertEquals("gone.txt", fileMutationsOf(repository.state.value)!!.orphanDiscard)
+        repository.cancelDiscardOrphanFileDraft()
+        runCurrent()
+        assertEquals(1, drafts.drafts.size)
+        repository.discardOrphanFileDraft("gone.txt")
+        repository.confirmDiscardOrphanFileDraft()
         runCurrent()
         assertTrue(drafts.drafts.isEmpty())
         assertTrue(fileMutationsOf(repository.state.value)!!.orphanDrafts.isEmpty())
     }
 
     @Test
+    fun aDraftWhoseFileExistsAgainIsNotDiscarded() = runTest {
+        val transport = Transport(all).apply { missing = setOf("gone.txt") }
+        val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "gone.txt") to StoredFileDraft(version, "a", "edited")))
+        val repository = opened(repository(transport, drafts = drafts))
+        repository.discardOrphanFileDraft("gone.txt")
+        // A branch switch brings the file back before the confirmation.
+        transport.missing = emptySet()
+        repository.confirmFileDraftDiscardChecked()
+        runCurrent()
+        assertEquals(1, drafts.drafts.size)
+        assertTrue(fileMutationsOf(repository.state.value)!!.orphanDrafts.isEmpty())
+    }
+
+    private fun RemoteRepository.confirmFileDraftDiscardChecked() = confirmDiscardOrphanFileDraft()
+
+    @Test
+    fun keptDraftsAreCheckedWhenTheBrowserOpensNotOnEveryMutation() = runTest {
+        val transport = Transport(all)
+        transport.answer = { record(it, "applied") }
+        val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "kept.txt") to StoredFileDraft(version, "a", "edited")))
+        val repository = opened(repository(transport, drafts = drafts))
+        fun reads() = transport.files().count { it.text("type") == "session.files.read" && it.text("path") == "kept.txt" }
+        assertEquals(1, reads())
+        repository.prepareFileCreate("")
+        repository.confirmFileMutation("x.md")
+        runCurrent()
+        assertEquals(1, transport.types().count { it == "session.files.create" })
+        assertEquals(1, reads())
+    }
+
+    @Test
     fun aDraftOfAMissingFileOpensAsANewFileWithTheDraftOffered() = runTest {
         val transport = Transport(all + FILES_WRITE_CAPABILITY).apply { missing = setOf("gone.txt") }
         transport.answer = { record(it, "applied") }
-        val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "gone.txt") to StoredFileDraft(version, "a", "edited")))
+        val oldWrite = PendingWrite("old-request", "b2xkLXZlcnNpb24tMDAwMQ", "edited")
+        val drafts = FileDrafts(mapOf(FileDraftKey("host", sessionId, "gone.txt") to StoredFileDraft("b2xkLXZlcnNpb24tMDAwMQ", "old", "edited", listOf(oldWrite))))
         val repository = opened(repository(transport, drafts = drafts))
         repository.openOrphanFileDraft("gone.txt")
         val dialog = checkNotNull(repository.dialog())
@@ -872,7 +912,10 @@ class FileMutationRepositoryTest {
         val editor = checkNotNull(repository.state.value.files?.editor)
         assertEquals("gone.txt", editor.path)
         assertEquals("edited", editor.recovery?.text)
-        assertTrue(drafts.drafts.isNotEmpty())
+        // Rebased onto the created file: its base, and none of the old file's write request IDs.
+        val rebased = drafts.drafts.getValue(FileDraftKey("host", sessionId, "gone.txt"))
+        assertEquals(StoredFileDraft(version, "a", "edited"), rebased)
+        assertEquals(rebased, editor.recovery)
     }
 
     @Test

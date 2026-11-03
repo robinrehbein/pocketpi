@@ -594,6 +594,10 @@ internal class ChatViewModel(
 
     fun discardOrphanFileDraft(path: String) = active { repository.discardOrphanFileDraft(path) }
 
+    fun confirmDiscardOrphanFileDraft() = active { repository.confirmDiscardOrphanFileDraft() }
+
+    fun cancelDiscardOrphanFileDraft() = repository.cancelDiscardOrphanFileDraft()
+
     fun confirmFileEditorLeave() = editing(repository::confirmFileEditorLeave)
 
     fun cancelFileEditorLeave() = repository.cancelFileEditorLeave()

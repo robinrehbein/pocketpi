@@ -47,6 +47,8 @@ internal class ProjectFilesLoader(
     private data class PendingSearchHit(val hit: FileSearchHit, val sessionId: String, val routeId: String?, val selectionIdentity: Long, val editor: FileEditor)
     private var pendingSearchHit: PendingSearchHit? = null
     private var autoEditPath: String? = null
+    /** A created file whose kept draft is rebased onto it when its editor opens. */
+    private var rebaseDraftPath: String? = null
     private var autoEditVersion: Long? = null
     private var listJob: Job? = null
     private var fileJob: Job? = null
@@ -772,7 +774,13 @@ internal class ProjectFilesLoader(
             try {
                 val draft = if (key != null) draftMutex.withLock {
                     reconcileKnown(key, journal)
-                    journal.get(key)
+                    val kept = journal.get(key)
+                    if (kept != null && rebaseDraftPath == file.path) {
+                        // A draft of a file that was missing, now created: its old writes belong to
+                        // the old file, so only its text moves onto the new one, never a request ID.
+                        rebaseDraftPath = null
+                        StoredFileDraft(checkNotNull(file.version), file.content, kept.text).also { journal.put(key, it) }
+                    } else kept
                 } else error("missing route")
                 if (active()) writeEditor(files.sessionId, file.path) { it.copy(recoveryLoading = false, recovery = draft) }
             } catch (e: CancellationException) { throw e
@@ -1473,7 +1481,10 @@ internal class ProjectFilesLoader(
                 relist(request.sessionId, folder)
                 if (open == null) {
                     // A kept draft of this path comes back: the editor opens and offers it.
-                    if (editKeptDraft) autoEditPath = request.path
+                    if (editKeptDraft) {
+                        autoEditPath = request.path
+                        rebaseDraftPath = request.path
+                    }
                     openFile(request.path)
                 }
             }

@@ -164,7 +164,10 @@ internal class FilesActions(
     val onCancelMutationReset: () -> Unit = {},
     /** A kept draft of a missing file: create the file and edit it, or discard the draft. */
     val onOpenOrphanDraft: (String) -> Unit = {},
+    /** Asks to confirm discarding a kept draft; confirming re-reads the file first. */
     val onDiscardOrphanDraft: (String) -> Unit = {},
+    val onConfirmDiscardOrphanDraft: () -> Unit = {},
+    val onCancelDiscardOrphanDraft: () -> Unit = {},
 )
 
 /**
@@ -239,6 +242,7 @@ internal fun FilesPane(
     }
     mutations?.dialog?.let { FileMutationPrompt(it, actions, mutations.journalFull, mutations.orphanDrafts) }
     if (mutations?.resetConfirming == true) FileMutationResetPrompt(mutations, actions)
+    mutations?.orphanDiscard?.let { FileOrphanDiscardPrompt(it, mutations.orphanDiscarding, actions) }
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
         val editor = state.editor

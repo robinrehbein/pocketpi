@@ -107,6 +107,9 @@ data class FileMutationsState(
     val journalCapacity: Int = 0,
     /** Kept drafts of files the computer no longer has: offered to open as a new file or to discard. */
     val orphanDrafts: List<String> = emptyList(),
+    /** The missing file whose kept draft the user is asked to confirm discarding. */
+    val orphanDiscard: String? = null,
+    val orphanDiscarding: Boolean = false,
 )
 
 /** Whether [kind] can be offered: its capability, recovery, a connected session and this client's journal. */
@@ -232,6 +235,8 @@ internal class FileMutationController(
             val readable = work.withLock { readable(target) }
             if (readable) write(target) { it.copy(journalUnreadable = false, storageFailed = false) }
             reconcile()
+            // Outside the lock: a few reads, only when the browser opens and after a rename or delete.
+            if (current().connected) refreshOrphans(target)
         }
     }
 
@@ -263,12 +268,38 @@ internal class FileMutationController(
         prepareCreate(parentPath(path), path.substringAfterLast('/'))
     }
 
-    /** Discards the kept draft of a missing file, after the user chose to. */
+    /** Asks to confirm discarding the kept draft of a missing file. */
     fun discardOrphan(path: String) {
         val target = scopeOf() ?: return
         if (path !in fileMutationsOf(current())?.orphanDrafts.orEmpty()) return
+        write(target) { it.copy(orphanDiscard = path) }
+    }
+
+    fun cancelDiscardOrphan() {
+        val target = scopeOf() ?: return
+        write(target) { it.copy(orphanDiscard = null) }
+    }
+
+    /**
+     * Discards the confirmed kept draft, after reading its file once more: a file that exists again
+     * (after a branch switch, say) keeps its draft and leaves the list.
+     */
+    fun confirmDiscardOrphan() {
+        val target = scopeOf() ?: return
+        val mutations = fileMutationsOf(current()) ?: return
+        val path = mutations.orphanDiscard ?: return
+        if (mutations.orphanDiscarding) return
+        write(target) { it.copy(orphanDiscarding = true) }
         scope.launch {
-            val discarded = try {
+            val missing = try {
+                source.read(target.sessionId, path)
+                false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e.hostCode == "not_found") true else null
+            }
+            val discarded = missing == true && try {
                 discardDraft(target.routeId, target.sessionId, path)
             } catch (e: CancellationException) {
                 throw e
@@ -277,7 +308,14 @@ internal class FileMutationController(
                 write(target) { it.copy(storageFailed = true) }
                 false
             }
-            if (discarded) write(target) { it.copy(orphanDrafts = it.orphanDrafts - path) }
+            write(target) {
+                it.copy(
+                    orphanDiscard = null,
+                    orphanDiscarding = false,
+                    // Gone, or not missing any more: either way no longer offered here.
+                    orphanDrafts = if (discarded || missing == false) it.orphanDrafts - path else it.orphanDrafts,
+                )
+            }
         }
     }
 
@@ -613,6 +651,7 @@ internal class FileMutationController(
                     val kept = request.kind == FileMutationKind.CREATE && keptDraftCreates.remove(request.sessionId to request.path)
                     if (kept) write(target) { it.copy(orphanDrafts = it.orphanDrafts - request.path) }
                     applied(request, kept)
+                    if (request.kind != FileMutationKind.CREATE) scope.launch { refreshOrphans(target) }
                 }
             }
             FileMutationHostState.REFUSED -> {
@@ -814,7 +853,6 @@ internal class FileMutationController(
         }
         if (unreadable != null) throw StorageFailure(unreadable)
         refreshCapacity(target)
-        refreshOrphans(target)
         return epoch
     }
 

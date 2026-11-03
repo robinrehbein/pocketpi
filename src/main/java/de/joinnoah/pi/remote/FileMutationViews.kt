@@ -279,3 +279,24 @@ internal fun FileMutationResetPrompt(mutations: FileMutationsState, actions: Fil
         },
     )
 }
+
+/** Confirms discarding the kept draft of [path]; dismissing it keeps the draft. */
+@Composable
+internal fun FileOrphanDiscardPrompt(path: String, discarding: Boolean, actions: FilesActions) {
+    AlertDialog(
+        onDismissRequest = actions.onCancelDiscardOrphanDraft,
+        modifier = Modifier.testTag("filesOrphanDiscardDialog"),
+        title = { Text(stringResource(R.string.remote_files_mutation_orphan_discard_title)) },
+        text = { Text(stringResource(R.string.remote_files_mutation_orphan_discard_text, path), Modifier.testTag("filesOrphanDiscardPath")) },
+        confirmButton = {
+            TextButton(onClick = actions.onConfirmDiscardOrphanDraft, enabled = !discarding, modifier = Modifier.testTag("filesOrphanDiscardConfirm")) {
+                Text(stringResource(R.string.remote_files_mutation_orphan_discard), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = actions.onCancelDiscardOrphanDraft, modifier = Modifier.testTag("filesOrphanDiscardCancel")) {
+                Text(stringResource(R.string.remote_files_mutation_cancel))
+            }
+        },
+    )
+}

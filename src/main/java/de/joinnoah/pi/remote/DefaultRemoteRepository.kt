@@ -11066,6 +11066,10 @@ class DefaultRemoteRepository(
 
     override fun discardOrphanFileDraft(path: String) { mutationController?.discardOrphan(path) }
 
+    override fun confirmDiscardOrphanFileDraft() { mutationController?.confirmDiscardOrphan() }
+
+    override fun cancelDiscardOrphanFileDraft() { mutationController?.cancelDiscardOrphan() }
+
     override fun openFiles() = openFiles(exclusive = true)
 
     override fun openFiles(exclusive: Boolean) {
