@@ -172,7 +172,8 @@ internal fun FilesPane(
     val focusManager = LocalFocusManager.current
     val codeWrap = rememberCodeWrap()
     var headerHeight by remember { mutableStateOf(64.dp) }
-    Surface(modifier.fillMaxSize().testTag("filesPane")) {
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
         val editor = state.editor
         if (editor != null) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {

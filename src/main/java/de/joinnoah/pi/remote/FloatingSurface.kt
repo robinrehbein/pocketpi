@@ -285,3 +285,14 @@ internal fun PaddingValues.underFloatingHeader(): PaddingValues {
 @Composable
 internal fun PaddingValues.floatingHeaderOverlap(): Dp =
     (calculateTopPadding() - WindowInsets.statusBars.asPaddingValues().calculateTopPadding()).coerceAtLeast(0.dp)
+
+/** [this] without its bottom, for a list that pads its own bottom to scroll under a floating bottom pill. */
+@Composable
+internal fun PaddingValues.withoutBottom(): PaddingValues {
+    val direction = LocalLayoutDirection.current
+    return PaddingValues(
+        start = calculateStartPadding(direction),
+        top = calculateTopPadding(),
+        end = calculateEndPadding(direction),
+    )
+}

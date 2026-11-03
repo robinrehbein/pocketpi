@@ -15,6 +15,10 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -973,7 +977,8 @@ private fun JobsTopBar(
 internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifier: Modifier = Modifier) {
     val view = state.view
     PaneBackHandler { if (view != null) actions.onCloseJob() else actions.onClose() }
-    Surface(modifier.fillMaxSize().testTag("jobsScreen")) {
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("jobsScreen"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             if (view == null) JobList(state, actions) else key(view.jobId) { JobDetail(view, actions) }
         }
@@ -982,6 +987,17 @@ internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifi
 
 @Composable
 private fun JobList(state: JobsState, actions: JobsActions) {
+    // The list scrolls under the floating header, whose pills blur it, as in the other panes.
+    var headerHeight by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
+    Box(Modifier.fillMaxSize()) {
+    JobListContent(
+        state,
+        actions.onOpenJob,
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = headerHeight, bottom = 16.dp),
+    )
+    Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
     JobsTopBar(
         title = stringResource(R.string.remote_jobs_title),
         nested = false,
@@ -998,22 +1014,28 @@ private fun JobList(state: JobsState, actions: JobsActions) {
                 )
             ),
     )
-    HorizontalDivider()
-    JobListContent(state, actions.onOpenJob, Modifier.fillMaxSize())
+    }
+    }
 }
 
 @Composable
-private fun JobListContent(state: JobsState, onOpenJob: (String) -> Unit, modifier: Modifier) {
+private fun JobListContent(
+    state: JobsState,
+    onOpenJob: (String) -> Unit,
+    modifier: Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+) {
     when {
         state.jobs.isEmpty() && state.loading && !state.loaded ->
-            Box(modifier, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            Box(modifier.padding(contentPadding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         state.jobs.isEmpty() ->
             JobsMessage(
                 stringResource(if (state.failure != null) R.string.remote_jobs_failed else R.string.remote_jobs_empty),
-                modifier,
+                modifier.padding(contentPadding),
             )
         else ->
-            LazyColumn(modifier.testTag("jobsList").glassSource()) {
+            // Rows like the session list's: no dividers, the page's background behind them.
+            LazyColumn(modifier.testTag("jobsList").glassSource(), contentPadding = contentPadding) {
                 if (state.failure != null)
                     item { JobsMessage(stringResource(R.string.remote_jobs_failed), Modifier) }
                 itemsIndexed(state.jobs.sortedByDescending { it.startedAt }, key = { _, job -> job.id }) { _, job ->
@@ -1036,10 +1058,12 @@ private fun JobListContent(state: JobsState, onOpenJob: (String) -> Unit, modifi
                                 else Icon(Icons.Outlined.Terminal, null)
                             }
                         },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier =
-                            Modifier.clickable(role = Role.Button) { onOpenJob(job.id) }.testTag("job-${job.id}"),
+                            Modifier.clip(MaterialTheme.shapes.medium)
+                                .clickable(role = Role.Button) { onOpenJob(job.id) }
+                                .testTag("job-${job.id}"),
                     )
-                    HorizontalDivider()
                 }
             }
     }
@@ -1092,7 +1116,6 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
         onClose = actions.onClose,
         actions = actionsList,
     )
-    HorizontalDivider()
     if (job != null)
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Text(jobStatusLabel(job), style = MaterialTheme.typography.bodyMedium, color = jobStatusColor(job))

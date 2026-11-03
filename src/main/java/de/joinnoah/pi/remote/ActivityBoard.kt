@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,10 +22,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -47,6 +44,11 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -223,42 +225,38 @@ internal fun ActivityBoardContent(
     now: Long = System.currentTimeMillis(),
 ) {
     val empty = groups.values.all { it.isEmpty() }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 8.dp, end = 16.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
-            }
-            Text(
-                stringResource(R.string.remote_activity_title),
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.semantics { heading() },
-            )
-        }
-        if (lastKnown)
-            Text(
-                stringResource(R.string.remote_activity_last_known),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
+    val density = LocalDensity.current
+    // The board scrolls under its floating header, whose pills blur it, as on the other pages.
+    var headerHeight by remember { mutableStateOf(0.dp) }
+    val lastKnownNote: @Composable () -> Unit = {
+        Text(
+            stringResource(R.string.remote_activity_last_known),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(vertical = 8.dp),
+        )
+    }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         if (empty)
-            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    stringResource(R.string.remote_activity_empty),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Column(Modifier.fillMaxSize().padding(top = headerHeight).padding(horizontal = 16.dp)) {
+                if (lastKnown) lastKnownNote()
+                Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        stringResource(R.string.remote_activity_empty),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         else if (wide)
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 260.dp),
-                modifier = Modifier.fillMaxSize().glassSource().padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxSize().glassSource(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                if (lastKnown) item(key = "lastKnown", span = { GridItemSpan(maxLineSpan) }) { lastKnownNote() }
                 groups.forEach { (group, items) ->
                     if (items.isNotEmpty()) {
                         item(key = "heading_${group.name}", span = { GridItemSpan(maxLineSpan) }) {
@@ -276,10 +274,11 @@ internal fun ActivityBoardContent(
                     .glassSource()
                     .wrapContentWidth(Alignment.CenterHorizontally)
                     .widthIn(max = MAX_PAGE_WIDTH)
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                if (lastKnown) item(key = "lastKnown") { lastKnownNote() }
                 groups.forEach { (group, items) ->
                     if (items.isNotEmpty()) {
                         item(key = "heading_${group.name}") { ActivityHeading(group, items.size) }
@@ -288,8 +287,13 @@ internal fun ActivityBoardContent(
                         }
                     }
                 }
-                item { Spacer(Modifier.height(16.dp)) }
             }
+        PageHeader(
+            title = stringResource(R.string.remote_activity_title),
+            titleInPill = true,
+            onBack = onBack,
+            modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } },
+        )
     }
 }
 

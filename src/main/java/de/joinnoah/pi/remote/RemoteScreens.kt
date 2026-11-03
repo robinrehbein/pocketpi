@@ -1825,7 +1825,7 @@ internal fun RemoteScreen(
         else {
             {
                 // The inspector beside the chat blurs its own panes only.
-                ProvideGlass(MaterialTheme.colorScheme.surface) {
+                ProvideGlass {
                 InspectorHost(
                     tabs,
                     content = ::tabContent,
@@ -2183,7 +2183,9 @@ internal fun RemoteScreen(
         },
         bottomBar = {
             if (!settings && key !is RemoteNavKey.Sessions && key !is RemoteNavKey.Chat && !firstRun)
-                Surface(color = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
+                // No bar of its own: the action floats as a glass pill over the list, which scrolls on
+                // under it, like the header pills above.
+                Box {
                     Column(
                         Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp)
                     ) {
@@ -2191,17 +2193,19 @@ internal fun RemoteScreen(
                             RemoteNavKey.Settings -> Unit
                             RemoteNavKey.Hosts -> {
                                 if (!firstRun)
-                                    TextButton(
-                                        onClick = { paste = true },
-                                        modifier = Modifier.fillMaxWidth().testTag("pasteCodeButton"),
-                                    ) {
-                                        Icon(
-                                            Icons.Default.ContentPaste,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(ButtonDefaults.IconSize),
-                                        )
-                                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                                        Text(stringResource(R.string.remote_onboarding_paste))
+                                    FloatingSurface(Modifier.fillMaxWidth(), shape = CircleShape) {
+                                        TextButton(
+                                            onClick = { paste = true },
+                                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("pasteCodeButton"),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.ContentPaste,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                            )
+                                            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                            Text(stringResource(R.string.remote_onboarding_paste))
+                                        }
                                     }
                             }
                             is RemoteNavKey.Sessions -> Unit
@@ -2214,12 +2218,14 @@ internal fun RemoteScreen(
                             // Providers, Open folder, Disconnect and Remove pairing live in the Mac's
                             // overflow in the header, so the list keeps the full height.
                             is RemoteNavKey.Projects -> {
-                                OutlinedButton(
-                                    onClick = { navigator.openActivity(key.routeId, twoPane) },
-                                    enabled = state.host != null,
-                                    modifier = Modifier.fillMaxWidth().testTag("activityButton"),
-                                ) {
-                                    Text(stringResource(R.string.remote_activity_title))
+                                FloatingSurface(Modifier.fillMaxWidth(), shape = CircleShape) {
+                                    TextButton(
+                                        onClick = { navigator.openActivity(key.routeId, twoPane) },
+                                        enabled = state.host != null,
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("activityButton"),
+                                    ) {
+                                        Text(stringResource(R.string.remote_activity_title))
+                                    }
                                 }
                             }
                         }
@@ -2243,8 +2249,11 @@ internal fun RemoteScreen(
                 Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()
                     .onSizeChanged { chatHeight = with(density) { it.height.toDp() } }
                     .then(chatDrop)
-            else Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
+            // A list page pads its list's bottom instead (see listBottomInset), so the list scrolls on
+            // under the floating bottom pill.
+            else Modifier.fillMaxSize().padding(insets.withoutBottom()).consumeWindowInsets(insets)
         ) {
+        val listBottomInset = if (key is RemoteNavKey.Chat) 0.dp else insets.calculateBottomPadding()
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
         val underlay = if (openTool != null && !panesBeside) Modifier.clearAndSetSemantics {} else Modifier
         // The inspector's resize handle reaches into the chat's end: the scrollbar lane starts
@@ -2285,9 +2294,9 @@ internal fun RemoteScreen(
                             if (
                                 key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
                                     (key is RemoteNavKey.Projects && canOpenFolders(state))
-                            ) 112.dp
+                            ) 112.dp + listBottomInset
                             else if (key is RemoteNavKey.Chat) conversationEndPadding
-                            else 24.dp,
+                            else 24.dp + listBottomInset,
                     ),
                 verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
             ) {
@@ -3712,8 +3721,9 @@ internal fun RemoteScreen(
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
             // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
-            // One call each, so a pane keeps its state while another comes or goes.
-            val paneSurface = MaterialTheme.colorScheme.surface
+            // One call each, so a pane keeps its state while another comes or goes. The panes draw
+            // on the page background, which also fills the gaps of their blurred lists.
+            val paneSurface = MaterialTheme.colorScheme.background
             if (!panesBeside && changesContent != null) ProvideGlass(paneSurface) { changesContent() }
             if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
             if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
