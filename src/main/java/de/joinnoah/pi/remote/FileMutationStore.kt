@@ -20,7 +20,7 @@ class FileMutationStore(
     private val directory = context.noBackupFilesDir.canonicalFile
     private val payload = File(directory, "file-mutations.enc")
     private val marker = File(directory, "file-mutations-v1.provisioned")
-    private val encrypted = EncryptedFileStore(context, "file-mutations.enc", "pi-remote-file-mutations-v1", preserveUnreadable = true, preserveIncompleteCommit = true)
+    private val encrypted = EncryptedFileStore(context, "file-mutations.enc", ALIAS, preserveUnreadable = true, preserveIncompleteCommit = true)
     override val lockIdentity: Any = payload.canonicalPath
     private val lock = locks.computeIfAbsent(lockIdentity as String) { Any() }
 
@@ -35,6 +35,25 @@ class FileMutationStore(
         encrypted.write(encoded)
     }
 
+    /**
+     * Discards every local artifact, readable or not, and provisions an empty journal under a new
+     * key. Only after the user confirmed that the record of open operations is lost.
+     */
+    override fun reset() = synchronized(lock) {
+        listOf(payload, File(payload.path + ".new"), File(payload.path + ".bak"), marker).forEach {
+            if (it.exists() && !it.delete()) throw IOException("Could not discard ${it.name}")
+        }
+        EncryptedFileStore.dropKey(ALIAS)
+        provision()
+    }
+
+    private fun provision() {
+        encrypted.write(encode(emptyMap()))
+        // A failure here leaves a payload without a marker, which subsequent reads reject.
+        if (!marker.createNewFile()) throw IOException("Provisioning marker already exists")
+        FileOutputStream(marker).use { it.write(MARKER); it.fd.sync() }
+    }
+
     private fun read(): Map<FileMutationKey, FileMutationEntry> {
         // AtomicFile recovery can replace the base file. For unresolved mutation evidence,
         // preserve every partial/legacy artifact instead of letting a read or write recover it.
@@ -44,11 +63,7 @@ class FileMutationStore(
         val hasPayload = payload.exists()
         val hasMarker = marker.exists()
         if (!hasPayload && !hasMarker && !expectProvisioned) {
-            val empty = encode(emptyMap())
-            encrypted.write(empty)
-            // A failure here leaves a payload without a marker, which subsequent reads reject.
-            if (!marker.createNewFile()) throw IOException("Provisioning marker already exists")
-            FileOutputStream(marker).use { it.write(MARKER); it.fd.sync() }
+            provision()
         } else if (!hasPayload || !hasMarker) {
             throw IOException("Mutation store provisioning evidence is missing")
         }
@@ -199,6 +214,7 @@ class FileMutationStore(
 
     companion object {
         private val locks = ConcurrentHashMap<String, Any>()
+        private const val ALIAS = "pi-remote-file-mutations-v1"
         /** 2 adds each operation's host journal epoch; no version 1 store was ever written by a release. */
         private const val VERSION = 2
         private val MARKER = "pocketpi-file-mutations-v1\n".toByteArray(Charsets.UTF_8)

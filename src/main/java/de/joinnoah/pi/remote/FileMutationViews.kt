@@ -131,9 +131,21 @@ internal fun FileMutationPrompt(dialog: FileMutationDialog, actions: FilesAction
 @Composable
 internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesActions, modifier: Modifier = Modifier) {
     val outcome = mutations.outcome
-    if (outcome == null && mutations.recovery.isEmpty() && !mutations.storageFailed) return
+    if (outcome == null && mutations.recovery.isEmpty() && !mutations.storageFailed && !mutations.journalUnreadable) return
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesMutationNotices")) {
-        if (mutations.storageFailed)
+        if (mutations.journalUnreadable)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("filesMutationJournalLost")) {
+                Text(
+                    stringResource(R.string.remote_files_mutation_journal_lost),
+                    Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TextButton(onClick = actions.onRequestMutationReset, enabled = !mutations.resetting, modifier = Modifier.testTag("filesMutationReset")) {
+                    Text(stringResource(R.string.remote_files_mutation_reset))
+                }
+            }
+        if (mutations.storageFailed && !mutations.journalUnreadable)
             Text(stringResource(R.string.remote_files_mutation_storage), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         if (outcome != null) {
             val operation = operationText(outcome.kind, outcome.path, outcome.destinationPath)
@@ -174,18 +186,53 @@ internal fun FileMutationNotices(mutations: FileMutationsState, actions: FilesAc
                     Column(Modifier.weight(1f)) {
                         Text(operationText(item.kind, item.path, item.destinationPath), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
                         if (item.lost) Text(stringResource(R.string.remote_files_mutation_lost), style = MaterialTheme.typography.bodySmall)
+                        if (item.pending) Text(stringResource(R.string.remote_files_mutation_recovery_pending), style = MaterialTheme.typography.bodySmall)
                         if (item.failure != null)
-                            Text(stringResource(R.string.remote_files_mutation_acknowledge_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                stringResource(if (item.pending) R.string.remote_files_mutation_check_failed else R.string.remote_files_mutation_acknowledge_failed),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                     }
-                    TextButton(
-                        onClick = { actions.onAcknowledgeMutation(item.operationId) },
-                        enabled = !item.acknowledging,
-                        modifier = Modifier.testTag("filesMutationAcknowledge:${item.operationId}"),
-                    ) {
-                        Text(stringResource(R.string.remote_files_mutation_acknowledge))
-                    }
+                    if (item.pending)
+                        TextButton(
+                            onClick = { actions.onCheckMutation(item.operationId) },
+                            enabled = !item.checking,
+                            modifier = Modifier.testTag("filesMutationCheck:${item.operationId}"),
+                        ) {
+                            Text(stringResource(R.string.remote_files_mutation_check))
+                        }
+                    else
+                        TextButton(
+                            onClick = { actions.onAcknowledgeMutation(item.operationId) },
+                            enabled = !item.acknowledging,
+                            modifier = Modifier.testTag("filesMutationAcknowledge:${item.operationId}"),
+                        ) {
+                            Text(stringResource(R.string.remote_files_mutation_acknowledge))
+                        }
                 }
             }
         }
     }
+}
+
+/** Confirms discarding the unreadable journal; dismissing it keeps everything blocked. */
+@Composable
+internal fun FileMutationResetPrompt(mutations: FileMutationsState, actions: FilesActions) {
+    AlertDialog(
+        onDismissRequest = actions.onCancelMutationReset,
+        modifier = Modifier.testTag("filesMutationResetDialog"),
+        title = { Text(stringResource(R.string.remote_files_mutation_reset_title)) },
+        text = { Text(stringResource(R.string.remote_files_mutation_reset_text)) },
+        confirmButton = {
+            TextButton(onClick = actions.onConfirmMutationReset, enabled = !mutations.resetting, modifier = Modifier.testTag("filesMutationResetConfirm")) {
+                Text(stringResource(R.string.remote_files_mutation_reset), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = actions.onCancelMutationReset, modifier = Modifier.testTag("filesMutationResetCancel")) {
+                Text(stringResource(R.string.remote_files_mutation_cancel))
+            }
+        },
+    )
 }

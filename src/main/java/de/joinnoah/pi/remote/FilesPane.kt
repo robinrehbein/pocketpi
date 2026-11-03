@@ -157,6 +157,11 @@ internal class FilesActions(
     val onDismissMutationOutcome: () -> Unit = {},
     /** Acknowledges an unknown outcome; nothing is retried. */
     val onAcknowledgeMutation: (String) -> Unit = {},
+    /** Asks the host again about a pending operation; nothing is resent. */
+    val onCheckMutation: (String) -> Unit = {},
+    val onRequestMutationReset: () -> Unit = {},
+    val onConfirmMutationReset: () -> Unit = {},
+    val onCancelMutationReset: () -> Unit = {},
 )
 
 /**
@@ -230,6 +235,7 @@ internal fun FilesPane(
         )
     }
     mutations?.dialog?.let { FileMutationPrompt(it, actions) }
+    if (mutations?.resetConfirming == true) FileMutationResetPrompt(mutations, actions)
     Surface(modifier.fillMaxSize().testTag("filesPane")) {
         val editor = state.editor
         if (editor != null) {
@@ -248,7 +254,7 @@ internal fun FilesPane(
                         color = MaterialTheme.colorScheme.error,
                     )
                 val notices = mutations != null &&
-                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed)
+                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable)
                 if (mutations != null && notices)
                     FileMutationNotices(mutations, actions, Modifier.padding(top = if (prefillFailed) 0.dp else headerHeight))
                 // Backspace, or Left at the edge, goes up a folder or back from a file.

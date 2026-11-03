@@ -69,6 +69,12 @@ data class FileMutationRecoveryItem(
     val epoch: String,
     val acknowledging: Boolean = false,
     val failure: FilesFailure? = null,
+    /** The host has not finished it yet: only its status can be asked for again, never acknowledged. */
+    val pending: Boolean = false,
+    /** Its status is being asked for. */
+    val checking: Boolean = false,
+    /** This device's journal holds it; an operation only the host lists is false. */
+    val local: Boolean = true,
 )
 
 data class FileMutationsState(
@@ -77,13 +83,21 @@ data class FileMutationsState(
     val dialog: FileMutationDialog? = null,
     val outcome: FileMutationOutcome? = null,
     val recovery: List<FileMutationRecoveryItem> = emptyList(),
-    /** The local operation journal could not be read or written; nothing is sent. */
+    /** The local operation journal could not be written; nothing is sent. */
     val storageFailed: Boolean = false,
+    /**
+     * The local journal cannot be read: this phone lost its record of open operations. Nothing is
+     * sent until the user confirms a reset ([resetConfirming]); the host's list still shows its own.
+     */
+    val journalUnreadable: Boolean = false,
+    val resetConfirming: Boolean = false,
+    val resetting: Boolean = false,
 )
 
 /** Whether [kind] can be offered: its capability, recovery, a connected session and this client's journal. */
 internal fun canMutateFiles(state: RemoteState, kind: FileMutationKind): Boolean =
-    canBrowseFiles(state) && state.connected && fileMutationsOf(state) != null &&
+    canBrowseFiles(state) && state.connected &&
+        fileMutationsOf(state)?.let { !it.journalUnreadable && !it.storageFailed } == true &&
         kind.capability in state.capabilities && kind.capability !in state.unavailableCapabilities &&
         FILES_MUTATION_RECOVERY_CAPABILITY in state.capabilities &&
         FILES_MUTATION_RECOVERY_CAPABILITY !in state.unavailableCapabilities
@@ -109,6 +123,9 @@ internal interface FileMutationSource {
     suspend fun mutationStatus(request: FileMutationRequest): FileMutationRecord
 
     suspend fun acknowledge(sessionId: String, item: FileMutationRecoveryItem): FileMutationRecord
+
+    /** `session.files.mutation.status` of an operation only known from the recovery list. */
+    suspend fun itemStatus(sessionId: String, item: FileMutationRecoveryItem): FileMutationRecord
 
     suspend fun read(sessionId: String, path: String): FileChunk
 }
@@ -170,8 +187,25 @@ internal class FileMutationController(
     fun open() {
         val target = scopeOf() ?: return
         write(target) { it }
-        reconcile()
+        scope.launch {
+            // Read the journal at once, also offline: an unreadable one shows its recovery notice.
+            val readable = work.withLock { readable(target) }
+            if (readable) write(target) { it.copy(journalUnreadable = false, storageFailed = false) }
+            reconcile()
+        }
     }
+
+    private suspend fun readable(target: Scope): Boolean =
+        try {
+            journal.pending(target.routeId, target.deviceId, target.sessionId)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diagnostics.caught("files.mutation.journal", e)
+            write(target) { it.copy(journalUnreadable = true) }
+            false
+        }
 
     // ---- Dialogs -----------------------------------------------------------------------------
 
@@ -232,7 +266,7 @@ internal class FileMutationController(
             throw e
         } catch (e: Exception) {
             Diagnostics.caught("files.mutation.journal", e)
-            write(target) { it.copy(storageFailed = true) }
+            write(target) { it.copy(journalUnreadable = true) }
             return true
         }
         return unresolved.any { entry -> listOfNotNull(entry.request.path, entry.request.destinationPath).any { it in paths } }
@@ -359,7 +393,7 @@ internal class FileMutationController(
         var sent = false
         try {
             val record = source.mutate(request) { sent = true }
-            withContext(NonCancellable) { settle(target, request, record, shown = true) }
+            withContext(NonCancellable) { settle(target, request, record, poll = true) }
         } catch (e: Throwable) {
             val answered = (e as? RemoteRequestException)?.answered == true
             withContext(NonCancellable) {
@@ -400,7 +434,7 @@ internal class FileMutationController(
     }
 
     /** Records what the host answered for [request]; a pending one is asked about again shortly. */
-    private suspend fun settle(target: Scope, request: FileMutationRequest, record: FileMutationRecord, shown: Boolean) {
+    private suspend fun settle(target: Scope, request: FileMutationRequest, record: FileMutationRecord, poll: Boolean) {
         val key = FileMutationKey(request.deviceId, request.operationId)
         try {
             when (record.state) {
@@ -424,21 +458,35 @@ internal class FileMutationController(
         }
         when (record.state) {
             FileMutationHostState.APPLIED -> {
+                removeRecovery(target, request.operationId)
                 showOutcome(target, request, FileMutationStatus.APPLIED)
                 if (scopeOf() == target) applied(request)
             }
-            FileMutationHostState.REFUSED -> showOutcome(target, request, FileMutationStatus.REFUSED, record.reason)
+            FileMutationHostState.REFUSED -> {
+                removeRecovery(target, request.operationId)
+                showOutcome(target, request, FileMutationStatus.REFUSED, record.reason)
+            }
             FileMutationHostState.UNKNOWN -> {
                 showOutcome(target, request, FileMutationStatus.UNKNOWN)
-                if (!record.acknowledged) addRecovery(target, request, lost = false)
+                if (record.acknowledged) removeRecovery(target, request.operationId) else addRecovery(target, item(request))
             }
-            FileMutationHostState.PENDING -> if (shown) poll(target, request)
+            FileMutationHostState.PENDING -> {
+                addRecovery(target, item(request).copy(pending = true))
+                if (poll) poll(target, request)
+            }
         }
     }
 
-    private fun addRecovery(target: Scope, request: FileMutationRequest, lost: Boolean) = write(target) { state ->
-        val item = FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, lost, request.epoch)
-        state.copy(recovery = state.recovery.filter { it.operationId != request.operationId } + item)
+    private fun item(request: FileMutationRequest, lost: Boolean = false) =
+        FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, lost, request.epoch)
+
+    private fun addRecovery(target: Scope, item: FileMutationRecoveryItem) = write(target) { state ->
+        val index = state.recovery.indexOfFirst { it.operationId == item.operationId }
+        state.copy(recovery = if (index < 0) state.recovery + item else state.recovery.toMutableList().also { it[index] = item })
+    }
+
+    private fun removeRecovery(target: Scope, operationId: String) = write(target) { state ->
+        state.copy(recovery = state.recovery.filter { it.operationId != operationId })
     }
 
     private fun poll(target: Scope, request: FileMutationRequest) {
@@ -454,7 +502,7 @@ internal class FileMutationController(
                     Diagnostics.caught("files.mutation.poll", e)
                     return@launch
                 }
-                settle(target, request, record, shown = false)
+                settle(target, request, record, poll = false)
                 if (record.state != FileMutationHostState.PENDING) return@launch
             }
         }
@@ -497,11 +545,15 @@ internal class FileMutationController(
         } while (after != null && pages.size < MAX_LIST_PAGES)
         val epoch = pages.first().epoch
         val host = pages.flatMap { it.operations }.associateBy { it.operationId }
+        // An unreadable journal still lets the host's own unresolved operations show.
+        var unreadable: Exception? = null
         val local = try {
             journal.pending(target.routeId, target.deviceId, target.sessionId)
         } catch (e: Exception) {
-            write(target) { it.copy(storageFailed = true) }
-            throw StorageFailure(e)
+            Diagnostics.caught("files.mutation.journal", e)
+            write(target) { it.copy(journalUnreadable = true) }
+            unreadable = e
+            emptyList()
         }
         val recovery = mutableListOf<FileMutationRecoveryItem>()
         for (entry in local) {
@@ -516,9 +568,12 @@ internal class FileMutationController(
             when (entry.state) {
                 FileMutationState.RESERVED -> {
                     val record = source.mutationStatus(request)
-                    settle(target, request, record, shown = false)
-                    if (record.state == FileMutationHostState.UNKNOWN && !record.acknowledged)
-                        recovery += FileMutationRecoveryItem(request.operationId, request.kind, request.path, request.destinationPath, epoch = epoch)
+                    // A pending one is asked about again shortly, and stays listed until then.
+                    settle(target, request, record, poll = true)
+                    when {
+                        record.state == FileMutationHostState.UNKNOWN && !record.acknowledged -> recovery += item(request)
+                        record.state == FileMutationHostState.PENDING -> recovery += item(request).copy(pending = true)
+                    }
                 }
                 FileMutationState.UNKNOWN ->
                     if (host[request.operationId]?.acknowledged == true) {
@@ -531,12 +586,15 @@ internal class FileMutationController(
         }
         // Unknown operations the host holds for this device that this journal no longer has.
         val known = local.map { it.request.operationId }.toSet()
-        host.values.filter { it.state == FileMutationHostState.UNKNOWN && !it.acknowledged && it.operationId !in known }
-            .forEach { recovery += FileMutationRecoveryItem(it.operationId, it.kind, it.path, it.destinationPath, epoch = epoch) }
+        host.values.filter { !it.acknowledged && it.operationId !in known }.forEach {
+            recovery += FileMutationRecoveryItem(it.operationId, it.kind, it.path, it.destinationPath, epoch = epoch,
+                pending = it.state == FileMutationHostState.PENDING, local = false)
+        }
         write(target) { state ->
             val acknowledging = state.recovery.filter { it.acknowledging }.map { it.operationId }.toSet()
             state.copy(recovery = recovery.map { it.copy(acknowledging = it.operationId in acknowledging) })
         }
+        if (unreadable != null) throw StorageFailure(unreadable)
         return epoch
     }
 
@@ -549,7 +607,7 @@ internal class FileMutationController(
         val state = current()
         val target = scopeOf(state) ?: return
         val item = fileMutationsOf(state)?.recovery?.firstOrNull { it.operationId == operationId } ?: return
-        if (item.acknowledging) return
+        if (item.acknowledging || item.pending) return
         if (!item.lost && (!state.connected || !canRecoverFileMutations(state))) return
         write(target) { it.copy(recovery = it.recovery.map { entry -> if (entry.operationId == operationId) entry.copy(acknowledging = true, failure = null) else entry }) }
         scope.launch {
@@ -560,12 +618,8 @@ internal class FileMutationController(
                         val record = source.acknowledge(target.sessionId, item)
                         check(record.state == FileMutationHostState.UNKNOWN && record.acknowledged) { "Not acknowledged" }
                     }
-                    try {
-                        journal.acknowledgeUnknown(key)
-                    } catch (e: IllegalStateException) {
-                        // Only the host had it: nothing to change here.
-                        if (!e.message.orEmpty().contains("not reserved")) throw e
-                    }
+                    // An operation only the host lists has nothing to change here.
+                    if (item.local) journal.acknowledgeUnknown(key)
                     write(target) { it.copy(recovery = it.recovery.filter { entry -> entry.operationId != operationId }) }
                 } catch (e: CancellationException) {
                     throw e
@@ -579,6 +633,88 @@ internal class FileMutationController(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Asks the host again about a pending operation of the recovery list
+     * (`session.files.mutation.status`); never sends the operation itself.
+     */
+    fun checkAgain(operationId: String) {
+        val state = current()
+        val target = scopeOf(state) ?: return
+        val item = fileMutationsOf(state)?.recovery?.firstOrNull { it.operationId == operationId } ?: return
+        if (!item.pending || item.checking || !state.connected || !canRecoverFileMutations(state)) return
+        fun mark(checking: Boolean, failure: FilesFailure?) = write(target) {
+            it.copy(recovery = it.recovery.map { entry -> if (entry.operationId == operationId) entry.copy(checking = checking, failure = failure) else entry })
+        }
+        mark(true, null)
+        scope.launch {
+            work.withLock {
+                try {
+                    val request = if (item.local) journal.pending(target.routeId, target.deviceId, target.sessionId)
+                        .firstOrNull { it.request.operationId == operationId }?.request else null
+                    if (request != null) {
+                        settle(target, request, source.mutationStatus(request), poll = false)
+                    } else {
+                        val record = source.itemStatus(target.sessionId, item)
+                        when (record.state) {
+                            FileMutationHostState.PENDING -> mark(false, null)
+                            FileMutationHostState.UNKNOWN ->
+                                if (record.acknowledged) removeRecovery(target, operationId)
+                                else addRecovery(target, item.copy(pending = false, checking = false, failure = null))
+                            else -> removeRecovery(target, operationId)
+                        }
+                        return@withLock
+                    }
+                    write(target) { it.copy(recovery = it.recovery.map { entry -> if (entry.operationId == operationId) entry.copy(checking = false) else entry }) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Diagnostics.caught("files.mutation.check", e)
+                    mark(false, if (e is RemoteRequestException) failure(e) else FilesFailure.FAILED)
+                }
+            }
+        }
+    }
+
+    /** Asks to confirm discarding an unreadable journal. */
+    fun requestReset() {
+        val target = scopeOf() ?: return
+        if (fileMutationsOf(current())?.journalUnreadable != true) return
+        write(target) { it.copy(resetConfirming = true) }
+    }
+
+    fun cancelReset() {
+        val target = scopeOf() ?: return
+        write(target) { it.copy(resetConfirming = false) }
+    }
+
+    /**
+     * Discards the unreadable journal and starts an empty one, after the user confirmed that this
+     * phone lost its record of open operations. Nothing is sent for them; the host's own
+     * unresolved operations are listed again for acknowledgement.
+     */
+    fun confirmReset() {
+        val target = scopeOf() ?: return
+        val mutations = fileMutationsOf(current()) ?: return
+        if (!mutations.resetConfirming || !mutations.journalUnreadable || mutations.resetting) return
+        write(target) { it.copy(resetting = true) }
+        scope.launch {
+            work.withLock {
+                try {
+                    journal.reset()
+                    journal.pending(target.routeId, target.deviceId, target.sessionId)
+                    write(target) { it.copy(journalUnreadable = false, storageFailed = false, resetConfirming = false, resetting = false, recovery = emptyList()) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Diagnostics.caught("files.mutation.reset", e)
+                    write(target) { it.copy(resetting = false, resetConfirming = false) }
+                    return@withLock
+                }
+            }
+            reconcile()
         }
     }
 

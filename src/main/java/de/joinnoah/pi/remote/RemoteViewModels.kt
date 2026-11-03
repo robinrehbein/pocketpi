@@ -582,6 +582,14 @@ internal class ChatViewModel(
 
     fun acknowledgeFileMutation(operationId: String) = active { repository.acknowledgeFileMutation(operationId) }
 
+    fun checkFileMutation(operationId: String) = active { repository.checkFileMutation(operationId) }
+
+    fun requestFileMutationReset() = repository.requestFileMutationReset()
+
+    fun confirmFileMutationReset() = repository.confirmFileMutationReset()
+
+    fun cancelFileMutationReset() = repository.cancelFileMutationReset()
+
     fun confirmFileEditorLeave() = editing(repository::confirmFileEditorLeave)
 
     fun cancelFileEditorLeave() = repository.cancelFileEditorLeave()

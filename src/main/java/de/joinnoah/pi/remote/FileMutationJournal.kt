@@ -58,6 +58,9 @@ interface FileMutationStorage {
     val lockIdentity: Any
     fun load(): Map<FileMutationKey, FileMutationEntry>
     fun save(entries: Map<FileMutationKey, FileMutationEntry>)
+
+    /** Discards all evidence, also unreadable evidence, and starts an empty journal. */
+    fun reset(): Unit = throw UnsupportedOperationException("This journal cannot be reset")
 }
 
 class FileMutationJournal(
@@ -157,6 +160,14 @@ class FileMutationJournal(
             check(entry.state == FileMutationState.TERMINAL) { "Only terminal receipts can be forgotten" }
             persist(current - key)
         }
+    }
+
+    /**
+     * Starts over with an empty journal after the user confirmed the local record is lost. The
+     * host keeps its own unresolved operations, which recovery still lists.
+     */
+    suspend fun reset(): Unit = withContext(dispatcher) {
+        mutex.withLock { storage.reset() }
     }
 
     suspend fun acknowledgeUnknown(key: FileMutationKey): Unit = withContext(dispatcher) {

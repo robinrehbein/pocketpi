@@ -789,4 +789,11 @@
     <string name="remote_files_mutation_acknowledge">Acknowledge</string>
     <string name="remote_files_mutation_acknowledge_failed">Could not acknowledge. Try again.</string>
     <string name="remote_files_mutation_storage">This phone cannot record file operations right now, so none are sent.</string>
+    <string name="remote_files_mutation_recovery_pending">The Mac has not finished this yet.</string>
+    <string name="remote_files_mutation_check">Check again</string>
+    <string name="remote_files_mutation_check_failed">Could not ask the Mac. Try again.</string>
+    <string name="remote_files_mutation_journal_lost">This phone lost its record of open file operations, so it sends none. The Mac’s own open operations are still listed.</string>
+    <string name="remote_files_mutation_reset">Reset</string>
+    <string name="remote_files_mutation_reset_title">Reset the record of file operations?</string>
+    <string name="remote_files_mutation_reset_text">This phone can no longer tell which of its file operations are still open. Resetting starts an empty record; nothing is sent again. Check the files yourself, and acknowledge what the Mac still lists.</string>
 </resources>

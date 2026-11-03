@@ -9899,6 +9899,13 @@ class DefaultRemoteRepository(
                 return parseFileMutationRecord(data, sessionId, item.operationId, item.kind, item.path, item.destinationPath)
             }
 
+            override suspend fun itemStatus(sessionId: String, item: FileMutationRecoveryItem): FileMutationRecord {
+                requireMutation(sessionId, FILES_MUTATION_RECOVERY_CAPABILITY)
+                val fields = fileMutationStatusFields(sessionId, item.operationId, item.epoch)
+                val data = request("session.files.mutation.status", selectionEpoch, *fields.toTypedArray())
+                return parseFileMutationRecord(data, sessionId, item.operationId, item.kind, item.path, item.destinationPath)
+            }
+
             override suspend fun read(sessionId: String, path: String): FileChunk = filesRead(sessionId, path, 0, null)
         }
 
@@ -11035,6 +11042,14 @@ class DefaultRemoteRepository(
     override fun dismissFileMutationOutcome() { mutationController?.dismissOutcome() }
 
     override fun acknowledgeFileMutation(operationId: String) { mutationController?.acknowledge(operationId) }
+
+    override fun checkFileMutation(operationId: String) { mutationController?.checkAgain(operationId) }
+
+    override fun requestFileMutationReset() { mutationController?.requestReset() }
+
+    override fun confirmFileMutationReset() { mutationController?.confirmReset() }
+
+    override fun cancelFileMutationReset() { mutationController?.cancelReset() }
 
     override fun openFiles() = openFiles(exclusive = true)
 

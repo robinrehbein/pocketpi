@@ -788,4 +788,11 @@
     <string name="remote_files_mutation_acknowledge">Bestätigen</string>
     <string name="remote_files_mutation_acknowledge_failed">Bestätigen fehlgeschlagen. Versuche es erneut.</string>
     <string name="remote_files_mutation_storage">Dieses Gerät kann Dateivorgänge gerade nicht aufzeichnen, deshalb wird keiner gesendet.</string>
+    <string name="remote_files_mutation_recovery_pending">Der Mac hat das noch nicht abgeschlossen.</string>
+    <string name="remote_files_mutation_check">Erneut prüfen</string>
+    <string name="remote_files_mutation_check_failed">Der Mac war nicht erreichbar. Versuche es erneut.</string>
+    <string name="remote_files_mutation_journal_lost">Dieses Gerät hat seine Aufzeichnung offener Dateivorgänge verloren und sendet deshalb keine. Die offenen Vorgänge des Macs werden weiter angezeigt.</string>
+    <string name="remote_files_mutation_reset">Zurücksetzen</string>
+    <string name="remote_files_mutation_reset_title">Aufzeichnung der Dateivorgänge zurücksetzen?</string>
+    <string name="remote_files_mutation_reset_text">Dieses Gerät kann nicht mehr erkennen, welche seiner Dateivorgänge noch offen sind. Zurücksetzen beginnt eine leere Aufzeichnung; nichts wird erneut gesendet. Prüfe die Dateien selbst und bestätige, was der Mac noch anzeigt.</string>
 </resources>

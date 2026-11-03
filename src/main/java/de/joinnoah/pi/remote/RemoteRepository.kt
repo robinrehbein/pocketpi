@@ -871,6 +871,17 @@ interface RemoteRepository {
     /** Acknowledges an unknown outcome (`session.files.mutation.acknowledge`); never retries it. */
     fun acknowledgeFileMutation(operationId: String) {}
 
+    /** Asks the host again about a pending operation (`session.files.mutation.status`); never resends it. */
+    fun checkFileMutation(operationId: String) {}
+
+    /** Asks to confirm discarding an unreadable mutation journal. */
+    fun requestFileMutationReset() {}
+
+    /** Discards the unreadable journal and starts an empty one; nothing is sent for its operations. */
+    fun confirmFileMutationReset() {}
+
+    fun cancelFileMutationReset() {}
+
     /** Discards the unsaved edit and runs the action that waited for it ([FileEditor.leaveRequest]). */
     fun confirmFileEditorLeave() {}
 
