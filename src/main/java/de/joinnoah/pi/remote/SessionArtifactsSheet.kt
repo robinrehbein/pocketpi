@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -183,7 +184,7 @@ internal fun SessionArtifactsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val maxHeight = windowHeightFraction(0.9f)
-    ModalBottomSheet(
+    GlassSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         modifier = Modifier.testTag("artifactsSheet"),
@@ -252,12 +253,14 @@ internal fun SessionArtifactsGallery(
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.weight(1f).semantics { heading() },
             )
-            IconButton(
-                onClick = { reload++ },
-                enabled = state != ArtifactGalleryState.Loading,
-                modifier = Modifier.testTag("artifactsReload"),
-            ) {
-                Icon(Icons.Default.Refresh, stringResource(R.string.remote_artifacts_reload))
+            FloatingSurface(shape = CircleShape, blur = false) {
+                IconButton(
+                    onClick = { reload++ },
+                    enabled = state != ArtifactGalleryState.Loading,
+                    modifier = Modifier.testTag("artifactsReload"),
+                ) {
+                    Icon(Icons.Default.Refresh, stringResource(R.string.remote_artifacts_reload))
+                }
             }
         }
         when (val current = state) {
@@ -326,7 +329,7 @@ private fun GalleryProblem(@StringRes message: Int, retryable: Boolean, onRetry:
                     .testTag("artifactsError"),
         )
         if (retryable)
-            OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth().testTag("artifactsRetry")) {
+            SheetSecondaryButton(onClick = onRetry, modifier = Modifier.fillMaxWidth().testTag("artifactsRetry")) {
                 Text(stringResource(R.string.remote_artifacts_retry))
             }
     }

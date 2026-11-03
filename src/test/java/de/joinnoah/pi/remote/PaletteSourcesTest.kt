@@ -206,6 +206,20 @@ class PaletteSourcesTest {
     }
 
     @Test
+    fun aSubagentOffersNoAdvisorControlOfItsOwn() {
+        val state =
+            paired.copy(
+                capabilities = setOf(ADVISOR_CAPABILITY),
+                session = Wire.objectOf("id" to "child", "parentSessionId" to "parent"),
+            )
+        val commands =
+            items(input(state, chat = true), ">")
+                .filter { it.category == PaletteCategory.CONTROL }
+                .map { (it as CommandItem).command }
+        assertFalse(ChatCommand.Control(SessionControl.ADVISOR) in commands)
+    }
+
+    @Test
     fun hostSlashCommandsAppearOnlyWithTheCommandsCapability() {
         val host = listOf(RemoteCommand("review", "Review the diff", "extension"))
         val without = items(input(paired.copy(commands = host), chat = true), "/")

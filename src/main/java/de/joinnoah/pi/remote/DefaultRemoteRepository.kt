@@ -6222,6 +6222,8 @@ class DefaultRemoteRepository(
         // A session can gain support after its advisor extension is loaded. A previous
         // unsupported response must not prevent a fresh read from the visible advisor entry.
         if (!current.connected || ADVISOR_CAPABILITY !in current.capabilities || current.advisorLoading) return
+        // A subagent child uses its parent's advisor; the host answers its own read as unsupported.
+        if (isChildSession(current)) return
         val epoch = selectionEpoch
         val version = ++advisorVersion
         update { it.copy(advisorLoading = true) }
@@ -6253,7 +6255,7 @@ class DefaultRemoteRepository(
         if (!current.connected || current.status != "idle" || current.advisorChanging ||
             current.sending || current.answering.isNotEmpty() ||
             ADVISOR_CAPABILITY !in current.capabilities ||
-            ADVISOR_CAPABILITY in current.unavailableCapabilities) return
+            ADVISOR_CAPABILITY in current.unavailableCapabilities || isChildSession(current)) return
         val command = if (provider == null) "/advisor off" else {
             val choice = current.advisor?.choices?.find { it.provider == provider && it.id == id } ?: return
             if (level !in choice.levels) return

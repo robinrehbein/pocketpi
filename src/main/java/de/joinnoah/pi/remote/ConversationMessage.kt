@@ -427,7 +427,9 @@ private fun ConversationMessageContent(
                         .testTag("messageBubble-${item.id}")
                         .contextMenu(items = messageMenu)
                 ) {
-                    Column {
+                    // A short outgoing bubble keeps to the end edge with its status line under it,
+                    // as in chat apps, however wide that line is.
+                    Column(horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
                         if (!outgoing)
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -998,8 +1000,9 @@ private fun PendingSendLabel(id: String, state: PendingSendState, onCancelQueued
     if (state == PendingSendState.CONFIRMED) return
     val failed = state == PendingSendState.NOT_CONFIRMED
     val queued = state == PendingSendState.QUEUED
+    // Only as wide as its text, so it never stretches the message and pushes the bubble away.
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        Modifier.padding(start = 8.dp, end = 8.dp + BUBBLE_TAIL, top = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.End,
     ) {

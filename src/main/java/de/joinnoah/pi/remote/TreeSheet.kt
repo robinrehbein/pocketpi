@@ -131,17 +131,13 @@ internal fun SessionTreeSheet(
     val sheetState =
         rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !busy })
     val maxHeight = windowHeightFraction(0.9f)
-    ModalBottomSheet(
+    GlassSheet(
         onDismissRequest = { if (!busy) onDismiss() },
         sheetState = sheetState,
         modifier = Modifier.testTag("treeSheet"),
     ) {
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).navigationBarsPadding()) {
-            Text(
-                stringResource(R.string.remote_tree_title),
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp).semantics { heading() },
-            )
+            SheetHeader(stringResource(R.string.remote_tree_title))
             when (val current = ui) {
                 TreeUi.Loading ->
                     Column(
@@ -163,7 +159,7 @@ internal fun SessionTreeSheet(
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.testTag("treeError"),
                         )
-                        OutlinedButton(onClick = { reload++ }, modifier = Modifier.fillMaxWidth()) {
+                        SheetSecondaryButton(onClick = { reload++ }, modifier = Modifier.fillMaxWidth()) {
                             Text(stringResource(R.string.remote_tree_retry))
                         }
                     }
@@ -306,11 +302,8 @@ private fun TreeRow(
                 .padding(start = INDENT_STEP * indent)
                 .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
                 .testTag("treeRow"),
-        shape = MaterialTheme.shapes.small,
-        color =
-            if (selected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+        shape = SHEET_OPTION_SHAPE,
+        color = sheetOptionColor(selected),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -385,7 +378,7 @@ private fun TreeActions(
             // One stop is enough; the host answers `cancelled` when the summary ends.
             var stopped by remember { mutableStateOf(false) }
             if (running)
-                OutlinedButton(
+                SheetSecondaryButton(
                     onClick = {
                         stopped = true
                         onCancel()
@@ -419,7 +412,7 @@ private fun TreeActions(
             TreeContinue.NOT_IDLE -> Hint(R.string.remote_tree_continue_not_idle)
             else -> Unit
         }
-        OutlinedButton(
+        SheetSecondaryButton(
             onClick = onFork,
             enabled = idle && canFork && !forkBlocked,
             modifier = Modifier.fillMaxWidth().testTag("treeFork"),

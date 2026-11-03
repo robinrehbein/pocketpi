@@ -86,6 +86,26 @@ class AdvisorControlUiTest {
     }
 
     @Test
+    fun subagentNamesTheMainChatsAdvisorWithoutReadingOrOfferingChoices() {
+        var refreshes = 0
+        controls(
+            RemoteState(connected = true, status = "idle",
+                selection = RemoteSelection("host", "project", "child"),
+                session = Wire.objectOf("id" to "child", "parentSessionId" to "parent"),
+                capabilities = setOf(ADVISOR_CAPABILITY)),
+            refresh = { refreshes++ },
+        )
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_from_parent))
+            .performScrollTo().performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_from_parent_explanation))
+            .assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_unavailable_label)).assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_retry)).assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_apply)).assertDoesNotExist()
+        assertEquals(0, refreshes)
+    }
+
+    @Test
     fun disconnectedSessionKeepsAnEntryWithConnectionGuidance() {
         controls(RemoteState(connected = false, capabilities = setOf(ADVISOR_CAPABILITY)))
         compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_unavailable_label))

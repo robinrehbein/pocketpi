@@ -2116,7 +2116,8 @@ class RemoteNavigationUiTest {
         }
         compose.waitForIdle()
         assertFalse(toolHeader("src/a.kt").isDisplayed())
-        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().performClick()
+        // The insight chips scroll sideways; others, such as a last-known subagent, can come first.
+        compose.onNodeWithTag("touchedFilesSummary").performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithTag("touchedFilesSheet").assertIsDisplayed()
         compose.mainClock.autoAdvance = false
         try {
@@ -2269,6 +2270,8 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
                 selection = selection,
                 connected = selection.routeId != null,
                 connection = R.string.remote_connected,
+                // The fake answers sessions.list on the connection it reports, so its rows are current.
+                sessionsFresh = selection.routeId != null,
                 projects = listOf(project),
                 project = if (selection.projectId != null) project else null,
                 sessions =

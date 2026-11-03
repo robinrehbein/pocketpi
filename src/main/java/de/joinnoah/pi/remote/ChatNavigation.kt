@@ -489,13 +489,9 @@ internal fun ChatHistorySheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().testTag("chatHistorySheet").navigationBarsPadding()) {
-            Text(
-                stringResource(R.string.remote_chat_history),
-                Modifier.padding(horizontal = 24.dp, vertical = 12.dp).semantics { heading() },
-                style = MaterialTheme.typography.titleLarge,
-            )
+            SheetHeader(stringResource(R.string.remote_chat_history))
             ChatHistoryList(entries, Modifier.fillMaxWidth(), initialIndex) {
                 onOpen(it)
                 scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
