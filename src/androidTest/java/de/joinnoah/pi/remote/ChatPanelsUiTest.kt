@@ -167,6 +167,30 @@ class ChatPanelsUiTest {
     }
 
     @Test
+    fun compactionBannerShowsTheDimmedSnakeInsteadOfASpinner() {
+        val now = System.currentTimeMillis()
+        compose.setContent {
+            MaterialTheme {
+                androidx.compose.foundation.layout.Column {
+                    CompactionBanner(SessionCompaction("manual", now - 1_000), now)
+                    CompactionBanner(SessionCompaction("overflow", now - 1_000), now, floating = false)
+                }
+            }
+        }
+        // Floating and inline banners share the glyph, the label and the reason.
+        compose.onAllNodesWithTag("compactionBanner").assertCountEquals(2)
+        compose.onAllNodesWithTag("compactionGlyph", useUnmergedTree = true).assertCountEquals(2)
+        compose.onAllNodesWithText(resources.getString(R.string.remote_panel_compacting)).assertCountEquals(2)
+        compose.onNodeWithText(resources.getString(R.string.remote_panel_compaction_manual)).assertIsDisplayed()
+        compose.onNodeWithText(resources.getString(R.string.remote_panel_compaction_overflow)).assertIsDisplayed()
+        // No Material progress indicator (it would expose progress semantics); the glyph is decorative.
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo), useUnmergedTree = true)
+            .assertCountEquals(0)
+        compose.onAllNodes(hasTestTag("compactionGlyph") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription), useUnmergedTree = true)
+            .assertCountEquals(0)
+    }
+
+    @Test
     fun compactionBannerIsHiddenWhenStale() {
         val now = 100_000_000L
         var compaction by mutableStateOf<SessionCompaction?>(SessionCompaction("threshold", now - 1_000))

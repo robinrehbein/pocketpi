@@ -12,7 +12,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +40,15 @@ internal fun statusGlyphFrame(kind: StatusGlyphKind, elapsedMillis: Long): Int =
     StatusGlyphKind.SESSION_RUNNING -> ((elapsedMillis.coerceAtLeast(0) / 100) % 8).toInt()
     else -> 0
 }
+
+private val sessionSnakeCells = intArrayOf(4, 5, 1, 3, 2, 10, 8, 12)
+
+/** Static session glyph (three quadrants, like ▛): reads as "busy" and differs from every snake frame and STOPPED. */
+internal const val SESSION_RUNNING_STATIC_CELLS = 7
+
+/** Quadrant bitmask for SESSION_RUNNING: bit 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right. */
+internal fun sessionRunningCells(frame: Int, animated: Boolean): Int =
+    if (animated) sessionSnakeCells[Math.floorMod(frame, sessionSnakeCells.size)] else SESSION_RUNNING_STATIC_CELLS
 
 @Composable
 internal fun StatusGlyph(
@@ -69,7 +78,8 @@ internal fun StatusGlyph(
         animationsEnabled = systemAnimationsEnabled()
         onDispose { context.contentResolver.unregisterContentObserver(observer) }
     }
-    val elapsed = if (animate && animationsEnabled && cycle > 0) {
+    val animated = animate && animationsEnabled && cycle > 0
+    val elapsed = if (animated) {
         key(kind) {
             val transition = rememberInfiniteTransition(label = "status glyph")
             transition.animateFloat(
@@ -83,7 +93,8 @@ internal fun StatusGlyph(
     val descriptionModifier = if (contentDescription == null) Modifier else Modifier.semantics {
         this.contentDescription = contentDescription
     }
-    Canvas(modifier.requiredSize(16.dp).then(descriptionModifier)) {
+    // size() after the caller's modifier: a caller size/constraint wins, 16.dp is only the default.
+    Canvas(modifier.size(16.dp).then(descriptionModifier)) {
         val unit = size.minDimension
         val center = Offset(unit / 2, unit / 2)
         val stroke = unit / 10
@@ -122,8 +133,8 @@ internal fun StatusGlyph(
                     topLeft = Offset(center.x - radius, center.y - radius), size = Size(radius * 2, radius * 2))
             }
             StatusGlyphKind.SESSION_RUNNING -> {
-                // Atlas: ▖▌▘▀▝▐▗▄ (quadrants and halves).
-                val cells = listOf(4, 5, 1, 3, 2, 10, 8, 12)[frame]
+                // Atlas: ▖▌▘▀▝▐▗▄ (quadrants and halves); static: ▛.
+                val cells = sessionRunningCells(frame, animated)
                 val start = unit * 0.2f
                 val half = unit * 0.3f
                 for (i in 0..3) if (cells and (1 shl i) != 0) {

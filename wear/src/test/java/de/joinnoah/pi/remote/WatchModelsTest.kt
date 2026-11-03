@@ -118,4 +118,21 @@ class WatchModelsTest {
         assertEquals(phoneDefaults.other(questions[1], "More").wire(questions), single)
         assertEquals(listOf("More"), single.array("answers")[1].array("selections").map { it.text("value") })
     }
+
+    @Test
+    fun watchSessionStatusIsLastKnownUntilTheListIsConfirmed() {
+        val row = Wire.objectOf("id" to "s", "title" to "S", "origin" to "rpc", "status" to "running")
+        val unconfirmed = visibleSessionListItems(listOf(row), connected = true, loading = false, hideOffline = false, confirmed = false)
+        assertEquals(listOf("s"), unconfirmed.map { it.id })
+        assertTrue(watchStatusIsLastKnown(unconfirmed.single()))
+        val offline = visibleSessionListItems(listOf(row), connected = false, loading = false, hideOffline = false, confirmed = false)
+        assertEquals(listOf("s"), offline.map { it.id })
+        assertEquals(SessionAvailability.OFFLINE, offline.single().availability)
+        assertFalse(watchStatusIsLastKnown(offline.single()))
+        assertEquals(R.string.remote_offline, watchStatus(offline.single().availability.name.lowercase()))
+        val reconnecting = visibleSessionListItems(listOf(row), connected = false, loading = false, stale = true, hideOffline = false, confirmed = false)
+        assertTrue(watchStatusIsLastKnown(reconnecting.single()))
+        val confirmed = visibleSessionListItems(listOf(row), connected = true, loading = false, hideOffline = false, confirmed = true)
+        assertFalse(watchStatusIsLastKnown(confirmed.single()))
+    }
 }

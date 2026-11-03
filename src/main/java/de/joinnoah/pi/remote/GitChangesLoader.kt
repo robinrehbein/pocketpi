@@ -588,9 +588,9 @@ internal class GitChangesLoader(
         subagentJob?.cancel()
         val now = current()
         val children =
-            sessionListItems(now.sessions, now.connected, now.loading)
+            sessionListItems(now.sessions, now.connected, now.loading, stale = now.stale, confirmed = now.sessionsFresh)
                 .filter { it.parentSessionId == sessionId && it.id != sessionId }
-                .sortedWith(compareByDescending<SessionListItem> { it.live() }.thenByDescending { it.updatedAt ?: 0L })
+                .sortedWith(compareByDescending<SessionListItem> { it.live() && !it.lastKnown }.thenByDescending { it.updatedAt ?: 0L })
                 .take(MAX_SUBAGENT_GROUPS)
         if (children.isEmpty()) {
             write(sessionId) { it.copy(subagents = emptyList()) }
@@ -611,10 +611,14 @@ internal class GitChangesLoader(
                     }
                 if (version != subagentVersion) return@launch
                 if (status != null && status.available && status.files.isNotEmpty())
-                    found += SubagentChanges(child.id, child.title, child.live(), status)
+                    found += subagentChangesFor(child, status)
             }
-            write(sessionId) { it.copy(subagents = found) }
-            finishReopen(sessionId, found, reopen)
+            // Requests take time: judge each child by the session list as it is now, not as it
+            // was when loading started, so a dropped connection never leaves a stale "running".
+            // Later list or connection changes re-judge them through [reconcileSubagents].
+            val judged = judgeSubagents(current(), sessionId, found)
+            write(sessionId) { it.copy(subagents = judged) }
+            finishReopen(sessionId, judged, reopen)
         }
     }
 
@@ -681,4 +685,50 @@ internal class GitChangesLoader(
     private companion object {
         val fallbackReasons = setOf(GitUnavailable.BASE_UNAVAILABLE, GitUnavailable.SESSION_UNSUPPORTED)
     }
+}
+
+/**
+ * Judges loaded subagent groups of [parentId] by [state]'s session list and connection. A child
+ * missing from the list, or no longer a child of [parentId], reads last known, never finished.
+ * Returns [subagents] itself when nothing changed, so an unchanged view does not recompose.
+ */
+internal fun judgeSubagents(state: RemoteState, parentId: String, subagents: List<SubagentChanges>): List<SubagentChanges> {
+    if (subagents.isEmpty()) return subagents
+    val latest =
+        sessionListItems(state.sessions, state.connected, state.loading, stale = state.stale, confirmed = state.sessionsFresh)
+            .associateBy { it.id }
+    val judged = subagents.map { sub ->
+        val child = latest[sub.sessionId]?.takeIf { it.parentSessionId == parentId }
+        if (child == null) sub.copy(running = false, lastKnown = true)
+        else subagentChangesFor(child, sub.status)
+    }
+    return if (judged == subagents) subagents else judged
+}
+
+/**
+ * Applied to every state write: when the session list or the connection changed, the open
+ * changes view's subagent groups are judged again (no network), so "running" never outlives a
+ * dropped connection and a reconnect's confirmed list replaces "last known".
+ */
+internal fun reconcileSubagents(before: RemoteState, after: RemoteState): RemoteState {
+    val changes = after.changes ?: return after
+    if (changes.subagents.isEmpty()) return after
+    if (before.changes === changes &&
+        before.sessions === after.sessions && before.connected == after.connected &&
+        before.loading == after.loading && before.stale == after.stale &&
+        before.sessionsFresh == after.sessionsFresh
+    ) return after
+    val judged = judgeSubagents(after, changes.sessionId, changes.subagents)
+    return if (judged === changes.subagents) after else after.copy(changes = changes.copy(subagents = judged))
+}
+
+/**
+ * A subagent's change group: running only while its session is live on a confirmed list; a
+ * last-known status is reported as such, never as finished. Finished needs a confirmed idle
+ * status: an offline row (also one that reads offline only because the connection dropped)
+ * proves no end state, so it reads last known too.
+ */
+internal fun subagentChangesFor(child: SessionListItem, status: GitStatus): SubagentChanges {
+    val lastKnown = child.lastKnown || child.availability == SessionAvailability.OFFLINE
+    return SubagentChanges(child.id, child.title, child.live() && !lastKnown, status, lastKnown = lastKnown)
 }
