@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
@@ -142,12 +143,17 @@ internal fun GlassSheet(
             if (backdrop != null) {
                 SheetBackdropLayer(
                     backdrop, glass,
-                    reachUp = handleHeight,
+                    reachUp = { handleHeight },
                     rim = glassRimColor(scheme),
                     pill = scheme.onSurfaceVariant.copy(alpha = HANDLE_PILL_ALPHA),
                 )
             }
-            Column(Modifier.fillMaxWidth().windowInsetsPadding(BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Bottom))) {
+            Column(
+                Modifier.fillMaxWidth()
+                    // The handle row used the top inset; the content must not pad for it again.
+                    .consumeWindowInsets(BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Top))
+                    .windowInsetsPadding(BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Bottom))
+            ) {
                 content()
             }
         }
@@ -256,19 +262,21 @@ private tailrec fun Context.sheetActivity(): Activity? =
  * The blurred app copy under the whole sheet, lined up with the screen, with the scrim and the
  * glass tint over it. It covers its box and reaches [reachUp] pixels above it, over the handle
  * slot, where it also draws the glass [rim] and the handle [pill]: the slot is drawn first, so the
- * layer would hide its pill. It reads its place on the screen, so it follows a drag; the copy is
- * blurred already, so a frame only moves it.
+ * layer would hide its pill. [reachUp] is read while laying out and drawing, not while composing,
+ * since the slot's height changes with the top inset as the sheet moves. The layer reads its place
+ * on the screen, so it follows a drag; the copy is blurred already, so a frame only moves it.
  */
 @Composable
-private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass, reachUp: Int, rim: Color, pill: Color) {
+private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass, reachUp: () -> Int, rim: Color, pill: Color) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     Box(
         Modifier.matchParentSize()
             .layout { measurable, constraints ->
+                val up = reachUp()
                 val placeable = measurable.measure(
-                    Constraints.fixed(constraints.maxWidth, constraints.maxHeight + reachUp)
+                    Constraints.fixed(constraints.maxWidth, constraints.maxHeight + up)
                 )
-                layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, -reachUp) }
+                layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, -up) }
             }
             // The copy is drawn at the whole window's size; clipping keeps it to the layer.
             .clipToBounds()
@@ -285,13 +293,14 @@ private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass
                 drawRect(glass.scrim)
                 drawRect(glass.tint)
                 drawTopRim(rim)
-                if (reachUp > 0) {
+                val up = reachUp()
+                if (up > 0) {
                     val pillSize = Size(HANDLE_PILL_WIDTH.toPx(), HANDLE_PILL_HEIGHT.toPx())
                     drawRoundRect(
                         pill,
                         topLeft = Offset(
                             (size.width - pillSize.width) / 2,
-                            reachUp - HANDLE_BOTTOM_PADDING.toPx() - pillSize.height,
+                            up - HANDLE_BOTTOM_PADDING.toPx() - pillSize.height,
                         ),
                         size = pillSize,
                         cornerRadius = CornerRadius(pillSize.height / 2),
