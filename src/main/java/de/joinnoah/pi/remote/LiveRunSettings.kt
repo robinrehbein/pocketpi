@@ -1,6 +1,11 @@
 package de.joinnoah.pi.remote
 
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import android.content.SharedPreferences
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
@@ -79,5 +84,47 @@ internal fun LiveRunSettingRow() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+    if (enabled) PromotedNotificationsNotice()
+}
+
+/**
+ * From Android 16 the running notification asks to be a Live Update: the status bar pill and, on
+ * Samsung, the Now Bar. The user can turn that off per app; then this says so and leads to the
+ * system setting. It reads the setting again whenever the screen comes back, as after that visit.
+ */
+@Composable
+private fun PromotedNotificationsNotice() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) return
+    val context = LocalContext.current
+    var allowed by remember { mutableStateOf(true) }
+    LifecycleResumeEffect(context) {
+        allowed = runCatching {
+            context.getSystemService(NotificationManager::class.java).canPostPromotedNotifications()
+        }.getOrDefault(true)
+        onPauseOrDispose {}
+    }
+    if (allowed) return
+    Column(Modifier.fillMaxWidth().testTag("liveUpdatesOff")) {
+        Text(
+            stringResource(R.string.remote_live_updates_off),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = {
+                // Some builds have no screen for it; then nothing happens.
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+            },
+            modifier = Modifier.testTag("liveUpdatesEnable"),
+        ) {
+            Text(stringResource(R.string.remote_live_updates_enable))
+        }
     }
 }

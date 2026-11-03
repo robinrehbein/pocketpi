@@ -13,4 +13,7 @@
         <item quantity="one">Während pi arbeitet, zeigt eine laufende Benachrichtigung den Fortschritt und hält die Sitzung bis zu %1$d Minute verbunden, nachdem du PocketPi verlassen hast.</item>
         <item quantity="other">Während pi arbeitet, zeigt eine laufende Benachrichtigung den Fortschritt und hält die Sitzung bis zu %1$d Minuten verbunden, nachdem du PocketPi verlassen hast.</item>
     </plurals>
+    <string name="remote_live_run_chip_waiting">Wartet</string>
+    <string name="remote_live_updates_off">Statusleisten-Pill und Now Bar sind für PocketPi ausgeschaltet, ein Lauf erscheint deshalb nur in den Benachrichtigungen.</string>
+    <string name="remote_live_updates_enable">Einschalten</string>
 </resources>
