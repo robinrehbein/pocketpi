@@ -626,7 +626,7 @@ class SessionListPresentationTest {
 
     @Test
     fun aBusySubagentShowsAsItsMainSession() {
-        val shown = sortedProjectChats(
+        val shown = mainSessionChats(
             listOf(
                 chat("main", "idle"),
                 chat("sub", "running", parent = "main"),
@@ -646,5 +646,17 @@ class SessionListPresentationTest {
         val shown = mainSessionChats(listOf(chat("orphan", "running", parent = "gone"), chat("a", "running", parent = "b"), chat("b", "running", parent = "a")))
         assertEquals(listOf("orphan", "a", "b"), shown.map { it.session.text("id") })
         assertEquals("running", mainSessionChats(listOf(chat("main", "running"), chat("sub", "running", parent = "main"))).single().session.text("status"))
+    }
+
+    @Test
+    fun theFeaturedChatsBringTheMainSessionOfABusySubagent() {
+        // Twelve newer idle chats would push the old main session out of the twelve featured ones.
+        val newer = (1..12).map { ProjectChatSummary("p", "Project", Wire.objectOf("id" to "n$it", "status" to "idle", "updatedAt" to 100 + it), verified = true) }
+        val featured = sortedProjectChats(newer + chat("main", "idle") + chat("sub", "running", parent = "main"))
+        assertEquals(13, featured.size)
+        assertTrue(featured.any { it.session.text("id") == "main" })
+        // The stored rows keep their own status; only the page lends the subagent's.
+        assertEquals("idle", featured.first { it.session.text("id") == "main" }.session.text("status"))
+        assertEquals("running", mainSessionChats(featured).first { it.session.text("id") == "main" }.session.text("status"))
     }
 }

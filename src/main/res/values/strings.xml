@@ -343,8 +343,8 @@
     <string name="remote_jobs_title">Background jobs</string>
     <string name="remote_jobs_group_running">Running</string>
     <string name="remote_jobs_group_finished">Finished</string>
+    <string name="remote_activity_tile_finished">Finished</string>
     <string name="remote_activity_all_clear">All quiet</string>
-    <string name="remote_changes_no_branch">No branch</string>
     <plurals name="remote_jobs_running_count">
         <item quantity="one">%d job running</item>
         <item quantity="other">%d jobs running</item>

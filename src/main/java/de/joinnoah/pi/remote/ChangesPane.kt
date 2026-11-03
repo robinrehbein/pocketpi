@@ -695,14 +695,17 @@ private fun ChangesOverviewCard(state: ChangesState, status: GitStatus?, shownBa
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassAvatar(size = 48.dp) { Icon(Icons.Outlined.AccountTree, null, tint = colors.primary) }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(
-                        status?.branch ?: stringResource(R.string.remote_changes_no_branch),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // Only a branch the host named: loading, a failure, an older host or a detached HEAD name none.
+                    status?.branch?.let { branch ->
+                        Text(
+                            branch,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     if (status?.available == true)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -716,7 +719,7 @@ private fun ChangesOverviewCard(state: ChangesState, status: GitStatus?, shownBa
                                     Modifier.semantics(mergeDescendants = true) { contentDescription = counts },
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    Text("+$added", style = MaterialTheme.typography.labelLarge, color = colors.primary)
+                                    Text("+$added", Modifier.testTag("changesOverviewAdded"), style = MaterialTheme.typography.labelLarge, color = colors.primary)
                                     Text("−$removed", style = MaterialTheme.typography.labelLarge, color = colors.error)
                                 }
                             }
@@ -786,7 +789,6 @@ private fun CommitRow(commit: GitCommit, context: Context, first: Boolean, last:
                 Text(
                     stringResource(
                         R.string.remote_changes_commit_meta,
-                        commit.sha.take(7),
                         commit.author,
                         formatTime(context, commit.time),
                     ),

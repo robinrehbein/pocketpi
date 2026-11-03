@@ -49,7 +49,6 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -338,7 +337,8 @@ private fun ActivitySummary(groups: Map<ActivityGroup, List<ActivityCard>>, onJu
         ActivityGroup.entries.forEach { group ->
             val count = groups[group].orEmpty().size
             val color = sessionStatusColor(group.availability)
-            val label = stringResource(group.cardLabelRes)
+            // The heading's own words, shortened where it is long, so a tile names the group it jumps to.
+            val label = stringResource(if (group == ActivityGroup.FINISHED) R.string.remote_activity_tile_finished else group.labelRes)
             Surface(
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(PAGE_CARD_CORNER))

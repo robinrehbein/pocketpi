@@ -124,7 +124,12 @@ class ChangesPaneTest {
             "big.kt" to "+2000",
         ).forEach { (path, detail) ->
             compose.onNodeWithTag("changesList").performScrollToNode(androidx.compose.ui.test.hasText(path))
-            compose.onNodeWithText(detail, useUnmergedTree = true).assertExists()
+            // The overview card sums the counts too, so the detail is looked up in the file's own tile.
+            compose.onNode(
+                androidx.compose.ui.test.hasText(detail) and
+                    androidx.compose.ui.test.hasAnyAncestor(androidx.compose.ui.test.hasTestTag("changesOverview")).not(),
+                useUnmergedTree = true,
+            ).assertExists()
         }
         compose.onNodeWithText("big.kt", useUnmergedTree = true).performClick()
         assertEquals(listOf<String?>("big.kt"), recorder.opened)

@@ -1192,9 +1192,9 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
             shape = RoundedCornerShape(24.dp),
             blur = false,
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    JobGlyph(job, 48.dp)
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    JobGlyph(job, 40.dp)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             jobStatusLabel(job),
@@ -1212,14 +1212,21 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
                         )
                     }
                 }
-                // The whole command, which the header's title cuts.
-                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                // The command the header's title cuts: two lines, all of it on a tap, so the card
+                // leaves the output its room on a short screen.
+                var commandOpen by androidx.compose.runtime.saveable.rememberSaveable(job.id) { mutableStateOf(false) }
+                Surface(
+                    onClick = { commandOpen = !commandOpen },
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.testTag("jobCommand"),
+                ) {
                     Text(
                         job.command,
                         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.bodySmall,
-                        maxLines = 6,
+                        maxLines = if (commandOpen) 12 else 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

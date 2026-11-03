@@ -47,7 +47,7 @@
     <string name="remote_changes_commits_empty">No commits since the base.</string>
     <string name="remote_changes_commits_truncated">Older commits are not listed.</string>
     <string name="remote_changes_commits_unavailable">The base commit no longer exists.</string>
-    <string name="remote_changes_commit_meta">%1$s · %2$s · %3$s</string>
+    <string name="remote_changes_commit_meta">%1$s · %2$s</string>
     <string name="remote_changes_commit_no_subject">(no subject)</string>
     <string name="remote_changes_comment_add">Comment on this line</string>
     <string name="remote_changes_comment_title">Comment on line %1$d</string>

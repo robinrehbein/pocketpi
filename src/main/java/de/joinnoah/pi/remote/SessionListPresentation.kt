@@ -53,6 +53,9 @@ data class ProjectChatSummary(
  * The main sessions of [chats]: a subagent's row gives way to its top-level session, which takes on
  * the subagent's activity while it is busy itself no more (waiting before running). A subagent whose
  * main session is not among [chats] stays, so its work does not vanish from the page.
+ *
+ * For display only: the borrowed status must not reach stored rows, which status events patch and
+ * other views (widget, activity board, restored lists) read as the session's own.
  */
 internal fun mainSessionChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> {
     fun id(chat: ProjectChatSummary) = chat.session.optionalText("id")
@@ -87,8 +90,13 @@ internal fun mainSessionChats(chats: List<ProjectChatSummary>): List<ProjectChat
     }
 }
 
-internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> =
-    mainSessionChats(chats).sortedWith(
+/**
+ * The featured chats: waiting, then running, then the most recently updated, twelve of them. The
+ * main sessions of the busy subagents among them come along beyond the twelve, so
+ * [mainSessionChats] can show each such subagent as the session it works for.
+ */
+internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> {
+    val kept = chats.sortedWith(
         compareBy<ProjectChatSummary> {
             if (!it.verified) 2
             else when (it.session.text("status")) {
@@ -98,6 +106,21 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
             }
         }.thenByDescending { it.session["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L }
     ).take(12)
+    val byId = chats.associateBy { it.session.optionalText("id") }
+    val keptIds = kept.mapTo(HashSet()) { it.session.optionalText("id") }
+    val ancestors = LinkedHashMap<String?, ProjectChatSummary>()
+    for (chat in kept) {
+        if (chat.session.optionalText("status") !in setOf("waiting", "running")) continue
+        var parentId = chat.session.optionalText("parentSessionId")?.takeIf { it.isNotBlank() }
+        var depth = 0
+        while (parentId != null && depth++ < 8) {
+            val parent = byId[parentId] ?: break
+            if (parentId !in keptIds) ancestors.putIfAbsent(parentId, parent)
+            parentId = parent.session.optionalText("parentSessionId")?.takeIf { it.isNotBlank() }
+        }
+    }
+    return kept + ancestors.values
+}
 
 /** How many running and how many recent quick chats a Mac's Projects page shows until "Show all". */
 internal const val QUICK_CHAT_LIMIT = 3

@@ -2852,7 +2852,8 @@ internal fun RemoteScreen(
                             // chats are capped at three each until their "Show all" (see quickChats).
                             val quick =
                                 quickChats(
-                                    if (projectSelected) emptyList() else state.projectChats,
+                                    // Main sessions only: a busy subagent shows as the session it works for.
+                                    if (projectSelected) emptyList() else mainSessionChats(state.projectChats),
                                     state.connected,
                                     showRunningAll = runningShowAll,
                                     showRecentAll = recentShowAll,
