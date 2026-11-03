@@ -178,19 +178,30 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         } catch (_: Exception) { if (valid(t,v.sessionId,c)) fail("control") } finally { if (valid(t,v.sessionId,c)) pending = false } }
         return true
     }
+    // At most one watch request per connection is in flight. The Host keeps the stream of whichever
+    // watch of a generation it handles last and may handle two in flight out of order, so a stale
+    // watch could replace the live one. A watch asked for meanwhile is sent when the reply arrives.
+    private var watchInFlight: Long? = null
+    private fun watchDone(c: Long) { if (watchInFlight == c) watchInFlight = null }
     private fun watch() {
         val v = view ?: return; val id = v.emulatorId ?: return; val inc = v.incarnation ?: return; val g = v.geometry ?: return
-        if (!visible || stream != null || watching || !current(v.sessionId,connection)) return
-        val c = connection; val t = token; val w = ++watchToken; watching = true
-        scope.launch { try {
-            val r = send(c, EmulatorCommand.Watch(Wire.random(),v.sessionId,id,v.generation,recovery)) as EmulatorResult.Watching
-            if (!valid(t,v.sessionId,c) || w != watchToken || r.emulatorId != id || r.generation != v.generation) {
-                if (connectionAlive(c)) try { send(c,EmulatorCommand.Unwatch(Wire.random(),v.sessionId,id,r.streamId)) } catch (_: Exception) {}; return@launch
+        if (!visible || stream != null || watching || !current(v.sessionId,connection) || watchInFlight == connection) return
+        val c = connection; val t = token; val w = ++watchToken; watching = true; watchInFlight = c
+        scope.launch {
+            val r = try { send(c, EmulatorCommand.Watch(Wire.random(),v.sessionId,id,v.generation,recovery)) as EmulatorResult.Watching } catch (_: Exception) {
+                watchDone(c); if (valid(t,v.sessionId,c) && w == watchToken) fail("watch") else if (w != watchToken) watch(); return@launch
             }
-            stream = r.streamId; assembler = EmulatorFrameAssembler(id,inc,r.streamId,v.generation,g.revision,System::currentTimeMillis,scope); watching = false
-            armDeadline(r.streamId, t, w, v.sessionId, c)
-            val buffered = early[r.streamId]; early.clear(); if (buffered != null) frame(buffered)
-        } catch (_: Exception) { if (valid(t,v.sessionId,c) && w == watchToken) fail("watch") } }
+            watchDone(c)
+            if (!valid(t,v.sessionId,c) || w != watchToken || r.emulatorId != id || r.generation != v.generation) {
+                if (connectionAlive(c)) scope.launch { try { send(c,EmulatorCommand.Unwatch(Wire.random(),v.sessionId,id,r.streamId)) } catch (_: Exception) {} }
+                if (w != watchToken) watch(); return@launch
+            }
+            try {
+                stream = r.streamId; assembler = EmulatorFrameAssembler(id,inc,r.streamId,v.generation,g.revision,System::currentTimeMillis,scope); watching = false
+                armDeadline(r.streamId, t, w, v.sessionId, c)
+                val buffered = early[r.streamId]; early.clear(); if (buffered != null) frame(buffered)
+            } catch (_: Exception) { if (valid(t,v.sessionId,c) && w == watchToken) fail("watch") }
+        }
     }
     private fun armDeadline(id: String, t: Long, w: Long, session: String, c: Long) {
         deadline?.cancel()

@@ -150,6 +150,8 @@ class EmulatorClientTest {
     private class FakeHost {
         var generation = 1; var owner: JsonObject? = null; var acquireReply: CompletableDeferred<JsonObject>? = null; var busyOwner: JsonObject? = null
         val calls = mutableListOf<Triple<Long, String, Map<String, Any?>>>()
+        // When set, each watch waits for its reply here, in order.
+        var deferWatches = false; val watchReplies = mutableListOf<CompletableDeferred<Unit>>()
         fun count(type: String) = calls.count { it.second == type }
     }
     private fun hostClient(scope: TestScope, host: FakeHost, connection: () -> Long, closed: MutableList<Long> = mutableListOf()): EmulatorClient {
@@ -162,7 +164,9 @@ class EmulatorClientTest {
                 "emulator.open" -> Wire.objectOf("kind" to "emulator.opened", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to host.generation, "geometry" to geometry, *owner)
                 "emulator.status" -> Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to host.generation, "geometry" to geometry, *owner)
                 "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to host.generation, "participants" to kotlinx.serialization.json.JsonArray(emptyList()))
-                "emulator.watch" -> Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream${host.count("emulator.watch")}")
+                "emulator.watch" -> { val n = host.count("emulator.watch")
+                    if (host.deferWatches) CompletableDeferred<Unit>().also { host.watchReplies.add(it) }.await()
+                    Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream$n") }
                 "emulator.unwatch" -> Wire.objectOf("kind" to "emulator.unwatched", "emulatorId" to "e", "streamId" to map["streamId"])
                 "emulator.acquire" -> host.acquireReply?.await() ?: host.busyOwner?.let { Wire.objectOf("kind" to "emulator.busy", "emulatorId" to "e", "generation" to host.generation, "owner" to it) } ?: run {
                     host.generation++; host.owner = self
@@ -277,5 +281,40 @@ class EmulatorClientTest {
         host.owner = null; host.busyOwner = null; host.generation++
         client.state(stateEvent(host.generation, null)); scope.runCurrent()
         assertEquals(1, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
+    }
+    private fun unwatched(host: FakeHost) = host.calls.filter { it.second == "emulator.unwatch" }.map { it.third["streamId"].toString().trim('"') }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun hidingAndShowingWhileAWatchIsInFlightSendsTheNextWatchAfterItsReply() {
+        val scope = TestScope(); val host = FakeHost().apply { deferWatches = true }
+        val client = hostClient(scope, host, { 1L })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertEquals(1, host.count("emulator.watch"))
+        client.setVisible(false); client.setVisible(true); scope.runCurrent()
+        // A second watch of generation 1 now could be handled before the first and then replaced by it.
+        assertEquals(1, host.count("emulator.watch"))
+        host.watchReplies[0].complete(Unit); scope.runCurrent()
+        assertEquals(2, host.count("emulator.watch"))
+        assertEquals(listOf("stream1"), unwatched(host))
+        host.watchReplies[1].complete(Unit); scope.runCurrent()
+        assertEquals(listOf("stream1"), unwatched(host))
+        assertEquals(2, host.count("emulator.watch"))
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aGeometryChangeWhileAWatchIsInFlightSendsTheNextWatchAfterItsReply() {
+        val scope = TestScope(); val host = FakeHost().apply { deferWatches = true }
+        val client = hostClient(scope, host, { 1L })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        val rotated = Wire.objectOf("width" to 3, "height" to 2, "rotation" to 1, "revision" to 2)
+        client.state(Wire.objectOf("type" to "host.event", "kind" to "emulator.state", "sessionId" to "session", "emulatorId" to "e", "profileId" to "p", "label" to "Phone",
+            "incarnation" to "i", "generation" to 1, "geometry" to rotated)); scope.runCurrent()
+        assertEquals(1, host.count("emulator.watch"))
+        host.watchReplies[0].complete(Unit); scope.runCurrent()
+        assertEquals(2, host.count("emulator.watch"))
+        assertEquals(listOf("stream1"), unwatched(host))
+        host.watchReplies[1].complete(Unit); scope.runCurrent()
+        assertEquals(listOf("stream1"), unwatched(host))
+        assertEquals(2L, client.view?.geometry?.revision)
     }
 }
