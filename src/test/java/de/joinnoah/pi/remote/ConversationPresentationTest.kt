@@ -972,7 +972,7 @@ class ConversationPresenterTest {
         val pending = PendingSend("m1", "One\nTwo", null, emptyList(), PendingSendState.CONFIRMED)
         keys.update(listOf(pendingSendItem(pending)), pending, emptyList())
         val copy = Wire.objectOf(
-            "id" to "u2", "role" to "user", "state" to "complete",
+            "id" to "u2", "role" to "user", "text" to "One\nTwo", "state" to "complete",
             "parts" to JsonArray(listOf(Wire.objectOf("type" to "text", "text" to "One"), Wire.objectOf("type" to "text", "text" to "Two"))),
         )
         val after = ConversationPresenter().present(listOf(copy), false).items

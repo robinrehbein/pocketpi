@@ -383,7 +383,9 @@ class ChangesPaneTest {
             }
         }
         compose.onNodeWithText(context.getString(R.string.remote_changes_this_session)).assertExists()
-        // The subagent on the session's own branch gets no group.
+        // The subagent on the session's own branch gets no group. The groups follow the overview
+        // card, the files and the commits, so the grid scrolls to them first.
+        compose.onNodeWithTag("changesList").performScrollToNode(hasTestTag("changesSubagent"))
         compose.onAllNodesWithTag("changesSubagent").assertCountEquals(1)
         compose.onNodeWithText("Implementer").assertExists()
         compose.onNodeWithText(context.getString(R.string.remote_changes_subagent_finished, "pi-agent-1")).assertExists()
