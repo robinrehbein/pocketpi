@@ -86,6 +86,8 @@ class WatchGlanceTest {
         val base = glance(row("a", "running"))
         assertEquals("waiting", base.withPush(PushPayload("route", "a", "e1", PushEvent.QUESTION)).home.sessions.single().status)
         assertEquals("idle", base.withPush(PushPayload("route", "a", "e2", PushEvent.COMPLETE)).home.sessions.single().status)
+        // A failed run ended too (push.run_failure.v1).
+        assertEquals("idle", base.withPush(PushPayload("route", "a", "e6", PushEvent.COMPLETE, failure = RunFailure.AGENT_ERROR)).home.sessions.single().status)
         // A push confirms no other row, so the time stays and a swipe right after it still refreshes.
         assertEquals(base.home.refreshedAt, base.withPush(PushPayload("route", "a", "e3", PushEvent.COMPLETE)).home.refreshedAt)
         assertEquals(base, base.withPush(PushPayload("route", "x", "e4", PushEvent.QUESTION)))

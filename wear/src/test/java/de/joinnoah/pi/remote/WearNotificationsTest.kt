@@ -49,6 +49,17 @@ class WearNotificationsTest {
         WearNotifications.forget(context, "route")
         assertEquals("watch:other:session", manager.activeNotifications.single().tag)
     }
+    @Test fun `a failed run says so and why in place of the completion`() {
+        WearNotifications.post(context, PushPayload("route", "session", "c", PushEvent.COMPLETE))
+        WearNotifications.post(context, PushPayload("route", "session", "f", PushEvent.COMPLETE, failure = RunFailure.WORKER_EXITED))
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(context.getString(R.string.remote_notification_run_failed), notification.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(context.getString(R.string.remote_notification_failure_worker_exited), notification.extras.getString(Notification.EXTRA_TEXT))
+        assertTrue(notification.flags and Notification.FLAG_LOCAL_ONLY != 0)
+        // A plain completion afterwards is a new run's: it reads as finished again.
+        WearNotifications.post(context, PushPayload("route", "session", "c2", PushEvent.COMPLETE))
+        assertEquals(context.getString(R.string.remote_notification_complete), manager.activeNotifications.single().notification.extras.getString(Notification.EXTRA_TITLE))
+    }
     @Test fun `no permission means no notification`() {
         shadowOf(context).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         WearNotifications.post(context, PushPayload("route", "session", "event", PushEvent.COMPLETE))
