@@ -3332,7 +3332,7 @@ internal fun RemoteScreen(
                                 val highlighted = item.id == highlightedId
                                 ConversationItemColumn(
                                     item,
-                                    Modifier.itemMotion(this).then(
+                                    Modifier.conversationItemMotion(this).then(
                                         if (highlighted)
                                             Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
                                         else Modifier

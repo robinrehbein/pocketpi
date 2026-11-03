@@ -802,6 +802,29 @@
           "truncated": false
         }
       }
+    },
+    {
+      "name": "status-omitted-denied",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "git.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "base": "head",
+          "available": true,
+          "snapshotId": "Q2hhbmdlc1NuYXBzaG90MQ",
+          "files": [
+            {
+              "path": ".env",
+              "change": "added",
+              "omitted": "denied"
+            }
+          ],
+          "truncated": false
+        }
+      }
     }
   ]
 }
