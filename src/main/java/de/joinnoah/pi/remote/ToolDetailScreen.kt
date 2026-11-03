@@ -82,6 +82,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -434,7 +436,8 @@ private fun ToolDetailContent(
         val target = firstRowIndex + match.line
         val visible = listState.layoutInfo.visibleItemsInfo
         val info = visible.firstOrNull { it.index == target }
-        val top = listState.layoutInfo.viewportStartOffset + searchBarHeight
+        // Item offsets count from below the floating header (the list's top content padding).
+        val top = searchBarHeight
         if (info == null || info.offset < top || info.offset + info.size > listState.layoutInfo.viewportEndOffset) {
             listState.scrollToItem(target)
             listState.scrollBy(-(searchBarHeight + with(density) { 48.dp.toPx() }))
@@ -446,17 +449,20 @@ private fun ToolDetailContent(
     // The page background, as the other pages have, rather than a white sheet.
     Surface(modifier.fillMaxSize().testTag("toolDetail"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            // Above the list rather than over it: the list's sticky search bar pins at the list's top
-            // edge, which must stay clear of the header. No divider, as under the other pill headers.
-            ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
             val quote = !output.isNullOrBlank()
             val bottomActions = quote || canAskToFix
-            // The output scrolls on under the floating Quote and Ask-to-fix pills.
+            var headerHeight by remember { mutableIntStateOf(0) }
+            val headerHeightDp = with(density) { headerHeight.toDp() }
+            // The content scrolls on under the floating header pills and the Quote and Ask-to-fix pills.
             Box(Modifier.weight(1f).fillMaxWidth()) {
+            // Composed first so focus reaches Back before the content; drawn on top.
+            Box(Modifier.zIndex(1f).fillMaxWidth().onSizeChanged { headerHeight = it.height }) {
+                ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
+            }
             LazyColumn(
                 Modifier.fillMaxSize().testTag("toolDetailContent").glassSource(),
                 state = listState,
-                contentPadding = PaddingValues(bottom = if (bottomActions) 72.dp else 0.dp),
+                contentPadding = PaddingValues(top = headerHeightDp, bottom = if (bottomActions) 72.dp else 0.dp),
             ) {
                 item(key = "overview") {
                     ToolOverview(item, Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp))
@@ -479,6 +485,9 @@ private fun ToolDetailContent(
                     )
                 }
                 stickyHeader(key = "search") {
+                    // A sticky header pins at the list's top edge, which now lies under the floating
+                    // header; shift it down by as much as it went above the content's start, so it
+                    // pins just below the header instead.
                     if (rows.isNotEmpty())
                         SearchBar(
                             query = query,
@@ -488,7 +497,10 @@ private fun ToolDetailContent(
                             onPrevious = { if (matches.isNotEmpty()) select((current - 1 + matches.size) % matches.size) },
                             onNext = { if (matches.isNotEmpty()) select((current + 1) % matches.size) },
                             output = output.orEmpty(),
-                            modifier = Modifier.onSizeChanged { searchBarHeight = it.height },
+                            modifier = Modifier.onSizeChanged { searchBarHeight = it.height }.graphicsLayer {
+                                val offset = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "search" }?.offset ?: 0
+                                translationY = (-offset).coerceAtLeast(0).toFloat()
+                            },
                         )
                 }
                 if (useCards && !showFormatted) {

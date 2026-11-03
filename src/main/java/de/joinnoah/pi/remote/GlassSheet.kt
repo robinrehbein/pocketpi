@@ -1,14 +1,17 @@
 package de.joinnoah.pi.remote
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import android.os.Build
-import android.view.View
-import android.view.ViewParent
-import android.view.Window
-import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -34,28 +37,31 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -63,22 +69,29 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindowProvider
-import java.util.function.Consumer
+import kotlin.coroutines.resume
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 // The app's bottom sheets in the floating-glass design. A sheet is a window of its own above the
-// app, so Haze cannot blur what lies behind it. From Android 12 the window asks the system to blur
-// everything behind it instead (cross-window blur), and the sheet turns frosted glass: the page
-// background at the glass tint, a light scrim and the glass rim. Where the system has that blur
-// off (battery saver, reduced animations, older Android) the sheet stays opaque.
+// app, so Haze cannot blur what lies behind it, and the system's blur behind windows is missing on
+// many phones (Samsung among them). So the sheet takes a small copy of the app as it opens, blurs it
+// once, and draws it under its own content, at the glass tint, lined up with where the app sits on
+// the screen: frosted glass over what was there. The copy is a still frame, taken again when the
+// configuration changes (rotation, dark mode). Before Android 12, or when the copy fails, the sheet
+// stays opaque.
 
 /** The top corners of every sheet. */
 private val SHEET_CORNER = 32.dp
 
 /**
- * A modal bottom sheet in the app's design: the page background rather than a tinted surface,
- * no tonal elevation, rounder top corners and a slim handle.
+ * A modal bottom sheet in the app's design: frosted glass over the app where it can be, otherwise
+ * the page background; no tonal elevation, rounder top corners and a slim handle.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,102 +101,173 @@ internal fun GlassSheet(
     sheetState: SheetState = rememberModalBottomSheetState(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val context = LocalContext.current
-    // Start from the system's current answer, so a frosted sheet does not open opaque for a frame.
-    var frosted by remember { mutableStateOf(crossWindowBlurOn(context)) }
+    val backdrop = rememberAppBackdrop()
     val scheme = MaterialTheme.colorScheme
+    val glass = SheetGlass(
+        // The scrim over the copy matches the scrim the sheet lays over the app around it.
+        scrim = BottomSheetDefaults.ScrimColor,
+        // The glass tint keeps text at 4.5:1 over any content, as on the floating pills.
+        tint = scheme.background.copy(alpha = GLASS_TINT_ALPHA),
+    )
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         modifier = modifier,
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = SHEET_CORNER, topEnd = SHEET_CORNER),
-        // The glass tint keeps text at 4.5:1 over any content, as on the floating pills.
-        containerColor = if (frosted) scheme.background.copy(alpha = GLASS_TINT_ALPHA) else scheme.background,
+        containerColor = scheme.background,
         contentColor = scheme.onBackground,
         tonalElevation = 0.dp,
-        scrimColor = if (frosted) scheme.scrim.copy(alpha = FROSTED_SCRIM_ALPHA) else BottomSheetDefaults.ScrimColor,
-        // The rim is drawn inside the sheet (by the handle) so it moves with the sheet.
-        dragHandle = { SheetHandle(rim = if (frosted) glassRimColor(scheme) else null) },
+        scrimColor = glass.scrim,
+        // The handle and the content each draw their part of the backdrop, so it moves with the sheet.
+        dragHandle = { SheetHandle(backdrop, glass, rim = if (backdrop != null) glassRimColor(scheme) else null) },
     ) {
-        BlurBehindSheetWindow(hiding = sheetState.targetValue == SheetValue.Hidden) { frosted = it }
-        content()
+        // The same structure with or without the backdrop, so its arrival keeps the content's state.
+        Box(Modifier.fillMaxWidth()) {
+            if (backdrop != null) SheetBackdropLayer(backdrop, glass)
+            Column(Modifier.fillMaxWidth()) { content() }
+        }
     }
 }
 
-/** The scrim over the blurred app: lighter than the opaque sheet's, since the blur already sets it back. */
-private const val FROSTED_SCRIM_ALPHA = 0.14f
+private class SheetGlass(val scrim: Color, val tint: Color)
 
-/** How far the system blurs the app behind a frosted sheet, in pixels. */
-private const val SHEET_BLUR_RADIUS_PX = 64
+/** A blurred, downscaled copy of the app window and the window's place and size on the screen. */
+private class AppBackdrop(val image: ImageBitmap, val originOnScreen: IntOffset, val windowSize: IntSize)
 
-private fun crossWindowBlurOn(context: Context): Boolean =
-    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-        runCatching { context.getSystemService(WindowManager::class.java)?.isCrossWindowBlurEnabled == true }
-            .getOrDefault(false)
+/** How much smaller than the app the copy is: it is blurred anyway, and stays small in memory. */
+private const val BACKDROP_DOWNSCALE = 4
+
+/** The blur radius in pixels of the small copy; three box passes of it read as about 56 screen pixels. */
+private const val BACKDROP_BLUR_RADIUS = 14
+
+/** Copies and blurs the app window as the sheet opens; null until the copy is there or when it fails. */
+@Composable
+private fun rememberAppBackdrop(): AppBackdrop? {
+    // Robolectric's PixelCopy draws the window itself and fails on Compose's vector caches.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || Build.FINGERPRINT == "robolectric") return null
+    val view = LocalView.current
+    val configuration = LocalConfiguration.current
+    var backdrop by remember { mutableStateOf<AppBackdrop?>(null) }
+    LaunchedEffect(view, configuration) {
+        backdrop = null
+        val window = view.context.sheetActivity()?.window ?: return@LaunchedEffect
+        val root = window.decorView
+        if (root.width == 0 || root.height == 0) return@LaunchedEffect
+        val bitmap = Bitmap.createBitmap(
+            (root.width / BACKDROP_DOWNSCALE).coerceAtLeast(1),
+            (root.height / BACKDROP_DOWNSCALE).coerceAtLeast(1),
+            Bitmap.Config.ARGB_8888,
+        )
+        val copied = suspendCancellableCoroutine { continuation ->
+            runCatching {
+                PixelCopy.request(window, bitmap, { result ->
+                    if (continuation.isActive) continuation.resume(result == PixelCopy.SUCCESS)
+                }, Handler(Looper.getMainLooper()))
+            }.onFailure { if (continuation.isActive) continuation.resume(false) }
+        }
+        if (!copied) return@LaunchedEffect
+        val location = IntArray(2).also(root::getLocationOnScreen)
+        withContext(Dispatchers.Default) {
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            boxBlur(pixels, bitmap.width, bitmap.height, BACKDROP_BLUR_RADIUS)
+            bitmap.setPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        }
+        backdrop = AppBackdrop(bitmap.asImageBitmap(), IntOffset(location[0], location[1]), IntSize(root.width, root.height))
+    }
+    return backdrop
+}
 
 /**
- * Asks the system to blur the app behind the sheet's window and reports whether that blur is on.
- * The system can turn cross-window blur off and on while the sheet is open (battery saver), so the
- * sheet follows its listener rather than reading it once. While the sheet is [hiding] the blur is
- * taken away, so it does not stay at full strength as the sheet slides out.
+ * Blurs ARGB [pixels] of a [width] by [height] image in place: three box passes across and down,
+ * which come close to a Gaussian blur. Edge pixels repeat beyond the image.
+ */
+internal fun boxBlur(pixels: IntArray, width: Int, height: Int, radius: Int) {
+    if (radius <= 0 || width <= 0 || height <= 0) return
+    val scratch = IntArray(pixels.size)
+    repeat(3) {
+        boxBlurPass(pixels, scratch, width, height, radius, across = true)
+        boxBlurPass(scratch, pixels, width, height, radius, across = false)
+    }
+}
+
+private fun boxBlurPass(input: IntArray, output: IntArray, width: Int, height: Int, radius: Int, across: Boolean) {
+    val lines = if (across) height else width
+    val length = if (across) width else height
+    val span = 2 * radius + 1
+    for (line in 0 until lines) {
+        fun at(i: Int): Int {
+            val clamped = i.coerceIn(0, length - 1)
+            return if (across) line * width + clamped else clamped * width + line
+        }
+        var a = 0
+        var r = 0
+        var g = 0
+        var b = 0
+        for (i in -radius..radius) {
+            val p = input[at(i)]
+            a += p ushr 24; r += (p shr 16) and 0xFF; g += (p shr 8) and 0xFF; b += p and 0xFF
+        }
+        for (i in 0 until length) {
+            output[at(i)] = ((a / span) shl 24) or ((r / span) shl 16) or ((g / span) shl 8) or (b / span)
+            val leaving = input[at(i - radius)]
+            val entering = input[at(i + radius + 1)]
+            a += (entering ushr 24) - (leaving ushr 24)
+            r += ((entering shr 16) and 0xFF) - ((leaving shr 16) and 0xFF)
+            g += ((entering shr 8) and 0xFF) - ((leaving shr 8) and 0xFF)
+            b += (entering and 0xFF) - (leaving and 0xFF)
+        }
+    }
+}
+
+private tailrec fun Context.sheetActivity(): Activity? =
+    when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.sheetActivity()
+        else -> null
+    }
+
+/**
+ * The blurred app copy under one part of the sheet, lined up with the screen, with the scrim and
+ * the glass tint over it. Each part reads its own place on the screen, so the parts join up and
+ * follow a drag; the copy is blurred already, so a frame only moves it.
  */
 @Composable
-private fun BlurBehindSheetWindow(hiding: Boolean, onFrosted: (Boolean) -> Unit) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-    val view = LocalView.current
-    val report by rememberUpdatedState(onFrosted)
-    val window = remember(view) { view.dialogWindow() }
-    var enabled by remember { mutableStateOf(crossWindowBlurOn(view.context)) }
-    DisposableEffect(view, window) {
-        val windowManager = view.context.getSystemService(WindowManager::class.java)
-        if (window == null || windowManager == null) {
-            report(false)
-            return@DisposableEffect onDispose {}
-        }
-        val listener = Consumer<Boolean> { on ->
-            enabled = on
-            report(on)
-        }
-        // The listener is called at once with the current state. A window manager that cannot
-        // blur (a test's) leaves the sheet opaque instead of failing.
-        val registered = runCatching {
-            window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-            windowManager.addCrossWindowBlurEnabledListener(listener)
-        }.isSuccess
-        if (!registered) report(false)
-        onDispose { if (registered) runCatching { windowManager.removeCrossWindowBlurEnabledListener(listener) } }
-    }
-    val radius = if (enabled && !hiding) SHEET_BLUR_RADIUS_PX else 0
-    DisposableEffect(window, radius) {
-        if (window != null && window.attributes.blurBehindRadius != radius)
-            runCatching { window.attributes = window.attributes.apply { blurBehindRadius = radius } }
-        onDispose {}
-    }
-}
-
-/** The window of the dialog that hosts this view, as the sheet's own layout provides it. */
-private fun View.dialogWindow(): Window? {
-    if (this is DialogWindowProvider) return window
-    var current: ViewParent? = parent
-    while (current != null) {
-        if (current is DialogWindowProvider) return current.window
-        current = current.parent
-    }
-    return null
+private fun BoxScope.SheetBackdropLayer(backdrop: AppBackdrop, glass: SheetGlass) {
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    Box(
+        Modifier.matchParentSize()
+            .onGloballyPositioned { origin = it.positionOnScreen() }
+            .drawBehind {
+                drawImage(
+                    backdrop.image,
+                    dstOffset = IntOffset(
+                        (backdrop.originOnScreen.x - origin.x).roundToInt(),
+                        (backdrop.originOnScreen.y - origin.y).roundToInt(),
+                    ),
+                    dstSize = backdrop.windowSize,
+                )
+                drawRect(glass.scrim)
+                drawRect(glass.tint)
+            }
+    )
 }
 
 @Composable
-private fun SheetHandle(rim: Color? = null) {
-    Box(
-        Modifier.fillMaxWidth()
-            .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
-            .padding(top = 12.dp, bottom = 16.dp),
-        contentAlignment = Alignment.Center,
-    ) {
+private fun SheetHandle(backdrop: AppBackdrop?, glass: SheetGlass, rim: Color?) {
+    Box(Modifier.fillMaxWidth()) {
+        if (backdrop != null) SheetBackdropLayer(backdrop, glass)
         Box(
-            Modifier.size(width = 36.dp, height = 4.dp)
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f), CircleShape)
-        )
+            Modifier.fillMaxWidth()
+                .then(if (rim != null) Modifier.drawBehind { drawTopRim(rim) } else Modifier)
+                .padding(top = 12.dp, bottom = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier.size(width = 36.dp, height = 4.dp)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f), CircleShape)
+            )
+        }
     }
 }
 

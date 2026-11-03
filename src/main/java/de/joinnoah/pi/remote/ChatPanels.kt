@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
@@ -35,6 +34,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -486,10 +486,12 @@ private fun SubagentStripRow(
     onAbort: (SubagentStripEntry) -> Unit,
 ) {
     val openable = entry.openable && entry.sessionId != null
-    Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
-                Icon(Icons.Default.Terminal, null, Modifier.padding(12.dp).size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            // The same glass π avatar as the sessions and the chat's subagent card.
+            // Decorative: the name beside it says which agent it is.
+            GlassAvatar(size = 44.dp, modifier = Modifier.clearAndSetSemantics {}) {
+                Text("π", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
@@ -517,15 +519,27 @@ private fun SubagentStripRow(
             }
         }
         if (openable || (entry.abortable && allowAbort)) {
-            HorizontalDivider()
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                if (openable) TextButton(onClick = { onOpen(entry) }) {
-                    Text(stringResource(R.string.remote_subagent_open_details))
+            // Glass pills under the text, as the sheets' other actions, instead of a divided button row.
+            FlowRow(
+                Modifier.fillMaxWidth().padding(start = 56.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (openable) FloatingSurface(shape = CircleShape, blur = false) {
+                    TextButton(onClick = { onOpen(entry) }, Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.remote_subagent_open_details))
+                    }
                 }
-                if (entry.abortable && allowAbort) TextButton(onClick = { onAbort(entry) }) {
-                    Icon(Icons.Default.Stop, stringResource(R.string.remote_panel_subagent_abort), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.remote_subagent_stop_label), color = MaterialTheme.colorScheme.error)
+                if (entry.abortable && allowAbort) FloatingSurface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    blur = false,
+                ) {
+                    TextButton(onClick = { onAbort(entry) }, Modifier.heightIn(min = 48.dp)) {
+                        Icon(Icons.Default.Stop, stringResource(R.string.remote_panel_subagent_abort), tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.remote_subagent_stop_label), color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
                 }
             }
         }
