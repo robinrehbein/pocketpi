@@ -43,6 +43,18 @@ class WatchUiTest {
             assertEquals(0, repository.prompts)
         }
     }
+    @Test fun `chat shows the session's pull request checks`() {
+        val repository = WatchFakeRepository()
+        val model = model(repository, "CHAT")
+        compose.setContent { MaterialTheme { WearApp(model, DefaultSettingsRepository(androidx.test.core.app.ApplicationProvider.getApplicationContext())) } }
+        compose.waitForIdle()
+        compose.onNodeWithText("PR #", substring = true).assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(pullRequest = PullRequestStatus(189, "https://github.com/acme/app/pull/189", false,
+                PullRequestReview.NONE, PullRequestChecksState.DONE, 2, emptyList()))
+        }
+        compose.onNodeWithText("PR #189 · 2 failing").assertExists()
+    }
     @Test fun `subagent stop uses subagent wording and stops only the subagent`() {
         val repository = WatchFakeRepository()
         val model = model(repository, "CONTROLS")

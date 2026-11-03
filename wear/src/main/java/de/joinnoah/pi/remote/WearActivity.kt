@@ -170,6 +170,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
             }
             WatchScreen.CHAT -> {
                 item { Text(stringResource(watchStatus(state.status))) }
+                state.pullRequest?.let { pr -> item { Text(watchPullRequestSummary(pullRequestChipModel(pr), androidx.compose.ui.platform.LocalResources.current)) } }
                 if (state.questions.isNotEmpty()) action(R.string.wear_questions, ready) { model.open(WatchScreen.QUESTIONS) }
                 action(R.string.wear_write, !busy) { model.open(WatchScreen.COMPOSE) }
                 action(R.string.wear_controls, !busy) { model.open(WatchScreen.CONTROLS) }

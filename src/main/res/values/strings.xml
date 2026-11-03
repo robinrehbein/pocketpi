@@ -537,6 +537,16 @@
     <string name="wear_notifications">Watch notifications</string>
     <string name="wear_push_unconfigured">Push is unavailable in this build because Firebase is not configured. Reopen the app to refresh your sessions.</string>
     <!-- The watch's status tile; the phone app does not use these. -->
+    <string name="wear_complication_pair" tools:ignore="UnusedResources">Pair</string>
+    <string name="wear_complication_preview_title" tools:ignore="UnusedResources">Session</string>
+    <plurals name="wear_complication_waiting" tools:ignore="UnusedResources">
+        <item quantity="one">waiting</item>
+        <item quantity="other">waiting</item>
+    </plurals>
+    <plurals name="wear_complication_working" tools:ignore="UnusedResources">
+        <item quantity="one">working</item>
+        <item quantity="other">working</item>
+    </plurals>
     <string name="wear_tile_label" tools:ignore="UnusedResources">PocketPi status</string>
     <string name="wear_tile_description" tools:ignore="UnusedResources">Sessions that need you or are working, with their pull request checks.</string>
     <string name="wear_tile_needs_you" tools:ignore="UnusedResources">needs you</string>
