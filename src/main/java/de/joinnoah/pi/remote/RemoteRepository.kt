@@ -481,6 +481,12 @@ interface RemoteRepository {
 
     fun closeSession(sessionId: String) {}
 
+    /**
+     * Closes [sessionId] of [projectId] from the Projects page, while no project is open; see
+     * [closableProjectChat] for the chats it takes.
+     */
+    fun closeProjectChat(projectId: String, sessionId: String) {}
+
     fun unshareProject(projectId: String) {}
 
     fun older()

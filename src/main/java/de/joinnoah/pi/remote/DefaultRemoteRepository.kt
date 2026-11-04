@@ -1095,6 +1095,12 @@ class DefaultRemoteRepository(
         }
     }
     private val closingSessions = mutableSetOf<String>()
+    /**
+     * Sessions closed from the Projects page, by ID, with the time the Mac accepted the close: a
+     * list reply sent before the close must not bring them back. Kept for
+     * [PROJECT_LISTS_REFRESH_MILLIS], which no list reply outlives ([REQUEST_TIMEOUT_MILLIS]).
+     */
+    private val closedProjectChats = HashMap<String, Long>()
     private val unsharingProjects = mutableSetOf<String>()
     private val sessionStatusRevisions = linkedMapOf<String, Long>()
     private val sessionStatusOverrides = mutableMapOf<String, String>()
@@ -1747,6 +1753,13 @@ class DefaultRemoteRepository(
      * way. When the project's list is on screen, it shows the new rows too.
      */
     private fun applyProjectList(routeId: String, project: JsonObject, sessions: List<JsonObject>, connection: Long) {
+        val time = now()
+        closedProjectChats.values.removeAll { time - it !in 0 until PROJECT_LISTS_REFRESH_MILLIS }
+        // A chat closed from Projects stays gone; its history row, should the Mac list one, stays.
+        @Suppress("NAME_SHADOWING")
+        val sessions =
+            if (closedProjectChats.isEmpty()) sessions
+            else sessions.filterNot { it.optionalText("id") in closedProjectChats && it.optionalText("origin") != "history" }
         val projectId = project.text("id")
         val name = project.optionalText("name").orEmpty()
         if (projectSessionsRoute != routeId) {
@@ -2097,6 +2110,60 @@ class DefaultRemoteRepository(
             } catch (swallowed: Exception) {
                 Diagnostics.caught("repo.closeSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
+            } finally {
+                closingSessions -= sessionId
+            }
+        }
+    }
+
+    override fun closeProjectChat(projectId: String, sessionId: String) {
+        val routeId = activeHost?.routeId ?: return
+        if (
+            sessionId.isBlank() ||
+                sessionId.length > 256 ||
+                sessionId in closingSessions ||
+                state.value.selection.routeId != routeId ||
+                !closableProjectChat(state.value, projectId, sessionId)
+        )
+            return
+        closingSessions += sessionId
+        val connection = generation
+        // Bound to the connection, not the selection: opening a chat meanwhile must not drop the
+        // reply and leave the closed chat on the page.
+        scope.launch {
+            try {
+                val result = connectionRequest("session.close", "projectId" to projectId, "sessionId" to sessionId)
+                require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+                if (connection != generation || activeHost?.routeId != routeId) return@launch
+                closedProjectChats[sessionId] = now()
+                invalidateProjectList(routeId, projectId)
+                chatCache.remove(RemoteSelection(routeId, projectId, sessionId))
+                if (cachedChat?.selection?.sessionId == sessionId) cachedChat = null
+                projectChatCandidates[projectId]?.let { chats ->
+                    projectChatCandidates[projectId] = chats.filterNot { it.session.optionalText("id") == sessionId }
+                }
+                if (projectSessionsRoute == routeId) {
+                    projectSessionsAggregate[projectId]?.let { entry ->
+                        projectSessionsAggregate[projectId] =
+                            entry.copy(sessions = entry.sessions.filterNot { it.optionalText("id") == sessionId })
+                    }
+                }
+                publishProjectChats(routeId)
+                publishProjectSessions(routeId)
+                // The project's list, read again, shows the closed chat as the Mac now lists it
+                // and brings the aggregate's counts up to date.
+                try {
+                    state.value.projects.find { it.text("id") == projectId }?.let { readProjectList(routeId, it, connection) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.closeProjectChat.read", swallowed)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.closeProjectChat", swallowed)
+                if (activeHost?.routeId == routeId) reportError(R.string.remote_request_error)
             } finally {
                 closingSessions -= sessionId
             }
@@ -8553,7 +8620,7 @@ class DefaultRemoteRepository(
     }
 
     /**
-     * Sends a read bound to the connection rather than the selection, like [folderRequest]:
+     * Sends a request bound to the connection rather than the selection, like [folderRequest]:
      * navigating away does not drop its reply, and only a lost or replaced connection fails it.
      * Diagnostics records its round trip like [request]'s.
      */
