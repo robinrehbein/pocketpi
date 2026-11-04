@@ -44,10 +44,9 @@ data class ActionUsage(val score: Double, val at: Long)
 internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
 /**
- * Which available actions take the pill's buttons, first come first: Changes and Refresh. The order
- * is fixed, so an action never jumps between the pill and the menu because of how often it was used;
- * only the command palette ranks by [ActionUsage]. [ChatAction.CLOSE] is never listed: a destructive
- * action must not move into the pill.
+ * Fallback priority when there is no available last-used action. The morphing pill selects its
+ * shortcut by recency, while the command palette ranks by decayed frequency. [ChatAction.CLOSE]
+ * is never a shortcut: a destructive action must remain behind the menu and confirmation.
  */
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
@@ -61,13 +60,17 @@ internal fun ActionUsage.decayed(now: Long): Double =
 internal fun ActionUsage?.used(now: Long): ActionUsage =
     ActionUsage((this?.decayed(now) ?: 0.0) + 1.0, now)
 
-/** The pill's buttons and the chevron menu's entries. */
+/** The available header actions; the morphing pill combines both lists into its full menu. */
 internal data class ChatActionLayout(val shown: List<ChatAction>, val menu: List<ChatAction>)
 
+/** Initial quick action uses recency, never the palette's decayed frequency score. */
+internal fun initialChatQuickAction(available: Set<ChatAction>, usage: Map<ChatAction, ActionUsage>): ChatAction? =
+    usage.filterKeys { it in available && it != ChatAction.CLOSE }.maxByOrNull { it.value.at }?.key
+        ?: DEFAULT_CHAT_ACTIONS.firstOrNull { it in available }
+
 /**
- * The first two [available] actions of [priority] go into the pill and the rest into the menu,
- * both in [ChatAction] order so entries never swap places. When only one would be left for the
- * menu, it gets the chevron's place instead.
+ * Partition available actions for the existing history/status/close adapters. The morphing pill
+ * combines both partitions into its full menu, so this partition no longer controls its width.
  */
 internal fun chatActionLayout(priority: List<ChatAction>, available: Set<ChatAction>): ChatActionLayout {
     val usable = priority.filter { it in available }
@@ -91,9 +94,8 @@ internal fun ChatActionLayout.withStatus(status: Boolean): ChatActionLayout =
     if (!status) this else copy(menu = (menu + ChatAction.STATUS).sortedBy { it.ordinal })
 
 /**
- * [this] with Close at the end of the menu: the same session actions as a session row's menu,
- * without a swipe. When Close opens the menu, the chevron takes the third button's place, so the
- * pill stays as wide as [chatActionLayout] makes it; History's own button stays.
+ * [this] with Close at the end of the available menu actions. Preserve the partition expected by
+ * the history adapter; the morphing pill still uses a single shortcut and a chevron.
  */
 internal fun ChatActionLayout.withClose(): ChatActionLayout {
     val moved = if (menu.isEmpty()) shown.filter { it != ChatAction.HISTORY }.drop(2) else emptyList()

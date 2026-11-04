@@ -3,6 +3,8 @@ package de.joinnoah.pi.remote
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.getAndUpdate
@@ -392,7 +394,17 @@ internal class ChatViewModel(
     fun terminalViewNow(): TerminalView? = repository.state.value.let { if (matches(it) && !cleared) it.terminal else null }
     fun resizeTerminal(cols: Int, rows: Int) = repository.resizeTerminal(cols, rows)
 
-    fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
+    private val mutableChatActionUsage = MutableStateFlow(settings.chatActionUsage())
+    val chatActionUsage: StateFlow<Map<ChatAction, ActionUsage>> = mutableChatActionUsage.asStateFlow()
+
+    /** Re-read on route entry/resume, including uses recorded by another cached chat model. */
+    fun refreshChatActionUsage() { mutableChatActionUsage.value = settings.chatActionUsage() }
+
+    fun recordChatAction(action: ChatAction) {
+        if (action == ChatAction.CLOSE) return
+        settings.recordChatAction(action)
+        refreshChatActionUsage()
+    }
 
     /** A picked, dropped or pasted batch waiting for its chat; identity matters, so not a data class. */
     private class PickerResult(
