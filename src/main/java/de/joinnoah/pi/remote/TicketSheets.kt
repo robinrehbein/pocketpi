@@ -134,7 +134,7 @@ internal fun AcceptSheet(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-        if (busy > 0)
+        if (busy > 0 && closable.isNotEmpty())
             Text(
                 pluralStringResource(R.plurals.remote_tickets_accept_busy_linked, busy, busy),
                 style = MaterialTheme.typography.bodySmall,

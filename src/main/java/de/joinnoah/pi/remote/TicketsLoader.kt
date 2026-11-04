@@ -273,8 +273,8 @@ internal class TicketsLoader(
             }
             write(routeId) { it.copy(pendingAccept = null) }
             // Its own coroutine: losing the connection must not cancel a request already sent.
+            val epoch = connectionEpoch
             scope.launch {
-                val epoch = connectionEpoch
                 val accepted = send(routeId, projectId, ref) { source.moveTicket(projectId, ref, ACCEPT_STATE, comment) }
                 // A reply that comes on a later connection or after a switch to another Mac closes
                 // nothing: the chats were chosen under the connection the accept was sent on.

@@ -257,7 +257,8 @@ internal fun acceptCloseOffer(
                 }
         when {
             status == "running" || status == "waiting" -> busy++
-            marks[link.id]?.pinned != true && (projectId to link.id) in closableIds -> closable += link.id
+            marks[link.id]?.pinned != true && link.id !in state.closingSessions &&
+                (projectId to link.id) in closableIds -> closable += link.id
         }
     }
     return AcceptCloseOffer(closable, busy)
