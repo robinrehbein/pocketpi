@@ -75,7 +75,7 @@ internal fun SessionListRow(
     val endToStart = available(swipe.first)
     val regionChild = rememberRegionChild()
     val startToEnd = available(swipe.second)
-    val title = item.title.ifBlank { stringResource(R.string.remote_new_session) }
+    val title = sessionTitleLabel(item)
     val subagentLabel = stringResource(R.string.remote_subagent)
     val reported =
         stringResource(
@@ -439,3 +439,19 @@ internal fun sessionBadgeGlyph(availability: SessionAvailability, lastKnown: Boo
         availability == SessionAvailability.WAITING -> StatusGlyphKind.NEEDS_INPUT
         else -> null
     }
+
+/**
+ * The title [item] shows: what the user typed; for a first prompt that was only an attachment, the
+ * file it named; else "New session".
+ */
+@Composable
+internal fun sessionTitleLabel(item: SessionListItem): String {
+    if (item.title.isNotBlank()) return item.title
+    val attachment = item.titleAttachment ?: return stringResource(R.string.remote_new_session)
+    val name = attachment.name
+    return when {
+        name == null -> stringResource(R.string.remote_session_title_attachment)
+        attachment.image -> stringResource(R.string.remote_session_title_image, name)
+        else -> stringResource(R.string.remote_session_title_file, name)
+    }
+}

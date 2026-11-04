@@ -682,7 +682,7 @@ internal fun ChildSessionPickerSheet(
                 SheetGroupRow(first = index == 0, last = index == candidates.lastIndex) {
                 ListItem(
                     colors = sheetListItemColors(),
-                    headlineContent = { Text(session.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    headlineContent = { Text(sessionTitleLabel(session), maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     supportingContent = {
                         Text(listOfNotNull(status, updated).joinToString(" · "), maxLines = 1)
                     },

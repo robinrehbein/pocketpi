@@ -41,4 +41,29 @@ class SessionListWorkerUiTest {
         compose.onNodeWithText("Running in the computer terminal", substring = true, useUnmergedTree = true)
             .assertDoesNotExist()
     }
+
+    @Test
+    fun anImageOnlySessionReadsAsImageAndItsName() {
+        val item =
+            SessionListItem(
+                id = "image",
+                title = "",
+                parentSessionId = null,
+                depth = 0,
+                hasChildren = false,
+                availability = SessionAvailability.IDLE,
+                preview = null,
+                updatedAt = null,
+                continuesAsCopy = false,
+                daemonOwned = false,
+                liveMacTui = false,
+                titleAttachment = TitleAttachment("a.png", true),
+            )
+        compose.setContent {
+            MaterialTheme {
+                SessionListRow(item = item, enabled = true, closeAvailable = true, onClick = {}, onClose = {})
+            }
+        }
+        compose.onNodeWithText("Image: a.png", substring = true, useUnmergedTree = true).assertExists()
+    }
 }
