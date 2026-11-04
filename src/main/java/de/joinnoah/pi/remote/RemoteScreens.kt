@@ -3165,6 +3165,10 @@ internal fun RemoteScreen(
                                             } else null,
                                         // Only a list the Mac confirmed has counts; a cached row has none.
                                         counts = state.projectSessions[projectId]?.counts,
+                                        unreadReady =
+                                            state.projectSessions[projectId]
+                                                ?.takeIf { it.verified }
+                                                ?.let { unreadReadyCount(it.sessions, routeMarks) } ?: 0,
                                     )
                                 }
                             }

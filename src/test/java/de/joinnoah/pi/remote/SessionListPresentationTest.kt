@@ -355,7 +355,7 @@ class SessionListPresentationTest {
 
         val verified = projectSessions("p", "Project", rows, verified = true)
         assertEquals(rows, verified.sessions)
-        assertEquals(SessionCounts(waiting = 1, running = 2, ready = 1), verified.counts)
+        assertEquals(SessionCounts(waiting = 1, running = 2), verified.counts)
         assertFalse(verified.truncated)
 
         val cached = projectSessions("p", "Project", rows, verified = false)
@@ -377,7 +377,7 @@ class SessionListPresentationTest {
         assertTrue("idle${idle.size - 1}" in kept)
         assertFalse("idle0" in kept)
         // The counts cover the whole list, not only the kept rows.
-        assertEquals(SessionCounts(waiting = 1, running = 1, ready = idle.size), entry.counts)
+        assertEquals(SessionCounts(waiting = 1, running = 1), entry.counts)
     }
 
     @Test
@@ -389,7 +389,7 @@ class SessionListPresentationTest {
         val running = entry.patched(status("b", "running"))
         assertEquals(SessionCounts(waiting = 1, running = 1), running.counts)
         val answered = running.patched(status("a", "idle"))
-        assertEquals(SessionCounts(running = 1, ready = 1), answered.counts)
+        assertEquals(SessionCounts(running = 1), answered.counts)
         // A row the patch leaves alone keeps the same entry.
         assertSame(answered, answered.patched { it })
         // A list without counts stays without them.
@@ -735,25 +735,41 @@ class SessionListPresentationTest {
     }
 
     @Test
-    fun sessionCountsCountOpenIdleTopLevelSessionsAsReady() {
-        val rows =
-            listOf(
-                row("open"),
-                Wire.objectOf("id" to "closed", "status" to "idle", "origin" to "history"),
-                Wire.objectOf("id" to "sub", "status" to "idle", "origin" to "rpc", "parentSessionId" to "open"),
-                row("busy", "running"),
-            )
+    fun sessionCountsCountWaitingAndRunningSessions() {
+        val rows = listOf(row("open"), row("busy", "running"), row("asks", "waiting"))
 
-        assertEquals(SessionCounts(running = 1, ready = 1), sessionCounts(rows))
+        assertEquals(SessionCounts(waiting = 1, running = 1), sessionCounts(rows))
     }
 
     @Test
-    fun patchedCountsFollowReady() {
-        val entry = projectSessions("p", "Project", listOf(row("a", "running"), row("b")), verified = true)
-        assertEquals(SessionCounts(running = 1, ready = 1), entry.counts)
+    fun unreadReadyCountsOnlyUnreadOpenIdleTopLevelSessions() {
+        val unread = SessionMark(seenUpdatedAt = 5, seenAt = 5)
+        val read = SessionMark(seenUpdatedAt = 10, seenAt = 10)
+        val rows =
+            listOf(
+                row("new", updatedAt = 10),
+                row("seen", updatedAt = 10),
+                row("unmarked", updatedAt = 10),
+                row("finished", updatedAt = 10),
+                row("busy", "running", updatedAt = 10),
+                Wire.objectOf("id" to "closed", "status" to "idle", "origin" to "history", "updatedAt" to 10),
+                Wire.objectOf(
+                    "id" to "sub", "status" to "idle", "origin" to "rpc", "parentSessionId" to "new", "updatedAt" to 10,
+                ),
+            )
+        val marks =
+            mapOf(
+                "new" to unread,
+                "seen" to read,
+                "finished" to SessionMark(finishedAt = 9),
+                "busy" to unread,
+                "closed" to unread,
+                "sub" to unread,
+            )
 
-        val finished = entry.patched { if (it.text("id") == "a") row("a", "idle") else it }
-        assertEquals(SessionCounts(ready = 2), finished.counts)
+        // A running, history or subagent row is no ready row, however unread; an unmarked one counts as read.
+        assertEquals(2, unreadReadyCount(rows, marks))
+        assertEquals(0, unreadReadyCount(rows, emptyMap()))
     }
 
     @Test

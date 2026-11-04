@@ -96,6 +96,7 @@ class MacHubUiTest {
         capabilities: Set<String> = emptySet(),
         tickets: TicketsState = TicketsState(),
         fontScale: Float? = null,
+        marks: SessionMarksStore? = null,
     ) {
         repository.state.value =
             RemoteState(
@@ -114,7 +115,8 @@ class MacHubUiTest {
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(
-                LocalDensity provides if (fontScale != null) Density(density.density, fontScale) else density
+                LocalDensity provides if (fontScale != null) Density(density.density, fontScale) else density,
+                LocalSessionMarks provides marks,
             ) {
                 androidx.compose.material3.MaterialTheme {
                     RemoteNavigation(repository, settings, false, {})
@@ -123,6 +125,12 @@ class MacHubUiTest {
         }
         compose.waitForIdle()
     }
+
+    /** A store that marks these sessions of the route as finished while the user was away, so unread. */
+    private fun unreadMarks(routeId: String, vararg sessionIds: String) =
+        SessionMarksStore(compose.activity).also { store ->
+            sessionIds.forEach { store.markFinished(routeId, it, now = 5) }
+        }
 
     private fun label(id: Int) = compose.activity.getString(id)
 
@@ -268,19 +276,26 @@ class MacHubUiTest {
     }
 
     @Test
-    fun aProjectRowShowsItsReadyCount() {
+    fun aProjectRowShowsItsUnreadReadyCount() {
         render(
             listOf(project("p1", "Alpha")),
             counts =
                 mapOf(
                     "p1" to
-                        ProjectSessions("p1", "Alpha", emptyList(), verified = true, counts = SessionCounts(running = 1, ready = 3)),
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            List(4) { Wire.objectOf("id" to "s$it", "status" to "idle", "origin" to "rpc", "updatedAt" to 10) },
+                            verified = true,
+                            counts = SessionCounts(running = 1),
+                        ),
                 ),
+            marks = unreadMarks("studio", "s0", "s1", "s2"),
         )
 
-        compose.onNodeWithText("3 ready").assertIsDisplayed()
+        compose.onNodeWithText("3 new").assertIsDisplayed()
         compose.onNodeWithTag("projectBadgeReady-p1", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription("Alpha, 1 working, 3 ready").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Alpha, 1 working, 3 new").assertIsDisplayed()
     }
 
     @Test
@@ -295,11 +310,12 @@ class MacHubUiTest {
                         ProjectSessions(
                             "p1",
                             "Alpha",
-                            emptyList(),
+                            List(3) { Wire.objectOf("id" to "s$it", "status" to "idle", "origin" to "rpc", "updatedAt" to 10) },
                             verified = true,
-                            counts = SessionCounts(waiting = 2, running = 1, ready = 3),
+                            counts = SessionCounts(waiting = 2, running = 1),
                         ),
                 ),
+            marks = unreadMarks("studio", "s0", "s1", "s2"),
         )
 
         val name = compose.onNode(hasText("Alpha") and hasAnyAncestor(hasTestTag("projectRow-p1")), useUnmergedTree = true)

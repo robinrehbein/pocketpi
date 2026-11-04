@@ -229,10 +229,12 @@ internal fun ProjectRow(
     /** Starts a session in this project, from the row's menu; null where none can start now. */
     onNewSession: (() -> Unit)? = null,
     /**
-     * The project's waiting, running and ready sessions, shown as badges; null for a row that is not
+     * The project's waiting and running sessions, shown as badges; null for a row that is not
      * confirmed by the Mac (a cached one), which shows none.
      */
     counts: SessionCounts? = null,
+    /** How many of the project's ready sessions are unread (see [unreadReadyCount]), shown as the "new" badge. */
+    unreadReady: Int = 0,
 ) {
     val context = LocalContext.current
     val regionChild = rememberRegionChild()
@@ -241,7 +243,8 @@ internal fun ProjectRow(
     val workingBadge =
         counts?.running?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_working_count, it, it) }
     val readyBadge =
-        counts?.ready?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_ready_count, it, it) }
+        unreadReady.takeIf { counts != null && it > 0 }
+            ?.let { pluralStringResource(R.plurals.remote_mac_ready_count, it, it) }
     // With badges the row reads them after its name, as one label.
     val badgeDescription = listOfNotNull(waitingBadge, workingBadge, readyBadge).takeIf { it.isNotEmpty() }
     val unshareLabel = stringResource(R.string.remote_project_unshare)

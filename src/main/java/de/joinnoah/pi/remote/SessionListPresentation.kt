@@ -150,7 +150,7 @@ internal data class QuickChats(
 
 /**
  * Whether a row with this status, origin and parent is an open idle top-level session: not a history row (a closed session the
- * Mac lists as a copy to continue) and no subagent. The Ready group and [SessionCounts.ready]
+ * Mac lists as a copy to continue) and no subagent. The Ready group and [unreadReadyCount]
  * share this.
  */
 private fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
@@ -203,11 +203,25 @@ internal const val OLD_READY_MILLIS = 24 * 60 * 60 * 1000L
 /** Whether a chat last updated at [updatedAt] has been idle for a day or more by [now]; a future time is not old. */
 internal fun readyIsOld(updatedAt: Long?, now: Long): Boolean = updatedAt != null && now - updatedAt >= OLD_READY_MILLIS
 
+/** How many of a project's sessions wait for an answer and how many run, by its latest list. */
+data class SessionCounts(val waiting: Int = 0, val running: Int = 0)
+
 /**
- * How many of a project's sessions wait for an answer, how many run and how many are ready (open,
- * idle, top-level), by its latest list.
+ * How many of [sessions] are ready (open, idle, top-level, the Ready group's rule) and unread by
+ * [marks]: their result is one the user has not seen yet. This is the "N new" badge of a project
+ * row. It lives apart from [SessionCounts] because unread is phone-local (see [sessionUnread]):
+ * the repository counts by the Mac's list alone, so the view applies the marks. A session
+ * without a mark counts as read.
  */
-data class SessionCounts(val waiting: Int = 0, val running: Int = 0, val ready: Int = 0)
+internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
+    sessions.count {
+        isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId")) &&
+            sessionUnread(
+                it.optionalText("id")?.let(marks::get),
+                it["updatedAt"]?.jsonPrimitive?.longOrNull,
+                open = false,
+            )
+    }
 
 /**
  * A project's sessions for views across projects, such as an activity board, badges or a
@@ -231,10 +245,6 @@ internal fun sessionCounts(sessions: List<JsonObject>): SessionCounts =
     SessionCounts(
         waiting = sessions.count { it.optionalText("status") == "waiting" },
         running = sessions.count { it.optionalText("status") == "running" },
-        ready =
-            sessions.count {
-                isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId"))
-            },
     )
 
 /**
@@ -283,7 +293,6 @@ internal fun ProjectSessions.patched(patch: (JsonObject) -> JsonObject): Project
             SessionCounts(
                 waiting = (it.waiting + after.waiting - before.waiting).coerceAtLeast(0),
                 running = (it.running + after.running - before.running).coerceAtLeast(0),
-                ready = (it.ready + after.ready - before.ready).coerceAtLeast(0),
             )
         },
     )

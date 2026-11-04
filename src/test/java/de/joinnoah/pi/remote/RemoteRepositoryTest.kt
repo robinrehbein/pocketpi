@@ -13422,9 +13422,9 @@ class RemoteRepositoryTest {
         val a = state.projectSessions.getValue("a")
         assertEquals(15, a.sessions.size)
         assertTrue(a.verified)
-        assertEquals(SessionCounts(waiting = 2, running = 3, ready = 10), a.counts)
+        assertEquals(SessionCounts(waiting = 2, running = 3), a.counts)
         assertEquals("Project a", a.projectName)
-        assertEquals(SessionCounts(ready = 1), state.projectSessions.getValue("b").counts)
+        assertEquals(SessionCounts(), state.projectSessions.getValue("b").counts)
 
         // Live status events patch the rows and the counts.
         fun status(sessionId: String, value: String) =
@@ -13437,7 +13437,7 @@ class RemoteRepositoryTest {
         status("idle0", "running")
         status("waiting0", "idle")
         val patched = repository.state.value.projectSessions.getValue("a")
-        assertEquals(SessionCounts(waiting = 1, running = 4, ready = 10), patched.counts)
+        assertEquals(SessionCounts(waiting = 1, running = 4), patched.counts)
         assertEquals("running", patched.sessions.first { it.text("id") == "idle0" }.text("status"))
 
         // A dropped connection leaves the rows unconfirmed and without counts.
@@ -13470,7 +13470,7 @@ class RemoteRepositoryTest {
         val read = repository.state.value.projectSessions.getValue("project")
         assertEquals(listOf("session", "fresh"), read.sessions.map { it.text("id") })
         assertTrue(read.verified)
-        assertEquals(SessionCounts(waiting = 1, ready = 1), read.counts)
+        assertEquals(SessionCounts(waiting = 1), read.counts)
     }
 
     @Test
@@ -13512,7 +13512,7 @@ class RemoteRepositoryTest {
         assertEquals(2, transport.lists("b"))
         val b = repository.state.value.projectSessions.getValue("b")
         assertEquals(listOf("old", "new"), b.sessions.map { it.text("id") })
-        assertEquals(SessionCounts(running = 1, ready = 1), b.counts)
+        assertEquals(SessionCounts(running = 1), b.counts)
         assertEquals(chat, repository.state.value.selection)
     }
 
