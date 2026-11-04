@@ -4500,7 +4500,8 @@ internal fun RemoteScreen(
             host = macHost,
             status = stringResource(macStatus),
             onDismiss = { macDetails = false },
-            loadStats = if (canUseHostStats(state)) model::hostStats else null,
+            // Only the connected computer's page: another Mac's page must not show this one's load.
+            loadStats = if (projectsPage.routeId == state.host?.routeId && canUseHostStats(state)) model::hostStats else null,
         )
     removing?.let { host ->
         AlertDialog(

@@ -8,9 +8,9 @@
     <string name="remote_host_stats_container">Container</string>
     <string name="remote_host_stats_cpu">CPU</string>
     <string name="remote_host_stats_measuring">Wird gemessen …</string>
-    <string name="remote_host_stats_cores">%1$s Kerne</string>
+    <string name="remote_host_stats_cores">Kerne: %1$s</string>
     <string name="remote_host_stats_load">Last %1$s / %2$s / %3$s</string>
-    <string name="remote_host_stats_cpu_limit">Limit %1$s Kerne</string>
+    <string name="remote_host_stats_cpu_limit">Kern-Limit: %1$s</string>
     <string name="remote_host_stats_memory">Arbeitsspeicher</string>
     <string name="remote_host_stats_memory_limit">Limit %1$s</string>
     <string name="remote_host_stats_pressure_normal">Speicherdruck: normal</string>
@@ -28,4 +28,8 @@
     <string name="remote_host_stats_minutes">%1$d Min</string>
     <string name="remote_host_stats_container_note">Systemlast und Akku gehören zur Maschine, nicht zum Container, und werden deshalb nicht gezeigt.</string>
     <string name="remote_host_stats_unavailable">Die Auslastung lässt sich gerade nicht lesen.</string>
+    <!-- Memory in binary gigabytes, such as "16 GB". -->
+    <string name="remote_host_stats_gib">%1$s GB</string>
+    <!-- The last reading stays on screen while the computer stops answering. -->
+    <string name="remote_host_stats_stale">Wird nicht aktualisiert</string>
 </resources>

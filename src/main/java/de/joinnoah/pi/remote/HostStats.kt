@@ -21,20 +21,20 @@ private const val MAX_CORES = 4096.0
 private const val MAX_LOAD = 1_000_000.0
 private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
 
-internal enum class HostPlatform(val wire: String) { DARWIN("darwin"), LINUX("linux"), OTHER("other") }
+enum class HostPlatform(val wire: String) { DARWIN("darwin"), LINUX("linux"), OTHER("other") }
 
-internal enum class MemoryPressure(val wire: String) { NORMAL("normal"), WARN("warn"), CRITICAL("critical") }
+enum class MemoryPressure(val wire: String) { NORMAL("normal"), WARN("warn"), CRITICAL("critical") }
 
-internal data class HostUsage(val usedBytes: Long, val totalBytes: Long) {
+data class HostUsage(val usedBytes: Long, val totalBytes: Long) {
     /** Used share, 0..1; 0 when the total is unknown. */
     val fraction: Float get() = if (totalBytes <= 0) 0f else (usedBytes.toDouble() / totalBytes).toFloat()
 }
 
-internal data class HostBattery(val percent: Double, val charging: Boolean, val onAc: Boolean)
+data class HostBattery(val percent: Double, val charging: Boolean, val onAc: Boolean)
 
-internal data class HostContainer(val cpuLimitCores: Double?, val memoryLimitBytes: Long?)
+data class HostContainer(val cpuLimitCores: Double?, val memoryLimitBytes: Long?)
 
-internal data class HostStats(
+data class HostStats(
     val platform: HostPlatform,
     val sampledAt: Long,
     val uptimeSeconds: Long,

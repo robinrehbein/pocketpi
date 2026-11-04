@@ -38,6 +38,9 @@ import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.withContext
 
 /**
@@ -77,27 +80,35 @@ internal fun MacConnectionDetailsDialog(
     }
 }
 
-/** The latest reading, or whether the last request failed while none had arrived yet. */
-private data class HostStatsView(val stats: HostStats? = null, val failed: Boolean = false)
+/** The latest reading and how many requests in a row failed since it arrived. */
+private data class HostStatsView(val stats: HostStats? = null, val failures: Int = 0)
+
+/** After this many failed requests in a row the last reading is marked as not updating. */
+private const val HOST_STATS_STALE_FAILURES = 3
 
 @Composable
 private fun HostStatsSection(loadStats: suspend () -> HostStats) {
     var view by remember { mutableStateOf(HostStatsView()) }
-    LaunchedEffect(loadStats) {
-        // One request at a time: the next one goes out a second after the previous answer.
-        while (true) {
-            view =
-                try {
-                    HostStatsView(stats = loadStats())
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Diagnostics.caught("host.stats", e)
-                    // Keep the last reading on a transient failure; say so only without one.
-                    if (view.stats != null) view else HostStatsView(failed = true)
-                }
-            // Real time, off the composition's clock, so a UI test's virtual clock never spins this loop.
-            withContext(Dispatchers.Default) { delay(HOST_STATS_POLL_MILLIS) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(loadStats, lifecycle) {
+        // Only while the app is on screen: in the background the connection can stay open.
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            // One request at a time: the next one goes out a second after the previous answer.
+            while (true) {
+                view =
+                    try {
+                        HostStatsView(stats = loadStats())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Recorded once per run of failures, not once a second.
+                        if (view.failures == 0) Diagnostics.caught("host.stats", e)
+                        // Keep the last reading on a transient failure.
+                        view.copy(failures = view.failures + 1)
+                    }
+                // Real time, off the composition's clock, so a UI test's virtual clock never spins this loop.
+                withContext(Dispatchers.Default) { delay(HOST_STATS_POLL_MILLIS) }
+            }
         }
     }
     SheetSection {
@@ -105,7 +116,14 @@ private fun HostStatsSection(loadStats: suspend () -> HostStats) {
             val stats = view.stats
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.remote_host_stats_title), style = MaterialTheme.typography.titleSmall)
-                if (stats != null) {
+                if (stats != null && view.failures >= HOST_STATS_STALE_FAILURES) {
+                    Text(
+                        stringResource(R.string.remote_host_stats_stale),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = waitingColor(),
+                        modifier = Modifier.testTag("hostStatsStale"),
+                    )
+                } else if (stats != null) {
                     Text(
                         stringResource(
                             when {
@@ -123,7 +141,7 @@ private fun HostStatsSection(loadStats: suspend () -> HostStats) {
             }
             when {
                 stats != null -> HostStatsBody(stats)
-                view.failed ->
+                view.failures > 0 ->
                     Text(
                         stringResource(R.string.remote_host_stats_unavailable),
                         style = MaterialTheme.typography.bodyMedium,
@@ -143,7 +161,9 @@ private fun HostStatsSection(loadStats: suspend () -> HostStats) {
 private fun HostStatsBody(stats: HostStats) {
     val context = LocalContext.current
     val locale = LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+    // Disks are sold and shown in powers of 1000, memory in powers of 1024 ("16 GB" for 2^34 bytes).
     fun size(bytes: Long) = Formatter.formatShortFileSize(context, bytes)
+    fun memory(bytes: Long) = context.getString(R.string.remote_host_stats_gib, formatNumber(bytes / GIB, 1, locale))
     val container = stats.container
 
     val cpuValue = stats.cpuPercent?.let { stringResource(R.string.remote_host_stats_percent, formatNumber(it, 0, locale)) }
@@ -174,7 +194,7 @@ private fun HostStatsBody(stats: HostStats) {
 
     HostStatsMetric(
         label = stringResource(R.string.remote_host_stats_memory),
-        value = stringResource(R.string.remote_host_stats_used_of, size(stats.memory.usedBytes), size(stats.memory.totalBytes)),
+        value = stringResource(R.string.remote_host_stats_used_of, memory(stats.memory.usedBytes), memory(stats.memory.totalBytes)),
         fraction = stats.memory.fraction,
         level =
             when (stats.pressure) {
@@ -189,7 +209,7 @@ private fun HostStatsBody(stats: HostStats) {
                 MemoryPressure.NORMAL -> stringResource(R.string.remote_host_stats_pressure_normal)
                 MemoryPressure.WARN -> stringResource(R.string.remote_host_stats_pressure_warn)
                 MemoryPressure.CRITICAL -> stringResource(R.string.remote_host_stats_pressure_critical)
-                null -> container?.memoryLimitBytes?.let { stringResource(R.string.remote_host_stats_memory_limit, size(it)) }
+                null -> container?.memoryLimitBytes?.let { stringResource(R.string.remote_host_stats_memory_limit, memory(it)) }
             },
         tag = "hostStatsMemory",
     )
@@ -247,6 +267,8 @@ private fun HostStatsBody(stats: HostStats) {
         )
     }
 }
+
+private const val GIB = 1024.0 * 1024 * 1024
 
 internal enum class LoadLevel { NORMAL, WARN, CRITICAL }
 

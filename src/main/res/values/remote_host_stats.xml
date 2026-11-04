@@ -9,10 +9,10 @@
     <string name="remote_host_stats_cpu">CPU</string>
     <string name="remote_host_stats_measuring">Measuring…</string>
     <!-- %1$s is a number of CPU cores, possibly fractional, such as "1.5". -->
-    <string name="remote_host_stats_cores">%1$s cores</string>
+    <string name="remote_host_stats_cores">Cores: %1$s</string>
     <!-- 1, 5 and 15 minute load averages. -->
     <string name="remote_host_stats_load">Load %1$s / %2$s / %3$s</string>
-    <string name="remote_host_stats_cpu_limit">Limit %1$s cores</string>
+    <string name="remote_host_stats_cpu_limit">Core limit: %1$s</string>
     <string name="remote_host_stats_memory">Memory</string>
     <string name="remote_host_stats_memory_limit">Limit %1$s</string>
     <string name="remote_host_stats_pressure_normal">Memory pressure: normal</string>
@@ -32,4 +32,8 @@
     <string name="remote_host_stats_minutes">%1$d min</string>
     <string name="remote_host_stats_container_note">System load and battery belong to the machine, not the container, so they are not shown.</string>
     <string name="remote_host_stats_unavailable">The load cannot be read right now.</string>
+    <!-- Memory in binary gigabytes, such as "16 GB". -->
+    <string name="remote_host_stats_gib">%1$s GB</string>
+    <!-- The last reading stays on screen while the computer stops answering. -->
+    <string name="remote_host_stats_stale">Not updating</string>
 </resources>

@@ -1,6 +1,11 @@
 package de.joinnoah.pi.remote
 
 import java.util.Locale
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -104,5 +109,92 @@ class HostStatsTest {
         assertEquals(LoadLevel.WARN, levelOf(0.8))
         assertEquals(LoadLevel.CRITICAL, levelOf(0.95))
         assertEquals(0f, HostUsage(0, 0).fraction, 0f)
+    }
+
+    // ---- Repository ---------------------------------------------------------------------
+
+    private val host = PairedHost("host", "https://relay.test", "device", "secret", "Host")
+
+    private class Pairings(val host: PairedHost) : PairingStorage {
+        override fun load() = listOf(host)
+
+        override fun save(hosts: List<PairedHost>) {}
+    }
+
+    private class Drafts : DraftStorage {
+        var values = emptyMap<DraftKey, StoredDraft>()
+
+        override fun load() = values
+
+        override fun save(drafts: Map<DraftKey, StoredDraft>) {
+            values = drafts.toMap()
+        }
+    }
+
+    private class Transport(val capabilities: List<String>, val stats: JsonObject) : RemoteTransport {
+        override lateinit var listener: RemoteTransport.Listener
+        val sent = mutableListOf<JsonObject>()
+
+        override fun connect(host: PairedHost) = listener.ready(emptySet())
+
+        override fun pair(value: JsonObject) {}
+
+        override fun close() {}
+
+        override fun send(payload: JsonObject) {
+            sent += payload
+            val data =
+                when (payload.text("type")) {
+                    "projects.list" ->
+                        Wire.objectOf(
+                            "kind" to "projects",
+                            "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))),
+                            "capabilities" to JsonArray(capabilities.map(::JsonPrimitive)),
+                        )
+                    "sessions.list" -> Wire.objectOf("kind" to "sessions", "items" to JsonArray(emptyList()))
+                    "host.stats" -> stats
+                    else -> Wire.objectOf("kind" to "accepted")
+                }
+            listener.message(
+                Wire.objectOf("type" to "result", "requestId" to payload.text("requestId"), "ok" to true, "data" to data)
+            )
+        }
+
+        fun stats() = sent.filter { it.text("type") == "host.stats" }
+    }
+
+    private suspend fun TestScope.connected(transport: Transport): DefaultRemoteRepository {
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(host),
+                Drafts(),
+                transport,
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+            )
+        repository.activate(RemoteSelection("host", "project", null))
+        runCurrent()
+        return repository
+    }
+
+    @Test
+    fun repositoryKeepsTheCapabilityFromTheV3RouteAndSendsTheFixtureCommand() = runTest {
+        val transport = Transport(listOf(HOST_STATS_CAPABILITY), data("mac"))
+        val repository = connected(transport)
+        assertTrue(canUseHostStats(repository.state.value))
+        assertEquals(37.5, repository.hostStats().cpuPercent!!, 0.0)
+        val request = payload(entries("wireValid").single { name(it) == "request" })
+        assertEquals(listOf(JsonObject(request - "requestId")), transport.stats().map { JsonObject(it - "requestId") })
+    }
+
+    @Test
+    fun repositorySendsNothingWithoutTheCapability() = runTest {
+        val transport = Transport(emptyList(), data("mac"))
+        val repository = connected(transport)
+        assertFalse(canUseHostStats(repository.state.value))
+        val error = runCatching { repository.hostStats() }.exceptionOrNull()
+        assertTrue(error.toString(), error?.isUnsupported == true)
+        assertTrue(transport.stats().isEmpty())
     }
 }
