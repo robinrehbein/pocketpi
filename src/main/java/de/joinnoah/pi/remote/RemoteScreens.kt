@@ -3039,8 +3039,8 @@ internal fun RemoteScreen(
                             // What needs the user leads the page: the featured chats waiting for an answer, then
                             // the ready ones, then the running ones. Then the shared projects, then the recent
                             // chats. Beside an open project the chats hide, as before.
-                            // Every waiting and ready chat shows, since their headings promise all of them; running
-                            // and recent chats are capped at three each until their "Show all" (see quickChats).
+                            // Every featured waiting and ready chat shows (the featured chats are bounded, see
+                            // sortedProjectChats); running and recent chats are capped at three each until their "Show all" (see quickChats).
                             val quick =
                                 quickChats(
                                     // Main sessions only: a busy subagent shows as the session it works for.

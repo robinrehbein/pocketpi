@@ -91,9 +91,10 @@ internal fun mainSessionChats(chats: List<ProjectChatSummary>): List<ProjectChat
 }
 
 /**
- * The featured chats: waiting, then running, then open idle chats, then the rest (unverified and
- * history rows), each by recency, twelve of them. Open idle chats keep their place ahead of
- * just-closed history rows. The main sessions of the busy subagents among them come along beyond
+ * The featured chats: waiting, then running, then open idle top-level chats (the ready ones), then the
+ * rest (unverified, history and idle subagent rows), each by recency, twelve of them. Ready chats
+ * keep their place ahead of just-closed history rows, but they compete for the twelve with the
+ * waiting and running chats, so a busy project can feature fewer ready chats than it has. The main sessions of the busy subagents among them come along beyond
  * the twelve, so [mainSessionChats] can show each such subagent as the session it works for.
  */
 internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> {
@@ -103,7 +104,13 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
             else when (it.session.text("status")) {
                 "waiting" -> 0
                 "running" -> 1
-                "idle" -> if (it.session.optionalText("origin") == "history") 3 else 2
+                "idle" ->
+                    if (isReadyRow(
+                            "idle",
+                            it.session.optionalText("origin"),
+                            it.session.optionalText("parentSessionId"),
+                        )
+                    ) 2 else 3
                 else -> 3
             }
         }.thenByDescending { it.session["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L }
@@ -131,7 +138,7 @@ internal const val QUICK_CHAT_LIMIT = 3
 internal data class QuickChats(
     /** Every waiting chat, never cut. */
     val waiting: List<ProjectChatSummary>,
-    /** Every open idle chat, unread first, never cut (the featured chats are bounded already). */
+    /** The open idle chats among the featured ones (at most twelve per project, see [sortedProjectChats]), unread first. */
     val ready: List<ProjectChatSummary>,
     val running: List<ProjectChatSummary>,
     val recent: List<ProjectChatSummary>,
@@ -151,7 +158,7 @@ private fun isReadyRow(status: String?, origin: String?, parentSessionId: String
 
 /**
  * The quick chats of a Mac's Projects page. On a connected Mac, a verified chat is waiting, running
- * or ready (idle, open, top-level); waiting and ready chats are never cut. Running and recent chats
+ * or ready (idle, open, top-level); waiting and ready chats are not cut here, only by the twelve featured chats. Running and recent chats
  * are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showRunningAll],
  * [showRecentAll]). Everything else is recent: offline, unverified, last-known and history chats,
  * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by

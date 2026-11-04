@@ -355,12 +355,18 @@ internal fun ProjectRow(
 
 /** A count of a project's sessions in one status, as a small pill in the status's colours. */
 @Composable
-internal fun ProjectCountBadge(text: String, container: Color, content: Color, tag: String) {
+internal fun ProjectCountBadge(
+    text: String,
+    container: Color,
+    content: Color,
+    tag: String,
+    modifier: Modifier = Modifier.padding(start = 8.dp),
+) {
     Surface(
         shape = CircleShape,
         color = container,
         contentColor = content,
-        modifier = Modifier.padding(start = 8.dp).testTag(tag),
+        modifier = modifier.testTag(tag),
     ) {
         Text(
             text,

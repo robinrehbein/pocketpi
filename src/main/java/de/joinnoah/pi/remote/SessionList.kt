@@ -141,6 +141,12 @@ internal fun SessionListRow(
             workerLabel.takeIf { item.hostWorker },
         )
     val ticketLabel = item.ticketRef?.let { stringResource(R.string.remote_ticket_chip, it) }
+    val relativeAge =
+        if (now != null)
+            item.updatedAt?.let {
+                DateUtils.getRelativeTimeSpanString(minOf(it, now), now, DateUtils.MINUTE_IN_MILLIS).toString()
+            }
+        else null
     val rowDescription =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
@@ -151,6 +157,7 @@ internal fun SessionListRow(
             pinnedLabel.takeIf { item.pinned },
             unreadLabel.takeIf { item.unread },
             oldLabel.takeIf { old },
+            relativeAge,
             item.preview,
             status,
         ).joinToString(", ")
@@ -303,12 +310,7 @@ internal fun SessionListRow(
                         item.updatedAt?.let {
                             val context = LocalContext.current
                             Text(
-                                if (now != null)
-                                    DateUtils.getRelativeTimeSpanString(
-                                        minOf(it, now),
-                                        now,
-                                        DateUtils.MINUTE_IN_MILLIS,
-                                    ).toString()
+                                if (relativeAge != null) relativeAge
                                 else
                                     (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
                                         else DateFormat.getDateFormat(context))
@@ -342,6 +344,7 @@ internal fun SessionListRow(
                                 MaterialTheme.colorScheme.surfaceContainerHighest,
                                 MaterialTheme.colorScheme.onSurfaceVariant,
                                 "sessionOld-${item.id}",
+                                Modifier,
                             )
                         if (metaLabels.isNotEmpty() || item.ticketRef != null)
                             Text(

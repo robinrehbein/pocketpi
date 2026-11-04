@@ -702,6 +702,18 @@ class SessionListPresentationTest {
     }
 
     @Test
+    fun anOlderReadyChatBeatsIdleSubagentsInTheTwelveCut() {
+        val subagents =
+            (1..12).map { quickChat("sub$it", "idle", updatedAt = 1000L + it, parent = "main") }
+        val ready = quickChat("ready", "idle", updatedAt = 1)
+
+        val kept = sortedProjectChats(subagents + ready)
+
+        assertTrue("ready" in ids(kept))
+        assertEquals(listOf("ready"), ids(quickChats(kept, true, false, false).ready))
+    }
+
+    @Test
     fun openChatsKeepTheirPlaceAmongTheTwelveBeforeHistory() {
         val history = (1..12).map { quickChat("history$it", "idle", origin = "history", updatedAt = 1000L + it) }
         val open = (1..3).map { quickChat("open$it", "idle", updatedAt = it.toLong()) }
