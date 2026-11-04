@@ -82,6 +82,17 @@ internal data class AgentProgress(
     val sessionId: String? = null,
     val step: Int? = null,
     val usage: AgentUsage? = null,
+    /** Stable ID of this agent run (`session_activity.v1`); the actor ledger's key part. */
+    val instanceId: String? = null,
+    /** The parent tool call that spawned this agent (`session_activity.v1`). */
+    val spawnToolCallId: String? = null,
+    /**
+     * The structured activity the transcript recorded. Historical: it never proves the agent is
+     * live and nothing animates from it; only the repository's actor ledger does.
+     */
+    val executionActivity: ActivitySnapshot? = null,
+    /** The agent's own `needsInput: true` as recorded; like [executionActivity], not live proof. */
+    val needsInput: Boolean = false,
 )
 
 /** Token usage of one assistant message; [cost] is USD when the host knew it. */
@@ -186,6 +197,35 @@ private fun agentUsage(agent: JsonObject): AgentUsage? {
 
 private val agentStates = setOf("queued", "running", "succeeded", "failed", "cancelled")
 
+private class StructuredAgentFields(
+    val instanceId: String?,
+    val spawnToolCallId: String?,
+    val executionActivity: ActivitySnapshot?,
+    val needsInput: Boolean,
+)
+
+/**
+ * `instanceId`, `spawnToolCallId`, `executionActivity` and `needsInput` of one progress agent, or
+ * null when one is present but invalid (parse.ts: opaque IDs, a valid snapshot, `needsInput` only
+ * `true`). `needsInput` counts only on a running agent, as the host only ever sends it there.
+ */
+private fun structuredAgentFields(agent: JsonObject): StructuredAgentFields? {
+    fun id(key: String): Result<String?> =
+        if (!agent.containsKey(key)) Result.success(null)
+        else agent.safeText(key)?.takeIf(::validActivityId)?.let { Result.success(it) }
+            ?: Result.failure(IllegalArgumentException(key))
+    val instanceId = id("instanceId").getOrElse { return null }
+    val spawnToolCallId = id("spawnToolCallId").getOrElse { return null }
+    val executionActivity =
+        if (!agent.containsKey("executionActivity")) null
+        else parseActivitySnapshot(agent["executionActivity"]) ?: return null
+    val needsInput =
+        if (!agent.containsKey("needsInput")) false
+        else if (agent.safeFlag("needsInput") == true) agent.safeText("state") == "running"
+        else return null
+    return StructuredAgentFields(instanceId, spawnToolCallId, executionActivity, needsInput)
+}
+
 /** Tools rendered as a subagent card: the retired `subagent` tool and the fork's `Agent` tool. */
 private val SUBAGENT_TOOLS = setOf("subagent", "Agent")
 private val QUESTIONNAIRE_TOOLS = setOf("AskUserQuestion", "questionnaire", "questionnaire_async")
@@ -199,6 +239,10 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
         val name = agent.safeText("agent")?.takeIf { it.isNotBlank() && it.length <= 80 }
             ?: return@mapNotNull null
         val state = agent.safeText("state")?.takeIf { it in agentStates } ?: return@mapNotNull null
+        // `session_activity.v1` fields as the host's parse.ts checks them: a present field that is
+        // invalid there rejects the message on the host, so here it drops the agent, never just the
+        // field, so a bad instance or a `needsInput: false` cannot leave a live-looking row.
+        val structured = structuredAgentFields(agent) ?: return@mapNotNull null
         AgentProgress(
             name,
             state,
@@ -208,8 +252,20 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
             sessionId = agent.safeText("sessionId")?.takeIf(::isOpaqueId),
             step = agent.safeCount("step")?.takeIf { it in 1L..10000L }?.toInt(),
             usage = agentUsage(agent),
+            instanceId = structured.instanceId,
+            spawnToolCallId = structured.spawnToolCallId,
+            executionActivity = structured.executionActivity,
+            needsInput = structured.needsInput,
         )
-    }.orEmpty()
+    }.orEmpty().let { agents ->
+        // An instance ID listed twice names no single run: neither row keeps its structured fields.
+        val counts = agents.mapNotNull { it.instanceId }.groupingBy { it }.eachCount()
+        agents.map {
+            if (it.instanceId != null && counts.getValue(it.instanceId) > 1)
+                it.copy(instanceId = null, spawnToolCallId = null, executionActivity = null, needsInput = false)
+            else it
+        }
+    }
     return ConversationItem.Subagent(
         message.text("id"),
         message.text("id"),

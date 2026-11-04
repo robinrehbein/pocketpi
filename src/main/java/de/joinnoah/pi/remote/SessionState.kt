@@ -686,6 +686,9 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             "session.pull_request" -> sessionPullRequest(event)?.let { pullRequest = it.pullRequest }
             // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
             "advisor.status" -> Unit
+            // `session_activity.v1`: the repository applies it to its activity view on receipt and
+            // on replay; here it only advances the revision, never a message or tool state.
+            "session.activity" -> Unit
             else -> unknownKindSeen = true
         }
         applying?.add(event)

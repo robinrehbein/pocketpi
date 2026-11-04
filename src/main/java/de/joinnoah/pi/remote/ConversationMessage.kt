@@ -307,6 +307,12 @@ internal fun ConversationMessage(
     /** Takes back the prompt that waits for the connection; the queued bubble offers it when set. */
     onCancelQueued: (() -> Unit)? = null,
     hideThinkingStatus: Boolean = false,
+    /** A tool card's typed state on a negotiated connection; null keeps the legacy behaviour. */
+    toolActivity: ToolCardActivity? = null,
+    /** Per agent of a subagent card, its exact actor ledger entry; null keeps every row static. */
+    agentActivity: List<ActorRowActivity?>? = null,
+    /** Negotiated: the thinking status pulses only in the typed thinking phase; it shows regardless. */
+    thinkingMotion: Boolean = true,
     onJumpToQuestion: ((String) -> Unit)? = null,
 ) {
     // A bubble draws the outline along its own shape; other items get it around their box.
@@ -329,6 +335,9 @@ internal fun ConversationMessage(
             onForkMenuRequestHandled,
             onCancelQueued,
             hideThinkingStatus,
+            toolActivity,
+            agentActivity,
+            thinkingMotion,
             onJumpToQuestion,
         )
     }
@@ -370,6 +379,9 @@ private fun ConversationMessageContent(
     onForkMenuRequestHandled: () -> Unit,
     onCancelQueued: (() -> Unit)?,
     hideThinkingStatus: Boolean,
+    toolActivity: ToolCardActivity?,
+    agentActivity: List<ActorRowActivity?>?,
+    thinkingMotion: Boolean,
     onJumpToQuestion: ((String) -> Unit)?,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
@@ -672,6 +684,8 @@ private fun ConversationMessageContent(
                                     showPreview = !expanded || item.output == null,
                                     openLabel = openAgentLabel,
                                     onOpen = onOpenAgent?.let { open -> { open(item, index) } },
+                                    actor = agentActivity?.getOrNull(index),
+                                    negotiated = agentActivity != null,
                                 )
                             }
                         }
@@ -699,7 +713,7 @@ private fun ConversationMessageContent(
                         }
                     }
                 }
-            else if (item.streaming && thinkingActive && !hideThinkingStatus) ThinkingStatus(true)
+            else if (item.streaming && thinkingActive && !hideThinkingStatus) ThinkingStatus(true, thinkingMotion)
         }
         is ConversationItem.QuestionnaireAnswer -> {
             var originalShown by remember(item.id) { mutableStateOf(false) }
@@ -801,7 +815,9 @@ private fun ConversationMessageContent(
                         when (item.state) {
                             "error" -> R.string.remote_tool_error
                             "streaming" ->
-                                if (thinkingActive) R.string.remote_tool_pending
+                                // Negotiated: an open call stays open; only its glyph says whether
+                                // the typed state confirms it runs. It is never read as finished.
+                                if (toolActivity != null || thinkingActive) R.string.remote_tool_pending
                                 else R.string.remote_tool_unavailable
                             "unavailable" -> R.string.remote_tool_unavailable
                             else -> R.string.remote_tool_complete
@@ -885,10 +901,15 @@ private fun ConversationMessageContent(
                                 color = when (state) {
                                     R.string.remote_tool_error -> MaterialTheme.colorScheme.error
                                     R.string.remote_tool_complete -> sessionStatusColor(SessionAvailability.IDLE)
-                                    else -> MaterialTheme.colorScheme.primary
+                                    else ->
+                                        if (toolActivity?.live == false) MaterialTheme.colorScheme.outline
+                                        else MaterialTheme.colorScheme.primary
                                 },
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(18.dp).testTag(
+                                    if (toolActivity?.live == false) "toolGlyphStatic" else "toolGlyph"
+                                ),
                                 contentDescription = stateLabel,
+                                animate = toolActivity?.live != false,
                             )
                         }
                         val toggleIcon = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore
@@ -1093,8 +1114,8 @@ private fun MessageTimestamp(timestamp: Long, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ThinkingStatus(active: Boolean) {
-    val animate = active && ValueAnimator.areAnimatorsEnabled()
+private fun ThinkingStatus(active: Boolean, motion: Boolean = true) {
+    val animate = active && motion && ValueAnimator.areAnimatorsEnabled()
     var labelIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(animate) {
         labelIndex = 0
@@ -1152,13 +1173,27 @@ private fun SubagentAgentRow(
     showPreview: Boolean,
     openLabel: String,
     onOpen: (() -> Unit)?,
+    actor: ActorRowActivity? = null,
+    /** The connection negotiated structured activity: a running row without a fresh actor is muted. */
+    negotiated: Boolean = false,
 ) {
-    val state = when (agent.state) {
+    val lifecycle = when (agent.state) {
         "queued" -> R.string.remote_subagent_queued
         "running" -> R.string.remote_subagent_running
         "succeeded" -> R.string.remote_subagent_succeeded
         "failed" -> R.string.remote_subagent_failed
         else -> R.string.remote_subagent_cancelled
+    }
+    // The agent's own confirmed wait, or its fresh typed phase, says so in words, not shape alone.
+    val state = when {
+        actor?.needsInput == true -> R.string.remote_status_waiting
+        else -> when (actor?.live?.phase) {
+            ActivityPhase.Pending -> R.string.remote_subagent_phase_pending
+            ActivityPhase.Thinking -> R.string.remote_subagent_phase_thinking
+            ActivityPhase.Writing -> R.string.remote_subagent_phase_writing
+            ActivityPhase.Tool -> R.string.remote_subagent_phase_tool
+            null -> lifecycle
+        }
     }
     // One row per agent; together they read as one card.
     Surface(
@@ -1177,10 +1212,32 @@ private fun SubagentAgentRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // The card carries no freshness of its own, so its state may be last known: never animate.
-            val glyph = subagentStateGlyph(agent.state)
-            val color = subagentStateColor(agent.state)
+            // Only this agent's exact, fresh actor entry animates its phase or shows its own wait.
+            val live = actor?.live
+            val glyph = when {
+                actor?.needsInput == true -> StatusGlyphKind.NEEDS_INPUT
+                live != null -> activityGlyphKind(live.phase)
+                else -> subagentStateGlyph(agent.state)
+            }
+            val color = when {
+                actor?.needsInput == true -> waitingColor()
+                live != null -> activityPhaseColor(live.phase, live.thinkingLevel)
+                // Negotiated, running, but no fresh actor (missing, unknown, expired): muted.
+                negotiated && agent.state == "running" -> MaterialTheme.colorScheme.outline
+                else -> subagentStateColor(agent.state)
+            }
             Box(Modifier.padding(top = 2.dp)) {
-                if (glyph != null) StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp), animate = false)
+                if (glyph != null) StatusGlyph(
+                    kind = glyph, color = color,
+                    modifier = Modifier.size(16.dp).testTag(
+                        when {
+                            actor?.needsInput == true -> "subagentAgentNeedsInput"
+                            live != null -> "subagentAgentLive"
+                            else -> "subagentAgentStatic"
+                        }
+                    ),
+                    animate = live != null,
+                )
                 else StatusDot(color)
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

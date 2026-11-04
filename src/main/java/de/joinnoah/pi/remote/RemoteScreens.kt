@@ -388,8 +388,13 @@ internal fun RemoteScreen(
         remember(conversation, thinkingDisplay, thinkingActive) {
             conversation.filter { conversationItemVisible(it, thinkingDisplay, thinkingActive) }
         }
-    val currentActivity = remember(chatKey, state, presentation) {
-        sessionActivityLine(state, presentation.items, chatKey?.selection())
+    // Monotonic instant for session_activity.v1 freshness; it moves only on a new activity state,
+    // at the soonest deadline and on resume, so an expiry stops every glyph without a network update.
+    val activityNow = rememberActivityNow(state.executionActivity)
+    // Re-evaluate every render: input/selection/freshness gates can change without a ledger update.
+    val typedChat = typedSessionActivity(state, chatKey?.sessionId, activityNow)
+    val currentActivity = remember(chatKey, state, presentation, activityNow) {
+        sessionActivityLine(state, presentation.items, chatKey?.selection(), activityNow)
     }
     val chatModel = model as? ChatViewModel
     val chatActionUsage = chatModel?.chatActionUsage?.collectAsStateWithLifecycle()?.value.orEmpty()
@@ -476,6 +481,8 @@ internal fun RemoteScreen(
             if (chatKey == null) SubagentStrip(emptyList(), 0, emptySet(), 0)
             else presenter.subagentStrip(presentation, children, chatKey.sessionId)
         }
+    // Negotiated: strip glyphs read only the exact child sessions' fresh typed views.
+    val subagentActivity = stripActivity(state, strip.entries.mapNotNull { it.sessionId }, activityNow)
     var onlyErrorsShown by rememberSaveable(key) { mutableStateOf(false) }
     val shownItems =
         remember(visibleConversation, onlyErrorsShown) {
@@ -1736,7 +1743,8 @@ internal fun RemoteScreen(
                                     statusColor,
                                     statusLabel,
                                     Modifier.padding(end = 8.dp).testTag("chatStatusDot"),
-                                    live = chatStatusLive(headerState, chatKey?.selection()),
+                                    live = chatStatusLive(headerState, chatKey?.selection(), activityNow),
+                                    phase = chatStatusPhase(headerState, chatKey?.selection(), activityNow),
                                 )
                                 val switchSession = stringResource(R.string.remote_palette_switch_session)
                                 Row(
@@ -3502,8 +3510,17 @@ internal fun RemoteScreen(
                                         item,
                                         thinkingDisplay,
                                         thinkingActive = thinkingActive,
+                                        // Negotiated: the typed thinking phase drives only the pulse, never visibility.
+                                        thinkingMotion = typedChat == null ||
+                                            (typedChat as? TypedActivity.Live)?.snapshot?.phase == ActivityPhase.Thinking,
                                         onJumpToQuestion = ::jumpTo,
                                         hideThinkingStatus = currentActivity != null,
+                                        toolActivity = (item as? ConversationItem.Activity)?.let { tool ->
+                                            typedToolCardActivity(typedChat, tool)
+                                        },
+                                        agentActivity = (item as? ConversationItem.Subagent)?.takeIf { typedChat != null }?.let { card ->
+                                            card.agents.map { actorRowActivity(state, chatKey?.sessionId, card.toolCallId, it, activityNow) }
+                                        },
                                         onQuote = model::quote,
                                         onOpenTool = {
                                             openToolId = it.id
@@ -3788,6 +3805,7 @@ internal fun RemoteScreen(
                                         sessionId = chatKey?.sessionId,
                                         expandedState = remember(insightSheet) { mutableStateOf(insightSheet == InsightSheetKind.SUBAGENTS) },
                                         onOpenSummary = { openInsightSheet(InsightSheetKind.SUBAGENTS) },
+                                        activity = subagentActivity,
                                     )
                                 InsightChip.PULL_REQUEST ->
                                     pullRequest?.let { pr ->
@@ -4199,6 +4217,7 @@ internal fun RemoteScreen(
                 onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
                 onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
                 onDismiss = { insightSheet = null },
+                activity = subagentActivity,
             )
             null -> Unit
         }

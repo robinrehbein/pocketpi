@@ -492,7 +492,7 @@ class RemoteRepositoryTest {
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
             assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"))
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -10766,7 +10766,7 @@ class RemoteRepositoryTest {
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
         val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"))
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1:"))
         assertTrue(ids[1].startsWith("capabilities.v2:"))
         assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
     }
