@@ -23,6 +23,8 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.SnackbarData
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarVisuals
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +47,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -234,6 +240,18 @@ internal fun BannerSurface(
 }
 
 /**
+ * A snackbar whose spoken text [description] differs from the [message] it shows, for a message
+ * that leaves out what a screen reader should name (the session that was hidden).
+ */
+internal class DescribedSnackbarVisuals(
+    override val message: String,
+    val description: String,
+    override val actionLabel: String?,
+    override val duration: SnackbarDuration,
+    override val withDismissAction: Boolean = true,
+) : SnackbarVisuals
+
+/**
  * Material's snackbar as a floating glass bar of the inverse surface. The action keeps the bar's
  * text colour: inversePrimary would fall below 4.5:1 on the translucent bar over light content.
  */
@@ -253,9 +271,14 @@ internal fun GlassSnackbar(data: SnackbarData, modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val description = (visuals as? DescribedSnackbarVisuals)?.description
             Text(
                 visuals.message,
-                Modifier.weight(1f, fill = false).padding(vertical = 14.dp),
+                Modifier.weight(1f, fill = false).padding(vertical = 14.dp)
+                    .semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        if (description != null) contentDescription = description
+                    },
                 style = MaterialTheme.typography.bodyMedium,
             )
             visuals.actionLabel?.let { label ->

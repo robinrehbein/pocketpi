@@ -19,6 +19,10 @@ import kotlinx.serialization.json.longOrNull
  * What PocketPi remembers about one session on this phone, not on the Mac: whether it is pinned,
  * when the user last saw its chat at the bottom, and when it finished while the user was not
  * looking. Stored apart from the other local stores, keyed by host and session.
+ *
+ * A mark can also hide the session on this phone ([hiddenUpdatedAt], [hiddenAt]). Hidden marks are
+ * never pinned. A build from before hiding drops the marks it cannot decode, so a downgrade loses
+ * the read state of hidden sessions and nothing else.
  */
 internal data class SessionMark(
     val pinned: Boolean = false,
@@ -28,10 +32,36 @@ internal data class SessionMark(
     val seenUpdatedAt: Long? = null,
     /** When a running session turned idle while it was not open; cleared once the chat is seen. */
     val finishedAt: Long? = null,
+    /**
+     * The host `updatedAt` (the session file's modification time, Mac clock) when the user hid the
+     * session; 0 when the row had none. Null while the session is not hidden.
+     */
+    val hiddenUpdatedAt: Long? = null,
+    /** The phone's clock at hide time. Only orders the eviction of marks; null while not hidden. */
+    val hiddenAt: Long? = null,
 ) {
     /** Nothing left to remember, so the store forgets the session. */
-    val isEmpty: Boolean get() = !pinned && seenAt == null && seenUpdatedAt == null && finishedAt == null
+    val isEmpty: Boolean
+        get() = !pinned && seenAt == null && seenUpdatedAt == null && finishedAt == null &&
+            hiddenUpdatedAt == null && hiddenAt == null
 }
+
+/**
+ * Whether a session is hidden on this phone. A newer `updatedAt` (the session file's modification
+ * time, which every entry pi writes moves forward) or an observed running or waiting state brings
+ * the row back, and so does a finished run that the phone saw ([SessionMark.finishedAt]) or a pin.
+ */
+internal fun sessionHidden(mark: SessionMark?, status: String?, updatedAt: Long?): Boolean {
+    val hiddenAt = mark?.hiddenUpdatedAt ?: return false
+    if (mark.pinned) return false
+    if (status == "running" || status == "waiting") return false
+    if (mark.finishedAt != null) return false
+    return (updatedAt ?: 0L) <= hiddenAt
+}
+
+/** A session row's `updatedAt` as the lists compare it: a missing or negative value is none. */
+internal fun sessionUpdatedAt(session: JsonObject): Long? =
+    session["updatedAt"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 }
 
 /**
  * Whether a session reads as unread: it changed since the user last saw it, or it finished while
@@ -110,8 +140,52 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
 
     fun mark(routeId: String, sessionId: String): SessionMark? = mutable.value[routeId to sessionId]
 
+    /** Pinning a session also shows it again: a pinned row is never hidden. */
     fun setPinned(routeId: String, sessionId: String, pinned: Boolean) =
-        change(routeId, sessionId) { it.copy(pinned = pinned) }
+        change(routeId, sessionId) {
+            if (pinned) it.copy(pinned = true, hiddenUpdatedAt = null, hiddenAt = null) else it.copy(pinned = false)
+        }
+
+    /**
+     * Hides the session on this phone while its `updatedAt` stays at [updatedAt] or below. The
+     * session also counts as seen, so it leaves the unread and finished groups and a finish seen
+     * earlier does not bring it back. Returns the mark from before, for [undoHide]. Hidden marks
+     * sort by [now] when the cap evicts, on the assumption that the phone's clock is close to the
+     * Mac's epoch milliseconds, so a fresh hide is not the first to go.
+     */
+    fun hide(routeId: String, sessionId: String, updatedAt: Long?, now: Long): SessionMark? {
+        val previous = mark(routeId, sessionId)
+        change(routeId, sessionId) {
+            it.copy(
+                seenAt = it.seenAt ?: now,
+                seenUpdatedAt = updatedAt ?: it.seenUpdatedAt,
+                finishedAt = null,
+                hiddenUpdatedAt = updatedAt ?: 0L,
+                hiddenAt = now,
+            )
+        }
+        return previous
+    }
+
+    /** Shows a hidden session again. */
+    fun unhide(routeId: String, sessionId: String) =
+        change(routeId, sessionId) { it.copy(hiddenUpdatedAt = null, hiddenAt = null) }
+
+    /**
+     * Takes back [hide] field by field: the hide goes, and the seen and finished fields return to
+     * [previous] only where they still equal what the hide wrote ([applied]), so a look or a finish
+     * after the hide stays. The pin is untouched. Marks the insert evicted are not brought back.
+     */
+    fun undoHide(routeId: String, sessionId: String, previous: SessionMark?, applied: SessionMark?) =
+        change(routeId, sessionId) {
+            it.copy(
+                hiddenUpdatedAt = null,
+                hiddenAt = null,
+                seenAt = if (it.seenAt == applied?.seenAt) previous?.seenAt else it.seenAt,
+                seenUpdatedAt = if (it.seenUpdatedAt == applied?.seenUpdatedAt) previous?.seenUpdatedAt else it.seenUpdatedAt,
+                finishedAt = if (it.finishedAt == applied?.finishedAt) previous?.finishedAt else it.finishedAt,
+            )
+        }
 
     /**
      * The chat was seen at its bottom: the session reads as read until the next change. Seeing a
@@ -168,6 +242,14 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
                         markFinished(route, session, now())
                     }
                     previous = statuses.mapValues { it.value.status }
+                    // A hidden session that is live again stays visible once it is idle.
+                    statuses.forEach { (key, row) ->
+                        if ((row.status == "running" || row.status == "waiting") &&
+                            mark(key.first, key.second)?.hiddenUpdatedAt != null
+                        ) {
+                            unhide(key.first, key.second)
+                        }
+                    }
                     prune(rows.hostRoutes, rows.hostsLoaded)
                 }
         }
@@ -197,7 +279,7 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
     ): List<Pair<String, String>> {
         val own = marks.entries.filter { it.key.first == routeId && !it.value.pinned && it.value.finishedAt == null }
         if (own.size <= MAX_PLAIN_MARKS_PER_ROUTE) return emptyList()
-        return own.sortedBy { it.value.seenUpdatedAt ?: it.value.seenAt ?: 0L }.take(own.size - MAX_PLAIN_MARKS_PER_ROUTE).map { it.key }
+        return own.sortedBy { it.value.hiddenAt ?: it.value.seenUpdatedAt ?: it.value.seenAt ?: 0L }.take(own.size - MAX_PLAIN_MARKS_PER_ROUTE).map { it.key }
     }
 
     private fun load(): Map<Pair<String, String>, SessionMark> =
@@ -256,23 +338,30 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
             return if (parts.size == 2 && parts[0].isNotEmpty() && parts[1].isNotEmpty()) parts[0] to parts[1] else null
         }
 
-        /** `pinned,seenAt,seenUpdatedAt,finishedAt`, with empty fields for unset values. */
+        /**
+         * `pinned,seenAt,seenUpdatedAt,finishedAt`, with empty fields for unset values, plus
+         * `hiddenUpdatedAt,hiddenAt` for a hidden session only.
+         */
         private fun encode(mark: SessionMark): String =
-            listOf(
+            listOfNotNull(
                 if (mark.pinned) "1" else "0",
                 mark.seenAt?.toString().orEmpty(),
                 mark.seenUpdatedAt?.toString().orEmpty(),
                 mark.finishedAt?.toString().orEmpty(),
+                mark.hiddenUpdatedAt?.let { it.toString() },
+                mark.hiddenUpdatedAt?.let { mark.hiddenAt?.toString().orEmpty() },
             ).joinToString(",")
 
         private fun decode(value: String): SessionMark? {
             val parts = value.split(",")
-            if (parts.size != 4) return null
+            if (parts.size != 4 && parts.size != 6) return null
             return SessionMark(
                 pinned = parts[0] == "1",
                 seenAt = parts[1].toLongOrNull(),
                 seenUpdatedAt = parts[2].toLongOrNull(),
                 finishedAt = parts[3].toLongOrNull(),
+                hiddenUpdatedAt = parts.getOrNull(4)?.toLongOrNull(),
+                hiddenAt = parts.getOrNull(5)?.toLongOrNull(),
             )
         }
     }
