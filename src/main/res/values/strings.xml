@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_palette_quick_access">Quick access</string>
+    <string name="remote_palette_search">Search</string>
+    <string name="remote_palette_search_compact">Search · &gt; / # @</string>
+    <string name="remote_palette_clear">Clear search</string>
+    <string name="remote_palette_mode_all">All</string>
+    <string name="remote_palette_mode_sessions"># Sessions</string>
+    <string name="remote_palette_mode_actions">&gt; Actions</string>
+    <string name="remote_palette_mode_commands">/ Commands</string>
+    <string name="remote_palette_mode_files">\@ Files</string>
+    <string name="remote_palette_section_sessions">Sessions</string>
+    <string name="remote_palette_section_actions">Actions</string>
+    <string name="remote_palette_section_commands">Commands</string>
+    <string name="remote_palette_section_projects">Projects</string>
+    <string name="remote_palette_section_hosts">Macs</string>
+    <string name="remote_palette_section_files">Files</string>
     <string name="remote_paged_editor_load">Load editor</string>
     <string name="remote_paged_editor_position">Text range %1$d–%2$d of %3$d</string>
     <string name="remote_paged_editor_first">First</string>

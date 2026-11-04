@@ -133,6 +133,25 @@ internal data class CommandItem(
     override val key get() = "command:$command"
 }
 
+/** Controls share the actions section without changing their category or mode membership. */
+internal fun paletteSection(item: PaletteItem): PaletteCategory =
+    if (item.category == PaletteCategory.CONTROL) PaletteCategory.ACTION else item.category
+
+/** Group the unfiltered overview without disturbing its first row or the order inside each section. */
+internal fun paletteDisplayItems(items: List<PaletteItem>, query: String): List<PaletteItem> {
+    val parsed = paletteQuery(query)
+    return if (parsed.mode == PaletteMode.ALL && parsed.text.isEmpty())
+        items.groupBy(::paletteSection).values.flatten()
+    else items
+}
+
+/** Switch modes while preserving the parsed search text. */
+internal fun paletteModeQuery(query: String, mode: PaletteMode): String {
+    val text = paletteQuery(query).text
+    return mode.prefix?.let { "$it$text" }
+        ?: if (PaletteMode.entries.any { it.prefix != null && text.startsWith(it.prefix) }) " $text" else text
+}
+
 /** The words the rows show that come from resources; the screen passes the localized ones. */
 internal class PaletteLabels(
     val command: (ChatCommand) -> String,
