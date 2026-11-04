@@ -40,6 +40,13 @@ internal data class SessionListItem(
     val ticketRef: String? = null,
     /** A pi the host runs in a terminal of its own (see [isHostWorker]); it may be offline until it reports. */
     val hostWorker: Boolean = false,
+    /** Hidden on this phone (see [sessionHidden]); listed only while the hidden rows are shown. */
+    val hidden: Boolean = false,
+    /**
+     * The status the session reported is running or waiting, whatever [availability] shows (an
+     * offline phone reads every row as offline). [sessionHidden] never hides such a row.
+     */
+    val busyStatus: Boolean = false,
     val compacting: Boolean = false,
     /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
     val titleAttachment: TitleAttachment? = null,
@@ -296,13 +303,14 @@ internal fun sessionListItem(
         hasChildren = false,
         availability = availability,
         preview = session.optionalText("preview")?.let { displayTitle(it).text }?.takeIf { it.isNotBlank() },
-        updatedAt = session["updatedAt"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 },
+        updatedAt = sessionUpdatedAt(session),
         continuesAsCopy = session.text("origin") == "history",
         daemonOwned = session.text("origin") == "rpc",
         liveMacTui = session.text("origin") == "tui" &&
             availability != SessionAvailability.OFFLINE && !loading && confirmed,
         lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
+        busyStatus = session.text("status").let { it == "running" || it == "waiting" },
         compacting = connected && confirmed && !loading &&
             availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
             compactionVisible(compaction, nowMillis),
@@ -332,9 +340,16 @@ internal fun visibleSessionListItems(
     ticketRef: (String) -> String? = { null },
     /** See [sessionListItem]; pass [RemoteState.sessionsFresh]. No default, on purpose. */
     confirmed: Boolean,
+    /** List the sessions hidden on this phone too, marked [SessionListItem.hidden]. */
+    showHidden: Boolean = false,
     compactions: Map<String, SessionCompaction> = emptyMap(),
     nowMillis: Long = System.currentTimeMillis(),
 ): List<SessionListItem> {
+    val markHidden =
+        sessions.associate { session ->
+            val id = session.text("id")
+            id to sessionHidden(marks[id], session.optionalText("status"), sessionUpdatedAt(session))
+        }
     val items =
         sessions.map { session ->
             val item = sessionListItem(
@@ -346,6 +361,7 @@ internal fun visibleSessionListItems(
                 ticketRef = ticketRef(item.id),
                 pinned = mark?.pinned == true,
                 unread = sessionUnread(mark, item.updatedAt, open = item.id == openSessionId),
+                hidden = markHidden[item.id] == true,
             )
         }
     val itemsById = items.associateBy(SessionListItem::id)
@@ -365,10 +381,20 @@ internal fun visibleSessionListItems(
 
     val childrenByParentId = items.groupBy(::validParentId)
 
+    fun hasLiveDescendant(item: SessionListItem): Boolean =
+        childrenByParentId[item.id].orEmpty().any {
+            it.availability == SessionAvailability.RUNNING ||
+                it.availability == SessionAvailability.WAITING ||
+                hasLiveDescendant(it)
+        }
+    // A hidden parent with a running subagent stays listed, with the subagent under it.
+    val hiddenIds = items.filter { it.hidden && !hasLiveDescendant(it) }.mapTo(mutableSetOf()) { it.id }
+
     fun isVisible(item: SessionListItem): Boolean =
-        !hideOffline ||
-            item.availability != SessionAvailability.OFFLINE ||
-            childrenByParentId[item.id].orEmpty().any(::isVisible)
+        (item.id !in hiddenIds || showHidden) &&
+            (!hideOffline ||
+                item.availability != SessionAvailability.OFFLINE ||
+                childrenByParentId[item.id].orEmpty().any(::isVisible))
 
     val result = mutableListOf<SessionListItem>()
     fun addVisibleItems(parentId: String?, depth: Int) {
@@ -388,6 +414,7 @@ internal fun visibleSessionListItems(
             if (isVisible(item)) {
                 val visibleChildren = childrenByParentId[item.id].orEmpty().count(::isVisible)
                 result += item.copy(
+                    hidden = item.id in hiddenIds,
                     depth = depth,
                     hasChildren = visibleChildren > 0,
                     childCount = visibleChildren,
@@ -398,6 +425,41 @@ internal fun visibleSessionListItems(
     }
     addVisibleItems(parentId = null, depth = 0)
     return result
+}
+
+/**
+ * How many top-level sessions of [items] are hidden on this phone. Pass the list built with
+ * `showHidden = true`, so the count and the list come from the same computation.
+ */
+internal fun hiddenSessionCount(items: List<SessionListItem>): Int = items.count { it.depth == 0 && it.hidden }
+
+/**
+ * Hide is offered for a finished main session that the phone can never close (a terminal, history
+ * or offline row), so each row has one obvious verb. [shownSessionId] is the chat open beside the
+ * list. The test is [hostOwned], a property of the row, not [canCloseSession], which also turns
+ * false while the list loads or the connection drops.
+ */
+internal fun canHideSession(
+    item: SessionListItem,
+    capabilities: Set<String>,
+    shownSessionId: String? = null,
+): Boolean =
+    (item.availability == SessionAvailability.IDLE || item.availability == SessionAvailability.OFFLINE) &&
+        item.parentSessionId == null &&
+        !item.pinned &&
+        !item.hidden &&
+        !item.busyStatus &&
+        item.id != shownSessionId &&
+        (!hostOwned(item, capabilities) || item.availability == SessionAvailability.OFFLINE)
+
+/**
+ * Whether the main session [chat] of the Projects page is hidden on this phone. Call it after
+ * [mainSessionChats], which lifts a busy subagent's status onto its main session, and hide with
+ * the same [sessionUpdatedAt].
+ */
+internal fun projectChatHidden(chat: ProjectChatSummary, marks: Map<String, SessionMark>): Boolean {
+    val id = chat.session.optionalText("id") ?: return false
+    return sessionHidden(marks[id], chat.session.optionalText("status"), sessionUpdatedAt(chat.session))
 }
 
 /**

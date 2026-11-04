@@ -256,4 +256,20 @@ class PointerMenusTest {
             sessionMenuActions(canRename = false, canClose = false, canPin = true, pinned = true, canMarkRead = true),
         )
     }
+
+    @Test
+    fun hideOrShowAgainSitsBeforeCloseAndNeverBoth() {
+        assertEquals(
+            listOf(SessionMenuAction.OPEN, SessionMenuAction.HIDE, SessionMenuAction.COPY_ID),
+            sessionMenuActions(canRename = false, canClose = false, canHide = true),
+        )
+        assertEquals(
+            listOf(SessionMenuAction.OPEN, SessionMenuAction.UNHIDE, SessionMenuAction.COPY_ID),
+            sessionMenuActions(canRename = false, canClose = false, canHide = true, hidden = true),
+        )
+        assertEquals(
+            listOf(SessionMenuAction.OPEN, SessionMenuAction.MARK_READ, SessionMenuAction.HIDE, SessionMenuAction.CLOSE, SessionMenuAction.COPY_ID),
+            sessionMenuActions(canRename = false, canClose = true, canMarkRead = true, canHide = true),
+        )
+    }
 }
