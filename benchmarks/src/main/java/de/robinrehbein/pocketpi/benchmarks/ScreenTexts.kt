@@ -47,7 +47,6 @@ internal const val FIXTURE_PROJECT_ROW = "projectRow-project-pocketpi"
 private fun UiDevice.projectRow(rowTag: String, trace: MutableList<String>): UiObject2? {
     val minimumSize = 48 * InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
     var searchDirection = Direction.DOWN
-    var edgeReached = false
     if (!hasObject(By.res(rowTag))) wait(Until.hasObject(By.scrollable(true)), 10_000)
     repeat(6) {
         // Smoke tests disable implicit idle waits. Reacquire nodes after this bounded settle.
@@ -58,13 +57,15 @@ private fun UiDevice.projectRow(rowTag: String, trace: MutableList<String>): UiO
             if (viewport.isEmpty) return null
             val node = findObject(By.res(rowTag))
             val bounds = node?.visibleBounds
-            trace += "viewport=$viewport row=$bounds edgeReached=$edgeReached"
+            val footer = findObject(By.res("activityButton"))?.visibleBounds?.takeUnless { it.isEmpty }
             val margin = viewport.height() / 10
+            val safeBottom = footer?.top?.coerceAtMost(viewport.bottom) ?: (viewport.bottom - margin)
+            trace += "viewport=$viewport footer=$footer row=$bounds"
             val validTouchTarget = bounds != null && !bounds.isEmpty &&
                 bounds.height() >= minimumSize && bounds.width() >= minimumSize && viewport.contains(bounds)
             val awayFromEdges = bounds != null &&
-                bounds.top >= viewport.top + margin && bounds.bottom <= viewport.bottom - margin
-            if (validTouchTarget && (awayFromEdges || (list != null && edgeReached))) return node
+                bounds.top >= viewport.top + margin && bounds.bottom <= safeBottom
+            if (validTouchTarget && awayFromEdges) return node
             // With no scroll container, retain the margin to stay clear of system bars.
             if (list == null) return null
             val direction =
@@ -77,11 +78,9 @@ private fun UiDevice.projectRow(rowTag: String, trace: MutableList<String>): UiO
             trace += "scroll=$direction result=$scrollResult verticalGestureMargins=30%"
             if (scrollResult) {
                 searchDirection = direction
-                edgeReached = false
             } else {
-                // The end may prevent centring a valid row. Settle and recheck fresh bounds on
-                // the next pass before accepting it; a missing row may be above this position.
-                edgeReached = true
+                // A missing row may be above a restored position. The API result must never
+                // relax touch safety: content can move yet remain underneath the footer.
                 searchDirection = if (direction == Direction.DOWN) Direction.UP else Direction.DOWN
             }
         } catch (_: StaleObjectException) {
