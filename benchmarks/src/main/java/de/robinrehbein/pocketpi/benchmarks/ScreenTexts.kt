@@ -46,6 +46,9 @@ private fun UiDevice.projectRow(rowTag: String): UiObject2? {
     val row = By.res(rowTag)
     wait(Until.findObject(row), 10_000)?.let { return it }
     return findObjects(By.scrollable(true)).firstNotNullOfOrNull { list ->
+        // The page's floating glass bars overlay the list's top and bottom edges, so a swipe that
+        // starts there moves nothing; start it well inside the list instead.
+        list.setGestureMarginPercentage(0.25f)
         list.scrollUntil(Direction.DOWN, Until.findObject(row))
     }
 }
