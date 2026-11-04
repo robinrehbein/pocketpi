@@ -45,13 +45,27 @@ internal const val FIXTURE_PROJECT_ROW = "projectRow-project-pocketpi"
 private fun UiDevice.projectRow(rowTag: String): UiObject2? {
     val row = By.res(rowTag)
     wait(Until.findObject(row), 10_000)?.let { return it }
-    return findObjects(By.scrollable(true)).firstNotNullOfOrNull { list ->
-        // The page's floating glass bars overlay the list's top and bottom edges, so a swipe that
-        // starts there moves nothing; start it well inside the list instead.
-        list.setGestureMarginPercentage(0.25f)
-        list.scrollUntil(Direction.DOWN, Until.findObject(row))
+    // The page list is the tallest scrollable; a swipeable chat row also reports itself as one, and
+    // a swipe on it can open the chat. The page's floating glass pills overlay the list's edges, so
+    // the swipe starts well inside it. Compose sends no scroll events for UiObject2.scrollUntil to
+    // wait on, so look for the row after every step instead.
+    val list = findObjects(By.scrollable(true)).maxByOrNull { it.visibleBounds.height() } ?: return null
+    list.setGestureMarginPercentage(0.25f)
+    repeat(PROJECT_ROW_SCROLLS) {
+        list.scroll(Direction.DOWN, 0.5f)
+        waitForIdle()
+        if (hasObject(row)) {
+            // A row that just scrolled in can still sit under the floating pill; one more step
+            // brings it clear of the pill before the tap.
+            list.scroll(Direction.DOWN, 0.3f)
+            waitForIdle()
+            return findObject(row)
+        }
     }
+    return null
 }
+
+private const val PROJECT_ROW_SCROLLS = 6
 
 /**
  * Opens the project of [rowTag] from its Projects row and waits for its session list: the row has
