@@ -3893,6 +3893,12 @@ internal fun RemoteScreen(
                                     }
                             }
                     }
+                    FollowUpStatus(
+                        state,
+                        model::dismissFollowUp,
+                        Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
+                            .fillMaxWidth().padding(horizontal = 16.dp),
+                    )
                     if (currentActivity != null)
                         Box(Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
                             .fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -3943,7 +3949,6 @@ internal fun RemoteScreen(
                             open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
-                    FollowUpStatus(state, model::dismissFollowUp)
                     if (statusSheet && bannersShown)
                         GlassSheet(onDismissRequest = { statusSheet = false }) {
                             Column(
