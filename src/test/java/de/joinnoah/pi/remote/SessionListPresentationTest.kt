@@ -693,12 +693,18 @@ class SessionListPresentationTest {
     }
 
     @Test
-    fun readyIsNeverCut() {
+    fun readyIsCutToThreeUntilShowAll() {
         val chats = (1..8).map { quickChat("ready$it", "idle", updatedAt = it.toLong()) }
 
-        val quick = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
-        assertEquals(8, quick.ready.size)
-        assertTrue(quick.recent.isEmpty())
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(listOf("ready8", "ready7", "ready6"), ids(folded.ready))
+        assertTrue(folded.readyExpandable)
+        assertTrue(folded.recent.isEmpty())
+
+        val all = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false, showReadyAll = true)
+        assertEquals(8, all.ready.size)
+        assertTrue(all.readyExpandable)
+        assertFalse(quickChats(chats.take(3), true, false, false).readyExpandable)
     }
 
     @Test
@@ -739,6 +745,17 @@ class SessionListPresentationTest {
         val rows = listOf(row("open"), row("busy", "running"), row("asks", "waiting"))
 
         assertEquals(SessionCounts(waiting = 1, running = 1), sessionCounts(rows))
+    }
+
+    @Test
+    fun theBadgeCountsUnreadReadySessionsBeyondTheFeaturedCut() {
+        // The project row counts its whole list; the Ready group shows only the featured chats, cut to three.
+        val rows = (1..5).map { row("s$it", updatedAt = 10) }
+        val marks = rows.associate { it.optionalText("id")!! to SessionMark(seenUpdatedAt = 5, seenAt = 5) }
+        val chats = (1..5).map { quickChat("s$it", "idle", updatedAt = 10) }
+
+        assertEquals(5, unreadReadyCount(rows, marks))
+        assertEquals(3, quickChats(chats, true, false, false, marks).ready.size)
     }
 
     @Test

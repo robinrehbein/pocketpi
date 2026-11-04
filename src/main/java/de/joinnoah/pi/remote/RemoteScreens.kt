@@ -1470,6 +1470,7 @@ internal fun RemoteScreen(
         mutableStateOf(cardRouteId != null && navigator.notificationCardDismissed(cardRouteId))
     }
     // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
+    var readyShowAll by rememberSaveable { mutableStateOf(false) }
     var runningShowAll by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
     // "5 minutes ago" on the Projects page's chat rows moves on without any state change. Not read here
@@ -3039,8 +3040,8 @@ internal fun RemoteScreen(
                             // What needs the user leads the page: the featured chats waiting for an answer, then
                             // the ready ones, then the running ones. Then the shared projects, then the recent
                             // chats. Beside an open project the chats hide, as before.
-                            // Every featured waiting and ready chat shows (the featured chats are bounded, see
-                            // sortedProjectChats); running and recent chats are capped at three each until their "Show all" (see quickChats).
+                            // Every featured waiting chat shows (the featured chats are bounded, see
+                            // sortedProjectChats); ready, running and recent chats are capped at three each until their "Show all" (see quickChats).
                             val quick =
                                 quickChats(
                                     // Main sessions only: a busy subagent shows as the session it works for.
@@ -3049,6 +3050,7 @@ internal fun RemoteScreen(
                                     showRunningAll = runningShowAll,
                                     showRecentAll = recentShowAll,
                                     marks = routeMarks,
+                                    showReadyAll = readyShowAll,
                                 )
                             val waitingChats = quick.waiting
                             val readyChats = quick.ready
@@ -3097,6 +3099,13 @@ internal fun RemoteScreen(
                                 }
                                 projectChatRows(readyChats, routeMarks, state.connected, homeTicketRef, projectsNow, ready = true) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
+                                }
+                                if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = readyShowAll,
+                                        tag = "quickChatsShowAllReady",
+                                        onClick = { readyShowAll = !readyShowAll },
+                                    )
                                 }
                             }
                             if (runningChats.isNotEmpty()) {

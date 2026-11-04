@@ -131,17 +131,22 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
     return kept + ancestors.values
 }
 
-/** How many running and how many recent quick chats a Mac's Projects page shows until "Show all". */
+/** How many ready, running and recent quick chats a Mac's Projects page shows until "Show all". */
 internal const val QUICK_CHAT_LIMIT = 3
 
 /** The quick chats of a Projects page, grouped by what they need; see [quickChats]. */
 internal data class QuickChats(
     /** Every waiting chat, never cut. */
     val waiting: List<ProjectChatSummary>,
-    /** The open idle chats among the featured ones (at most twelve per project, see [sortedProjectChats]), unread first. */
+    /**
+     * The open idle chats among the featured ones (at most twelve featured chats across all projects, see
+     * [sortedProjectChats]), unread first, cut to [QUICK_CHAT_LIMIT] until shown in full.
+     */
     val ready: List<ProjectChatSummary>,
     val running: List<ProjectChatSummary>,
     val recent: List<ProjectChatSummary>,
+    /** Whether the ready group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
+    val readyExpandable: Boolean,
     /** Whether the running group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
     val runningExpandable: Boolean,
     /** Whether the recent group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
@@ -158,8 +163,8 @@ private fun isReadyRow(status: String?, origin: String?, parentSessionId: String
 
 /**
  * The quick chats of a Mac's Projects page. On a connected Mac, a verified chat is waiting, running
- * or ready (idle, open, top-level); waiting and ready chats are not cut here, only by the twelve featured chats. Running and recent chats
- * are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showRunningAll],
+ * or ready (idle, open, top-level); waiting chats are not cut here, only by the twelve featured chats. Ready, running and recent
+ * chats are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showReadyAll], [showRunningAll],
  * [showRecentAll]). Everything else is recent: offline, unverified, last-known and history chats,
  * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by
  * [marks]; a chat without a mark counts as read), then the most recently updated.
@@ -170,6 +175,7 @@ internal fun quickChats(
     showRunningAll: Boolean,
     showRecentAll: Boolean,
     marks: Map<String, SessionMark> = emptyMap(),
+    showReadyAll: Boolean = false,
 ): QuickChats {
     fun ProjectChatSummary.live() = verified && connected
     fun ProjectChatSummary.status() = session.optionalText("status")
@@ -189,7 +195,8 @@ internal fun quickChats(
     val recent = chats.filter { !it.live() || (it.status() !in setOf("waiting", "running") && !it.ready()) }
     return QuickChats(
         waiting = waiting,
-        ready = ready,
+        ready = ready.take(if (showReadyAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        readyExpandable = ready.size > QUICK_CHAT_LIMIT,
         running = running.take(if (showRunningAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         runningExpandable = running.size > QUICK_CHAT_LIMIT,

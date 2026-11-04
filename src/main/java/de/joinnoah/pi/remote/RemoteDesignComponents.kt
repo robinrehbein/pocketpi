@@ -346,8 +346,9 @@ internal fun ProjectRow(
             readyBadge?.let {
                 ProjectCountBadge(
                     it,
-                    MaterialTheme.colorScheme.surfaceContainerHighest,
-                    MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Unread, like the primary dot on a session row; the neutral surface is for the Old chip.
+                    MaterialTheme.colorScheme.primaryContainer,
+                    MaterialTheme.colorScheme.onPrimaryContainer,
                     "projectBadgeReady-$projectId",
                 )
             }
