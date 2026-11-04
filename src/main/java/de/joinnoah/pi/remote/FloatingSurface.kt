@@ -171,6 +171,8 @@ internal fun FloatingSurface(
     // contentColorFor only knows the opaque scheme colors, so a translucent one is looked up as such.
     contentColor: Color = contentColorFor(color.copy(alpha = 1f)),
     blur: Boolean = true,
+    // Nested composer controls use their rim only: their scroll viewport would cut a shadow.
+    shadowElevation: Dp = 8.dp,
     content: @Composable () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -193,7 +195,7 @@ internal fun FloatingSurface(
         modifier
             // Keep the shadow outside the surface's rounded clipping layer.
             .shadow(
-                elevation = 8.dp,
+                elevation = shadowElevation,
                 shape = shape,
                 clip = false,
                 ambientColor = Color.Black.copy(alpha = 0.18f),
