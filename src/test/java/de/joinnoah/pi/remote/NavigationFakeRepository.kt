@@ -508,6 +508,7 @@ internal class FakeSettingsRepository : SettingsRepository {
 
     override fun recordChatAction(action: ChatAction, now: Long) {
         recordedActions += action
+        usage[action] = usage[action].used(now)
     }
 
     /** What [chatActionUsage] answers, as if stored by earlier uses. */

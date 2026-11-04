@@ -192,7 +192,7 @@ class ShareIntakeTest {
         assertEquals(ShareIntake.parse(plain, access), ShareIntake.parse(loaded, access))
         // A share action sent straight to the exported MainActivity carries nothing in.
         val request = ShareRequest(SharedContent("look", listOf(SharedFile(image, true))), ShareTarget.Session("route", "project", "session"))
-        val forged = LaunchIntents.share(context, request).setComponent(ComponentName(context, MainActivity::class.java))
+        val forged = LaunchIntents.share(context, request).setComponent(ComponentName(context, RemoteActivity::class.java))
         assertNull(LaunchIntents.share(forged))
         assertNull(LaunchIntents.target(forged))
     }

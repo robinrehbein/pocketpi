@@ -187,13 +187,13 @@ class AppLockTest {
 
     private val app get() = ApplicationProvider.getApplicationContext<RemoteApplication>()
 
-    private fun pending(controller: org.robolectric.android.controller.ActivityController<MainActivity>): String? =
+    private fun pending(controller: org.robolectric.android.controller.ActivityController<RemoteActivity>): String? =
         Bundle().also { controller.saveInstanceState(it) }.getString("pendingSessionId")
 
-    private fun lockedActivity(intent: android.content.Intent): Pair<org.robolectric.android.controller.ActivityController<MainActivity>, FakePrompt> {
+    private fun lockedActivity(intent: android.content.Intent): Pair<org.robolectric.android.controller.ActivityController<RemoteActivity>, FakePrompt> {
         app.appLock.store.setEnabled(true)
         val prompt = FakePrompt()
-        val controller = Robolectric.buildActivity(MainActivity::class.java, intent)
+        val controller = Robolectric.buildActivity(RemoteActivity::class.java, intent)
         controller.get().appLockPrompt = prompt
         controller.create().start().resume()
         return controller to prompt
@@ -245,7 +245,7 @@ class AppLockTest {
         app.appLock.unlock()
         app.appLock.onBackground()
         ShadowSystemClock.advanceBy(Duration.ofMinutes(6))
-        val restored = Robolectric.buildActivity(MainActivity::class.java, LaunchIntents.app(context))
+        val restored = Robolectric.buildActivity(RemoteActivity::class.java, LaunchIntents.app(context))
         restored.get().appLockPrompt = prompt
         restored.create(saved).start().resume()
         assertTrue(app.appLock.locked.value)
@@ -265,7 +265,7 @@ class AppLockTest {
 
     private fun shared() = LaunchIntents.share(context, ShareRequest(SharedContent("Shared"), ShareTarget.Pick))
 
-    private fun saved(controller: org.robolectric.android.controller.ActivityController<MainActivity>) =
+    private fun saved(controller: org.robolectric.android.controller.ActivityController<RemoteActivity>) =
         Bundle().also { controller.saveInstanceState(it) }
 
     @Test fun aShareWhileLockedIsHeldUntilUnlock() {

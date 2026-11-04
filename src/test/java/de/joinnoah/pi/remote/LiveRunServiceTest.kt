@@ -189,7 +189,7 @@ class LiveRunServiceTest {
 
     @Test
     fun theActivityStartsTheServiceOnPauseOnlyWhileTheSessionRunsOrWaits() {
-        val controller = Robolectric.buildActivity(MainActivity::class.java, LaunchIntents.app(context)).create().start().resume()
+        val controller = Robolectric.buildActivity(RemoteActivity::class.java, LaunchIntents.app(context)).create().start().resume()
         controller.pause()
         assertEquals(LiveRunService::class.java.name, startedService()?.component?.className)
         assertTrue(LiveRun.wanted)
@@ -209,7 +209,7 @@ class LiveRunServiceTest {
 
     @Test
     fun aConfigurationChangeStartsNoService() {
-        val controller = Robolectric.buildActivity(MainActivity::class.java, LaunchIntents.app(context)).create().start().resume()
+        val controller = Robolectric.buildActivity(RemoteActivity::class.java, LaunchIntents.app(context)).create().start().resume()
         // The activity handles rotation and resizing itself; a language change recreates it.
         controller.configurationChange(
             android.content.res.Configuration(context.resources.configuration).apply {
@@ -224,7 +224,7 @@ class LiveRunServiceTest {
     fun withTheSettingOffNoServiceStarts() {
         assertTrue("on by default", LiveRunSettings(context).enabled.value)
         LiveRunSettings(context).setEnabled(false)
-        val controller = Robolectric.buildActivity(MainActivity::class.java, LaunchIntents.app(context)).create().start().resume()
+        val controller = Robolectric.buildActivity(RemoteActivity::class.java, LaunchIntents.app(context)).create().start().resume()
         controller.pause()
         assertNull(startedService())
         assertFalse(LiveRun.onPause(context))

@@ -570,10 +570,11 @@ class RemoteNavigationUiTest {
         val rename = compose.onNodeWithContentDescription(label(R.string.remote_rename_session))
         val refresh = compose.onNodeWithContentDescription(label(R.string.remote_refresh))
         val more = compose.onNodeWithTag("chatActionsMore")
-        for (action in listOf(back, rename, refresh, more)) {
+        rename.assertDoesNotExist()
+        for (action in listOf(back, refresh, more)) {
             action.assertIsDisplayed().assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
         }
-        val controls = listOf(back, rename, refresh, more).map {
+        val controls = listOf(back, refresh, more).map {
             it.fetchSemanticsNode().boundsInRoot
         }
         assertTrue(controls.zipWithNext().all { (left, right) -> left.right <= right.left })
@@ -594,8 +595,9 @@ class RemoteNavigationUiTest {
             .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.OFFLINE))
         rename.assertDoesNotExist()
         refresh.assertIsDisplayed()
-        // Offline leaves only Refresh and Settings, so Settings moves back into the pill.
-        compose.onNodeWithContentDescription(label(R.string.remote_settings)).performClick()
+        // Offline still has one shortcut; Settings remains in the full menu.
+        more.performClick()
+        compose.onNodeWithTag("chatActionMenu_settings").performClick()
         compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
     }
 
@@ -624,10 +626,9 @@ class RemoteNavigationUiTest {
             val back = compose.onNodeWithContentDescription(label(R.string.remote_back))
             val title = compose.onNodeWithText("A long title on a narrow screen")
             val dot = compose.onNodeWithTag("chatStatusDot")
-            val rename = compose.onNodeWithContentDescription(label(R.string.remote_rename_session))
             val refresh = compose.onNodeWithContentDescription(label(R.string.remote_refresh))
             val more = compose.onNodeWithTag("chatActionsMore")
-            for (action in listOf(back, rename, refresh, more)) {
+            for (action in listOf(back, refresh, more)) {
                 action.assertIsDisplayed().assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
             }
             title.assertIsDisplayed()
@@ -635,7 +636,6 @@ class RemoteNavigationUiTest {
             val backBounds = back.fetchSemanticsNode().boundsInRoot
             val titleBounds = title.fetchSemanticsNode().boundsInRoot
             val dotBounds = dot.fetchSemanticsNode().boundsInRoot
-            val renameBounds = rename.fetchSemanticsNode().boundsInRoot
             val refreshBounds = refresh.fetchSemanticsNode().boundsInRoot
             val moreBounds = more.fetchSemanticsNode().boundsInRoot
             assertTrue("Title has less than 48dp: $titleBounds", titleBounds.width >= 48 * metrics.density)
@@ -643,12 +643,12 @@ class RemoteNavigationUiTest {
             assertTrue(dotBounds.right <= titleBounds.left)
             assertTrue("Actions should sit below the title on a narrow screen", titleBounds.bottom <= moreBounds.top)
             assertTrue(refreshBounds.top >= backBounds.bottom)
-            assertTrue(renameBounds.top >= backBounds.bottom)
-            assertTrue(renameBounds.right <= refreshBounds.left)
             assertTrue(refreshBounds.right <= moreBounds.left)
             dot.assertContentDescriptionEquals(label(R.string.remote_status_idle))
-            rename.performClick()
+            more.performClick()
+            compose.onNodeWithTag("chatActionMenu_rename").performClick()
             compose.onNodeWithText(label(R.string.remote_cancel)).performClick()
+            compose.onNodeWithTag("chatAction_rename").assertIsDisplayed()
             more.performClick()
             compose.onNodeWithTag("chatActionMenu_new_session").assertIsDisplayed()
             compose.onNodeWithTag("chatActionMenu_settings").performClick()

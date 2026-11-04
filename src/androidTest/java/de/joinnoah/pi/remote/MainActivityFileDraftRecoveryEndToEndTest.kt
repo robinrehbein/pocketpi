@@ -133,7 +133,7 @@ class MainActivityFileDraftRecoveryEndToEndTest {
             assertEquals(proof.getJSONObject("worker").toString(), before.getJSONObject("worker").toString())
             readsBeforeOpen = events(before).count { it.getString("event") == "read.request" }
         }
-        val scenario = ActivityScenario.launch<MainActivity>(launch)
+        val scenario = ActivityScenario.launch<RemoteActivity>(launch)
         try {
             val actual = onMain { Intent(ProductionEntryBootstrap.activityEvents.last { it.kind == "resumed" }.activity.intent) }
             check(actual.component?.className == LaunchIntents.ALIAS)

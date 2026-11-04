@@ -556,7 +556,11 @@ class TwoPaneNavigationTest {
     // ---- Inspector tabs ------------------------------------------------------------------
 
     private fun click(tag: String) {
-        compose.onNodeWithTag(tag).performClick()
+        if (tag.startsWith("chatAction_") && compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty()) {
+            compose.onNodeWithTag("chatActionsMore").performClick()
+            compose.waitForIdle()
+            compose.onNodeWithTag("chatActionMenu_${tag.removePrefix("chatAction_")}").performClick()
+        } else compose.onNodeWithTag(tag).performClick()
         compose.waitForIdle()
     }
 

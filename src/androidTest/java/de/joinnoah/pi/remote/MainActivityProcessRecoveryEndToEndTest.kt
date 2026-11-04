@@ -115,7 +115,7 @@ class MainActivityProcessRecoveryEndToEndTest {
             assertTrue(life.getBoolean("cut")); assertFalse(before.getBoolean("deviceOnline"))
             assertEquals(1, life.getInt("promptRequests")); owner(before, saved.getJSONObject("owner"))
         }
-        val scenario = ActivityScenario.launch<MainActivity>(launch)
+        val scenario = ActivityScenario.launch<RemoteActivity>(launch)
         try {
             val actual = onMain { Intent(ProductionEntryBootstrap.activityEvents.last { it.kind == "resumed" }.activity.intent) }
             check(actual.component?.className == LaunchIntents.ALIAS)
