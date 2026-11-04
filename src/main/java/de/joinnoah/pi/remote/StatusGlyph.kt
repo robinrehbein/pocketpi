@@ -32,14 +32,20 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 internal enum class StatusGlyphKind {
-    TASK_PENDING, TASK_RUNNING, DONE, FAILED, STOPPED, TOOL_RUNNING, SESSION_RUNNING, WAITING, NEEDS_INPUT
+    TASK_PENDING, TASK_RUNNING, DONE, FAILED, STOPPED, TOOL_RUNNING, SESSION_RUNNING, COMPACTING, WAITING, NEEDS_INPUT
 }
 
 internal fun statusGlyphFrame(kind: StatusGlyphKind, elapsedMillis: Long): Int = when (kind) {
     StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING -> ((elapsedMillis.coerceAtLeast(0) / 400) % 2).toInt()
     StatusGlyphKind.SESSION_RUNNING -> ((elapsedMillis.coerceAtLeast(0) / 100) % 8).toInt()
+    StatusGlyphKind.COMPACTING -> ((elapsedMillis.coerceAtLeast(0) / 80) % 10).toInt()
     else -> 0
 }
+
+// pi-tui Loader defaults: ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, 80 ms per frame.
+private val compactionBrailleCells = intArrayOf(0x0b, 0x19, 0x39, 0x38, 0x3c, 0x34, 0x26, 0x27, 0x07, 0x0f)
+internal fun compactionDotCells(frame: Int): Int =
+    compactionBrailleCells[Math.floorMod(frame, compactionBrailleCells.size)]
 
 private val sessionSnakeCells = intArrayOf(4, 5, 1, 3, 2, 10, 8, 12)
 
@@ -59,7 +65,7 @@ internal fun StatusGlyph(
     animate: Boolean = true,
 ) {
     val cycle = when (kind) {
-        StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING, StatusGlyphKind.SESSION_RUNNING -> 800
+        StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING, StatusGlyphKind.SESSION_RUNNING, StatusGlyphKind.COMPACTING -> 800
         else -> 0
     }
     val context = LocalContext.current
@@ -131,6 +137,15 @@ internal fun StatusGlyph(
                 drawCircle(color, radius, center, style = Stroke(stroke))
                 drawArc(color, if (frame == 0) 90f else -90f, 180f, true,
                     topLeft = Offset(center.x - radius, center.y - radius), size = Size(radius * 2, radius * 2))
+            }
+            StatusGlyphKind.COMPACTING -> {
+                val cells = compactionDotCells(frame)
+                // Braille dots 1–3 occupy the left column; dots 4–6 the right.
+                for (dot in 0..5) if (cells and (1 shl dot) != 0) {
+                    drawCircle(color, unit * 0.075f,
+                        Offset(unit * if (dot < 3) 0.32f else 0.68f,
+                            unit * (0.2f + (dot % 3) * 0.3f)))
+                }
             }
             StatusGlyphKind.SESSION_RUNNING -> {
                 // Atlas: ▖▌▘▀▝▐▗▄ (quadrants and halves); static: ▛.
