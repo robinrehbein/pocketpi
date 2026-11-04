@@ -357,6 +357,11 @@ internal class ChatViewModel(
     repository: RemoteRepository,
     key: RemoteNavKey.Chat,
     private val settings: SettingsRepository,
+    /**
+     * The "Context full" offer's dismissals and announcements. The activity holds it above the nav
+     * entries, so it outlives this chat's entry; the default serves a chat shown on its own.
+     */
+    val contextOffers: ContextOfferMemory = ContextOfferMemory(),
 ) : DestinationViewModel(repository, key) {
     val commitReview = GitCommitReviewController(repository, viewModelScope, key.selection())
     val pushReview = GitPushReviewController(repository, viewModelScope, key.selection(), android.os.SystemClock::elapsedRealtime)
@@ -365,8 +370,6 @@ internal class ChatViewModel(
     fun openPushReview() = active { commitReview.close(); pullRequestReview.close(); pushReview.prepare() }
     fun openPullRequestReview() = active { commitReview.close(); pushReview.close(); pullRequestReview.prepare() }
     val preferences = settings.state
-    /** The "Context full" offer's dismissals and announcements; in memory only, for this chat's lifetime. */
-    val contextOffers = ContextOfferMemory()
     fun canOpenPreview() = repository.canOpenPreview()
     fun openPreview(port: Int) = repository.openPreview(port)
     fun closePreview() = repository.closePreview()

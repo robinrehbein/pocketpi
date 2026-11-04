@@ -102,7 +102,6 @@
     <string name="remote_context_full_title">Context %1$d%% full</string>
     <string name="remote_context_full_body_compact">Compacting summarizes older messages so pi has room to continue.</string>
     <string name="remote_compact_now_action">Compact now</string>
-    <string name="remote_compact_now_description">Compact now, context %1$d%% full</string>
     <string name="remote_context_offer_dismiss">Not now</string>
     <string name="remote_settings">Settings</string>
     <string name="remote_settings_privacy_title">Privacy policy</string>

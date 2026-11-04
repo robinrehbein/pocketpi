@@ -644,7 +644,6 @@ internal fun ContextOfferBanner(
 ) {
     val scheme = MaterialTheme.colorScheme
     val dismissLabel = stringResource(R.string.remote_context_offer_dismiss)
-    val compactDescription = stringResource(R.string.remote_compact_now_description, offer.percent)
     BannerSurface(
         floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("contextOfferBanner")
@@ -685,8 +684,8 @@ internal fun ContextOfferBanner(
                 if (ContextOfferAction.COMPACT in offer.actions)
                     Button(
                         onClick = onCompact,
-                        modifier = Modifier.testTag("contextOfferCompact")
-                            .semantics { contentDescription = compactDescription },
+                        // Labelled "Compact now" only: the heading already reads out the fill.
+                        modifier = Modifier.testTag("contextOfferCompact"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = scheme.onSecondaryContainer,
                             contentColor = scheme.secondaryContainer,

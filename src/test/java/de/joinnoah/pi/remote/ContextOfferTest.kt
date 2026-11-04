@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -31,17 +33,27 @@ class ContextOfferTest {
     }
 
     @Test
-    fun veryLargeWindowsOfferFromTwoHundredThousandTokensButNeverBelowHalf() {
-        // 1M window: 200k used is only 20%, so the floor holds the offer back until 50%.
-        assertNull(contextOfferLevel(usage(20.0, window = 1_000_000)))
-        assertNull(contextOfferLevel(usage(49.9, window = 1_000_000)))
-        assertEquals(CONTEXT_OFFER_PERCENT, contextOfferLevel(usage(50.0, window = 1_000_000)))
+    fun largeWindowsOfferFromTwoHundredThousandTokensButNeverBelowHalf() {
+        // 300k window: 210k used is only 70%, but past 200k tokens.
+        assertEquals(CONTEXT_OFFER_PERCENT, contextOfferLevel(usage(70.0, window = 300_000)))
+        assertNull(contextOfferLevel(usage(66.0, window = 300_000, used = 199_999)))
+        // From about 267k (where 200k is 75%) the token rule applies.
+        assertEquals(CONTEXT_OFFER_PERCENT, contextOfferLevel(usage(74.99, window = CONTEXT_OFFER_LARGE_WINDOW, used = 200_000)))
+        assertNull(contextOfferLevel(usage(74.0, window = CONTEXT_OFFER_LARGE_WINDOW - 1, used = 200_000)))
         // 400k window: 200k used is exactly half.
         assertEquals(CONTEXT_OFFER_PERCENT, contextOfferLevel(usage(50.0, window = 400_000)))
         assertNull(contextOfferLevel(usage(50.0, window = 400_000, used = 199_999)))
-        // Smaller windows keep the plain 75% rule even past 200k tokens.
-        assertNull(contextOfferLevel(usage(70.0, window = 300_000)))
+        // Beyond 400k the floor wins: on a 1M window 200k used is only 20%.
+        assertNull(contextOfferLevel(usage(20.0, window = 1_000_000)))
+        assertNull(contextOfferLevel(usage(49.9, window = 1_000_000)))
+        assertEquals(CONTEXT_OFFER_PERCENT, contextOfferLevel(usage(50.0, window = 1_000_000)))
         assertEquals(CONTEXT_OFFER_REOFFER_PERCENT, contextOfferLevel(usage(95.0, window = 1_000_000)))
+        // Smaller windows keep the plain 75% rule.
+        assertNull(contextOfferLevel(usage(74.0, window = 260_000)))
+        assertEquals(
+            ContextOffer(CONTEXT_OFFER_PERCENT, 70, setOf(ContextOfferAction.COMPACT)),
+            contextOffer(idle(usage(70.0, window = 300_000)), null, 0L),
+        )
     }
 
     @Test
@@ -71,6 +83,8 @@ class ContextOfferTest {
         assertNull(contextOffer(base.copy(configurationChanging = true), null, 0L))
         // A usage read in flight (after the turn ended) has not measured the idle chat yet.
         assertNull(contextOffer(base.copy(contextLoading = true), null, 0L))
+        // A read taken before the turn ended still shows the old fill until the next one finishes.
+        assertNull(contextOffer(base.copy(contextUsageStale = true), null, 0L))
         assertNull(contextOffer(base.copy(compactionRequesting = true), null, 0L))
         assertNull(contextOffer(base.copy(compaction = SessionCompaction("threshold", 0L)), null, 1_000L))
         // Usage of another chat or of a model other than the confirmed one is stale.
@@ -104,6 +118,7 @@ class ContextOfferTest {
         assertFalse(contextOfferResets(idle(null), 0L))
         assertFalse(contextOfferResets(idle(usage(null)), 0L))
         assertFalse(contextOfferResets(idle(usage(40.0)).copy(contextLoading = true), 0L))
+        assertFalse(contextOfferResets(idle(usage(40.0)).copy(contextUsageStale = true), 0L))
     }
 
     @Test
@@ -112,7 +127,9 @@ class ContextOfferTest {
         memory.dismiss("s1", CONTEXT_OFFER_REOFFER_PERCENT)
         memory.dismiss("s1", CONTEXT_OFFER_PERCENT)
         memory.dismiss("s2", CONTEXT_OFFER_PERCENT)
-        assertEquals(mapOf("s1" to CONTEXT_OFFER_REOFFER_PERCENT, "s2" to CONTEXT_OFFER_PERCENT), memory.dismissed.value)
+        assertEquals(CONTEXT_OFFER_REOFFER_PERCENT, memory.dismissed("s1"))
+        assertEquals(CONTEXT_OFFER_PERCENT, memory.dismissed("s2"))
+        assertNull(memory.dismissed("s3"))
 
         assertTrue(memory.shouldAnnounce("s1", CONTEXT_OFFER_PERCENT))
         memory.announced("s1", CONTEXT_OFFER_PERCENT)
@@ -121,7 +138,37 @@ class ContextOfferTest {
         assertTrue(memory.shouldAnnounce("s2", CONTEXT_OFFER_PERCENT))
 
         memory.forget("s1")
-        assertEquals(mapOf("s2" to CONTEXT_OFFER_PERCENT), memory.dismissed.value)
+        assertNull(memory.dismissed("s1"))
+        assertEquals(CONTEXT_OFFER_PERCENT, memory.dismissed("s2"))
         assertTrue(memory.shouldAnnounce("s1", CONTEXT_OFFER_PERCENT))
+    }
+
+    @Test
+    fun memoryChangesAreSnapshotStateTheScreenObserves() {
+        val memory = ContextOfferMemory()
+        var reads = 0
+        val observer = SnapshotStateObserver { it() }
+        observer.start()
+        try {
+            val scope = Any()
+            fun observe() {
+                observer.observeReads(scope, { observe() }) {
+                    reads++
+                    memory.dismissed("s1")
+                    memory.shouldAnnounce("s1", CONTEXT_OFFER_PERCENT)
+                }
+            }
+            observe()
+            assertEquals(1, reads)
+            memory.announced("s1", CONTEXT_OFFER_PERCENT)
+            Snapshot.sendApplyNotifications()
+            assertTrue("an announcement is observed", reads > 1)
+            val beforeDismiss = reads
+            memory.dismiss("s1", CONTEXT_OFFER_PERCENT)
+            Snapshot.sendApplyNotifications()
+            assertTrue("a dismissal is observed", reads > beforeDismiss)
+        } finally {
+            observer.stop()
+        }
     }
 }

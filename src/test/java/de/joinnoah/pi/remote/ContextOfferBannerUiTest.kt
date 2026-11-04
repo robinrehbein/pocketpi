@@ -9,10 +9,10 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
-import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -54,8 +54,10 @@ class ContextOfferBannerUiTest {
                 node.config.getOrElse(SemanticsActions.CustomActions) { emptyList() }.map { it.label } ==
                     listOf(context.getString(R.string.remote_context_offer_dismiss))
             })
+        // The button says only "Compact now": the heading carries the fill, so TalkBack reads it once.
         compose.onNodeWithTag("contextOfferCompact")
-            .assertContentDescriptionEquals(context.getString(R.string.remote_compact_now_description, 82))
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.ContentDescription))
+            .assertTextEquals(context.getString(R.string.remote_compact_now_action))
             .assertHasClickAction()
             .assertHeightIsAtLeast(48.dp)
             .performClick()

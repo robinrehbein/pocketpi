@@ -206,7 +206,7 @@ class ChatPanelsUiTest {
         compose.onAllNodesWithTag("contextOfferBanner").assertCountEquals(2)
         compose.onAllNodesWithText(resources.getString(R.string.remote_context_full_title, 93), useUnmergedTree = true)
             .assertCountEquals(2)
-        val compactButtons = compose.onAllNodesWithContentDescription(resources.getString(R.string.remote_compact_now_description, 93))
+        val compactButtons = compose.onAllNodesWithText(resources.getString(R.string.remote_compact_now_action))
         compactButtons.assertCountEquals(2)
         compactButtons[0].assertHeightIsAtLeast(48.dp).performClick()
         compose.onAllNodesWithTag("contextOfferDismiss")[1].assertHeightIsAtLeast(48.dp).performClick()

@@ -278,6 +278,11 @@ data class RemoteState(
     val configurationChanging: Boolean = false,
     val contextUsage: SessionContextUsage? = null,
     val contextLoading: Boolean = false,
+    /**
+     * The chat went idle after [contextUsage] was read: no read started since has finished. The
+     * usage may still show the fill from before the run, so the context offer waits for the next read.
+     */
+    val contextUsageStale: Boolean = false,
     val compactionRequesting: Boolean = false,
     val advisor: SessionAdvisor? = null,
     val advisorLoading: Boolean = false,

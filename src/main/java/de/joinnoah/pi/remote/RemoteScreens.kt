@@ -142,7 +142,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.conflate
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 
 private data class AbortRunTarget(val sessionId: String, val questionIds: Set<String>)
@@ -1356,39 +1355,42 @@ internal fun RemoteScreen(
     var editorExpanded by rememberSaveable(key) { mutableStateOf(false) }
     var newSessionOpen by rememberSaveable(key) { mutableStateOf(false) }
     // The "Context full" offer: idle chats only, behind an error, a running compaction or a failed
-    // export. Starting to type counts as "Not now".
-    val contextOffers = chatModel?.contextOffers
-    val offerSessionId = chatKey?.sessionId?.takeIf { it == state.selection.sessionId }
-    val offerDismissals = contextOffers?.dismissed?.collectAsStateWithLifecycle()?.value.orEmpty()
-    val pendingOffer =
-        if (contextOffers == null || offerSessionId == null || state.error != null || exportState is ExportState.Failed) null
-        else contextOffer(state, offerDismissals[offerSessionId], compactionNow)
-    // A stored draft hides the offer. The composer's live text is only watched below (reading it here
-    // would recompose the whole chat on a keystroke): starting to type dismisses the offer's level.
-    val shownOffer = pendingOffer?.takeIf { state.draft.isBlank() }
+    // export, and hidden by a stored draft. The user's own typing while it shows counts as "Not now".
+    // The memory and this chat's session ID, while this chat is the selected one.
+    val offerChat: Pair<ContextOfferMemory, String>? =
+        chatKey?.sessionId?.takeIf { it == state.selection.sessionId }?.let { id -> chatModel?.contextOffers?.to(id) }
+    val shownOffer =
+        if (offerChat == null || state.error != null || exportState is ExportState.Failed || state.draft.isNotBlank()) null
+        else contextOffer(state, offerChat.first.dismissed(offerChat.second), compactionNow)
     val offerResets = contextOfferResets(state, compactionNow)
-    LaunchedEffect(offerSessionId, offerResets) {
-        if (offerResets && offerSessionId != null) contextOffers?.forget(offerSessionId)
+    LaunchedEffect(offerChat, offerResets) {
+        val (memory, sessionId) = offerChat ?: return@LaunchedEffect
+        if (offerResets) memory.forget(sessionId)
     }
-    val currentPendingOffer by rememberUpdatedState(pendingOffer)
-    LaunchedEffect(offerSessionId, contextOffers, composerDraft) {
-        if (offerSessionId == null || contextOffers == null) return@LaunchedEffect
-        snapshotFlow { composerDraft?.text?.isNotBlank() ?: false }.drop(1).collect { typed ->
-            if (typed) currentPendingOffer?.let { contextOffers.dismiss(offerSessionId, it.level) }
+    val currentShownOffer by rememberUpdatedState(shownOffer)
+    // Only text the user typed: a Mac draft, voice input or a command the app sets is no "Not now".
+    // The composer's text is not read here, which would recompose the whole chat on a keystroke.
+    DisposableEffect(offerChat, composerDraft) {
+        val (memory, sessionId) = offerChat ?: return@DisposableEffect onDispose {}
+        val remove = composerDraft?.addTypedListener { text ->
+            val offer = currentShownOffer
+            if (offer != null && text.isNotBlank()) memory.dismiss(sessionId, offer.level)
         }
+        onDispose { remove?.invoke() }
     }
-    val offerAnnounce = shownOffer != null && offerSessionId != null &&
-        contextOffers?.shouldAnnounce(offerSessionId, shownOffer.level) == true
-    LaunchedEffect(offerSessionId, shownOffer?.level) {
+    val offerAnnounce = shownOffer != null && offerChat != null &&
+        offerChat.first.shouldAnnounce(offerChat.second, shownOffer.level)
+    LaunchedEffect(offerChat, shownOffer?.level) {
         val level = shownOffer?.level ?: return@LaunchedEffect
-        if (offerSessionId == null) return@LaunchedEffect
+        val (memory, sessionId) = offerChat ?: return@LaunchedEffect
         // Long enough for the live region's first announcement to go out before it is withdrawn.
         delay(CONTEXT_OFFER_ANNOUNCE_MILLIS)
-        contextOffers?.announced(offerSessionId, level)
+        memory.announced(sessionId, level)
     }
     fun dismissContextOffer() {
         val offer = shownOffer ?: return
-        offerSessionId?.let { contextOffers?.dismiss(it, offer.level) }
+        val (memory, sessionId) = offerChat ?: return
+        memory.dismiss(sessionId, offer.level)
         statusSheet = false
     }
     fun compactFromOffer() {
@@ -1912,7 +1914,7 @@ internal fun RemoteScreen(
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
                         }
-                    if (!compact && shownOffer != null && !compactionVisible(state.compaction, compactionNow))
+                    if (!compact && shownOffer != null)
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             ContextOfferBanner(
                                 shownOffer,
