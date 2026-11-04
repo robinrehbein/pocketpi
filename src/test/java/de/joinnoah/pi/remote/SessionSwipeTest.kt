@@ -239,4 +239,33 @@ class SessionSwipeTest {
         compose.onNodeWithTag("menu_session_rename").performClick()
         assertEquals(listOf(1, 1), counts.toList())
     }
+
+    @Test
+    fun closeSwipeHidesARowThePhoneCannotClose() {
+        assertEquals(SessionSwipe.HIDE, effectiveSessionSwipe(SwipeAction.CLOSE, closeAvailable = false, canRename = false, canHide = true, canUnhide = false))
+        assertEquals(SessionSwipe.CLOSE, effectiveSessionSwipe(SwipeAction.CLOSE, closeAvailable = true, canRename = false, canHide = false, canUnhide = false))
+        assertEquals(SessionSwipe.NONE, effectiveSessionSwipe(SwipeAction.CLOSE, closeAvailable = false, canRename = false, canHide = false, canUnhide = false))
+        assertEquals(SessionSwipe.UNHIDE, effectiveSessionSwipe(SwipeAction.CLOSE, closeAvailable = false, canRename = false, canHide = false, canUnhide = true))
+        assertEquals(SessionSwipe.RENAME, effectiveSessionSwipe(SwipeAction.RENAME, closeAvailable = false, canRename = true, canHide = true, canUnhide = false))
+    }
+
+    @Test
+    fun swipeLeftHidesWhereCloseCannotApply() {
+        var hidden = 0
+        compose.setContent {
+            MaterialTheme {
+                SessionListRow(
+                    item = item.copy(daemonOwned = false),
+                    enabled = true,
+                    closeAvailable = false,
+                    onClick = {},
+                    onClose = {},
+                    onHide = { hidden++ },
+                )
+            }
+        }
+        compose.onNodeWithText(item.title).performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        assertEquals(1, hidden)
+    }
 }

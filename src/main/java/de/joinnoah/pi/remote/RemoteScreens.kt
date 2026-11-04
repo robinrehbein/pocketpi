@@ -50,7 +50,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -103,6 +102,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -157,8 +157,6 @@ private class LeadingItems {
 /** Rail marker for a pending question; it has no conversation item and jumps to the latest one. */
 private const val PENDING_QUESTION_MARKER = "__pending_question__"
 
-/** From this header width on, History gets its own button beside the action pill. */
-private val HISTORY_BUTTON_MIN_HEADER = 600.dp
 private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
@@ -308,6 +306,26 @@ internal fun RemoteScreen(
     val routeMarks = remember(sessionMarkMap, state.host?.routeId) { sessionMarksById(sessionMarkMap, state.host?.routeId) }
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
+    // Sessions hidden on this phone stay out of the list until the footer shows them; not persisted.
+    var showHiddenSessions by rememberSaveable(key) { mutableStateOf(false) }
+    // A third list build next to visibleSessions and sessionCount: the hidden rows leave those two
+    // lists, and deriving the count from one of them would have to redo the hide rule for
+    // subagents and the offline filter. The inputs are the same, so it reruns only when they change.
+    val hiddenSessionTotal =
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, routeMarks) {
+            hiddenSessionCount(
+                visibleSessionListItems(
+                    state.sessions,
+                    state.connected,
+                    state.loading,
+                    hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
+                    stale = state.stale,
+                    confirmed = state.sessionsFresh,
+                    marks = routeMarks,
+                    showHidden = true,
+                )
+            )
+        }
     val hasCompactionList = key is RemoteNavKey.Sessions || (key is RemoteNavKey.Projects && !projectSelected)
     // Expiry is independent of animation settings, including reduced motion.
     val sessionCompactionNow by produceState(
@@ -323,7 +341,7 @@ internal fun RemoteScreen(
         }
     }
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities, state.sessionCompactions, sessionCompactionNow) {
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities, showHiddenSessions, state.sessionCompactions, sessionCompactionNow) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -335,6 +353,7 @@ internal fun RemoteScreen(
                 marks = routeMarks,
                 openSessionId = shownSessionId,
                 ticketRef = { ticketRefForSession(state, it) },
+                showHidden = showHiddenSessions,
                 compactions = state.sessionCompactions,
                 nowMillis = sessionCompactionNow,
             )
@@ -355,7 +374,7 @@ internal fun RemoteScreen(
             onDispose { shortcutTargets.unregisterRefresh(key, refresh) }
         }
     val sessionCount =
-        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions) {
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, routeMarks) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -363,6 +382,7 @@ internal fun RemoteScreen(
                 hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 stale = state.stale,
                 confirmed = state.sessionsFresh,
+                marks = routeMarks,
             ).size
         }
     val sessionActive =
@@ -1085,6 +1105,35 @@ internal fun RemoteScreen(
         }
     }
     val snackbar = remember { SnackbarHostState() }
+    // Hiding is phone-local, so the notice says so. Reads use the marks of state.host's route, and
+    // the write goes to the same route, never to the key's.
+    val hideScope = rememberCoroutineScope()
+    val hiddenMessage = stringResource(R.string.remote_session_hidden_snackbar)
+    val undoLabel = stringResource(R.string.remote_undo)
+    val hideResources = LocalResources.current
+    val hideSession: (String, String, Long?) -> Unit = hide@{ sessionId, title, updatedAt ->
+        val store = sessionMarkStore ?: return@hide
+        val route = state.host?.routeId ?: return@hide
+        val previous = store.hide(route, sessionId, updatedAt, System.currentTimeMillis())
+        val applied = store.mark(route, sessionId)
+        snackbar.currentSnackbarData?.dismiss()
+        hideScope.launch {
+            val result =
+                snackbar.showSnackbar(
+                    DescribedSnackbarVisuals(
+                        message = hiddenMessage,
+                        description = hideResources.getString(R.string.remote_session_hidden_snackbar_a11y, title),
+                        actionLabel = undoLabel,
+                        duration = SnackbarDuration.Long,
+                    )
+                )
+            if (result == SnackbarResult.ActionPerformed) store.undoHide(route, sessionId, previous, applied)
+        }
+    }
+    val unhideSession: (String) -> Unit = unhide@{ sessionId ->
+        val route = state.host?.routeId ?: return@unhide
+        sessionMarkStore?.unhide(route, sessionId)
+    }
     val childNotice = stringResource(R.string.remote_insights_child_not_found)
     // An extension's notice (`session.notice`) shows once, in the chat only, which holds the snackbar
     // host; the repository forgets it at once, so a recomposition or a return does not show it again.
@@ -1464,6 +1513,10 @@ internal fun RemoteScreen(
             ChatAction.EMULATOR -> { if (state.emulator == null) chatModel?.openEmulator() }
             ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
+            ChatAction.TERMINAL -> openInspector(InspectorTab.TERMINAL)
+            ChatAction.RENDER_CAPTURE ->
+                renderSnapshot = renderRecorder.export(Build.MODEL, Build.VERSION.SDK_INT, BuildConfig.VERSION_CODE,
+                    density.density, density.fontScale, renderOptions)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), displayTitle(session.text("title")).text) }
             ChatAction.NEW_SESSION -> newSessionOpen = true
@@ -1592,7 +1645,9 @@ internal fun RemoteScreen(
         key, projectSelected, state.projectChats, state.connected, runningShowAll, recentShowAll, readyShowAll, routeMarks,
     ) {
         quickChats(
-            if (key is RemoteNavKey.Projects && !projectSelected) mainSessionChats(state.projectChats) else emptyList(),
+            if (key is RemoteNavKey.Projects && !projectSelected) {
+                mainSessionChats(state.projectChats).filterNot { projectChatHidden(it, routeMarks) }
+            } else emptyList(),
             state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
             marks = routeMarks, showReadyAll = readyShowAll,
         )
@@ -1646,8 +1701,8 @@ internal fun RemoteScreen(
                 chatSessionId?.let { ticketForSession(state, it) }
             }
             val headerColor = MaterialTheme.colorScheme.surfaceContainer
-            // History never competes for the pill's places: it would push Settings into the menu.
-            fun actionLayout(withHistory: Boolean) =
+            // Every action, History included, lives behind the pill's shortcut and chevron.
+            fun actionLayout() =
                 chatActionLayout(
                     DEFAULT_CHAT_ACTIONS,
                     buildSet {
@@ -1656,6 +1711,9 @@ internal fun RemoteScreen(
                         if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
                         if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
                         if (state.emulator != null || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
+                        if (chatModel?.canAttachTerminal() == true) add(ChatAction.TERMINAL)
+                        // Render capture is local diagnostics, offered only while recording is on.
+                        if (renderOptions.recording) add(ChatAction.RENDER_CAPTURE)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -1668,7 +1726,7 @@ internal fun RemoteScreen(
                         // while pi runs, so the open menu keeps its rows; runChatAction explains a busy one.
                         addAll(localCommandActions(chatMenuLocalCommands(state)))
                     },
-                ).let { if (withHistory) it.withHistory() else it }
+                ).withHistory()
                     .let { if (closableSession != null) it.withClose() else it }
             fun runAction(action: ChatAction) {
                 if (action == ChatAction.CLOSE) closing = closableSession?.let { ClosingSession(it) }
@@ -1677,38 +1735,16 @@ internal fun RemoteScreen(
             // Not ::runAction: references to one local function compare equal whatever they captured,
             // so the pill's remembered row callbacks and rememberUpdatedState would keep the first one.
             val currentRunAction by rememberUpdatedState { action: ChatAction -> runAction(action) }
-            val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (standaloneHistory) FloatingSurface(shape = CircleShape, color = headerColor) {
-                        IconButton(
-                            onClick = ::toggleHistory,
-                            modifier = Modifier.size(48.dp).testTag("chatHistoryButton"),
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
-                        }
-                    }
-                    if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
-                        Text(stringResource(R.string.remote_terminal_title))
-                    }
-                    if (renderOptions.recording) IconButton(
-                        onClick = {
-                            renderSnapshot = renderRecorder.export(Build.MODEL, Build.VERSION.SDK_INT, BuildConfig.VERSION_CODE,
-                                density.density, density.fontScale, renderOptions)
-                        },
-                        modifier = Modifier.size(48.dp).testTag("captureChatRender"),
-                    ) { Icon(Icons.Outlined.Info, stringResource(R.string.remote_render_capture)) }
-                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, usage = chatActionUsage, sessionIdentity = key, onAction = { currentRunAction(it) })
-                }
+            // The right side is exactly the pill's two controls; nothing else sits beside it.
+            val actionsControl: @Composable (ChatActionLayout) -> Unit = { actionLayout ->
+                ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, usage = chatActionUsage, sessionIdentity = key, onAction = { currentRunAction(it) })
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val narrow = maxWidth < 360.dp
-                // A phone's title keeps its room: History then joins the pill or its menu.
-                val standaloneHistory = maxWidth >= HISTORY_BUTTON_MIN_HEADER
                 // Compact, the banners' entry joins the menu while they show; see the status sheet.
-                val actionLayout = actionLayout(!standaloneHistory).let { if (compact) it.withStatus(bannersShown) else it }
-                val actionsWidth =
-                    96.dp +
-                        (if (standaloneHistory) 56.dp else 0.dp) + (if (renderOptions.recording) 56.dp else 0.dp)
+                val actionLayout = actionLayout().let { if (compact) it.withStatus(bannersShown) else it }
+                // The shortcut and the chevron, 48dp each; the title takes everything else.
+                val actionsWidth = 96.dp
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
@@ -1814,7 +1850,7 @@ internal fun RemoteScreen(
                                 }
                             }
                         }
-                        if (!narrow) actionsControl(actionLayout, standaloneHistory)
+                        if (!narrow) actionsControl(actionLayout)
                     }
                     if (narrow) {
                         Row(
@@ -1822,7 +1858,7 @@ internal fun RemoteScreen(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            actionsControl(actionLayout, standaloneHistory)
+                            actionsControl(actionLayout)
                         }
                     }
                     // Compact, the banners wait in the pill's menu, see the status sheet.
@@ -2422,8 +2458,12 @@ internal fun RemoteScreen(
         floatingActionButtonPosition = FabPosition.Center,
         // The 5 s window of a queued accept; the open-folder button sits in the same corner.
         snackbarHost = {
-            if (key is RemoteNavKey.Projects && state.tickets.routeId == key.routeId)
-                TicketUndoBar(state.tickets.pendingAccept, onUndo = { (model as? ProjectsViewModel)?.undoAccept() })
+            if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions)
+                Column {
+                    if (key is RemoteNavKey.Projects && state.tickets.routeId == key.routeId)
+                        TicketUndoBar(state.tickets.pendingAccept, onUndo = { (model as? ProjectsViewModel)?.undoAccept() })
+                    SnackbarHost(snackbar, Modifier.testTag("hideSnackbar")) { data -> GlassSnackbar(data) }
+                }
         },
         floatingActionButton = {
             if (key is RemoteNavKey.Projects && canOpenFolders(state))
@@ -3228,6 +3268,10 @@ internal fun RemoteScreen(
                                         navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                     },
                                     onClose = { chat, item -> closing = ClosingSession(item, chat.projectId) },
+                                    capabilities = state.capabilities,
+                                    onHide = { chat ->
+                                        hideSession(chat.session.text("id"), chat.session.text("title"), sessionUpdatedAt(chat.session))
+                                    },
                                 )
                             // The result of the last accept, which may have left the "To accept" section already.
                             if (!projectSelected && canUseTickets(state) && state.tickets.routeId == key.routeId &&
@@ -3426,7 +3470,7 @@ internal fun RemoteScreen(
                                     )
                                 }
                             }
-                            else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
+                            else if (visibleSessions.isEmpty() && hiddenSessionTotal == 0 && (state.connected || state.stale) && !state.loading)
                                 item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
                             else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                                 item { Text(stringResource(R.string.remote_session_search_empty)) }
@@ -3475,6 +3519,12 @@ internal fun RemoteScreen(
                                                 }
                                             } else null,
                                         onClose = { closing = ClosingSession(session) },
+                                        onHide =
+                                            if (canHideSession(session, state.capabilities, shownSessionId)) {
+                                                { hideSession(session.id, session.title, session.updatedAt) }
+                                            } else null,
+                                        onUnhide = if (session.hidden) ({ unhideSession(session.id) }) else null,
+                                        hidden = session.hidden,
                                         onForkLatest =
                                             if (
                                                 state.connected && !state.loading && !navigator.mutating &&
@@ -3500,6 +3550,15 @@ internal fun RemoteScreen(
                                     )
                                 }
                             }
+                            // The count ignores the search, so the footer waits until the query is cleared.
+                            if (hiddenSessionTotal > 0 && !(sessionSearchShown && sessionQuery.isNotBlank()))
+                                item(key = "sessions_hidden_footer") {
+                                    HiddenSessionsFooter(
+                                        count = hiddenSessionTotal,
+                                        shown = showHiddenSessions,
+                                        onToggle = { showHiddenSessions = !showHiddenSessions },
+                                    )
+                                }
                         }
 
                         is RemoteNavKey.Chat -> {
@@ -4809,6 +4868,10 @@ private class ProjectChatRowContext(
     val swipe: Pair<SwipeAction, SwipeAction>,
     val onOpen: (ProjectChatSummary) -> Unit,
     val onClose: (ProjectChatSummary, SessionListItem) -> Unit,
+    /** The host's capabilities; they decide which rows offer Hide (see [canHideSession]). */
+    val capabilities: Set<String>,
+    /** Hides the chat on this phone; offered only on a row that cannot be closed. */
+    val onHide: (ProjectChatSummary) -> Unit,
 )
 
 /** One row per featured chat of a Projects section, in the order given. */
@@ -4840,6 +4903,7 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
                 ticketRef = id?.let(context.ticketRef),
             )
         }
+    val closable = context.closable(chat)
     Column(Modifier.testTag("projectChatRow-${chat.projectId}-${id.orEmpty()}")) {
         Text(
             chat.projectName,
@@ -4850,9 +4914,10 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
             item = item,
             compactionFrame = context.compactionFrame,
             enabled = true,
-            closeAvailable = context.closable(chat),
+            closeAvailable = closable,
             onClick = { context.onOpen(chat) },
             onClose = { context.onClose(chat, item) },
+            onHide = if (!closable && canHideSession(item, context.capabilities)) ({ context.onHide(chat) }) else null,
             swipe = context.swipe,
             now = nowMillis,
             old = ready && readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),

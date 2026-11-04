@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -14,6 +15,8 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
@@ -31,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -46,6 +50,72 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Date
+
+/**
+ * The list's last row when sessions are hidden on this phone: "N hidden sessions" with a button
+ * that lists them (muted, with Show again) or folds them away. The state is not persisted.
+ */
+@Composable
+internal fun HiddenSessionsFooter(count: Int, shown: Boolean, onToggle: () -> Unit) {
+    val summary = pluralStringResource(R.plurals.remote_sessions_hidden_count, count, count)
+    val action = stringResource(if (shown) R.string.remote_sessions_hide_hidden else R.string.remote_sessions_show_hidden)
+    val state =
+        stringResource(
+            if (shown) R.string.remote_sessions_hidden_state_shown
+            else R.string.remote_sessions_hidden_state_collapsed
+        )
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .semantics {
+                contentDescription = "$summary, $action"
+                stateDescription = state
+            }
+            .clickable(role = Role.Button, onClick = onToggle)
+            .padding(horizontal = 4.dp, vertical = 12.dp)
+            .testTag("hiddenSessionsFooter"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$summary ·",
+            Modifier.weight(1f, fill = false),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            action,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+/** What a swipe on a session row does once the row's own state is taken into account. */
+internal enum class SessionSwipe { CLOSE, RENAME, HIDE, UNHIDE, NONE }
+
+/**
+ * The effect of the stored [action] on a row. Close stands in for Hide on a row the phone cannot
+ * close but can hide, and for Show again on a hidden row; the stored [SwipeAction] stays as it is.
+ */
+internal fun effectiveSessionSwipe(
+    action: SwipeAction,
+    closeAvailable: Boolean,
+    canRename: Boolean,
+    canHide: Boolean,
+    canUnhide: Boolean,
+): SessionSwipe =
+    when (action) {
+        SwipeAction.CLOSE ->
+            when {
+                canUnhide -> SessionSwipe.UNHIDE
+                closeAvailable -> SessionSwipe.CLOSE
+                canHide -> SessionSwipe.HIDE
+                else -> SessionSwipe.NONE
+            }
+        SwipeAction.RENAME -> if (canRename) SessionSwipe.RENAME else SessionSwipe.NONE
+        SwipeAction.NONE -> SessionSwipe.NONE
+    }
 
 @Composable
 internal fun SessionListRow(
@@ -70,14 +140,16 @@ internal fun SessionListRow(
     now: Long? = null,
     /** Marks a ready chat that has been idle for a day or more with an "Old" chip. */
     old: Boolean = false,
+    /** Hides the session on this phone; null where the row offers no Hide (see [canHideSession]). */
+    onHide: (() -> Unit)? = null,
+    /** Shows a hidden session again; null unless the row is listed as hidden. */
+    onUnhide: (() -> Unit)? = null,
+    /** The row is hidden on this phone and listed only because hidden rows are shown. */
+    hidden: Boolean = false,
     compactionFrame: State<Int>? = null,
 ) {
-    fun available(action: SwipeAction): SwipeAction =
-        when (action) {
-            SwipeAction.CLOSE -> if (closeAvailable) action else SwipeAction.NONE
-            SwipeAction.RENAME -> if (onRename != null) action else SwipeAction.NONE
-            SwipeAction.NONE -> SwipeAction.NONE
-        }
+    fun available(action: SwipeAction): SessionSwipe =
+        effectiveSessionSwipe(action, closeAvailable, onRename != null, onHide != null, onUnhide != null && hidden)
     val endToStart = available(swipe.first)
     val regionChild = rememberRegionChild()
     val startToEnd = available(swipe.second)
@@ -107,6 +179,9 @@ internal fun SessionListRow(
     val pinnedLabel = stringResource(R.string.remote_activity_pinned)
     val unreadLabel = stringResource(R.string.remote_activity_unread)
     val oldLabel = stringResource(R.string.remote_session_old)
+    val hiddenLabel = stringResource(R.string.remote_session_hidden_label)
+    val hideLabel = stringResource(R.string.remote_menu_hide)
+    val unhideLabel = stringResource(R.string.remote_menu_unhide)
     // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
     // rename and close stay reachable with swipe actions turned off or a mouse in hand.
     val menuAnchor = rememberMenuAnchor()
@@ -118,6 +193,8 @@ internal fun SessionListRow(
             canPin = onTogglePin != null,
             pinned = item.pinned,
             canMarkRead = onMarkRead != null && item.unread,
+            canHide = onHide != null,
+            hidden = hidden && onUnhide != null,
         ).map { action ->
             MenuItem(action.label, "session_${action.name.lowercase()}") {
                 when (action) {
@@ -127,6 +204,8 @@ internal fun SessionListRow(
                     SessionMenuAction.PIN,
                     SessionMenuAction.UNPIN -> onTogglePin?.invoke()
                     SessionMenuAction.MARK_READ -> onMarkRead?.invoke()
+                    SessionMenuAction.HIDE -> onHide?.invoke()
+                    SessionMenuAction.UNHIDE -> onUnhide?.invoke()
                     SessionMenuAction.CLOSE -> onClose()
                     SessionMenuAction.COPY_ID -> copyId(item.id)
                 }
@@ -142,6 +221,7 @@ internal fun SessionListRow(
             stringResource(R.string.remote_fork_session).takeIf { item.continuesAsCopy },
             // Shown even before the worker's first report, while it is still offline.
             workerLabel.takeIf { item.hostWorker },
+            hiddenLabel.takeIf { hidden },
         )
     val ticketLabel = item.ticketRef?.let { stringResource(R.string.remote_ticket_chip, it) }
     val relativeAge =
@@ -158,6 +238,7 @@ internal fun SessionListRow(
             macTuiLabel.takeIf { item.liveMacTui },
             workerLabel.takeIf { item.hostWorker },
             pinnedLabel.takeIf { item.pinned },
+            hiddenLabel.takeIf { hidden },
             unreadLabel.takeIf { item.unread },
             oldLabel.takeIf { old },
             relativeAge,
@@ -165,19 +246,21 @@ internal fun SessionListRow(
             status,
         ).joinToString(", ")
     SnapBackSwipeBox(
-        enableStartToEnd = startToEnd != SwipeAction.NONE,
-        enableEndToStart = endToStart != SwipeAction.NONE,
+        enableStartToEnd = startToEnd != SessionSwipe.NONE,
+        enableEndToStart = endToStart != SessionSwipe.NONE,
         onSwipe = { direction ->
             val action =
                 when (direction) {
                     SwipeToDismissBoxValue.EndToStart -> endToStart
                     SwipeToDismissBoxValue.StartToEnd -> startToEnd
-                    SwipeToDismissBoxValue.Settled -> SwipeAction.NONE
+                    SwipeToDismissBoxValue.Settled -> SessionSwipe.NONE
                 }
             when (action) {
-                SwipeAction.CLOSE -> onClose()
-                SwipeAction.RENAME -> onRename?.invoke()
-                SwipeAction.NONE -> Unit
+                SessionSwipe.CLOSE -> onClose()
+                SessionSwipe.RENAME -> onRename?.invoke()
+                SessionSwipe.HIDE -> onHide?.invoke()
+                SessionSwipe.UNHIDE -> onUnhide?.invoke()
+                SessionSwipe.NONE -> Unit
             }
         },
         background = { direction ->
@@ -188,7 +271,9 @@ internal fun SessionListRow(
             }
         },
     ) {
-        Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+        Column(
+            Modifier.background(MaterialTheme.colorScheme.background)
+        ) {
             Row(
                 modifier =
                     Modifier.fillMaxWidth()
@@ -213,6 +298,14 @@ internal fun SessionListRow(
                                 })
                                 if (closeAvailable) add(CustomAccessibilityAction(closeLabel) {
                                     onClose()
+                                    true
+                                })
+                                if (onHide != null) add(CustomAccessibilityAction(hideLabel) {
+                                    onHide()
+                                    true
+                                })
+                                if (hidden && onUnhide != null) add(CustomAccessibilityAction(unhideLabel) {
+                                    onUnhide()
                                     true
                                 })
                             }
@@ -287,6 +380,8 @@ internal fun SessionListRow(
                             title,
                             Modifier.weight(1f),
                             style = MaterialTheme.typography.titleMedium,
+                            // The Hidden chip and the row description say it; the muted title is a cue.
+                            color = if (hidden) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -415,9 +510,25 @@ private fun SessionStatusLabel(
 }
 
 @Composable
-private fun SessionSwipeBackground(action: SwipeAction, atEnd: Boolean) {
+private fun SessionSwipeBackground(action: SessionSwipe, atEnd: Boolean) {
     when (action) {
-        SwipeAction.CLOSE ->
+        SessionSwipe.HIDE ->
+            SwipeActionBackground(
+                icon = Icons.Outlined.VisibilityOff,
+                label = stringResource(R.string.remote_swipe_action_hide),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                atEnd = atEnd,
+            )
+        SessionSwipe.UNHIDE ->
+            SwipeActionBackground(
+                icon = Icons.Outlined.Visibility,
+                label = stringResource(R.string.remote_swipe_action_unhide),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                atEnd = atEnd,
+            )
+        SessionSwipe.CLOSE ->
             SwipeActionBackground(
                 icon = Icons.Default.DeleteOutline,
                 label = stringResource(R.string.remote_swipe_action_close),
@@ -425,7 +536,7 @@ private fun SessionSwipeBackground(action: SwipeAction, atEnd: Boolean) {
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
                 atEnd = atEnd,
             )
-        SwipeAction.RENAME ->
+        SessionSwipe.RENAME ->
             SwipeActionBackground(
                 icon = Icons.Default.Edit,
                 label = stringResource(R.string.remote_swipe_action_rename),
@@ -433,7 +544,7 @@ private fun SessionSwipeBackground(action: SwipeAction, atEnd: Boolean) {
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 atEnd = atEnd,
             )
-        SwipeAction.NONE -> Unit
+        SessionSwipe.NONE -> Unit
     }
 }
 
