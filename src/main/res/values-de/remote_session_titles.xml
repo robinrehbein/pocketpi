@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Eine Sitzung, deren erste Nachricht nur ein Anhang war, heißt nach ihm (sessionTitleLabel in SessionList.kt). -->
+    <string name="remote_session_title_image">Bild: %1$s</string>
+    <string name="remote_session_title_file">Datei: %1$s</string>
+    <string name="remote_session_title_attachment">Anhang</string>
+</resources>
