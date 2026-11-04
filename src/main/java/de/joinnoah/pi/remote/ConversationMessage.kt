@@ -102,6 +102,7 @@ internal fun conversationItemWidth(item: ConversationItem): Dp =
         is ConversationItem.Thinking -> if (hasWideContent(item.text)) WIDE_READING_WIDTH else PROSE_READING_WIDTH
         is ConversationItem.Activity -> WIDE_READING_WIDTH
         is ConversationItem.Subagent -> PROSE_READING_WIDTH
+        is ConversationItem.QuestionnaireAnswer -> PROSE_READING_WIDTH
     }
 
 /**
@@ -312,6 +313,7 @@ internal fun ConversationMessage(
     agentActivity: List<ActorRowActivity?>? = null,
     /** Negotiated: the thinking status pulses only in the typed thinking phase; it shows regardless. */
     thinkingMotion: Boolean = true,
+    onJumpToQuestion: ((String) -> Unit)? = null,
 ) {
     // A bubble draws the outline along its own shape; other items get it around their box.
     Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
@@ -336,7 +338,24 @@ internal fun ConversationMessage(
             toolActivity,
             agentActivity,
             thinkingMotion,
+            onJumpToQuestion,
         )
+    }
+}
+
+@Composable
+private fun QuestionnaireOriginalAction(item: ConversationItem.Activity, onOpenTool: ((ConversationItem.Activity) -> Unit)?) {
+    var outputPeek by remember(item.id) { mutableStateOf(false) }
+    if (outputPeek) item.output?.let { output ->
+        ToolOutputPeek(output, item.name, item.arguments) { outputPeek = false }
+    }
+    if (onOpenTool != null || !item.output.isNullOrEmpty()) {
+        TextButton(
+            onClick = { if (onOpenTool != null) onOpenTool(item) else outputPeek = true },
+            modifier = Modifier.testTag("questionnaireOriginalOutput"),
+        ) {
+            Text(stringResource(if (onOpenTool != null) R.string.remote_card_open_tool else R.string.remote_output_peek))
+        }
     }
 }
 
@@ -363,6 +382,7 @@ private fun ConversationMessageContent(
     toolActivity: ToolCardActivity?,
     agentActivity: List<ActorRowActivity?>?,
     thinkingMotion: Boolean,
+    onJumpToQuestion: ((String) -> Unit)?,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -695,7 +715,37 @@ private fun ConversationMessageContent(
                 }
             else if (item.streaming && thinkingActive && !hideThinkingStatus) ThinkingStatus(true, thinkingMotion)
         }
+        is ConversationItem.QuestionnaireAnswer -> {
+            var originalShown by remember(item.id) { mutableStateOf(false) }
+            if (originalShown) ToolOutputPeek(item.rawText, "AskUserQuestion", null) { originalShown = false }
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+                if (item.targetId == null) {
+                    QuestionnaireResultCard(item.presentation, standalone = true)
+                } else {
+                    TextButton(
+                        enabled = onJumpToQuestion != null,
+                        onClick = { onJumpToQuestion?.invoke(item.targetId) },
+                        modifier = Modifier.testTag("questionnaireAnswerMarker-${item.id}"),
+                    ) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(stringResource(R.string.remote_questionnaire_answer_sent))
+                            item.timestamp?.let { MessageTimestamp(it) }
+                        }
+                    }
+                }
+                TextButton(onClick = { originalShown = true }, modifier = Modifier.testTag("questionnaireOriginal-${item.id}")) {
+                    Text(stringResource(R.string.remote_output_peek), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
         is ConversationItem.Activity -> {
+            if (item.questionnaire != null) {
+                Column {
+                    QuestionnaireResultCard(item.questionnaire)
+                    QuestionnaireOriginalAction(item, onOpenTool)
+                }
+                return
+            }
             val planMarkdown = remember(item.name, item.arguments) {
                 if (isPlanTool(item.name))
                     runCatching {

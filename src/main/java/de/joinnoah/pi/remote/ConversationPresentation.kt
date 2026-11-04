@@ -27,6 +27,16 @@ internal sealed interface ConversationItem {
         val interrupted: Boolean = false,
     ) : ConversationItem
 
+    /** A host-identified async answer, either a jump marker or a standalone history fallback. */
+    data class QuestionnaireAnswer(
+        override val id: String,
+        override val sourceId: String,
+        val presentation: QuestionnairePresentation,
+        val targetId: String?,
+        val timestamp: Long?,
+        val rawText: String,
+    ) : ConversationItem
+
     data class Thinking(
         override val id: String,
         override val sourceId: String,
@@ -47,6 +57,7 @@ internal sealed interface ConversationItem {
         val outputMessageId: String? = null,
         val argumentsTruncated: Boolean = false,
         val details: ToolDetails? = null,
+        val questionnaire: QuestionnairePresentation? = null,
     ) : ConversationItem
 
     data class Subagent(
@@ -217,6 +228,7 @@ private fun structuredAgentFields(agent: JsonObject): StructuredAgentFields? {
 
 /** Tools rendered as a subagent card: the retired `subagent` tool and the fork's `Agent` tool. */
 private val SUBAGENT_TOOLS = setOf("subagent", "Agent")
+private val QUESTIONNAIRE_TOOLS = setOf("AskUserQuestion", "questionnaire", "questionnaire_async")
 
 private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
     val progress = message["subagentProgress"] as? JsonObject
@@ -429,6 +441,7 @@ private class MessageLinks(val message: JsonObject) {
         message.parts().filter { it.optionalText("type") == "toolCall" }.map { it.text("id") }
 
     val thinks = message.parts().any { it.optionalText("type") == "thinking" }
+    val questionnaire = questionnairePresentation(message)
 }
 
 /**
@@ -444,12 +457,17 @@ private class MessageContext(
     val paired: Boolean,
     /** The outputs of the message's calls, in the order of [MessageLinks.callIds]. */
     val outputs: List<JsonObject?>,
+    val questionnaireResponses: List<JsonObject?>,
+    val questionnaireTarget: String?,
 ) {
     // Outputs compare by identity: Timeline keeps an unchanged message's instance.
     fun sameAs(other: MessageContext): Boolean =
         last == other.last &&
             pending == other.pending &&
             paired == other.paired &&
+            questionnaireTarget == other.questionnaireTarget &&
+            questionnaireResponses.size == other.questionnaireResponses.size &&
+            questionnaireResponses.indices.all { questionnaireResponses[it] === other.questionnaireResponses[it] } &&
             outputs.size == other.outputs.size &&
             outputs.indices.all { outputs[it] === other.outputs[it] }
 }
@@ -467,6 +485,28 @@ private class ConversationLinks(private val links: List<MessageLinks>, sessionAc
         for (link in links) link.toolCallId?.let { put(it, link.message) }
     }
 
+    private val questionnaireCalls = buildMap<String, String> {
+        for (link in links) for (part in link.message.parts()) {
+            if (part.optionalText("type") == "toolCall" &&
+                part.optionalText("name") in QUESTIONNAIRE_TOOLS)
+                put(part.text("id"), "${link.id}-call-${part.text("id")}")
+        }
+    }
+    private fun matchesQuestionnaireCall(question: QuestionnairePresentation): Boolean {
+        if (question.toolCallId !in questionnaireCalls) return false
+        val output = outputs[question.toolCallId] ?: return true
+        if (output["questionnaire"] == null || output["questionnaire"] == JsonNull) return true
+        val original = questionnairePresentation(output) ?: return false
+        return (original.requestId == null || original.requestId == question.requestId) &&
+            original.questions.map { it.id to it.prompt } == question.questions.map { it.id to it.prompt }
+    }
+    private val questionnaireResponses = buildMap<String, JsonObject> {
+        for (link in links) {
+            val question = link.questionnaire ?: continue
+            if (link.role == "user" && matchesQuestionnaireCall(question)) put(question.toolCallId, link.message)
+        }
+    }
+
     fun context(index: Int): MessageContext {
         val link = links[index]
         return MessageContext(
@@ -474,6 +514,10 @@ private class ConversationLinks(private val links: List<MessageLinks>, sessionAc
             pending = link.callIds.isNotEmpty() && link.id == pendingAssistant,
             paired = link.toolCallId in calls,
             outputs = link.callIds.map { outputs[it] },
+            questionnaireResponses = link.callIds.map { questionnaireResponses[it] },
+            questionnaireTarget = if (link.role == "user") link.questionnaire?.let {
+                if (questionnaireResponses[it.toolCallId] === link.message) questionnaireCalls[it.toolCallId] else null
+            } else null,
         )
     }
 }
@@ -637,6 +681,10 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
     val role = links.role
     val truncated = message["truncated"]?.jsonPrimitive?.booleanOrNull == true
     val timestamp = message.messageTimestamp()
+    if (role == "user" && links.questionnaire != null) {
+        add(ConversationItem.QuestionnaireAnswer(id, id, links.questionnaire, context.questionnaireTarget, timestamp, userMessageBody(message)))
+        return@buildList
+    }
     if (role == "tool") {
         if (context.paired) return@buildList
         if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
@@ -658,6 +706,7 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                 toolCallId = message.safeText("toolCallId"),
                 outputMessageId = id,
                 details = if (messageAuthor(message) == "edit") toolDetails(message) else null,
+                questionnaire = links.questionnaire.takeIf { message.optionalText("toolName") in QUESTIONNAIRE_TOOLS },
             )
         )
         return@buildList
@@ -789,6 +838,11 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                         toolCallId = part.text("id"),
                         outputMessageId = output?.text("id"),
                         argumentsTruncated = parsedToolArguments(arguments) == null,
+                        questionnaire = if (part.text("name") in QUESTIONNAIRE_TOOLS) {
+                            context.questionnaireResponses.getOrNull(links.callIds.indexOf(part.text("id")))
+                                ?.let(::questionnairePresentation)
+                                ?: output?.let(::questionnairePresentation)
+                        } else null,
                         details =
                             output
                                 ?.takeIf { part.text("name") == "edit" }

@@ -192,8 +192,9 @@ memory. Production Timeline retry hardening is a separate proposed follow-up, no
 
 ### Main-branch integration
 
-The branch integrates `main` at `74f23d577b1914e1af5431cc4efe779edea46b8c`. That merge preserves
-main's phone diagnostics and session titles and keeps main's separate Braille compaction indicator
+The branch integrates `main` at `ab90f7891f805ccf64faa48850725163292dafec`. That merge preserves
+main's phone diagnostics, session titles, questionnaire answer cards with jump-to-question, and
+the frosted popup/shadow styling, and keeps main's separate Braille compaction indicator
 alongside typed activity. Validation and review results for the integration are tracked on the PR.
 
 CI checks out the PR head explicitly, not a synthetic merge. When `main` advances beyond the

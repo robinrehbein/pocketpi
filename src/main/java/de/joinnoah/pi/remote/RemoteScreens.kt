@@ -218,6 +218,7 @@ internal fun conversationContentType(item: ConversationItem): String =
         is ConversationItem.Thinking -> "thinking"
         is ConversationItem.Activity -> "activity"
         is ConversationItem.Subagent -> "subagent"
+        is ConversationItem.QuestionnaireAnswer -> "questionnaire-answer"
     }
 
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
@@ -3512,6 +3513,7 @@ internal fun RemoteScreen(
                                         // Negotiated: the typed thinking phase drives only the pulse, never visibility.
                                         thinkingMotion = typedChat == null ||
                                             (typedChat as? TypedActivity.Live)?.snapshot?.phase == ActivityPhase.Thinking,
+                                        onJumpToQuestion = ::jumpTo,
                                         hideThinkingStatus = currentActivity != null,
                                         toolActivity = (item as? ConversationItem.Activity)?.let { tool ->
                                             typedToolCardActivity(typedChat, tool)
