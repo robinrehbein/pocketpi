@@ -9,6 +9,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Assert.assertEquals
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -81,7 +82,7 @@ class FolderBrowserUiTest {
     fun rootOffersNoOpenHereButExplainsWhy() {
         render(loaded("", FolderEntry("Code", git = false, piConfig = false, shared = false, trusted = true)))
         compose.onNodeWithTag("folderOpenHere").assertIsNotEnabled()
-        compose.onNodeWithTag("folderRootHint").assertIsDisplayed()
+        compose.onNodeWithTag("folderRootHint").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("folderNewAction").assertIsEnabled()
         compose.onNodeWithTag("folderRow:Code").performClick()
         assertEquals(listOf("Code"), entered)

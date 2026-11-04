@@ -49,6 +49,7 @@ internal class HomeSurfaces(
     // shortcut once, pinned ones included, instead of trusting the signature of an older version.
     @Volatile private var shortcutsCurrent =
         shortcutPrefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0) == BuildConfig.VERSION_CODE
+    private var publishedLauncher = shortcutPrefs.getString(PUBLISHED_SHORTCUTS_LAUNCHER_KEY, null)
     private var publishedShortcuts: List<String>? =
         shortcutPrefs.getString(PUBLISHED_SHORTCUTS_KEY, null)
             ?.takeIf { shortcutsCurrent }
@@ -68,6 +69,17 @@ internal class HomeSurfaces(
 
     /** The first publish after start always runs, to reconcile shortcuts with the pairings. */
     @Volatile private var reconciled = false
+
+    /** Reassign launcher shortcuts without waiting for a session state change. */
+    fun refreshLauncherShortcuts() {
+        scope.launch {
+            try {
+                update(force = true) { it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {}
+        }
+    }
 
     fun isForgotten(routeId: String): Boolean = routeId in forgotten
     private val mutable = MutableStateFlow(HomeSnapshot())
@@ -264,6 +276,7 @@ internal class HomeSurfaces(
                 val present = snapshot.sessions.map { shortcutId(it.routeId, it.sessionId) }.toSet()
                 val plan = shortcutPlan(chosenIds, existing, present, closed, routes - forgotten)
                 val localized = RemoteNotifications.localized(context)
+                val launcher = AppIconManager(context).selectedComponent()
                 fun info(session: HomeSession, rank: Int) =
                     run {
                         val title = session.title.ifBlank {
@@ -271,6 +284,7 @@ internal class HomeSurfaces(
                         }
                         val id = shortcutId(session.routeId, session.sessionId)
                         ShortcutInfoCompat.Builder(context, id)
+                            .setActivity(launcher)
                             .setShortLabel(title.take(24))
                             .setLongLabel(
                                 if (session.projectName.isBlank()) title.take(48)
@@ -299,7 +313,9 @@ internal class HomeSurfaces(
                     )
                 }
                 // Title changes matter; status changes don't, since it isn't shown.
-                val signature = shortcutSignature(chosen, snapshot)
+                val signature = launcherShortcutSignature(
+                    launcher.flattenToString(), shortcutSignature(chosen, snapshot),
+                )
                 if (signature != publishedShortcuts || plan.enable.isNotEmpty()) {
                     if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)) {
                         publishedShortcuts = signature
@@ -325,9 +341,17 @@ internal class HomeSurfaces(
                 reconciled = true
                 // Last, so a failed pinned update cannot hold up the bookkeeping above. Until it
                 // succeeds the version stays unrecorded and the next publish retries it.
-                if (!shortcutsCurrent && publishedShortcuts == signature && relaunchPinned(chosenIds)) {
+                val launcherName = launcher.flattenToString()
+                if ((!shortcutsCurrent || publishedLauncher != launcherName) &&
+                    publishedShortcuts == signature && relaunchPinned(chosenIds, launcher)
+                ) {
                     shortcutsCurrent = true
-                    shortcutPrefs.edit { putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, BuildConfig.VERSION_CODE) }
+                    publishedLauncher = launcherName
+                    // One editor persists both markers atomically; a failed update retries next publish.
+                    shortcutPrefs.edit {
+                        putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, BuildConfig.VERSION_CODE)
+                        putString(PUBLISHED_SHORTCUTS_LAUNCHER_KEY, launcherName)
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -342,7 +366,7 @@ internal class HomeSurfaces(
      * updateShortcuts reaches it; disabled ones are included, in case their session comes back.
      * The update keeps each shortcut's icon and long label, which are left unset here.
      */
-    private fun relaunchPinned(republished: List<String>): Boolean =
+    private fun relaunchPinned(republished: List<String>, launcher: android.content.ComponentName): Boolean =
         try {
             val updates =
                 ShortcutManagerCompat.getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_PINNED)
@@ -350,6 +374,7 @@ internal class HomeSurfaces(
                     .mapNotNull { pinned ->
                         val (route, session) = shortcutTarget(pinned.id) ?: return@mapNotNull null
                         ShortcutInfoCompat.Builder(context, pinned.id)
+                            .setActivity(launcher)
                             .setShortLabel(pinned.shortLabel)
                             .setIntent(LaunchIntents.session(context, route, session))
                             .build()
@@ -360,6 +385,9 @@ internal class HomeSurfaces(
             false
         }
 }
+
+internal fun launcherShortcutSignature(launcher: String, sessions: List<String>): List<String> =
+    listOf(launcher) + sessions
 
 /** The longest the widget and the shortcuts trail the app's state, also while pi streams. */
 internal const val HOME_UPDATE_INTERVAL_MS = 750L
@@ -421,3 +449,4 @@ internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
 internal const val PUBLISHED_SHORTCUTS_KEY = "signature"
 /** The versionCode whose launch intents all shortcuts carry. */
 internal const val PUBLISHED_SHORTCUTS_VERSION_KEY = "version"
+internal const val PUBLISHED_SHORTCUTS_LAUNCHER_KEY = "launcher"

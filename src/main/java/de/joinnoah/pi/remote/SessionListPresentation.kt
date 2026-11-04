@@ -40,6 +40,8 @@ internal data class SessionListItem(
     val ticketRef: String? = null,
     /** A pi the host runs in a terminal of its own (see [isHostWorker]); it may be offline until it reports. */
     val hostWorker: Boolean = false,
+    /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 data class ProjectChatSummary(
@@ -281,14 +283,16 @@ internal fun sessionListItem(
                 "waiting" -> SessionAvailability.WAITING
                 else -> SessionAvailability.OFFLINE
             }
+    val display = displayTitle(session.text("title"))
     return SessionListItem(
         id = session.text("id"),
-        title = session.text("title"),
+        title = display.text,
+        titleAttachment = display.attachment,
         parentSessionId = session.optionalText("parentSessionId")?.takeIf { it.isNotBlank() },
         depth = 0,
         hasChildren = false,
         availability = availability,
-        preview = session.optionalText("preview")?.takeIf { it.isNotBlank() },
+        preview = session.optionalText("preview")?.let { displayTitle(it).text }?.takeIf { it.isNotBlank() },
         updatedAt = session["updatedAt"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 },
         continuesAsCopy = session.text("origin") == "history",
         daemonOwned = session.text("origin") == "rpc",

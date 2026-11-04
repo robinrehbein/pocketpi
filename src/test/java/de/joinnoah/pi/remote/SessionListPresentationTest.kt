@@ -786,4 +786,39 @@ class SessionListPresentationTest {
         assertFalse(closableProjectChat(state.copy(selection = RemoteSelection("host", "p2")), "p2", "idle"))
         assertFalse(closableProjectChat(state.copy(selection = RemoteSelection("host", "p1")), "p2", "idle"))
     }
+
+    @Test
+    fun sessionListItemShowsATitleWithoutTheAttachmentMarker() {
+        val session =
+            Wire.objectOf(
+                "id" to "s",
+                "title" to "[PocketPi attachments v1]\n[{\"name\":\"a.png\",\"kind\":\"image\",\"mim",
+                "origin" to "rpc",
+                "status" to "idle",
+            )
+        val item = sessionListItem(session, connected = true, loading = false, confirmed = true)
+        assertEquals("", item.title)
+        assertEquals(TitleAttachment("a.png", true), item.titleAttachment)
+    }
+
+    @Test
+    fun sessionListItemCleansThePreview() {
+        val quoted = "[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"x\"}\n[/PocketPi quote]\n\nWhy?"
+        val item =
+            sessionListItem(
+                Wire.objectOf("id" to "s", "title" to "T", "origin" to "rpc", "status" to "idle", "preview" to quoted),
+                connected = true,
+                loading = false,
+                confirmed = true,
+            )
+        assertEquals("Why?", item.preview)
+        val onlyMarker =
+            sessionListItem(
+                Wire.objectOf("id" to "s", "title" to "T", "origin" to "rpc", "status" to "idle", "preview" to "[PocketPi quote v1]\n{"),
+                connected = true,
+                loading = false,
+                confirmed = true,
+            )
+        assertNull(onlyMarker.preview)
+    }
 }

@@ -2,6 +2,8 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -51,11 +53,55 @@ internal fun compactChrome(phone: Boolean, imeVisible: Boolean, height: Dp): Boo
 
 @Composable
 private fun LoadingControlPill(width: Dp) {
-    Surface(
+    FloatingSurface(
         modifier = Modifier.width(width).height(32.dp),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {}
+        blur = false,
+    ) {
+        Box(Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+internal fun ComposerControlPill(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    leadingIcon: @Composable () -> Unit,
+    label: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        .copy(alpha = if (enabled) 1f else 0.38f)
+    Box(
+        modifier = modifier.heightIn(min = 48.dp)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        FloatingSurface(shape = CircleShape, blur = false, contentColor = contentColor) {
+            CompositionLocalProvider(LocalContentColor provides contentColor) {
+                ProvideTextStyle(MaterialTheme.typography.labelLarge) {
+                    Row(
+                        // Keep the state layer inside the glass shape, not the larger touch target.
+                        modifier = Modifier.defaultMinSize(minHeight = 32.dp)
+                            .indication(interactionSource, ripple(bounded = false))
+                            .padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        leadingIcon()
+                        Box { label() }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -176,13 +222,6 @@ internal fun SessionControls(
             onSettingsSheetRequestHandled()
         }
     }
-    val configurationChipColors =
-        AssistChipDefaults.assistChipColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-        )
     LaunchedEffect(slash != null, state.selection) { if (slash != null) refreshCommands() }
     LaunchedEffect(
         state.selection,
@@ -234,15 +273,12 @@ internal fun SessionControls(
                 LoadingControlPill(160.dp)
                 LoadingControlPill(96.dp)
             } else if (available) {
-                AssistChip(
+                ComposerControlPill(
                     onClick = {
                         picker = "model"
                         refreshConfiguration()
                     },
                     enabled = state.connected && !state.configurationChanging,
-                    shape = CircleShape,
-                    colors = configurationChipColors,
-                    border = null,
                     leadingIcon = {
                         ConfigurationChipIcon(Icons.Outlined.AutoAwesome, state.configurationChanging)
                     },
@@ -259,15 +295,12 @@ internal fun SessionControls(
                     val thinkingLabel = thinkingLevelLabel(thinking.thinkingLevel)
                     val thinkingContentDescription =
                         stringResource(R.string.remote_thinking_level, thinkingLabel)
-                    AssistChip(
+                    ComposerControlPill(
                         onClick = {
                             picker = "thinking"
                             refreshConfiguration()
                         },
                         enabled = state.connected && !state.configurationChanging,
-                        shape = CircleShape,
-                        colors = configurationChipColors,
-                        border = null,
                         modifier =
                             Modifier.semantics { contentDescription = thinkingContentDescription },
                         leadingIcon = {
@@ -280,14 +313,11 @@ internal fun SessionControls(
                 }
             }
             if (loadingContext) LoadingControlPill(80.dp)
-            else AssistChip(
+            else ComposerControlPill(
                 onClick = {
                     showContext = true
                     refreshContextUsage()
                 },
-                shape = CircleShape,
-                colors = configurationChipColors,
-                border = null,
                 modifier = Modifier.semantics { contentDescription = contextDescription },
                 leadingIcon = {
                     Box(Modifier.size(AssistChipDefaults.IconSize), contentAlignment = Alignment.Center) {
@@ -305,7 +335,7 @@ internal fun SessionControls(
             )
             if (loadingAdvisor) LoadingControlPill(140.dp)
             else {
-                AssistChip(
+                ComposerControlPill(
                     onClick = {
                         advisorChoice = sessionAdvisor?.choices?.firstOrNull { choice ->
                             sessionAdvisor.model == "${choice.provider}/${choice.id}"
@@ -321,9 +351,6 @@ internal fun SessionControls(
                     },
                     // Keep the entry actionable even when unsupported: the sheet explains why.
                     enabled = true,
-                    shape = CircleShape,
-                    colors = configurationChipColors,
-                    border = null,
                     leadingIcon = {
                         Icon(Icons.Outlined.SupportAgent, contentDescription = null,
                             modifier = Modifier.size(AssistChipDefaults.IconSize))
@@ -466,7 +493,7 @@ internal fun SessionControls(
                 )
         }
     }
-    val sessionTitle = state.session?.optionalText("title")?.takeIf(String::isNotBlank)
+    val sessionTitle = state.session?.optionalText("title")?.let { displayTitle(it).text }?.takeIf(String::isNotBlank)
     val projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank)
     val confirmedModel = confirmed?.model
     val sessionInfo =

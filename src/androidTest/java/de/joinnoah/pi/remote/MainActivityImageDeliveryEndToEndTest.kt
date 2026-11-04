@@ -185,7 +185,7 @@ class MainActivityImageDeliveryEndToEndTest {
         }
         val key = DraftKey(route, session)
         val prompt = fixture.getJSONObject("nativeLifecycle").getString("prompt")
-        var scenario: ActivityScenario<MainActivity>? = null
+        var scenario: ActivityScenario<RemoteActivity>? = null
         try {
             scenario = ActivityScenario.launch(LaunchIntents.session(app, route, session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             waitFor("connected session") { val s = repository.state.value; s.selection == RemoteSelection(route, project, session) && s.connected && !s.loading && exists("composerField") }
