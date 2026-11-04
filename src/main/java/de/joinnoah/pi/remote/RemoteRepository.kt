@@ -237,6 +237,8 @@ data class RemoteState(
     /** The latest extension notice of the selected session, until the chat has shown it. */
     val notice: SessionNotice? = null,
     val compaction: SessionCompaction? = null,
+    /** Live host-reported activity for all sessions, including chats not currently open. */
+    val sessionCompactions: Map<String, SessionCompaction> = emptyMap(),
     /** The host's suggested next prompt for the selected session; untrusted plain text. */
     val suggestion: String? = null,
     /** The open pull request of the selected session's branch; null when there is none. */

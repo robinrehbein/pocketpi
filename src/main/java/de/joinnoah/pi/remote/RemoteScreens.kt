@@ -305,8 +305,22 @@ internal fun RemoteScreen(
     val routeMarks = remember(sessionMarkMap, state.host?.routeId) { sessionMarksById(sessionMarkMap, state.host?.routeId) }
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
+    val hasCompactionList = key is RemoteNavKey.Sessions || (key is RemoteNavKey.Projects && !projectSelected)
+    // Expiry is independent of animation settings, including reduced motion.
+    val sessionCompactionNow by produceState(
+        System.currentTimeMillis(), state.sessionCompactions, hasCompactionList,
+    ) {
+        value = System.currentTimeMillis()
+        while (hasCompactionList) {
+            val nextExpiry = state.sessionCompactions.values
+                .filter { compactionVisible(it, value) }
+                .minOfOrNull { it.startedAtMillis + COMPACTION_VISIBLE_MILLIS } ?: break
+            delay((nextExpiry - value).coerceAtLeast(1L))
+            value = System.currentTimeMillis()
+        }
+    }
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities) {
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities, state.sessionCompactions, sessionCompactionNow) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -318,6 +332,8 @@ internal fun RemoteScreen(
                 marks = routeMarks,
                 openSessionId = shownSessionId,
                 ticketRef = { ticketRefForSession(state, it) },
+                compactions = state.sessionCompactions,
+                nowMillis = sessionCompactionNow,
             )
         }
     val listedSessions =
@@ -1538,6 +1554,19 @@ internal fun RemoteScreen(
     // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
     var runningShowAll by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
+    val projectQuickChats = quickChats(
+        if (key is RemoteNavKey.Projects && !projectSelected) mainSessionChats(state.projectChats) else emptyList(),
+        state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
+    )
+    val compactionFrame = rememberBrailleSpinnerFrame(
+        (key is RemoteNavKey.Sessions && listedSessions.any { it.compacting }) ||
+            (projectQuickChats.waiting + projectQuickChats.running + projectQuickChats.recent).any { chat ->
+                sessionListItem(
+                    chat.session, state.connected && chat.verified, loading = false, confirmed = chat.verified,
+                    compaction = state.sessionCompactions[chat.session.text("id")], nowMillis = sessionCompactionNow,
+                ).compacting
+            }
+    )
     // The home accept sheet: the project id and ref of the ticket it is about.
     var acceptTarget by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
     val title =
@@ -3119,14 +3148,7 @@ internal fun RemoteScreen(
                             // project the chats hide, as before.
                             // Every waiting chat leads, since the heading promises all of them; running and recent
                             // chats are capped at three each until their "Show all" (see quickChats).
-                            val quick =
-                                quickChats(
-                                    // Main sessions only: a busy subagent shows as the session it works for.
-                                    if (projectSelected) emptyList() else mainSessionChats(state.projectChats),
-                                    state.connected,
-                                    showRunningAll = runningShowAll,
-                                    showRecentAll = recentShowAll,
-                                )
+                            val quick = projectQuickChats
                             val waitingChats = quick.waiting
                             val runningChats = quick.running
                             val recentChats = quick.recent
@@ -3163,7 +3185,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
-                                projectChatRows(waitingChats, routeMarks, state.connected, homeTicketRef) { chat ->
+                                projectChatRows(waitingChats, routeMarks, state.connected, homeTicketRef, state.sessionCompactions, sessionCompactionNow, compactionFrame) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                             }
@@ -3171,7 +3193,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_running_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_working))
                                 }
-                                projectChatRows(runningChats, routeMarks, state.connected, homeTicketRef) { chat ->
+                                projectChatRows(runningChats, routeMarks, state.connected, homeTicketRef, state.sessionCompactions, sessionCompactionNow, compactionFrame) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 // Directly under the group it expands, so it is not far down the page.
@@ -3241,7 +3263,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                projectChatRows(recentChats, routeMarks, state.connected, homeTicketRef) { chat ->
+                                projectChatRows(recentChats, routeMarks, state.connected, homeTicketRef, state.sessionCompactions, sessionCompactionNow, compactionFrame) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
@@ -3325,6 +3347,7 @@ internal fun RemoteScreen(
                                 Box(Modifier.itemMotion(this).testTag("sessionRow-${session.id}")) {
                                     SessionListRow(
                                         item = session,
+                                        compactionFrame = compactionFrame,
                                         selected = session.id == listPane?.selectedSessionId,
                                         onTogglePin = {
                                             sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
@@ -4652,11 +4675,17 @@ private fun LazyListScope.projectChatRows(
     marks: Map<String, SessionMark>,
     connected: Boolean,
     ticketRef: (String) -> String?,
+    compactions: Map<String, SessionCompaction>,
+    nowMillis: Long,
+    compactionFrame: State<Int>,
     onOpen: (ProjectChatSummary) -> Unit,
 ) {
     items(chats, key = { "chat:${it.projectId}:${it.session.text("id")}" }) { chat ->
         ProjectChatRow(
             chat = chat,
+            compaction = compactions[chat.session.text("id")],
+            nowMillis = nowMillis,
+            compactionFrame = compactionFrame,
             connected = connected,
             mark = chat.session.optionalText("id")?.let(marks::get),
             ticketRef = chat.session.optionalText("id")?.let(ticketRef),
@@ -4668,6 +4697,9 @@ private fun LazyListScope.projectChatRows(
 @Composable
 private fun ProjectChatRow(
     chat: ProjectChatSummary,
+    compaction: SessionCompaction?,
+    nowMillis: Long,
+    compactionFrame: State<Int>,
     connected: Boolean,
     mark: SessionMark?,
     ticketRef: String?,
@@ -4681,13 +4713,17 @@ private fun ProjectChatRow(
         )
         SessionListRow(
             item =
-                sessionListItem(chat.session, connected && chat.verified, loading = false, confirmed = chat.verified).let {
+                sessionListItem(
+                    chat.session, connected && chat.verified, loading = false, confirmed = chat.verified,
+                    compaction = compaction, nowMillis = nowMillis,
+                ).let {
                     it.copy(
                         pinned = mark?.pinned == true,
                         unread = sessionUnread(mark, it.updatedAt, open = false),
                         ticketRef = ticketRef,
                     )
                 },
+            compactionFrame = compactionFrame,
             enabled = true,
             closeAvailable = false,
             onClick = onClick,

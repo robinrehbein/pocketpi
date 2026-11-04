@@ -154,6 +154,35 @@ class SessionListPresentationTest {
     }
 
     @Test
+    fun compactionIsAnActivityWithOfflineWaitingAndTimeoutTakingPrecedence() {
+        val compaction = SessionCompaction("manual", 100)
+        for (status in listOf("idle", "running", "waiting", "offline")) {
+            val session = Wire.objectOf("id" to "s", "title" to "Session", "origin" to "rpc", "status" to status)
+            assertEquals(status in setOf("idle", "running"),
+                sessionListItem(session, true, false, confirmed = true, compaction = compaction, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, false, false, confirmed = false, compaction = compaction, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, true, false, confirmed = true, compaction = compaction, nowMillis = 600100).compacting)
+            assertFalse(sessionListItem(session, true, false, confirmed = true, compaction = null, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, true, false, confirmed = false, compaction = compaction, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, true, true, confirmed = true, compaction = compaction, nowMillis = 200).compacting)
+        }
+    }
+
+    @Test
+    fun compactionDoesNotChangeWaitingFirstOrParentChildOrder() {
+        val sessions = listOf(
+            Wire.objectOf("id" to "parent", "title" to "Parent", "origin" to "rpc", "status" to "idle"),
+            Wire.objectOf("id" to "child", "title" to "Child", "origin" to "rpc", "parentSessionId" to "parent", "status" to "running"),
+            Wire.objectOf("id" to "waiting", "title" to "Waiting", "origin" to "rpc", "status" to "waiting"),
+        )
+        val items = visibleSessionListItems(sessions, true, false, false, confirmed = true,
+            compactions = mapOf("child" to SessionCompaction("threshold", 100)), nowMillis = 200)
+        assertEquals(listOf("waiting", "parent", "child"), items.map { it.id })
+        assertTrue(items.last().compacting)
+        assertEquals(1, items.last().depth)
+    }
+
+    @Test
     fun disconnectionOverridesAvailabilityButLoadingDoesNot() {
         for ((status, availability) in
             listOf(
