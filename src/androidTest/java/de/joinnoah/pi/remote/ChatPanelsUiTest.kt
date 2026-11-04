@@ -212,9 +212,9 @@ class ChatPanelsUiTest {
         compose.onAllNodesWithTag("contextOfferDismiss")[1].assertHeightIsAtLeast(48.dp).performClick()
         val text = compose.onAllNodesWithTag("contextOfferText")[0]
             .assert(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Heading))
-        compose.runOnIdle {
-            text.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single().action()
-        }
+        // Fetch the node off the main thread; only the action itself runs on it.
+        val notNow = text.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single()
+        compose.runOnIdle { notNow.action() }
         compose.runOnIdle {
             assertEquals(1, compacts)
             assertEquals(2, dismissals)
