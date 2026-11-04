@@ -25,8 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -160,7 +160,7 @@ private fun HostStatsSection(loadStats: suspend () -> HostStats) {
 @Composable
 private fun HostStatsBody(stats: HostStats) {
     val context = LocalContext.current
-    val locale = LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+    val locale = LocalLocale.current.platformLocale
     // Disks are sold and shown in powers of 1000, memory in powers of 1024 ("16 GB" for 2^34 bytes).
     fun size(bytes: Long) = Formatter.formatShortFileSize(context, bytes)
     fun memory(bytes: Long) = context.getString(R.string.remote_host_stats_gib, formatNumber(bytes / GIB, 1, locale))
