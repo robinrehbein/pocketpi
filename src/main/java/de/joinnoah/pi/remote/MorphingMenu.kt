@@ -126,6 +126,8 @@ internal fun MorphingMenu(
     val transition = rememberTransition(state.visibility, label = "morphMenu")
     val progress by transition.animateFloat(transitionSpec = { tween(240) }, label = "surface") { if (it) 1f else 0f }
     val visible = state.expanded || state.visibility.currentState || !state.visibility.isIdle
+    // Capture the Activity before entering the popup, retaining the copy through collapse.
+    val backdrop = rememberAppBackdrop(enabled = visible)
     if (!visible) {
         SideEffect { state.placed = false }
         return
@@ -161,10 +163,12 @@ internal fun MorphingMenu(
             val closedHeight = anchor.height.roundToInt().coerceAtLeast(1)
             val radius = with(density) { (closedHeight / 2f).toDp() } * (1f - progress) + 20.dp * progress
             Layout(content = {
-                FloatingSurface(
+                FrostedPopupSurface(
+                    backdrop = backdrop,
                     modifier = modifier.onGloballyPositioned { state.placed = true }
                         .pointerInput(Unit) { detectTapGestures {} },
-                    shape = RoundedCornerShape(radius), color = color, blur = false,
+                    shape = RoundedCornerShape(radius), color = color,
+                    shadowElevation = if (down) 8.dp else 8.dp * progress,
                 ) {
                     Layout(content = {
                         Box(Modifier.fillMaxWidth(), contentAlignment = if (down) Alignment.TopEnd else Alignment.BottomStart) { controls() }

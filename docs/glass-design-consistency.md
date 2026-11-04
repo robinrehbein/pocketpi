@@ -6,6 +6,10 @@ shape scale or navigation model.
 ## Surface roles
 
 - Floating controls and menus use the existing glass tint, subtle rim and theme shapes.
+  Floating surfaces normally keep their 8dp shadow. Nested composer controls (including the closed
+  attachment button and loading placeholders) use the rim without a shadow: the composer's own
+  elevation provides depth, and its vertically scrolling extras would clip child shadows. This
+  exception preserves control targets, composer height and IME geometry at enlarged font scales.
 - Bottom sheets and popup surfaces may display a blurred snapshot of the parent app on supported
   Android versions. A snapshot is a still image, not live blur: streaming content behind an open
   popup is not continuously captured. Unsupported devices and failed captures must remain readable.
