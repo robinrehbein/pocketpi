@@ -889,4 +889,9 @@
     <string name="remote_render_capture">Capture chat layout report</string>
     <string name="remote_render_snapshot_help">This report contains recent layout positions, device information and diagnostic options. It contains no message text, IDs or screenshots. Share it together with your separately taken screenshot. Opening this sheet or changing diagnostic options may redraw the chat.</string>
     <string name="remote_render_share">Share layout report</string>
+    <string name="remote_pill_sizes">Pill sizes</string>
+    <string name="remote_composer_pill_size">Composer controls</string>
+    <string name="remote_insight_pill_size">Insights above the composer</string>
+    <string name="remote_pill_small">Small</string>
+    <string name="remote_pill_large">Large</string>
 </resources>

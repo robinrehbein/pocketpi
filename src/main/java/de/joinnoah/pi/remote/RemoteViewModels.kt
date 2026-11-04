@@ -736,6 +736,10 @@ internal class SettingsViewModel(
 
     fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
 
+    fun setComposerPillSize(size: PillSize) = settings.setComposerPillSize(size)
+
+    fun setInsightPillSize(size: PillSize) = settings.setInsightPillSize(size)
+
     fun setThinkingDisplay(display: ThinkingDisplay) = settings.setThinkingDisplay(display)
 
     fun setSwipeEndToStart(action: SwipeAction) = settings.setSwipeEndToStart(action)

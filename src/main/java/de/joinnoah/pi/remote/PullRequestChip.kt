@@ -145,21 +145,12 @@ internal fun PullRequestChip(pr: PullRequestStatus, onClick: (() -> Unit)?) {
     val text = pullRequestChipText(model, resources)
     val description = pullRequestChipDescription(model, resources)
     val openLabel = if (onClick != null) stringResource(R.string.remote_pr_open_changes) else null
-    FloatingSurface(shape = CircleShape) {
-        Row(
+    InsightPillRow(
             Modifier.testTag("pullRequestChip")
-                .let {
-                    if (onClick != null) it.clickable(role = Role.Button, onClickLabel = openLabel, onClick = onClick)
-                    else it
-                }
-                .semantics(mergeDescendants = true) { contentDescription = description }
-                .minimumInteractiveComponentSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+                .semantics(mergeDescendants = true) { contentDescription = description },
+        onClick = onClick, onClickLabel = openLabel,
+    ) {
             Box(Modifier.size(10.dp).background(pullRequestToneColor(model.tone), CircleShape))
             Text(text, style = MaterialTheme.typography.labelLarge)
-        }
     }
 }
