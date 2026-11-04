@@ -69,6 +69,7 @@ internal class PaneAction(
 
 /** Room the title keeps before the header's [PaneAction]s move into the "more" menu. */
 private val PANE_TITLE_MIN_ROOM = 120.dp
+private val PANE_PILL_GAP = 12.dp
 
 /**
  * Wrap the title's content, reserving room for the separate refresh pill even on narrow panes.
@@ -95,14 +96,17 @@ internal fun PaneHeader(
     leaveEnabled: Boolean = true,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        val reloadWidth = if (onReload == null) 0.dp else 60.dp
-        val reserved = 56.dp + 28.dp + reloadWidth + if (nested) 48.dp else 0.dp
+        val hasTrailingPill = onReload != null || actions.isNotEmpty()
+        val reloadWidth = if (onReload == null) 0.dp else 48.dp
+        // Leading padding, back/close button, title gap and trailing padding: 8 + 48 + 12 + 20.
+        val reserved = 88.dp + reloadWidth + (if (nested) 48.dp else 0.dp) +
+            (if (hasTrailingPill) PANE_PILL_GAP else 0.dp)
         // Every action as a button of its own, or all of them behind one "more" button.
         val inline = actions.isNotEmpty() && maxWidth - reserved - 48.dp * actions.size >= PANE_TITLE_MIN_ROOM
         val actionsWidth = if (actions.isEmpty()) 0.dp else 48.dp * (if (inline) actions.size else 1)
         val textWidth = (maxWidth - reserved - actionsWidth).coerceAtLeast(0.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            FloatingSurface(Modifier.testTag("${tag}HeaderPill"), shape = CircleShape) {
+            FloatingSurface(Modifier.weight(1f, fill = false).testTag("${tag}HeaderPill"), shape = CircleShape) {
                 Row(Modifier.padding(start = 8.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                     // Esc runs the same step as this button (see PaneBackHandler).
                     ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE) {
@@ -131,7 +135,8 @@ internal fun PaneHeader(
                         }
                 }
             }
-            if (onReload != null || actions.isNotEmpty())
+            if (hasTrailingPill) Spacer(Modifier.width(PANE_PILL_GAP))
+            if (hasTrailingPill)
             FloatingSurface(Modifier.testTag("${tag}ReloadPill"), shape = CircleShape) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (inline) actions.forEach { InlineAction(it) }
