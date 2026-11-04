@@ -50,10 +50,16 @@ internal fun chatHeaderState(state: RemoteState): RemoteState =
 internal fun chatStatusLive(
     state: RemoteState,
     destination: RemoteSelection?,
-    now: Long = android.os.SystemClock.elapsedRealtime(),
-): Boolean = chatStatusPhase(state, destination, now) != null ||
-    (state.executionActivity.negotiated.not() &&
-        chatStatusShape(state) == ChatStatusShape.RUNNING && sessionActivityAllowed(state, destination))
+    /**
+     * Monotonic now ([rememberActivityNow]). Without it a negotiated connection never animates (no
+     * freshness can be read) and never falls back to the legacy rule; a legacy one is unaffected.
+     */
+    now: Long? = null,
+): Boolean = if (state.executionActivity.negotiated) {
+    now != null && chatStatusPhase(state, destination, now) != null
+} else {
+    chatStatusShape(state) == ChatStatusShape.RUNNING && sessionActivityAllowed(state, destination)
+}
 
 /**
  * The typed phase the header's RUNNING mark animates in, on a connection that negotiated

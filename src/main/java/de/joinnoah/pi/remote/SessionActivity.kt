@@ -92,10 +92,19 @@ internal fun sessionActivityLine(
     state: RemoteState,
     items: List<ConversationItem>,
     destination: RemoteSelection?,
-    /** Monotonic now ([rememberActivityNow]); freshness of a negotiated connection is read at it. */
-    now: Long = android.os.SystemClock.elapsedRealtime(),
+    /**
+     * Monotonic now ([rememberActivityNow]); freshness of a negotiated connection is read at it.
+     * Without it a negotiated connection reads as static (never animates, never the legacy path).
+     */
+    now: Long? = null,
 ): SessionActivityLine? {
-    val typed = typedSessionActivity(state, destination?.sessionId, now)
+    val typed = if (now != null) {
+        typedSessionActivity(state, destination?.sessionId, now)
+    } else if (state.executionActivity.negotiated) {
+        TypedActivity.Static
+    } else {
+        null
+    }
     if (typed != null) return typedActivityLine(state, destination, typed)
     if (!sessionActivityAllowed(state, destination)) return null
     val task = state.tasks.items.firstOrNull { it.status == TaskStatus.IN_PROGRESS }

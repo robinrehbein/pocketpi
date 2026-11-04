@@ -57,6 +57,25 @@ class ExecutionActivityPresentationTest {
     private val before = 10_999L
     private val after = 11_000L
 
+    @Test fun legacyCallsWithoutNowNeedNoAndroidClock() {
+        // Plain JVM: no android.os.SystemClock is reachable; the legacy path must not touch it.
+        val items = listOf(ConversationItem.Activity("a", "a", "read", "{\"path\":\"x\"}", null, "streaming", false))
+        assertTrue(chatStatusLive(state(negotiated = false), destination))
+        assertNotNull(sessionActivityLine(state(negotiated = false), items, destination))
+    }
+
+    @Test fun negotiatedFreshSnapshotWithoutNowNeverAnimates() {
+        val s = state(active(ActivityPhase.Writing))
+        val items = listOf(ConversationItem.Activity("a", "a", "read", "{\"path\":\"x\"}", null, "streaming", false))
+        assertFalse(chatStatusLive(s, destination))
+        val line = sessionActivityLine(s, items, destination)!!
+        assertFalse(line.animate)
+        assertEquals(R.string.remote_chat_activity_working, line.labelRes)
+        // With an explicit fresh monotonic now the same state animates.
+        assertTrue(chatStatusLive(s, destination, before))
+        assertTrue(sessionActivityLine(s, items, destination, before)!!.animate)
+    }
+
     @Test fun legacyConnectionKeepsTheLegacyLine() {
         val items = listOf(ConversationItem.Activity("a", "a", "read", "{\"path\":\"x\"}", null, "streaming", false))
         val line = sessionActivityLine(state(negotiated = false), items, destination, before)!!

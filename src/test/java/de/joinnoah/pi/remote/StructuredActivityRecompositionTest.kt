@@ -53,7 +53,7 @@ class StructuredActivityRecompositionTest {
         compose.mainClock.advanceTimeBy(300)
         val baseline = repository.state.value
         val blocked: List<(RemoteState) -> RemoteState> = listOf(
-            { it.copy(questions = listOf(Wire.objectOf("id" to "q1", "kind" to "confirm", "title" to "Continue?"))) },
+            { it.copy(questions = listOf(Wire.objectOf("id" to "q1", "kind" to "confirm", "title" to "Continue?", "message" to "Continue?"))) },
             { it.copy(status = "waiting") },
             { it.copy(stale = true) },
             { it.copy(preview = true) },
@@ -61,7 +61,7 @@ class StructuredActivityRecompositionTest {
         for (closeGate in blocked) {
             compose.runOnIdle { repository.state.value = baseline }
             compose.mainClock.advanceTimeBy(100)
-            compose.onNodeWithTag("toolGlyph").assertExists()
+            compose.onNodeWithTag("toolGlyph", useUnmergedTree = true).assertExists()
             compose.runOnIdle {
                 repository.state.value = closeGate(baseline)
                 assertSame(ledger, repository.state.value.executionActivity)
@@ -70,7 +70,8 @@ class StructuredActivityRecompositionTest {
             // The card stays visible: only its motion changes. This exercises RemoteScreen's
             // actual typedChat evaluation, not a second miniature implementation of its logic.
             compose.onNodeWithTag("toolCard").assertExists()
-            compose.onNodeWithTag("toolGlyphStatic").assertExists()
+            compose.onNodeWithTag("toolGlyphStatic", useUnmergedTree = true).assertExists()
+            compose.onNodeWithTag("toolGlyph", useUnmergedTree = true).assertDoesNotExist()
         }
     }
 }
