@@ -350,7 +350,7 @@ internal class SessionsViewModel(
 
     fun setHideOfflineSessions(hide: Boolean) = settings.setHideOfflineSessions(hide)
 
-    fun close(sessionId: String) = repository.closeSession(sessionId)
+    fun close(sessionId: String) = repository.closeSession(sessionId, allowTerminal = true)
 }
 
 internal class ChatViewModel(
@@ -510,7 +510,7 @@ internal class ChatViewModel(
     }
 
     /** Closes this chat's session on the Mac, as a session row's Close does. */
-    fun closeSession(sessionId: String) = active { repository.closeSession(sessionId) }
+    fun closeSession(sessionId: String) = active { repository.closeSession(sessionId, allowTerminal = true) }
 
     /** [exclusive] false keeps the files open beside the changes ([RemoteRepository.openChanges]). */
     fun openChanges(exclusive: Boolean = true) = active { repository.openChanges(exclusive) }

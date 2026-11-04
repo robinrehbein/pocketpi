@@ -26,6 +26,7 @@ enum class ExtensionControl {
     FOLLOW_UP,
     STEER,
     RELOAD,
+    CLOSE,
 }
 
 /** Set on a list row the host listed as `worker`; the app keeps such a row as `tui`. */
@@ -62,6 +63,32 @@ internal fun hostOwned(state: RemoteState, session: JsonObject? = state.session)
     session != null &&
         (session.optionalText("origin") == "rpc" ||
             (isHostWorker(session) && hostWorkerV2(state.capabilities, state.unavailableCapabilities)))
+
+/**
+ * A terminal session started by hand on the Mac (not a host worker, not a subagent) that the host can
+ * close through its pi Remote extension. The app cannot know which extension that pi runs, so this is
+ * optimistic until the host answers `unsupported` ([ExtensionControl.CLOSE]).
+ */
+internal fun terminalClosable(state: RemoteState, session: JsonObject? = state.session): Boolean =
+    session != null &&
+        session.optionalText("origin") == "tui" &&
+        !isHostWorker(session) &&
+        session.optionalText("parentSessionId").isNullOrBlank() &&
+        SESSION_CLOSE_TERMINAL_CAPABILITY in state.capabilities &&
+        SESSION_CLOSE_TERMINAL_CAPABILITY !in state.unavailableCapabilities &&
+        ExtensionControl.CLOSE !in state.sessionControlUnsupported[session.optionalText("id")].orEmpty()
+
+/** [terminalClosable] for a list row; [unsupported] are the controls the host refused for it. */
+internal fun terminalClosable(
+    item: SessionListItem,
+    capabilities: Set<String>,
+    unsupported: Set<ExtensionControl> = emptySet(),
+): Boolean =
+    item.liveMacTui &&
+        !item.hostWorker &&
+        item.parentSessionId == null &&
+        SESSION_CLOSE_TERMINAL_CAPABILITY in capabilities &&
+        ExtensionControl.CLOSE !in unsupported
 
 /** [hostOwned] for a list row. */
 internal fun hostOwned(item: SessionListItem, capabilities: Set<String>): Boolean =

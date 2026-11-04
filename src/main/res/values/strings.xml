@@ -165,6 +165,14 @@
     <string name="remote_offline_sessions_hidden">All sessions are offline.</string>
     <string name="remote_session_close">Close session</string>
     <string name="remote_session_close_confirmation">Close this session on your computer? Its history will remain available.</string>
+    <string name="remote_session_close_terminal_confirmation">Close this session? pi ends on your Mac and its terminal returns to the shell. If the session has messages, it stays in your list as a saved session you can resume.</string>
+    <string name="remote_session_closing">Closing…</string>
+    <string name="remote_session_closed_announcement">Session closed</string>
+    <string name="remote_close_draft">There is unsent text in pi\'s editor on your Mac. Send or clear it there, then close again.</string>
+    <string name="remote_close_busy">pi is busy on your Mac. Try again once the session is idle.</string>
+    <string name="remote_close_unsupported">Reload the Remote extension in pi on your Mac to close this session from your phone.</string>
+    <string name="remote_close_timeout">PocketPi could not confirm that the session closed. Refresh to see its state.</string>
+    <string name="remote_close_offline">PocketPi cannot reach pi on your Mac for this session, so it cannot close it from your phone. Close it on your Mac.</string>
     <string name="remote_prompt">Message pi</string>
     <string name="remote_send">Send</string>
     <string name="remote_stop">Stop pi</string>

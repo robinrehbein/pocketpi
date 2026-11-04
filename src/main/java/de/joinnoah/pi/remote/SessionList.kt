@@ -37,6 +37,8 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -51,6 +53,8 @@ internal fun SessionListRow(
     item: SessionListItem,
     enabled: Boolean,
     closeAvailable: Boolean,
+    /** A close request for this session is in flight: the row says so instead of its status. */
+    closing: Boolean = false,
     onClick: () -> Unit,
     onClose: () -> Unit,
     onRename: (() -> Unit)? = null,
@@ -87,7 +91,10 @@ internal fun SessionListRow(
             }
         )
     // A last-known status is shown muted and named as such: nothing on it is live.
-    val status = if (item.lastKnown) stringResource(R.string.remote_status_last_known, reported) else reported
+    val status =
+        if (closing) stringResource(R.string.remote_session_closing)
+        else if (item.lastKnown) stringResource(R.string.remote_status_last_known, reported)
+        else reported
     val statusColor =
         if (item.lastKnown) MaterialTheme.colorScheme.outline else sessionStatusColor(item.availability)
     val copyExplanation = stringResource(R.string.remote_history_note)
@@ -320,8 +327,12 @@ internal fun SessionListRow(
                     ) {
                         SessionStatusLabel(
                             status,
-                            if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
+                            if (closing) SessionAvailability.IDLE
+                            else if (item.lastKnown) SessionAvailability.OFFLINE
+                            else item.availability,
                             statusColor,
+                            // Polite: "Closing…" is announced without interrupting.
+                            Modifier.semantics { if (closing) liveRegion = LiveRegionMode.Polite },
                         )
                         if (metaLabels.isNotEmpty() || item.ticketRef != null)
                             Text(
@@ -358,12 +369,13 @@ private fun SessionStatusLabel(
     status: String,
     availability: SessionAvailability,
     statusColor: Color,
+    modifier: Modifier = Modifier,
 ) {
     when (availability) {
         SessionAvailability.WAITING ->
             Text(
                 status,
-                Modifier.background(waitingContainerColor(), CircleShape)
+                modifier.background(waitingContainerColor(), CircleShape)
                     .padding(horizontal = 10.dp, vertical = 3.dp),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
@@ -372,10 +384,11 @@ private fun SessionStatusLabel(
         SessionAvailability.OFFLINE ->
             Text(
                 status,
+                modifier,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        else -> Text(status, style = MaterialTheme.typography.labelMedium, color = statusColor)
+        else -> Text(status, modifier, style = MaterialTheme.typography.labelMedium, color = statusColor)
     }
 }
 

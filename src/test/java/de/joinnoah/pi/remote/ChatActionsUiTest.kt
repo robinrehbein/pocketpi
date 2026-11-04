@@ -194,6 +194,28 @@ class ChatActionsUiTest {
     }
 
     @Test
+    fun aTerminalSessionAsksWithItsOwnConfirmation() {
+        val terminal = buildJsonObject {
+            put("id", "s1")
+            put("title", "First session")
+            put("status", "idle")
+            put("origin", "tui")
+        }
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    sessions = listOf(terminal),
+                    session = terminal,
+                    capabilities =
+                        repository.state.value.capabilities + SESSION_CLOSE_CAPABILITY + SESSION_CLOSE_TERMINAL_CAPABILITY,
+                )
+        }
+        render()
+        runFromMenu(ChatAction.CLOSE)
+        compose.onNodeWithText(label(R.string.remote_session_close_terminal_confirmation)).assertIsDisplayed()
+    }
+
+    @Test
     fun exportReportsInTheChatWithoutAToast() {
         render()
         runFromMenu(ChatAction.EXPORT)

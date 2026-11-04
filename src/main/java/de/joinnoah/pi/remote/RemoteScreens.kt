@@ -1573,7 +1573,11 @@ internal fun RemoteScreen(
     val chatHeader: @Composable () -> Unit = {
         if (key is RemoteNavKey.Chat) {
             val headerState = chatHeaderState(state)
-            val statusLabel = stringResource(chatStatusLabel(headerState))
+            val statusLabel =
+                stringResource(
+                    if (state.session?.optionalText("id")?.let { it in state.closingSessions } == true) R.string.remote_session_closing
+                    else chatStatusLabel(headerState),
+                )
             val statusColor = chatStatusColor(headerState.status, headerState.connected)
             val canRename = canRenameSession(state)
             // The open session's row in the project's list, when that row could close it. The
@@ -1583,7 +1587,7 @@ internal fun RemoteScreen(
                 state.session?.optionalText("id")
                     ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
                     ?.let { sessionListItem(it, state.connected, loading = false, state.stale, state.sessionsFresh) }
-                    ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
+                    ?.takeIf { canCloseSession(it, state.connected, loading = false, closeCapabilities(state), unsupported = state.sessionControlUnsupported[it.id].orEmpty()) && it.id !in state.closingSessions }
             val hasTuiInfo = showsTuiInfo(state)
             // The ticket this chat belongs to, from the loaded tickets: its chip opens the ticket.
             val chatSessionId = state.session?.optionalText("id")
@@ -3165,6 +3169,7 @@ internal fun RemoteScreen(
                                     connected = state.connected,
                                     ticketRef = homeTicketRef,
                                     closable = { (it.projectId to it.session.text("id")) in closableIds },
+                                    closing = state.closingSessions,
                                     swipe =
                                         (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
                                             (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
@@ -3373,13 +3378,15 @@ internal fun RemoteScreen(
                                                 }
                                             },
                                         enabled = true,
+                                        closing = session.id in state.closingSessions,
                                         closeAvailable =
                                             canCloseSession(
                                                 session,
                                                 state.connected,
                                                 state.loading,
-                                                state.capabilities,
-                                            ),
+                                                closeCapabilities(state),
+                                                unsupported = state.sessionControlUnsupported[session.id].orEmpty(),
+                                            ) && session.id !in state.closingSessions,
                                         onClick = {
                                             navigator.open(
                                                 RemoteNavKey.Chat(
@@ -4381,6 +4388,15 @@ internal fun RemoteScreen(
             },
         )
     }
+    // A finished close without a refusal is announced; a refusal is announced as the error.
+    val closeView = androidx.compose.ui.platform.LocalView.current
+    val closedAnnouncement = stringResource(R.string.remote_session_closed_announcement)
+    var previousClosing by remember { mutableStateOf(state.closingSessions) }
+    LaunchedEffect(state.closingSessions) {
+        val finished = previousClosing - state.closingSessions
+        previousClosing = state.closingSessions
+        if (finished.isNotEmpty() && state.error == null) closeView.announceForAccessibility(closedAnnouncement)
+    }
     // A chat closed from Projects that left the page (closed elsewhere, or no longer featured)
     // takes its dialog along.
     LaunchedEffect(closing?.projectId, state.projectChats) {
@@ -4395,7 +4411,14 @@ internal fun RemoteScreen(
         AlertDialog(
             onDismissRequest = { closing = null },
             title = { Text(stringResource(R.string.remote_session_close)) },
-            text = { Text(stringResource(R.string.remote_session_close_confirmation)) },
+            text = {
+                Text(
+                    stringResource(
+                        if (session.liveMacTui && !session.hostWorker) R.string.remote_session_close_terminal_confirmation
+                        else R.string.remote_session_close_confirmation,
+                    ),
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -4421,8 +4444,9 @@ internal fun RemoteScreen(
                             session,
                             state.connected,
                             state.loading,
-                            state.capabilities,
-                        ),
+                            closeCapabilities(state),
+                            unsupported = state.sessionControlUnsupported[session.id].orEmpty(),
+                        ) && session.id !in state.closingSessions,
                 ) {
                     Text(stringResource(R.string.remote_session_close))
                 }
@@ -4714,6 +4738,8 @@ private class ProjectChatRowContext(
     val ticketRef: (String) -> String?,
     /** Whether the row offers Close; see [closableProjectChat]. */
     val closable: (ProjectChatSummary) -> Boolean,
+    /** The chats a close request is in flight for ([RemoteState.closingSessions]). */
+    val closing: Set<String>,
     /** The end-to-start and start-to-end swipe actions, as the user set them. */
     val swipe: Pair<SwipeAction, SwipeAction>,
     val onOpen: (ProjectChatSummary) -> Unit,
@@ -4749,6 +4775,7 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
             item = item,
             enabled = true,
             closeAvailable = context.closable(chat),
+            closing = id != null && id in context.closing,
             onClick = { context.onOpen(chat) },
             onClose = { context.onClose(chat, item) },
             swipe = context.swipe,

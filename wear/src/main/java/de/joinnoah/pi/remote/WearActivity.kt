@@ -261,7 +261,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 if (canUseBackgroundJobs(state)) action(R.string.wear_jobs, ready) { model.open(WatchScreen.JOBS) }
                 if (RENAME_CAPABILITY in state.capabilities) action(R.string.wear_rename, ready) { model.open(WatchScreen.RENAME) }
                 state.session?.let { session ->
-                    if (canCloseSession(sessionListItem(session, state.connected, state.loading, confirmed = state.sessionsFresh), state.connected, state.loading, state.capabilities))
+                    if (canCloseSession(sessionListItem(session, state.connected, state.loading, confirmed = state.sessionsFresh), state.connected, state.loading, state.capabilities, terminal = false))
                         action(R.string.wear_close_session, ready) { model.ask(WatchConfirmationKind.CLOSE) }
                 }
                 if (state.followUps.isNotEmpty()) action(R.string.wear_journal) { model.open(WatchScreen.JOURNAL) }

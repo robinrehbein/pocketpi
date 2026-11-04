@@ -56,7 +56,7 @@ internal class WatchFakeRepository : RemoteRepository {
     override fun reportError(resource: Int) { error = resource }
     override fun setPushToken(token: String?) {}
     override fun closeChanges() { closedChanges++ }
-    override fun closeSession(sessionId: String) { closeRequests++ }
+    override fun closeSession(sessionId: String, allowTerminal: Boolean) { closeRequests++ }
     override fun unshareProject(projectId: String) {
         if (state.value.selection.projectId == null) unshared = projectId
     }

@@ -254,7 +254,22 @@ class SessionListPresentationTest {
                 connected = true,
                 loading = false, confirmed = true,
             )
+        // A terminal session closes only with the terminal capability (idle only).
         assertFalse(canCloseSession(terminal, true, false, v2))
+        val terminalCaps = close + SESSION_CLOSE_TERMINAL_CAPABILITY
+        assertTrue(canCloseSession(terminal, true, false, terminalCaps))
+        assertFalse(canCloseSession(terminal, true, false, terminalCaps, terminal = false))
+        assertFalse(canCloseSession(terminal, true, false, terminalCaps, unsupported = setOf(ExtensionControl.CLOSE)))
+        assertFalse(canCloseSession(terminal, false, false, terminalCaps))
+        assertFalse(canCloseSession(terminal, true, true, terminalCaps))
+        assertFalse(canCloseSession(terminal.copy(lastKnown = true), true, false, terminalCaps))
+        assertFalse(canCloseSession(terminal.copy(parentSessionId = "p"), true, false, terminalCaps))
+        for (status in listOf("running", "waiting", "offline")) {
+            val busy = sessionListItem(Wire.objectOf("id" to "t", "title" to "T", "origin" to "tui", "status" to status), true, false, confirmed = true)
+            assertFalse(status, canCloseSession(busy, true, false, terminalCaps))
+        }
+        // Hide (claude/hide-sessions, unmerged) must keep working beside Close; see the PR notes (R12).
+        assertTrue(terminalClosable(terminal, terminalCaps))
     }
 
     @Test
@@ -775,6 +790,24 @@ class SessionListPresentationTest {
             )
         assertFalse(closableProjectChat(state, "p2", "history"))
         assertFalse(closableProjectChat(state, "p2", "tui"))
+        // With the terminal capability an idle, verified tui chat closes; a running one does not.
+        val terminal = closableState(
+            projectChat("tui", origin = "tui"),
+            projectChat("tuiRunning", origin = "tui", status = "running"),
+            projectChat("tuiSub", origin = "tui", parent = "tui"),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY, SESSION_CLOSE_TERMINAL_CAPABILITY),
+        )
+        assertTrue(closableProjectChat(terminal, "p2", "tui"))
+        assertFalse(closableProjectChat(terminal, "p2", "tuiRunning"))
+        assertFalse(closableProjectChat(terminal, "p2", "tuiSub"))
+        assertFalse(closableProjectChat(terminal.copy(unavailableCapabilities = setOf(SESSION_CLOSE_TERMINAL_CAPABILITY)), "p2", "tui"))
+        assertFalse(
+            closableProjectChat(
+                terminal.copy(sessionControlUnsupported = mapOf("tui" to setOf(ExtensionControl.CLOSE))),
+                "p2",
+                "tui",
+            ),
+        )
         assertFalse(closableProjectChat(state, "p2", "pi"))
         assertFalse(closableProjectChat(state, "p2", "unverified"))
     }

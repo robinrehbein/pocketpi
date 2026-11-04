@@ -14,6 +14,12 @@ internal enum class SessionAvailability {
 
 internal const val SESSION_CLOSE_CAPABILITY = "session.close.v1"
 
+/**
+ * The host closes an idle terminal session (origin `tui`, started by hand on the Mac) through its pi
+ * Remote extension. Only the `capabilities.v3:` route advertises it.
+ */
+internal const val SESSION_CLOSE_TERMINAL_CAPABILITY = "session.close.terminal.v1"
+
 internal data class SessionListItem(
     val id: String,
     val title: String,
@@ -399,13 +405,24 @@ internal fun canCloseSession(
     connected: Boolean,
     loading: Boolean,
     capabilities: Set<String>,
+    // Wear passes false: the watch closes host-owned sessions only (see [terminalClosable]).
+    terminal: Boolean = true,
+    unsupported: Set<ExtensionControl> = emptySet(),
 ): Boolean =
-    hostOwned(item, capabilities) &&
+    (hostOwned(item, capabilities) ||
+        (terminal &&
+            item.availability == SessionAvailability.IDLE &&
+            terminalClosable(item, capabilities, unsupported))) &&
         item.availability != SessionAvailability.OFFLINE &&
         !item.lastKnown &&
         connected &&
         !loading &&
         SESSION_CLOSE_CAPABILITY in capabilities
+
+/** The capabilities [canCloseSession] reads: those the host advertises minus the ones it refused. */
+internal fun closeCapabilities(state: RemoteState): Set<String> =
+    if (SESSION_CLOSE_TERMINAL_CAPABILITY in state.unavailableCapabilities) state.capabilities - SESSION_CLOSE_TERMINAL_CAPABILITY
+    else state.capabilities
 
 /**
  * The featured chat [sessionId] of [projectId], as the Projects page shows it, can be closed from
@@ -438,7 +455,7 @@ internal fun closableMainChat(state: RemoteState, chat: ProjectChatSummary): Boo
         chat.session.optionalText("status") == "idle" &&
         chat.session.optionalText("origin") != "history" &&
         chat.session.optionalText("parentSessionId").isNullOrBlank() &&
-        hostOwned(state, chat.session)
+        (hostOwned(state, chat.session) || terminalClosable(state, chat.session))
 
 /** The (project, session) IDs of the [mainChats] the Projects page can close, computed once per pass. */
 internal fun closableProjectChatIds(state: RemoteState, mainChats: List<ProjectChatSummary>): Set<Pair<String, String>> =
