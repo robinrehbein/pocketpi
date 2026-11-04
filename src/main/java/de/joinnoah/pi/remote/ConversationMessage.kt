@@ -105,15 +105,10 @@ internal fun conversationItemWidth(item: ConversationItem): Dp =
     }
 
 /**
- * Chat rows can grow while streaming, and new tools can arrive before a queued prompt. Sliding
- * rows to their new positions paints the old message through those new rows until it catches up.
- * Keep only the arrival fade: removed rows must also stop drawing before their space is reused.
- * This does not affect scroll animations or the motion of rows on other pages.
+ * Keep chat motion consistent with other lists, including moving rows when a tool is expanded.
+ * Disabling placement motion did not resolve the persistent overlap reported on the device.
  */
-internal fun Modifier.conversationItemMotion(item: LazyItemScope): Modifier =
-    if (ValueAnimator.areAnimatorsEnabled()) with(item) {
-        this@conversationItemMotion.animateItem(placementSpec = null, fadeOutSpec = null)
-    } else this
+internal fun Modifier.conversationItemMotion(item: LazyItemScope): Modifier = itemMotion(item)
 
 /**
  * One chat item in its reading column, at most [conversationItemWidth] wide and anchored to the
