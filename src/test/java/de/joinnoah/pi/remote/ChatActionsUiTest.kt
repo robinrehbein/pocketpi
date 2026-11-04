@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
@@ -12,25 +14,35 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowToast
 
 /** The chat header's More actions, their snackbar feedback and the status mark, inside the whole app. */
@@ -328,6 +340,272 @@ class ChatActionsUiTest {
             repository.state.value = repository.state.value.copy(capabilities = repository.state.value.capabilities - FILES_CAPABILITY)
         }
         compose.onNodeWithTag("chatAction_settings").assertIsDisplayed()
+    }
+
+    private fun terminalTextCount() =
+        compose.onAllNodesWithText(label(R.string.remote_terminal_title), useUnmergedTree = true).fetchSemanticsNodes().size
+
+    @Test
+    fun terminalIsNotOfferedWhileTheRepositoryCannotAttachIt() {
+        render()
+        assertEquals(0, terminalTextCount())
+        compose.onNodeWithTag("chatAction_terminal").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionMenu_terminal").assertDoesNotExist()
+        assertEquals(0, terminalTextCount())
+    }
+
+    @Test
+    fun terminalSitsInTheMoreActionsAndOpensTheTerminalInspector() {
+        repository.terminalAttachable = true
+        render()
+        // The closed header is the title pill plus one shortcut and the chevron: no Terminal text button.
+        assertEquals(0, terminalTextCount())
+        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_terminal").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNode(
+            hasText(label(R.string.remote_terminal_title)).and(hasAnyAncestor(hasTestTag("chatActionMenu_terminal"))),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        compose.onNodeWithTag("chatActionMenu_terminal").performClick()
+        compose.waitForIdle()
+        // The row asks the inspector to attach, as the old header button did, and its use is recorded.
+        assertEquals(listOf(80 to 24), repository.terminalAttaches)
+        assertEquals(listOf(ChatAction.TERMINAL), settings.recordedActions)
+        compose.onNodeWithTag("chatActionMenu_terminal").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_terminal").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_terminal").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(80 to 24, 80 to 24), repository.terminalAttaches)
+    }
+
+    @Test
+    fun aStoredTerminalShortcutFallsBackWhileTheTerminalIsUnavailable() {
+        settings.usage[ChatAction.SETTINGS] = ActionUsage(1.0, 10)
+        settings.usage[ChatAction.TERMINAL] = ActionUsage(1.0, 20)
+        repository.terminalAttachable = true
+        render()
+        compose.onNodeWithTag("chatAction_terminal").assertIsDisplayed()
+        // The gate lives in the repository; the next state the header reads drops Terminal.
+        compose.runOnIdle {
+            repository.terminalAttachable = false
+            repository.state.value = repository.state.value.copy(status = "running")
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatAction_terminal").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_settings").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_terminal").assertDoesNotExist()
+        // The stored use stays, so Terminal returns as the shortcut once it can attach again.
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            repository.terminalAttachable = true
+            repository.state.value = repository.state.value.copy(status = "idle")
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatAction_terminal").assertIsDisplayed()
+    }
+
+    @Test
+    fun thePaletteNeverListsTerminal() {
+        val everything =
+            repository.state.value.copy(
+                selection = RemoteSelection("host", "project", "s1"),
+                capabilities = repository.state.value.capabilities + SESSION_TERMINAL_CAPABILITY + SESSION_TERMINAL_KEYS_CAPABILITY,
+            )
+        assertFalse(chatActionAvailable(ChatAction.TERMINAL, everything))
+        assertFalse(ChatAction.TERMINAL in DEFAULT_CHAT_ACTIONS.filter { chatActionAvailable(it, everything) })
+    }
+
+    @After
+    fun stopRenderRecording() {
+        ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options())
+    }
+
+    @Test
+    fun thePaletteNeverListsRenderCapture() {
+        val everything = repository.state.value.copy(selection = RemoteSelection("host", "project", "s1"))
+        assertFalse(chatActionAvailable(ChatAction.RENDER_CAPTURE, everything))
+        assertFalse(ChatAction.RENDER_CAPTURE in DEFAULT_CHAT_ACTIONS.filter { chatActionAvailable(it, everything) })
+    }
+
+    @Test
+    fun renderCaptureIsOfferedInTheMenuOnlyWhileRecording() {
+        render()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionMenu_render_capture").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.runOnIdle { ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options(recording = true)) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("captureChatRender").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_render_capture").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_render_capture").performScrollTo().assertIsDisplayed()
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test
+    @Config(qualifiers = "w360dp-h740dp")
+    fun recordingKeepsTheTwoControlHeaderAndCaptureOpensTheExportFromTheMenu() {
+        ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options(recording = true))
+        repository.terminalAttachable = true
+        withLongTitle()
+        render()
+        assertTwoControlHeader(sameRow = true)
+        compose.onNodeWithTag("captureChatRender").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_render_capture").performScrollTo().assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("shareRenderSnapshot").assertIsDisplayed()
+        compose.onNodeWithTag("copyRenderSnapshot").assertIsDisplayed()
+        assertEquals(listOf(ChatAction.RENDER_CAPTURE), settings.recordedActions)
+    }
+
+    @Test
+    fun aUsedRenderCaptureBecomesTheShortcutAndFallsBackWhenRecordingStops() {
+        ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options(recording = true))
+        settings.usage[ChatAction.SETTINGS] = ActionUsage(1.0, 10)
+        settings.usage[ChatAction.RENDER_CAPTURE] = ActionUsage(1.0, 20)
+        render()
+        compose.onNodeWithTag("chatAction_render_capture").assertIsDisplayed()
+        val quick = compose.onNodeWithTag("chatAction_render_capture").getUnclippedBoundsInRoot()
+        val more = compose.onNodeWithTag("chatActionsMore").getUnclippedBoundsInRoot()
+        assertEquals(96f, (more.right - quick.left).value, 0.5f)
+        compose.runOnIdle { ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options()) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatAction_render_capture").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_settings").assertIsDisplayed()
+    }
+
+    private val longTitle = "glassy-frosted-header-session-" + "with-a-very-long-title-".repeat(8)
+
+    private fun withLongTitle() {
+        val long = buildJsonObject {
+            put("id", "s1")
+            put("title", longTitle)
+            put("status", "idle")
+            put("origin", "rpc")
+        }
+        // The open session and its row in the list agree, however the notification resolves it.
+        repository.state.value = repository.state.value.copy(session = long, sessions = listOf(long))
+    }
+
+    /** The tags of the header's clickable controls on the shortcut's row from [fromX] px on. */
+    private fun rightControls(fromX: Float, quickTag: String = "chatAction_refresh"): List<String?> {
+        val quick = compose.onNodeWithTag(quickTag).fetchSemanticsNode().boundsInRoot
+        return compose.onAllNodes(hasClickAction().and(hasAnyAncestor(hasTestTag("chatHeader"))))
+            .fetchSemanticsNodes()
+            .filter { it.boundsInRoot.left >= fromX - 0.5f && it.boundsInRoot.center.y in quick.top..quick.bottom }
+            .sortedBy { it.boundsInRoot.left }
+            .map { it.config.getOrNull(SemanticsProperties.TestTag) }
+    }
+
+    /**
+     * The closed header's right side is exactly the 96dp pill, a 48dp shortcut and the 48dp chevron,
+     * inside the header's padding; History and Terminal wait in the menu. On one row the title pill
+     * runs up to the pill's 8dp gap, so no width stays reserved for a button beside it.
+     */
+    private fun assertTwoControlHeader(sameRow: Boolean) {
+        // The fixture's long title is what the header renders, so the width checks measure it.
+        compose.onNodeWithTag("chatTitle").assertTextEquals(longTitle)
+        assertEquals(0, terminalTextCount())
+        compose.onNodeWithTag("chatHistoryButton").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_history").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_terminal").assertDoesNotExist()
+        val header = compose.onNodeWithTag("chatHeader").getUnclippedBoundsInRoot()
+        val quick = compose.onNodeWithTag("chatAction_refresh").getUnclippedBoundsInRoot()
+        val more = compose.onNodeWithTag("chatActionsMore").getUnclippedBoundsInRoot()
+        val title = compose.onNodeWithTag("chatTitle").getUnclippedBoundsInRoot()
+        assertEquals(48f, (quick.right - quick.left).value, 0.5f)
+        assertEquals(48f, (more.right - more.left).value, 0.5f)
+        assertEquals(96f, (more.right - quick.left).value, 0.5f)
+        assertEquals("chevron $more ends at the header's padding $header", (header.right - 16.dp).value, more.right.value, 0.5f)
+        val titleNode = compose.onNodeWithTag("chatTitle").fetchSemanticsNode().boundsInRoot
+        if (sameRow) {
+            // The title's 8dp end padding and the row's gap: 16dp, where a History button once kept 72dp.
+            val gap = (quick.left - title.right).value
+            assertTrue("title $title must fill up to the shortcut $quick, gap $gap", gap in 7.5f..24f)
+            assertEquals(listOf("chatAction_refresh", "chatActionsMore"), rightControls(titleNode.right))
+        } else {
+            assertTrue("actions $quick sit below the title $title", quick.top >= title.bottom - 0.5.dp)
+            assertEquals(listOf("chatAction_refresh", "chatActionsMore"), rightControls(0f))
+        }
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        // The menu may scroll on a short screen; both rows exist in it.
+        compose.onNodeWithTag("chatActionMenu_history").assertExists()
+        compose.onNodeWithTag("chatActionMenu_terminal").assertExists()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test
+    @Config(qualifiers = "w360dp-h740dp")
+    fun aPhoneHeaderShowsOnlyTheShortcutAndChevronAtLargeFont() {
+        RuntimeEnvironment.setFontScale(1.8f)
+        repository.terminalAttachable = true
+        withLongTitle()
+        render()
+        assertTwoControlHeader(sameRow = true)
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test
+    @Config(qualifiers = "w320dp-h640dp")
+    fun aNarrowHeaderKeepsOnlyTheShortcutAndChevronOnTheirOwnRowAtLargeFont() {
+        RuntimeEnvironment.setFontScale(1.8f)
+        repository.terminalAttachable = true
+        withLongTitle()
+        render()
+        assertTwoControlHeader(sameRow = false)
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test
+    @Config(qualifiers = "w1300dp-h800dp")
+    fun aWideHeaderHasNoHistoryButtonAndGivesItsWidthToTheTitle() {
+        repository.terminalAttachable = true
+        withLongTitle()
+        render()
+        // Wide enough that History used to get its own 48dp button and a 56dp reserve beside the pill.
+        assertTrue(compose.onNodeWithTag("chatHeader").getUnclippedBoundsInRoot().let { it.right - it.left } >= 600.dp)
+        assertTwoControlHeader(sameRow = true)
+    }
+
+    @Test
+    @Config(qualifiers = "w1300dp-h800dp")
+    fun aUsedHistoryBecomesTheOneShortcutAndNeverAThirdIcon() {
+        render()
+        compose.onNodeWithTag("chatAction_history").assertDoesNotExist()
+        runFromMenu(ChatAction.HISTORY)
+        assertEquals(listOf(ChatAction.HISTORY), settings.recordedActions)
+        // History follows the last-used rule: it replaces the shortcut, beside the chevron only.
+        compose.onNodeWithTag("chatAction_history").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_refresh").assertDoesNotExist()
+        compose.onNodeWithTag("chatHistoryButton").assertDoesNotExist()
+        val history = compose.onNodeWithTag("chatAction_history").getUnclippedBoundsInRoot()
+        val more = compose.onNodeWithTag("chatActionsMore").getUnclippedBoundsInRoot()
+        assertEquals(96f, (more.right - history.left).value, 0.5f)
+        // The open History pane narrows the chat; a narrow header puts the pill on a row of its own.
+        val title = compose.onNodeWithTag("chatTitle").fetchSemanticsNode().boundsInRoot
+        val pill = compose.onNodeWithTag("chatAction_history").fetchSemanticsNode().boundsInRoot
+        val fromX = if (pill.top < title.bottom) title.right else 0f
+        assertEquals(
+            listOf("chatAction_history", "chatActionsMore"),
+            rightControls(fromX, quickTag = "chatAction_history"),
+        )
     }
 
     @Test

@@ -878,6 +878,7 @@ class GitChangesTest {
                 ChatAction.FILES, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.RENAME,
                 ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.SETTINGS, ChatAction.NEW_SESSION,
                 ChatAction.SESSION_SETTINGS, ChatAction.HISTORY, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR,
+                ChatAction.TERMINAL, ChatAction.RENDER_CAPTURE,
             ),
             layout.menu,
         )
