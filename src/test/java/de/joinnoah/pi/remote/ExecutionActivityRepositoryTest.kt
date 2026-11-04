@@ -79,6 +79,8 @@ class ExecutionActivityRepositoryTest {
         }
 
         override fun send(payload: JsonObject) {
+            // Every test sends far fewer; more means a request loop (a stale page asked again and again).
+            check(sent.size < 200) { "runaway transport: ${sent.size} requests sent" }
             sent += payload
             val data = when (payload.text("type")) {
                 "projects.list" -> {
@@ -724,10 +726,17 @@ class ExecutionActivityRepositoryTest {
         repo.activate(selection); runCurrent()
         monotonic += 10_001
         val pages = transport.snapshots().size
-        upsertAt(transport, 110, agent("inst-9", "call-1", state = "succeeded"))
-        upsertAt(transport, 105, agent("inst-9", "call-1"))
+        // Gap-free revisions, so no resume is asked; held, so no stale page answers the recovery.
+        transport.holdSnapshots = true
+        upsertAt(transport, 101)
+        upsertAt(transport, 102, agent("inst-9", "call-1", state = "succeeded"))
+        // Above the page (100) but below the terminal row's own source (102).
+        upsertAt(transport, 101, agent("inst-9", "call-1"))
         assertEquals(pages, transport.snapshots().size)
-        upsertAt(transport, 111, agent("inst-9", "call-1"))
+        upsertAt(transport, 103, agent("inst-9", "call-1"))
+        assertEquals(pages + 1, transport.snapshots().size)
+        // While that page is held, a newer running row asks nothing more.
+        upsertAt(transport, 104, agent("inst-9", "call-1"))
         assertEquals(pages + 1, transport.snapshots().size)
         assertTrue(repo.activity().actors.isEmpty())
     }

@@ -1,7 +1,8 @@
 # Structured session activity (`session_activity.v1`)
 
-Implementation and contract note for PocketPi. Status: in progress. Nothing here claims that the
-Android implementation or its tests are finished; the check sections below are filled in later.
+Implementation and contract note for PocketPi. The Android implementation is available in
+[Draft PR #242](https://github.com/robinrehbein/pocketpi/pull/242). Local checks and independent
+reviews passed; final-head CI, current-main integration and real-device checks remain outstanding.
 
 ## Host source
 
@@ -81,6 +82,9 @@ sessions and may drop it from list items to stay within the size limit.
   `clockId`, and `now < expiresAt + offset`. Remaining time is capped at 30 s.
 - Expiry freezes the last state as stale. It never turns into idle or done. The transport heartbeat
   renews nothing.
+- Pure presentation helpers do not read an Android clock through default arguments. Production
+  Compose callers supply monotonic time explicitly. Without it, negotiated activity stays static
+  and never falls back to transcript inference; legacy behavior is unchanged.
 - Observed host internals, not contract (rely only on `expiresAt`, the offset and the 30 s cap):
   lease 15 s from probe start, probe answers valid within 5 s, owner hint every 5 s, renewal
   events once less than half the lease is left (about every 7 to 8 s while active).
@@ -153,14 +157,41 @@ host producer separately resets the phase to `pending` on compaction). Structure
 feeds the existing glyph language; it does not replace these features. Legacy hosts keep today's
 behavior.
 
-## Automated checks (filled in later)
+## Validation
 
-- [ ] `python3 scripts/i18n-check.py .`
-- [ ] `./gradlew testDebugUnitTest` including the copied `session-activity-v1.json` fixture and
-      the ported ordering and freshness vectors
-- [ ] `./gradlew assembleDebug lintDebug`
-- [ ] `./gradlew pixel2Api36DebugAndroidTest` (CI)
-- [ ] Legacy host fixture (`sessions-legacy`) and ungranted connection behavior
+- [x] `scripts/quick-check.sh`: resource parity, all app/androidTest/benchmark/Wear compilations,
+      4,074 app unit tests and 67 Wear unit tests; no failures, errors or skipped tests.
+      Log: `build/structured-activity-final-check-fixed.log` (148 seconds).
+- [x] Shared host fixture and ordering/freshness vectors, legacy host fixture and ungranted
+      connection behavior are covered by the app suite.
+- [x] Real fullscreen recomposition regression: identical ledger instance, all four lifecycle/input
+      gates, visible tool card, and live glyph replaced by a static glyph.
+- [x] Actor-source regression: 29 repository tests pass. Temporarily bypassing the actor's source
+      watermark makes the terminal-row regression fail; production source was restored
+      byte-identically and all 29 tests passed again.
+- [x] Independent Opus reviews of the implementation and both final test corrections.
+- [ ] CI on the final PR head: unit/build, lint, benchmark isolation, phone emulator, minified smoke
+      and tablet emulator. Earlier-head results do not count as final-head validation.
+
+The three chat Settings instrumentation selectors use the existing main-branch fix from
+`2f2d871a105b13e55d8bc74cb358b3f7c95438eb`, transplanted only into
+`RemoteNavigationUiTest.kt`. Non-chat Settings navigation is unchanged.
+
+### Known pre-existing retry limitation
+
+An invalid fake-host sequence exposed a legacy Timeline gap-resume retry: a host repeatedly
+answering below a journal revision it already emitted can cause immediate repeated snapshot
+requests. The same retry exists on current main; structured activity recovery is separately
+bounded and throttled. The source-ordering test now uses contiguous journal revisions, holds the
+intended recovery request and caps fake-transport requests so regressions fail instead of exhausting
+memory. Production Timeline retry hardening is a separate proposed follow-up, not implemented here.
+
+### Main-branch integration
+
+CI checks out the PR head explicitly, not a synthetic merge. Main has advanced in repository and
+screen code since this branch's last update. Passing head CI therefore does not validate that
+integration. Keep the PR as Draft; updating against current main needs a separate check/review pass
+before readiness or merge.
 
 ## Real device checks (pending, Robin)
 
