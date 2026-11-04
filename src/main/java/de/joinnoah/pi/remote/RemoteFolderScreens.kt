@@ -26,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -37,6 +38,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -142,11 +144,19 @@ internal fun FolderBrowserContent(
     val atRoot = folders.path.isEmpty()
     val actionable = available && !folders.working
     val cloneRunning = folders.clone?.stage == CloneStage.RUNNING
+    BoxWithConstraints(modifier) {
+    val density = LocalDensity.current
+    var headerHeightPx by remember { mutableIntStateOf(0) }
+    val headerHeight = with(density) { headerHeightPx.toDp() }
+    // Leave half of the actual space below the header for the list on compact screens.
+    val footerMaxHeight =
+        if (constraints.hasBoundedHeight) (maxHeight - headerHeight).coerceAtLeast(0.dp) / 2
+        else Dp.Infinity
     Scaffold(
-        modifier = modifier,
+        modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Column(Modifier.fillMaxWidth().statusBarsPadding()) {
+            Column(Modifier.fillMaxWidth().onSizeChanged { headerHeightPx = it.height }.statusBarsPadding()) {
                 PageHeader(
                     title = stringResource(R.string.remote_folders_title),
                     titleInPill = true,
@@ -176,7 +186,8 @@ internal fun FolderBrowserContent(
         },
         bottomBar = {
             Column(
-                Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
+                Modifier.fillMaxWidth().testTag("folderFooter").heightIn(max = footerMaxHeight)
+                    .navigationBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 FolderSecondaryActions(
@@ -200,29 +211,27 @@ internal fun FolderBrowserContent(
                     else Text(stringResource(R.string.remote_folders_open_here))
                 }
                 if (atRoot)
-                    Text(
-                        stringResource(R.string.remote_folders_root_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("folderRootHint"),
-                    )
+                    FloatingSurface(Modifier.fillMaxWidth()) {
+                        Text(
+                            stringResource(R.string.remote_folders_root_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("folderRootHint"),
+                        )
+                    }
             }
         },
     ) { insets ->
-        // The folder list alone scrolls under the floating header; a notice, a clone or a state
-        // message above it keeps the page below the header.
+        // Status cards and state messages start below the floating header; a plain listing scrolls
+        // under it. Status cards join a non-empty list so they can scroll clear of the footer.
         val headerTop = insets.floatingHeaderOverlap()
         val listUnderHeader =
             connected && available && folders.notice == null && folders.clone == null &&
                 folders.error == null && folders.loaded && folders.entries.isNotEmpty()
-        Column(
-            Modifier.fillMaxSize()
-                .padding(insets.underFloatingHeader())
-                .consumeWindowInsets(insets)
-                .padding(top = if (listUnderHeader) 0.dp else headerTop)
-                .padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        val listUnderFooter = connected && available && folders.error == null &&
+            folders.loaded && folders.entries.isNotEmpty()
+        @Composable fun StatusCards() {
             folders.notice?.let { notice ->
                 FolderNotice(stringResource(notice), onDismissNotice)
             }
@@ -235,6 +244,19 @@ internal fun FolderBrowserContent(
                     onDismiss = onDismissClone,
                 )
             }
+        }
+        Column(
+            Modifier.fillMaxSize()
+                .padding(
+                    if (listUnderFooter) insets.underFloatingHeader().withoutBottom()
+                    else insets.underFloatingHeader()
+                )
+                .consumeWindowInsets(insets)
+                .padding(top = if (listUnderHeader) 0.dp else headerTop)
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (!listUnderFooter) StatusCards()
             when {
                 // The connection chip above says why there is no listing.
                 !connected -> Unit
@@ -251,10 +273,17 @@ internal fun FolderBrowserContent(
                         onEnter = onEnter,
                         onRetry = onRetry,
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(top = if (listUnderHeader) headerTop else 0.dp, bottom = 24.dp),
+                        contentPadding = PaddingValues(
+                            top = if (listUnderHeader) headerTop else 0.dp,
+                            bottom = 24.dp + if (listUnderFooter) insets.calculateBottomPadding() else 0.dp,
+                        ),
+                        headerContent = if (listUnderFooter && (folders.notice != null || folders.clone != null)) {
+                            { StatusCards() }
+                        } else null,
                     )
             }
         }
+    }
     }
     if (creating)
         NewFolderDialog(
@@ -290,17 +319,21 @@ private fun FolderSecondaryActions(enabled: Boolean, cloneEnabled: Boolean, onNe
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val stacked = stackFolderActions(maxWidth.value, LocalDensity.current.fontScale)
         @Composable fun NewAction(modifier: Modifier) {
-            OutlinedButton(onClick = onNew, enabled = enabled, modifier = modifier.testTag("folderNewAction")) {
-                Icon(Icons.Default.CreateNewFolder, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.remote_folders_new_folder))
+            FloatingSurface(modifier, shape = CircleShape) {
+                OutlinedButton(onClick = onNew, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("folderNewAction")) {
+                    Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.remote_folders_new_folder))
+                }
             }
         }
         @Composable fun CloneAction(modifier: Modifier) {
-            OutlinedButton(onClick = onClone, enabled = cloneEnabled, modifier = modifier.testTag("folderCloneAction")) {
-                Icon(Icons.Default.Download, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.remote_folders_clone))
+            FloatingSurface(modifier, shape = CircleShape) {
+                OutlinedButton(onClick = onClone, enabled = cloneEnabled, modifier = Modifier.fillMaxWidth().testTag("folderCloneAction")) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.remote_folders_clone))
+                }
             }
         }
         if (stacked) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -370,6 +403,9 @@ internal fun FolderBreadcrumb(
     }
 }
 
+// Structural keys must never collide with a real folder name.
+private enum class FolderListItemKey { STATUS, TRUNCATED }
+
 /** The listing of one folder with its loading, empty and error states. */
 @Composable
 internal fun RemoteFolderList(
@@ -379,6 +415,7 @@ internal fun RemoteFolderList(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(bottom = 24.dp),
+    headerContent: (@Composable () -> Unit)? = null,
 ) {
     val error = folders.error
     when {
@@ -402,11 +439,18 @@ internal fun RemoteFolderList(
             PaneNotice(stringResource(R.string.remote_folders_empty), modifier.testTag("folderEmpty"), FolderNoticePadding)
         else ->
             LazyColumn(modifier.fillMaxWidth().testTag("folderList").glassSource(), contentPadding = contentPadding) {
+                headerContent?.let { header ->
+                    item(key = FolderListItemKey.STATUS) {
+                        Column(Modifier.padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            header()
+                        }
+                    }
+                }
                 items(folders.entries, key = { it.name }) { entry ->
                     FolderRow(entry, enabled) { onEnter(entry.name) }
                 }
                 if (folders.truncated)
-                    item(key = "truncated") {
+                    item(key = FolderListItemKey.TRUNCATED) {
                         Text(
                             stringResource(R.string.remote_folders_truncated),
                             style = MaterialTheme.typography.bodySmall,

@@ -14,7 +14,7 @@ import org.junit.runner.RunWith
 
 private const val TARGET = "de.robinrehbein.pocketpi.benchmark"
 private const val CONNECTED_FLOW = "de.joinnoah.pi.remote.ConnectedFlowActivity"
-private const val MAIN = "de.joinnoah.pi.remote.MainActivity"
+private const val MAIN = "de.joinnoah.pi.remote.RemoteActivity"
 private const val SHARE = "de.joinnoah.pi.remote.ShareActivity"
 private const val LIVE_RUN = "de.joinnoah.pi.remote.LiveRunService"
 

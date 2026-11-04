@@ -28,7 +28,7 @@ import org.junit.Test
  */
 @SdkSuppress(minSdkVersion = 31)
 class ConfigChangeEmulatorTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createAndroidComposeRule<RemoteActivity>()
 
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 

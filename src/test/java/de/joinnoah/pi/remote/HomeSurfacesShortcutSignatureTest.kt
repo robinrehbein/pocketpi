@@ -64,7 +64,10 @@ class HomeSurfacesShortcutSignatureTest {
     private fun persist(signature: List<String>, version: Int? = BuildConfig.VERSION_CODE) {
         prefs.edit()
             .putString(PUBLISHED_SHORTCUTS_KEY, signature.joinToString(SHORTCUT_SIGNATURE_DELIMITER))
-            .apply { if (version != null) putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, version) }
+            .apply {
+                if (version != null) putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, version)
+                putString(PUBLISHED_SHORTCUTS_LAUNCHER_KEY, AppIconManager(context).selectedComponent().flattenToString())
+            }
             .commit()
     }
 
@@ -76,10 +79,11 @@ class HomeSurfacesShortcutSignatureTest {
     /** A shortcut as an older version published it: straight at MainActivity, with extras. */
     private fun oldShortcut(sessionId: String, title: String) =
         ShortcutInfoCompat.Builder(context, shortcutId("route", sessionId))
+            .setActivity(android.content.ComponentName(context.packageName, "de.joinnoah.pi.remote.MainActivity"))
             .setShortLabel(title)
             .setLongLabel("$title · Project")
             .setIntent(
-                Intent(context, MainActivity::class.java)
+                Intent(context, RemoteActivity::class.java)
                     .setAction(Intent.ACTION_VIEW)
                     .putExtra(RemoteNotifications.EXTRA_ROUTE, "route")
                     .putExtra(RemoteNotifications.EXTRA_TARGET, sessionId)
@@ -88,6 +92,19 @@ class HomeSurfacesShortcutSignatureTest {
             .toShortcutInfo()
 
     private fun pinned(id: String) = shortcuts.pinnedShortcuts.single { it.id == id }
+
+    @Test
+    fun iconChangeInvalidatesSignatureEvenWithUnchangedSessions() {
+        val manager = AppIconManager(context)
+        val sessions = listOf("session:r:a|Title|Project")
+        val before = launcherShortcutSignature(manager.selectedComponent().flattenToString(), sessions)
+        manager.setIcon(AppIcon.BLACK_WHITE)
+        val after = launcherShortcutSignature(manager.selectedComponent().flattenToString(), sessions)
+        org.junit.Assert.assertNotEquals(before, after)
+        assertEquals(sessions, after.drop(1))
+        persist(after)
+        assertEquals(after, publishedSignature(surfaces()))
+    }
 
     @Test
     fun withNothingPersistedYetTheSignatureStartsUnknown() {
@@ -140,9 +157,32 @@ class HomeSurfacesShortcutSignatureTest {
         assertEquals("Pinned", pinned(shortcutId("route", "pinned")).shortLabel)
         assertEquals(BuildConfig.VERSION_CODE, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
         assertEquals(
-            listOf(shortcutSignatureEntry("route", "open", "Open", "Project")),
+            launcherShortcutSignature(
+                AppIconManager(context).selectedComponent().flattenToString(),
+                listOf(shortcutSignatureEntry("route", "open", "Open", "Project")),
+            ),
             publishedSignature(surfaces()),
         )
+    }
+
+    @Test
+    @Config(shadows = [RejectingShortcutManager::class])
+    fun iconChangeRebindsPinnedOnlyShortcutsAndPersistsTheNewLauncher() = runBlocking {
+        shadowOf(shortcuts).setIsRequestPinShortcutSupported(true)
+        shortcuts.requestPinShortcut(oldShortcut("pinned", "Pinned"), null)
+        persist(emptyList())
+        val home = surfaces()
+        val manager = AppIconManager(context)
+        listOf(AppIcon.BLACK_WHITE, AppIcon.WHITE_COLOR).forEach { icon ->
+            manager.setIcon(icon)
+            home.publishShortcuts(HomeSnapshot(paired = true))
+            val rebound = pinned(shortcutId("route", "pinned"))
+            assertEquals(manager.selectedComponent(), rebound.activity)
+            assertTrue(rebound.isPinned)
+            assertFalse(rebound.isDynamic)
+            assertTrue(shortcuts.getShortcuts(ShortcutManager.FLAG_MATCH_PINNED).any { it.id == rebound.id })
+            assertEquals(manager.selectedComponent().flattenToString(), prefs.getString(PUBLISHED_SHORTCUTS_LAUNCHER_KEY, null))
+        }
     }
 
     @Test
@@ -153,7 +193,7 @@ class HomeSurfacesShortcutSignatureTest {
 
         surfaces().publishShortcuts(HomeSnapshot(paired = true))
 
-        assertEquals(MainActivity::class.java.name, pinned(shortcutId("route", "pinned")).intent?.component?.className)
+        assertEquals(RemoteActivity::class.java.name, pinned(shortcutId("route", "pinned")).intent?.component?.className)
     }
 
     @After
@@ -175,7 +215,7 @@ class HomeSurfacesShortcutSignatureTest {
         RejectingShortcutManager.rejectUpdates = true
         home.publishShortcuts(snapshot)
         assertEquals(1, RejectingShortcutManager.dynamicPublishes)
-        assertEquals(MainActivity::class.java.name, pinned(shortcutId("route", "pinned")).intent?.component?.className)
+        assertEquals(RemoteActivity::class.java.name, pinned(shortcutId("route", "pinned")).intent?.component?.className)
         assertEquals(BuildConfig.VERSION_CODE - 1, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
 
         // The next publish retries only the pinned update; the dynamic set is already current.
@@ -426,8 +466,24 @@ class RejectingShortcutManager : ShadowShortcutManager() {
     }
 
     @Implementation
-    override fun updateShortcuts(shortcutInfoList: MutableList<ShortcutInfo>): Boolean =
-        !rejectUpdates && super.updateShortcuts(shortcutInfoList)
+    override fun updateShortcuts(shortcutInfoList: MutableList<ShortcutInfo>): Boolean {
+        if (rejectUpdates) return false
+        // Robolectric 4.17 replaces pinned entries through addDynamicShortcuts: it drops PINNED
+        // and adds DYNAMIC. Android preserves membership on update; restore those flags here.
+        val membership = (pinnedShortcuts + dynamicShortcuts).associate {
+            it.id to (it.isPinned to it.isDynamic)
+        }
+        val updated = super.updateShortcuts(shortcutInfoList)
+        if (updated) shortcutInfoList.forEach { info ->
+            membership[info.id]?.let { (wasPinned, wasDynamic) ->
+                if (wasPinned) ShortcutInfo::class.java.getMethod("addFlags", Int::class.javaPrimitiveType)
+                    .invoke(info, 2) // ShortcutInfo.FLAG_PINNED (hidden).
+                if (!wasDynamic) ShortcutInfo::class.java.getMethod("clearFlags", Int::class.javaPrimitiveType)
+                    .invoke(info, 1) // ShortcutInfo.FLAG_DYNAMIC (hidden).
+            }
+        }
+        return updated
+    }
 
     @Implementation
     override fun setDynamicShortcuts(shortcutInfoList: MutableList<ShortcutInfo>): Boolean {

@@ -1,7 +1,7 @@
 # R8 keep rules for the phone app's release and benchmark builds.
 #
 # Most of what R8 must not remove or rename is covered elsewhere:
-# - AAPT keeps every class the merged manifest names: the activities (MainActivity also as the
+# - AAPT keeps every class the merged manifest names: the activities (RemoteActivity also as the
 #   target of the InternalLaunch alias), ShareActivity, LiveRunService, RemoteMessagingService,
 #   the receivers, the FileProvider and, in the benchmark build, the fixture activities.
 # - The libraries ship their own rules: kotlinx-serialization keeps the generated serializers of
@@ -18,7 +18,7 @@
 # moved component or a manifest edit cannot silently drop a notification action, the widget, a
 # share, a live run or a push.
 -keep class de.joinnoah.pi.remote.RemoteApplication { <init>(); }
--keep class de.joinnoah.pi.remote.MainActivity { <init>(); }
+-keep class de.joinnoah.pi.remote.RemoteActivity { <init>(); }
 -keep class de.joinnoah.pi.remote.ShareActivity { <init>(); }
 -keep class de.joinnoah.pi.remote.WatchPairingActivity { <init>(); }
 -keep class de.joinnoah.pi.remote.LiveRunService { <init>(); }

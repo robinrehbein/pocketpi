@@ -852,4 +852,11 @@
     <string name="remote_files_mutation_create_draft">A kept draft exists for this file. It opens once the file is created.</string>
     <string name="remote_files_mutation_orphan_discard_title">Discard this draft?</string>
     <string name="remote_files_mutation_orphan_discard_text">This discards your unsaved edits of %1$s on this phone. The file is read once more first; if it exists again, the draft is kept.</string>
+    <string name="remote_app_icon">App icon</string>
+    <string name="remote_app_icon_help">Choose a background and symbol. Your launcher may take a moment to update or remove the old home screen icon. Themed icons follow your Android wallpaper settings instead.</string>
+    <string name="remote_app_icon_white_color">White · Pi colors</string>
+    <string name="remote_app_icon_white_black">White · Black</string>
+    <string name="remote_app_icon_black_white">Black · White</string>
+    <string name="remote_app_icon_color_white">Pi colors · White</string>
+    <string name="remote_app_icon_error">Could not change the app icon. Please try again.</string>
 </resources>

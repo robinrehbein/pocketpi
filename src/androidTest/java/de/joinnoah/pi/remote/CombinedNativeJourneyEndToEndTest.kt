@@ -38,7 +38,7 @@ class CombinedNativeJourneyEndToEndTest {
     private lateinit var selection: RemoteSelection
     private lateinit var originalOwner: JSONObject
     private lateinit var remoteRef: String
-    private lateinit var activity: MainActivity
+    private lateinit var activity: RemoteActivity
     private val ticketMode = true
     private val proof = JSONObject().put("schemaVersion", 1).put("outcome", "running")
     private lateinit var proofFile: File
@@ -105,7 +105,7 @@ class CombinedNativeJourneyEndToEndTest {
             .put("ticketFieldsAbsent", true).put("ownersAbsent", true)
             .put("initialHead", initialHead).put("commitCount", 0).put("pushCount", 0).put("pullRequestCreateCount", 0))
         record("pre-ticket")
-        ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)).use { scenario ->
+        ActivityScenario.launch<RemoteActivity>(Intent(app, RemoteActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)).use { scenario ->
             scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { repository.state.value.hostsLoaded && repository.state.value.hosts.any { it.routeId == host.routeId } }
             assertTrue(repository.state.value.selection?.sessionId == null)

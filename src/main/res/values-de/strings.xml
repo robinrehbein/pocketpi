@@ -851,4 +851,11 @@
     <string name="remote_files_mutation_create_draft">Für diese Datei gibt es einen aufbewahrten Entwurf. Er öffnet sich, sobald die Datei angelegt ist.</string>
     <string name="remote_files_mutation_orphan_discard_title">Diesen Entwurf verwerfen?</string>
     <string name="remote_files_mutation_orphan_discard_text">Damit werden deine ungespeicherten Änderungen an %1$s auf diesem Gerät verworfen. Die Datei wird vorher noch einmal gelesen; gibt es sie wieder, bleibt der Entwurf erhalten.</string>
+    <string name="remote_app_icon">App-Icon</string>
+    <string name="remote_app_icon_help">Wähle Hintergrund und Symbol. Dein Launcher zeigt die Änderung möglicherweise verzögert an oder entfernt das alte Icon vom Startbildschirm. Bei aktivierten Design-Icons gelten stattdessen deine Android-Hintergrundeinstellungen.</string>
+    <string name="remote_app_icon_white_color">Weiß · Pi-Farben</string>
+    <string name="remote_app_icon_white_black">Weiß · Schwarz</string>
+    <string name="remote_app_icon_black_white">Schwarz · Weiß</string>
+    <string name="remote_app_icon_color_white">Pi-Farben · Weiß</string>
+    <string name="remote_app_icon_error">Das App-Icon konnte nicht geändert werden. Bitte versuche es erneut.</string>
 </resources>
