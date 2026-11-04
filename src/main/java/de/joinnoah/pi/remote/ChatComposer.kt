@@ -1275,6 +1275,7 @@ private fun QuestionComposer(
                     val questionId = question.text("id")
                     QuestionCard(
                         question = question,
+                        embedded = true,
                         editorScope = state.editorQuestionGeneration,
                         editorAvailable = editorCapabilityAvailable(question, state) &&
                             (!question.containsKey("editorUploadGrantId") || QUESTION_PAGED_EDITOR_CAPABILITY in state.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in state.unavailableCapabilities),
@@ -1296,7 +1297,7 @@ private fun QuestionComposer(
                 }
             }
             if (stopHint) EscapeStopHint()
-            OutlinedButton(
+            SheetSecondaryButton(
                 onClick = onAbort,
                 enabled = abortEnabled,
                 modifier = Modifier.fillMaxWidth().testTag("abortRun"),

@@ -18,6 +18,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
@@ -25,6 +27,23 @@ import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.*
 
 private class QuestionCallbackFence { var active = false }
+
+/** The composer already supplies the glass backdrop; do not cover it with a second card. */
+@Composable
+private fun QuestionSurface(
+    title: String,
+    embedded: Boolean,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    if (embedded) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+            content()
+        }
+    } else {
+        Section(title, content = content)
+    }
+}
 
 @Composable
 internal fun QuestionCard(
@@ -43,6 +62,7 @@ internal fun QuestionCard(
     onEditPagedEditor: (String) -> Unit = {},
     onSubmitPagedEditor: (String) -> Unit = {},
     onRetryPagedEditorStorage: () -> Unit = {},
+    embedded: Boolean = false,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
@@ -67,7 +87,10 @@ internal fun QuestionCard(
         if (if (cancel) currentCancelEnabled else currentControlsEnabled && !currentAnswerBlocked) onAnswer(answer)
     }
     key(EditorQuestionKey(question)) {
-    Section(if (kind == "plan") stringResource(R.string.remote_plan_title) else question.optionalText("title") ?: stringResource(R.string.remote_questions)) {
+    QuestionSurface(
+        title = if (kind == "plan") stringResource(R.string.remote_plan_title) else question.optionalText("title") ?: stringResource(R.string.remote_questions),
+        embedded = embedded,
+    ) {
         if (storage?.storagePending == true) Text(stringResource(R.string.remote_paged_editor_storage_pending), Modifier.testTag("pagedEditorStoragePending"))
         if (storage?.storageFailed == true) Text(stringResource(R.string.remote_paged_editor_storage_failed), Modifier.testTag("pagedEditorStorageFailure"), color = MaterialTheme.colorScheme.error)
         if (storage?.storageRetryAvailable == true) TextButton(
@@ -561,14 +584,14 @@ internal fun QuestionnaireForm(
             stringResource(R.string.remote_question_required),
             style = MaterialTheme.typography.bodySmall,
         )
-    Button(
+    SheetPrimaryButton(
         enabled = controlsEnabled && valid,
         onClick = {
-            if (!currentControlsEnabled) return@Button
+            if (!currentControlsEnabled) return@SheetPrimaryButton
             // The watch sends the same encoding (WatchQuestionAnswers), defaults included. The
             // state can change after the last composition enabled this button, so check again.
             val answers = QuestionnaireAnswers.of(selected, customDefaults, custom)
-            if (!answers.valid(questions)) return@Button
+            if (!answers.valid(questions)) return@SheetPrimaryButton
             onAnswer(answers.wire(questions))
         },
     ) {
