@@ -7,7 +7,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
@@ -60,7 +59,7 @@ class HideSessionsUiTest {
         compose.setContent {
             MaterialTheme {
                 CompositionLocalProvider(LocalSessionMarks provides store) {
-                    RemoteNavigation(repository, settings, false, {})
+                    PointerMenuHost { RemoteNavigation(repository, settings, false, {}) }
                 }
             }
         }
@@ -134,10 +133,12 @@ class HideSessionsUiTest {
         ).copy(hidden = true)
         compose.setContent {
             MaterialTheme {
-                SessionListRow(
-                    item = item, enabled = true, closeAvailable = false, onClick = {}, onClose = {},
-                    onHide = { events += "hide" }, onUnhide = { events += "unhide" }, hidden = true,
-                )
+                PointerMenuHost {
+                    SessionListRow(
+                        item = item, enabled = true, closeAvailable = false, onClick = {}, onClose = {},
+                        onHide = { events += "hide" }, onUnhide = { events += "unhide" }, hidden = true,
+                    )
+                }
             }
         }
         compose.onNodeWithText(label(R.string.remote_session_hidden_label), substring = true).assertIsDisplayed()

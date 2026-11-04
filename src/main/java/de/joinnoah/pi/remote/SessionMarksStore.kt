@@ -173,17 +173,20 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
 
     /**
      * Takes back [hide] field by field: the hide goes, and the seen and finished fields return to
-     * [previous] only where they still equal what the hide wrote ([applied]), so a look or a finish
-     * after the hide stays. The pin is untouched. Marks the insert evicted are not brought back.
+     * [previous] only while all of them still equal what the hide wrote ([applied]), so a look or a
+     * finish after the hide stays. The pin is untouched. Marks the insert evicted are not brought back.
      */
     fun undoHide(routeId: String, sessionId: String, previous: SessionMark?, applied: SessionMark?) =
         change(routeId, sessionId) {
+            val untouched = it.seenAt == applied?.seenAt &&
+                it.seenUpdatedAt == applied?.seenUpdatedAt &&
+                it.finishedAt == applied?.finishedAt
             it.copy(
                 hiddenUpdatedAt = null,
                 hiddenAt = null,
-                seenAt = if (it.seenAt == applied?.seenAt) previous?.seenAt else it.seenAt,
-                seenUpdatedAt = if (it.seenUpdatedAt == applied?.seenUpdatedAt) previous?.seenUpdatedAt else it.seenUpdatedAt,
-                finishedAt = if (it.finishedAt == applied?.finishedAt) previous?.finishedAt else it.finishedAt,
+                seenAt = if (untouched) previous?.seenAt else it.seenAt,
+                seenUpdatedAt = if (untouched) previous?.seenUpdatedAt else it.seenUpdatedAt,
+                finishedAt = if (untouched) previous?.finishedAt else it.finishedAt,
             )
         }
 
