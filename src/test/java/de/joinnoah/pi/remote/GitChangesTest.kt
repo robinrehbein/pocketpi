@@ -130,6 +130,7 @@ class GitChangesTest {
             backgroundScope,
             StandardTestDispatcher(testScheduler),
             now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
         )
 
     private fun withRequest(payload: JsonObject, request: JsonObject): JsonObject =

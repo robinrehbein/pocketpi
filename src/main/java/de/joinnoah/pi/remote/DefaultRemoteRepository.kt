@@ -1433,7 +1433,9 @@ class DefaultRemoteRepository(
     private fun update(block: (RemoteState) -> RemoteState) {
         checkMainThread()
         val previous = mutable.value
-        val next = reconcileSubagents(previous, block(previous))
+        val next = reconcileChatWorkTiming(
+            previous, reconcileSubagents(previous, block(previous)), terminalNow,
+        )
         if (previous.selection != next.selection && nativePresenceSelection == previous.selection) {
             nativePresenceOwner = null
             nativePresenceSelection = null

@@ -42,6 +42,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
@@ -70,6 +72,7 @@ internal data class SessionActivityLine(
     val thinkingLevel: String? = null,
     /** Running tools beyond the one named (typed only); see [activityExtraTools]. */
     val extraTools: Int = 0,
+    val completedDurationMillis: Long? = null,
 )
 
 internal fun sessionActivityAllowed(state: RemoteState, destination: RemoteSelection?): Boolean =
@@ -98,6 +101,14 @@ internal fun sessionActivityLine(
      */
     now: Long? = null,
 ): SessionActivityLine? {
+    if (state.status == "idle" && state.connected && !state.stale && !state.loading && !state.preview &&
+        destination?.sessionId != null && state.selection == destination && state.questions.isEmpty()
+    ) {
+        state.chatWorkTiming.durationMillis?.let {
+            return SessionActivityLine(R.string.remote_chat_activity_completed, glyphKind = StatusGlyphKind.DONE,
+                animate = false, completedDurationMillis = it)
+        }
+    }
     val typed = if (now != null) {
         typedSessionActivity(state, destination?.sessionId, now)
     } else if (state.executionActivity.negotiated) {
@@ -176,7 +187,9 @@ internal fun waitingForOutputAllowed(
 @Composable
 internal fun ChatCurrentActivity(line: SessionActivityLine?) {
     if (line == null) return
-    val label = stringResource(line.labelRes)
+    val label = line.completedDurationMillis?.let { duration ->
+        stringResource(line.labelRes, completedWorkDuration(duration))
+    } ?: stringResource(line.labelRes)
     val more = when {
         line.extraTools <= 0 -> null
         line.extraTools > MAX_SHOWN_EXTRA_TOOLS -> stringResource(R.string.remote_chat_activity_more_tools_many, MAX_SHOWN_EXTRA_TOOLS)
@@ -196,7 +209,12 @@ internal fun ChatCurrentActivity(line: SessionActivityLine?) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusGlyph(line.glyphKind, color, Modifier.size(14.dp).testTag("chatCurrentActivityGlyph"), animate = line.animate)
-        ActivityMarquee(text, Modifier.weight(1f), motionEnabled = activityMotionEnabled(), active = activityLifecycleResumed())
+        if (line.completedDurationMillis != null) {
+            Text(text, Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.labelSmall,
+                color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        } else {
+            ActivityMarquee(text, Modifier.weight(1f), motionEnabled = activityMotionEnabled(), active = activityLifecycleResumed())
+        }
     }
 }
 
