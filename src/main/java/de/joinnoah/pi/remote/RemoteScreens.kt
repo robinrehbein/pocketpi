@@ -2605,7 +2605,8 @@ internal fun RemoteScreen(
         },
     ) { insets ->
         val accepting = acceptTarget
-        if (key is RemoteNavKey.Projects && accepting != null)
+        if (key is RemoteNavKey.Projects && accepting != null) {
+            val acceptedTicket = state.tickets.pages[accepting.first]?.items?.firstOrNull { it.ref == accepting.second }
             AcceptSheet(
                 ref = accepting.second,
                 onConfirm = { comment ->
@@ -2614,7 +2615,13 @@ internal fun RemoteScreen(
                 },
                 onDismiss = { acceptTarget = null },
                 connected = state.connected,
+                closeOffer = acceptedTicket?.let { acceptCloseOffer(state, accepting.first, it, routeMarks) },
+                onConfirmClosing = { comment, sessionIds ->
+                    (model as? ProjectsViewModel)?.queueAccept(accepting.first, accepting.second, comment, sessionIds)
+                    acceptTarget = null
+                },
             )
+        }
         BoxWithConstraints(
             if (key is RemoteNavKey.Chat)
                 Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()

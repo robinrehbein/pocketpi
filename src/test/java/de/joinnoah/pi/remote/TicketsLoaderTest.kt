@@ -19,6 +19,7 @@ class TicketsLoaderTest {
         var failComment: Exception? = null
         var failStart: Exception? = null
         var moveGate: CompletableDeferred<Unit>? = null
+        var moveSkipped = false
         var failStatus: Exception? = null
         var detailGate: CompletableDeferred<Unit>? = null
         val failPage = mutableMapOf<String, Exception>()
@@ -57,7 +58,7 @@ class TicketsLoaderTest {
             calls += "move:$ref:$state:$comment"
             moveGate?.await()
             failMove?.let { throw it }
-            return false
+            return moveSkipped
         }
 
         override suspend fun startTicket(projectId: String, ref: String, note: String?): String {
@@ -79,7 +80,12 @@ class TicketsLoaderTest {
             connected = true,
             capabilities = setOf(TICKETS_CAPABILITY),
         )
-        val loader = TicketsLoader(scope, source, { state }, now) { state = it(state) }
+        /** What [TicketsLoader] asked to close after an accept: route, project and chats. */
+        val closes = mutableListOf<Triple<String, String, List<String>>>()
+        val loader =
+            TicketsLoader(scope, source, { state }, now, onAccepted = { route, projectId, ids -> closes += Triple(route, projectId, ids) }) {
+                state = it(state)
+            }
         val tickets get() = state.tickets
     }
 
@@ -149,6 +155,103 @@ class TicketsLoaderTest {
         assertTrue("move:DEV-1:Done:Accepted" in e.source.calls)
         assertNull(e.tickets.pendingAccept)
         assertNull(e.tickets.writeFailure)
+    }
+
+    @Test
+    fun anAcceptThatWentThroughClosesItsChats() = runTest {
+        val e = loaded()
+        e.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1", "s2", "s1"))
+        runCurrent()
+        assertEquals(listOf("s1", "s2"), e.tickets.pendingAccept!!.closeSessionIds)
+        advanceTimeBy(4_999)
+        runCurrent()
+        assertTrue(e.closes.isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(Triple("route", "p1", listOf("s1", "s2"))), e.closes)
+    }
+
+    @Test
+    fun anAcceptTheHostSkippedStillClosesItsChats() = runTest {
+        val e = loaded(Fake().apply { moveSkipped = true })
+        e.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(listOf(Triple("route", "p1", listOf("s1"))), e.closes)
+    }
+
+    @Test
+    fun anAcceptWithoutChatsToCloseClosesNothing() = runTest {
+        val e = loaded()
+        e.loader.queueAccept("p1", "DEV-1", "Accepted")
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue("move:DEV-1:Done:Accepted" in e.source.calls)
+        assertTrue(e.closes.isEmpty())
+    }
+
+    @Test
+    fun undoFailureUnknownOutcomeOrLostConnectionCloseNothing() = runTest {
+        // Undone in the window.
+        val undone = loaded()
+        undone.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(2_000)
+        undone.loader.undo()
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue(undone.closes.isEmpty())
+        // Dropped by a lost connection in the window.
+        val lost = loaded()
+        lost.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(2_000)
+        lost.state = lost.state.copy(connected = false)
+        lost.loader.connectionLost()
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue(lost.closes.isEmpty())
+        // Refused by the host.
+        val refused = loaded(Fake().apply { failMove = RemoteRequestException("forbidden") })
+        refused.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(TicketsFailure.FORBIDDEN, refused.tickets.writeFailure)
+        assertTrue(refused.closes.isEmpty())
+        // Timed out: the outcome is unknown.
+        val unknown = loaded(Fake().apply { failMove = RemoteRequestException.timeout() })
+        unknown.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue(unknown.tickets.outcomeUnknown)
+        assertTrue(unknown.closes.isEmpty())
+    }
+
+    @Test
+    fun anAcceptAnsweredAfterTheMacChangedClosesNothing() = runTest {
+        val e = loaded(Fake().apply { moveGate = CompletableDeferred() })
+        e.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue("move:DEV-1:Done:Accepted" in e.source.calls)
+        // The request was sent; its reply comes once another Mac is shown.
+        e.state = e.state.copy(host = e.state.host!!.copy(routeId = "other"))
+        e.source.moveGate!!.complete(Unit)
+        runCurrent()
+        assertTrue(e.closes.isEmpty())
+    }
+
+    @Test
+    fun anAcceptAnsweredOnALaterConnectionClosesNothing() = runTest {
+        val e = loaded(Fake().apply { moveGate = CompletableDeferred() })
+        e.loader.queueAccept("p1", "DEV-1", "Accepted", listOf("s1"))
+        advanceTimeBy(5_000)
+        runCurrent()
+        // The connection drops and comes back to the same Mac before the reply arrives.
+        e.state = e.state.copy(connected = false)
+        e.loader.connectionLost()
+        e.state = e.state.copy(connected = true)
+        e.source.moveGate!!.complete(Unit)
+        runCurrent()
+        assertTrue(e.closes.isEmpty())
     }
 
     @Test

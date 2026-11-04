@@ -80,6 +80,15 @@
     <string name="remote_tickets_accept_comment">Accepted in PocketPi.</string>
     <string name="remote_tickets_comment_label">Comment</string>
     <string name="remote_tickets_accepting">%1$s is being accepted</string>
+    <plurals name="remote_tickets_accept_close_linked">
+        <item quantity="one">Also close %d finished chat linked to this ticket</item>
+        <item quantity="other">Also close %d finished chats linked to this ticket</item>
+    </plurals>
+    <plurals name="remote_tickets_accept_busy_linked">
+        <item quantity="one">%d linked chat is still active and stays open</item>
+        <item quantity="other">%d linked chats are still active and stay open</item>
+    </plurals>
+    <string name="remote_tickets_accept_chats_stayed_open">The ticket is done, but some of its linked chats could not be closed and stayed open.</string>
     <string name="remote_tickets_undo">Undo</string>
     <string name="remote_tickets_comment_title">Comment on %1$s</string>
     <string name="remote_tickets_send">Send</string>

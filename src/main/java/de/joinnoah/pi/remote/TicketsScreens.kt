@@ -100,6 +100,8 @@ internal fun TicketsScreen(key: RemoteNavKey.Tickets, model: TicketsViewModel, n
 internal fun TicketDetailScreen(key: RemoteNavKey.Ticket, model: TicketsViewModel, navigator: RemoteNavigator) {
     val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val sessionMarkMap by sessionMarksState()
+    val routeMarks = remember(sessionMarkMap, key.routeId) { sessionMarksById(sessionMarkMap, key.routeId) }
     val usable = canUseTickets(state)
     val asked = state.tickets.routeId == key.routeId && state.tickets.detailRef == key.ref
     // A restored page asks again, and so does a reconnect: the loader forgets a read the lost
@@ -116,6 +118,8 @@ internal fun TicketDetailScreen(key: RemoteNavKey.Ticket, model: TicketsViewMode
         onOpenChat = { sessionId -> navigator.open(RemoteNavKey.Chat(key.routeId, key.projectId, sessionId)) },
         onOpenLink = { openHttpsLink(context, it) },
         onAccept = { comment -> model.queueAccept(key.projectId, key.ref, comment) },
+        onAcceptClosing = { comment, sessionIds -> model.queueAccept(key.projectId, key.ref, comment, sessionIds) },
+        marks = routeMarks,
         onComment = { text -> model.comment(key.projectId, key.ref, text) },
         onMove = { target, comment -> model.move(key.projectId, key.ref, target, comment) },
         onStart = { note -> model.start(key.projectId, key.ref, note) },
@@ -476,6 +480,10 @@ internal fun TicketDetailContent(
     modifier: Modifier = Modifier,
     onUndo: () -> Unit = {},
     onDismissNotice: () -> Unit = {},
+    /** Accepts and closes the linked chats offered by [acceptCloseOffer]. */
+    onAcceptClosing: (comment: String, sessionIds: List<String>) -> Unit = { comment, _ -> onAccept(comment) },
+    /** The shown Mac's session marks; a pinned linked chat is not offered for closing. */
+    marks: Map<String, SessionMark> = emptyMap(),
 ) {
     var sheet by rememberSaveable { mutableStateOf<TicketSheet?>(null) }
     val view = ticketDetailView(state, ref)
@@ -541,7 +549,12 @@ internal fun TicketDetailContent(
     val close = { sheet = null }
     if (open != null)
         when (sheet) {
-            TicketSheet.ACCEPT -> AcceptSheet(open.ref, { onAccept(it); close() }, close, state.connected)
+            TicketSheet.ACCEPT ->
+                AcceptSheet(
+                    open.ref, { onAccept(it); close() }, close, state.connected,
+                    closeOffer = acceptCloseOffer(state, projectId, open, marks),
+                    onConfirmClosing = { comment, sessionIds -> onAcceptClosing(comment, sessionIds); close() },
+                )
             TicketSheet.COMMENT -> CommentSheet(open.ref, { onComment(it); close() }, close, state.connected)
             TicketSheet.STATUS -> StatusSheet(open, { target, comment -> onMove(target, comment); close() }, close, state.connected)
             TicketSheet.START -> StartSheet(projectId, open.ref, state.tickets, state.connected, onStart, onOpenChat, close)

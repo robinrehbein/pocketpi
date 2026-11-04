@@ -97,6 +97,14 @@ internal class NavigationFakeRepository : RemoteRepository {
         ticketAccepts += Triple(projectId, ref, comment)
     }
 
+    /** The chats each accept asked to close, in the order of [ticketAccepts]. */
+    val ticketAcceptCloses = mutableListOf<List<String>>()
+
+    override fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String>) {
+        ticketAccepts += Triple(projectId, ref, comment)
+        ticketAcceptCloses += closeSessionIds
+    }
+
     override fun undoAccept() {
         ticketUndos++
     }

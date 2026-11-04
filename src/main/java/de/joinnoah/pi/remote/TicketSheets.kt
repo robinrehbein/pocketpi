@@ -32,6 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,19 +98,53 @@ private fun SheetConfirm(text: String, enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Confirms setting [ref] to Done; the comment is prefilled and editable. */
+/**
+ * Confirms setting [ref] to Done; the comment is prefilled and editable. With chats of [closeOffer]
+ * to close, a checkbox (off by default) also closes them: confirming with it ticked calls
+ * [onConfirmClosing] with the chats closable at that moment. Working linked chats get a note that
+ * they stay open.
+ */
 @Composable
 internal fun AcceptSheet(
     ref: String,
     onConfirm: (comment: String) -> Unit,
     onDismiss: () -> Unit,
     connected: Boolean = true,
+    closeOffer: AcceptCloseOffer? = null,
+    onConfirmClosing: (comment: String, sessionIds: List<String>) -> Unit = { comment, _ -> onConfirm(comment) },
 ) {
     val prefill = stringResource(R.string.remote_tickets_accept_comment)
     var comment by rememberSaveable { mutableStateOf(prefill) }
+    var closeLinked by rememberSaveable { mutableStateOf(false) }
+    val closable = closeOffer?.closable.orEmpty()
+    val busy = closeOffer?.busy ?: 0
     SheetFrame(stringResource(R.string.remote_tickets_accept_title, ref), onDismiss) {
         SheetField(stringResource(R.string.remote_tickets_comment_label), comment, { comment = it }, MAX_TICKET_MOVE_COMMENT_CHARS)
-        SheetConfirm(stringResource(R.string.remote_ticket_accept), connected && comment.isNotBlank()) { onConfirm(comment.trim()) }
+        if (closable.isNotEmpty())
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .toggleable(value = closeLinked, role = Role.Checkbox, onValueChange = { closeLinked = it })
+                    .testTag("ticketAcceptCloseLinked"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Checkbox(checked = closeLinked, onCheckedChange = null)
+                Text(
+                    pluralStringResource(R.plurals.remote_tickets_accept_close_linked, closable.size, closable.size),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        if (busy > 0)
+            Text(
+                pluralStringResource(R.plurals.remote_tickets_accept_busy_linked, busy, busy),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("ticketAcceptBusyLinked"),
+            )
+        SheetConfirm(stringResource(R.string.remote_ticket_accept), connected && comment.isNotBlank()) {
+            if (closeLinked && closable.isNotEmpty()) onConfirmClosing(comment.trim(), closable)
+            else onConfirm(comment.trim())
+        }
     }
 }
 

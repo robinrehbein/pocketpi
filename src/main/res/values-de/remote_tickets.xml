@@ -80,6 +80,15 @@
     <string name="remote_tickets_accept_comment">Abgenommen in PocketPi.</string>
     <string name="remote_tickets_comment_label">Kommentar</string>
     <string name="remote_tickets_accepting">%1$s wird abgenommen</string>
+    <plurals name="remote_tickets_accept_close_linked">
+        <item quantity="one">Auch %d verknüpften fertigen Chat schließen</item>
+        <item quantity="other">Auch %d verknüpfte fertige Chats schließen</item>
+    </plurals>
+    <plurals name="remote_tickets_accept_busy_linked">
+        <item quantity="one">%d verknüpfter Chat ist noch aktiv und bleibt offen</item>
+        <item quantity="other">%d verknüpfte Chats sind noch aktiv und bleiben offen</item>
+    </plurals>
+    <string name="remote_tickets_accept_chats_stayed_open">Das Ticket ist erledigt, aber einige verknüpfte Chats ließen sich nicht schließen und sind offen geblieben.</string>
     <string name="remote_tickets_undo">Rückgängig</string>
     <string name="remote_tickets_comment_title">%1$s kommentieren</string>
     <string name="remote_tickets_send">Senden</string>
