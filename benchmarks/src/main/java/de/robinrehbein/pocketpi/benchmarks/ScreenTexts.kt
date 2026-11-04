@@ -29,12 +29,31 @@ internal fun UiDevice.screenTexts(): String =
  * Taps the text [tap] until [expected] shows, at most three times. On the emulator a tap that lands
  * while the screen is still settling is sometimes lost; one lost tap must not fail the run.
  */
-internal fun UiDevice.tapUntil(tap: String, expected: BySelector, what: String, timeoutMs: Long = 20_000) {
+internal fun UiDevice.tapUntil(
+    tap: String,
+    expected: BySelector,
+    what: String,
+    timeoutMs: Long = 20_000,
+    rowTag: String? = null,
+) {
+    val trace = mutableListOf<String>()
     repeat(3) {
-        findObject(By.text(tap))?.click()
+        if (rowTag == null) {
+            findObject(By.text(tap))?.click()
+        } else {
+            // A featured title alone may have clipped bounds or move during list layout.
+            // Tap its uniquely tagged full row, and never retry that tap on another screen.
+            if (hasObject(expected)) return
+            check(hasObject(By.res("projectsMacHeading"))) { "$what. Left Projects. " + screenTexts() }
+            try {
+                projectRow(rowTag, trace)?.click()
+            } catch (_: StaleObjectException) {
+                return@repeat
+            }
+        }
         if (wait(Until.hasObject(expected), timeoutMs)) return
     }
-    error("$what. " + screenTexts())
+    error("$what. " + screenTexts() + " Navigation: " + trace.joinToString(" | "))
 }
 
 /** The fixture project of src/benchmark/assets/connected-flow.json, as its Projects row is tagged. */
