@@ -21,7 +21,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
@@ -258,7 +257,6 @@ internal fun SessionListRow(
     ) {
         Column(
             Modifier.background(MaterialTheme.colorScheme.background)
-                .then(if (hidden) Modifier.alpha(0.6f) else Modifier)
         ) {
             Row(
                 modifier =
@@ -366,6 +364,8 @@ internal fun SessionListRow(
                             title,
                             Modifier.weight(1f),
                             style = MaterialTheme.typography.titleMedium,
+                            // The Hidden chip and the row description say it; the muted title is a cue.
+                            color = if (hidden) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

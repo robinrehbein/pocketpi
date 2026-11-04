@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -90,6 +91,16 @@ class HideSessionsUiTest {
         assertEquals(100L, store.mark("studio", "s1")?.hiddenUpdatedAt)
 
         compose.onNodeWithText(label(R.string.remote_undo)).performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Session s1").assertIsDisplayed()
+        assertNull(store.mark("studio", "s1")?.hiddenUpdatedAt)
+    }
+
+    @Test
+    fun swipingAProjectsPageRowDoesNotHideIt() {
+        renderProjects(listOf(terminalChat("s1", 100)))
+        compose.onNodeWithText("Session s1").performTouchInput { swipeLeft() }
         compose.waitForIdle()
 
         compose.onNodeWithText("Session s1").assertIsDisplayed()

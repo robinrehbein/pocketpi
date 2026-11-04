@@ -42,6 +42,11 @@ internal data class SessionListItem(
     val hostWorker: Boolean = false,
     /** Hidden on this phone (see [sessionHidden]); listed only while the hidden rows are shown. */
     val hidden: Boolean = false,
+    /**
+     * The status the session reported is running or waiting, whatever [availability] shows (an
+     * offline phone reads every row as offline). [sessionHidden] never hides such a row.
+     */
+    val busyStatus: Boolean = false,
 )
 
 data class ProjectChatSummary(
@@ -298,6 +303,7 @@ internal fun sessionListItem(
             availability != SessionAvailability.OFFLINE && !loading && confirmed,
         lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
+        busyStatus = session.text("status").let { it == "running" || it == "waiting" },
     )
 }
 
@@ -427,6 +433,7 @@ internal fun canHideSession(
         item.parentSessionId == null &&
         !item.pinned &&
         !item.hidden &&
+        !item.busyStatus &&
         item.id != shownSessionId &&
         (!hostOwned(item, capabilities) || item.availability == SessionAvailability.OFFLINE)
 

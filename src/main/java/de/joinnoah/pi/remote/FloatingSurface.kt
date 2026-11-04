@@ -275,10 +275,8 @@ internal fun GlassSnackbar(data: SnackbarData, modifier: Modifier = Modifier) {
             Text(
                 visuals.message,
                 Modifier.weight(1f, fill = false).padding(vertical = 14.dp)
-                    .semantics {
-                        liveRegion = LiveRegionMode.Polite
-                        if (description != null) contentDescription = description
-                    },
+                    // SnackbarHost already wraps the snackbar in a polite live region.
+                    .semantics { if (description != null) contentDescription = description },
                 style = MaterialTheme.typography.bodyMedium,
             )
             visuals.actionLabel?.let { label ->

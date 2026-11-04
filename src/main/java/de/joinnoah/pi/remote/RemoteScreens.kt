@@ -308,6 +308,9 @@ internal fun RemoteScreen(
     val shownSessionId = state.selection.sessionId
     // Sessions hidden on this phone stay out of the list until the footer shows them; not persisted.
     var showHiddenSessions by rememberSaveable(key) { mutableStateOf(false) }
+    // A third list build next to visibleSessions and sessionCount: the hidden rows leave those two
+    // lists, and deriving the count from one of them would have to redo the hide rule for
+    // subagents and the offline filter. The inputs are the same, so it reruns only when they change.
     val hiddenSessionTotal =
         remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, routeMarks) {
             hiddenSessionCount(
@@ -3466,7 +3469,8 @@ internal fun RemoteScreen(
                                     )
                                 }
                             }
-                            if (hiddenSessionTotal > 0)
+                            // The count ignores the search, so the footer waits until the query is cleared.
+                            if (hiddenSessionTotal > 0 && !(sessionSearchShown && sessionQuery.isNotBlank()))
                                 item(key = "sessions_hidden_footer") {
                                     HiddenSessionsFooter(
                                         count = hiddenSessionTotal,
@@ -4784,6 +4788,8 @@ private fun ProjectChatRow(
             onClick = onClick,
             onClose = {},
             onHide = if (canHideSession(row, capabilities)) onHide else null,
+            // Hide on the Projects page stays a menu entry; these rows have never swiped.
+            swipe = SwipeAction.NONE to SwipeAction.NONE,
         )
     }
 }

@@ -774,6 +774,16 @@ class SessionListPresentationTest {
         assertFalse(canHideSession(item("tui", status = "running"), close))
         assertFalse(canHideSession(item("tui", status = "waiting"), close))
         assertFalse(canHideSession(item("tui", parent = "p"), close))
+        // A disconnected phone reads every row as offline, but a running or waiting status stays unhideable.
+        for (status in listOf("running", "waiting")) {
+            val offline =
+                sessionListItem(
+                    Wire.objectOf("id" to "x", "title" to "X", "origin" to "tui", "status" to status),
+                    connected = false, loading = false, confirmed = false,
+                )
+            assertEquals(SessionAvailability.OFFLINE, offline.availability)
+            assertFalse(canHideSession(offline, close))
+        }
         assertFalse(canHideSession(item("tui").copy(pinned = true), close))
         assertFalse(canHideSession(item("tui").copy(hidden = true), close))
         assertFalse(canHideSession(item("tui"), close, shownSessionId = "x"))
