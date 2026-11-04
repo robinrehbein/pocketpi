@@ -1626,23 +1626,35 @@ internal fun RemoteScreen(
         mutableStateOf(cardRouteId != null && navigator.notificationCardDismissed(cardRouteId))
     }
     // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
+    var readyShowAll by rememberSaveable { mutableStateOf(false) }
     var runningShowAll by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
+    // "5 minutes ago" on the Projects page's chat rows moves on without any state change. Not read here
+    // (no `by`): only the rows read it, so the tick recomposes them and not the whole page.
+    val projectsNow =
+        produceState(System.currentTimeMillis(), key) {
+            if (key !is RemoteNavKey.Projects) return@produceState
+            while (true) {
+                delay(ELAPSED_TICK_MILLIS)
+                value = System.currentTimeMillis()
+            }
+        }
     // Keep this captured value stable: recreating it on chat recomposition invalidates the lazy
     // content, whose layoutInfo observation would otherwise trigger another measurement.
     val projectQuickChats = remember(
-        key, projectSelected, state.projectChats, state.connected, runningShowAll, recentShowAll, routeMarks,
+        key, projectSelected, state.projectChats, state.connected, runningShowAll, recentShowAll, readyShowAll, routeMarks,
     ) {
         quickChats(
             if (key is RemoteNavKey.Projects && !projectSelected) {
                 mainSessionChats(state.projectChats).filterNot { projectChatHidden(it, routeMarks) }
             } else emptyList(),
             state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
+            marks = routeMarks, showReadyAll = readyShowAll,
         )
     }
     val compactionFrame = rememberBrailleSpinnerFrame(
         (key is RemoteNavKey.Sessions && listedSessions.any { it.compacting }) ||
-            (projectQuickChats.waiting + projectQuickChats.running + projectQuickChats.recent).any { chat ->
+            (projectQuickChats.waiting + projectQuickChats.ready + projectQuickChats.running + projectQuickChats.recent).any { chat ->
                 sessionListItem(
                     chat.session, state.connected && chat.verified, loading = false, confirmed = chat.verified,
                     compaction = state.sessionCompactions[chat.session.text("id")], nowMillis = sessionCompactionNow,
@@ -3223,15 +3235,17 @@ internal fun RemoteScreen(
                         }
                         is RemoteNavKey.Projects -> {
                             // What needs the user leads the page: the featured chats waiting for an answer, then
-                            // the running ones. Then the shared projects, then the recent chats. Beside an open
-                            // project the chats hide, as before.
-                            // Every waiting chat leads, since the heading promises all of them; running and recent
-                            // chats are capped at three each until their "Show all" (see quickChats).
+                            // the ready ones, then the running ones. Then the shared projects, then the recent
+                            // chats. Beside an open project the chats hide, as before.
+                            // Every featured waiting chat shows (the featured chats are bounded, see
+                            // sortedProjectChats); ready, running and recent chats are capped at three each until
+                            // their "Show all" (see quickChats).
                             // Main sessions only: a busy subagent shows as the session it works for.
                             val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
                             val closableIds = closableProjectChatIds(state, mainChats)
                             val quick = projectQuickChats
                             val waitingChats = quick.waiting
+                            val readyChats = quick.ready
                             val runningChats = quick.running
                             val recentChats = quick.recent
                             val homeTicketRef: (String) -> String? = { ticketRefForSession(state, it) }
@@ -3242,6 +3256,7 @@ internal fun RemoteScreen(
                                     marks = routeMarks,
                                     connected = state.connected,
                                     ticketRef = homeTicketRef,
+                                    now = projectsNow,
                                     compactions = state.sessionCompactions,
                                     nowMillis = sessionCompactionNow,
                                     compactionFrame = compactionFrame,
@@ -3291,6 +3306,19 @@ internal fun RemoteScreen(
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
                                 projectChatRows(waitingChats, chatRowContext)
+                            }
+                            if (readyChats.isNotEmpty()) {
+                                item(key = "project_chats_ready_heading") {
+                                    ProjectsSectionHeading(stringResource(R.string.remote_status_ready))
+                                }
+                                projectChatRows(readyChats, chatRowContext, ready = true)
+                                if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = readyShowAll,
+                                        tag = "quickChatsShowAllReady",
+                                        onClick = { readyShowAll = !readyShowAll },
+                                    )
+                                }
                             }
                             if (runningChats.isNotEmpty()) {
                                 item(key = "project_chats_running_heading") {
@@ -3356,6 +3384,10 @@ internal fun RemoteScreen(
                                             } else null,
                                         // Only a list the Mac confirmed has counts; a cached row has none.
                                         counts = state.projectSessions[projectId]?.counts,
+                                        unreadReady =
+                                            state.projectSessions[projectId]
+                                                ?.takeIf { it.verified }
+                                                ?.let { unreadReadyCount(it.sessions, routeMarks) } ?: 0,
                                     )
                                 }
                             }
@@ -4830,6 +4862,8 @@ private class ProjectChatRowContext(
     val marks: Map<String, SessionMark>,
     val connected: Boolean,
     val ticketRef: (String) -> String?,
+    /** The minute clock the relative ages and the "Old" chip read. */
+    val now: State<Long>,
     val compactions: Map<String, SessionCompaction>,
     val nowMillis: Long,
     val compactionFrame: State<Int>,
@@ -4846,14 +4880,21 @@ private class ProjectChatRowContext(
 )
 
 /** One row per featured chat of a Projects section, in the order given. */
-private fun LazyListScope.projectChatRows(chats: List<ProjectChatSummary>, context: ProjectChatRowContext) {
+private fun LazyListScope.projectChatRows(
+    chats: List<ProjectChatSummary>,
+    context: ProjectChatRowContext,
+    /** The chats are the Ready group, so a long-idle one wears the "Old" chip. */
+    ready: Boolean = false,
+) {
     items(chats, key = { "chat:${it.projectId}:${it.session.text("id")}" }) { chat ->
-        ProjectChatRow(chat, context)
+        ProjectChatRow(chat, context, ready)
     }
 }
 
 @Composable
-private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowContext) {
+private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowContext, ready: Boolean) {
+    // Read here, not by the caller, so the minute tick recomposes the rows only.
+    val nowMillis = context.now.value
     val id = chat.session.optionalText("id")
     val mark = id?.let(context.marks::get)
     val item =
@@ -4883,6 +4924,8 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
             onClose = { context.onClose(chat, item) },
             onHide = if (!closable && canHideSession(item, context.capabilities)) ({ context.onHide(chat) }) else null,
             swipe = context.swipe,
+            now = nowMillis,
+            old = ready && readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),
         )
     }
 }

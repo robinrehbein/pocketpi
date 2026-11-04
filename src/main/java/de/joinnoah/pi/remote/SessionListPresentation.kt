@@ -101,18 +101,27 @@ internal fun mainSessionChats(chats: List<ProjectChatSummary>): List<ProjectChat
 }
 
 /**
- * The featured chats: waiting, then running, then the most recently updated, twelve of them. The
- * main sessions of the busy subagents among them come along beyond the twelve, so
- * [mainSessionChats] can show each such subagent as the session it works for.
+ * The featured chats: waiting, then running, then open idle top-level chats (the ready ones), then the
+ * rest (unverified, history and idle subagent rows), each by recency, twelve of them. Ready chats
+ * keep their place ahead of just-closed history rows, but they compete for the twelve with the
+ * waiting and running chats, so a busy project can feature fewer ready chats than it has. The main sessions of the busy subagents among them come along beyond
+ * the twelve, so [mainSessionChats] can show each such subagent as the session it works for.
  */
 internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> {
     val kept = chats.sortedWith(
         compareBy<ProjectChatSummary> {
-            if (!it.verified) 2
+            if (!it.verified) 3
             else when (it.session.text("status")) {
                 "waiting" -> 0
                 "running" -> 1
-                else -> 2
+                "idle" ->
+                    if (isReadyRow(
+                            "idle",
+                            it.session.optionalText("origin"),
+                            it.session.optionalText("parentSessionId"),
+                        )
+                    ) 2 else 3
+                else -> 3
             }
         }.thenByDescending { it.session["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L }
     ).take(12)
@@ -132,14 +141,22 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
     return kept + ancestors.values
 }
 
-/** How many running and how many recent quick chats a Mac's Projects page shows until "Show all". */
+/** How many ready, running and recent quick chats a Mac's Projects page shows until "Show all". */
 internal const val QUICK_CHAT_LIMIT = 3
 
 /** The quick chats of a Projects page, grouped by what they need; see [quickChats]. */
 internal data class QuickChats(
+    /** Every waiting chat, never cut. */
     val waiting: List<ProjectChatSummary>,
+    /**
+     * The open idle chats among the featured ones (at most twelve featured chats across all projects, see
+     * [sortedProjectChats]), unread first, cut to [QUICK_CHAT_LIMIT] until shown in full.
+     */
+    val ready: List<ProjectChatSummary>,
     val running: List<ProjectChatSummary>,
     val recent: List<ProjectChatSummary>,
+    /** Whether the ready group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
+    val readyExpandable: Boolean,
     /** Whether the running group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
     val runningExpandable: Boolean,
     /** Whether the recent group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
@@ -147,24 +164,49 @@ internal data class QuickChats(
 )
 
 /**
- * The quick chats of a Mac's Projects page: every waiting chat, and the running and the recent ones up to
- * [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showRunningAll], [showRecentAll]). A chat
- * counts as waiting or running only on a connected Mac and once verified; all others are recent.
+ * Whether a row with this status, origin and parent is an open idle top-level session: not a history row (a closed session the
+ * Mac lists as a copy to continue) and no subagent. The Ready group and [unreadReadyCount]
+ * share this.
+ */
+private fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
+    status == "idle" && origin != "history" && parentSessionId.isNullOrBlank()
+
+/**
+ * The quick chats of a Mac's Projects page. On a connected Mac, a verified chat is waiting, running
+ * or ready (idle, open, top-level); waiting chats are not cut here, only by the twelve featured chats. Ready, running and recent
+ * chats are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showReadyAll], [showRunningAll],
+ * [showRecentAll]). Everything else is recent: offline, unverified, last-known and history chats,
+ * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by
+ * [marks]; a chat without a mark counts as read), then the most recently updated.
  */
 internal fun quickChats(
     chats: List<ProjectChatSummary>,
     connected: Boolean,
     showRunningAll: Boolean,
     showRecentAll: Boolean,
+    marks: Map<String, SessionMark> = emptyMap(),
+    showReadyAll: Boolean = false,
 ): QuickChats {
-    val waiting = chats.filter { it.verified && connected && it.session.text("status") == "waiting" }
-    val running = chats.filter { it.verified && connected && it.session.text("status") == "running" }
-    val recent =
-        chats.filter {
-            !it.verified || !connected || it.session.text("status") !in setOf("waiting", "running")
-        }
+    fun ProjectChatSummary.live() = verified && connected
+    fun ProjectChatSummary.status() = session.optionalText("status")
+    fun ProjectChatSummary.updatedAt() = session["updatedAt"]?.jsonPrimitive?.longOrNull
+    fun ProjectChatSummary.ready() =
+        live() && isReadyRow(status(), session.optionalText("origin"), session.optionalText("parentSessionId"))
+    val waiting = chats.filter { it.live() && it.status() == "waiting" }
+    val running = chats.filter { it.live() && it.status() == "running" }
+    val ready =
+        chats
+            .filter { it.ready() }
+            .sortedWith(
+                compareByDescending<ProjectChatSummary> {
+                    sessionUnread(it.session.optionalText("id")?.let(marks::get), it.updatedAt(), open = false)
+                }.thenByDescending { it.updatedAt() ?: 0L }
+            )
+    val recent = chats.filter { !it.live() || (it.status() !in setOf("waiting", "running") && !it.ready()) }
     return QuickChats(
         waiting = waiting,
+        ready = ready.take(if (showReadyAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        readyExpandable = ready.size > QUICK_CHAT_LIMIT,
         running = running.take(if (showRunningAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         runningExpandable = running.size > QUICK_CHAT_LIMIT,
@@ -172,8 +214,29 @@ internal fun quickChats(
     )
 }
 
+/** A ready chat idle for this long wears an "Old" chip. */
+internal const val OLD_READY_MILLIS = 24 * 60 * 60 * 1000L
+
+/** Whether a chat last updated at [updatedAt] has been idle for a day or more by [now]; a future time is not old. */
+internal fun readyIsOld(updatedAt: Long?, now: Long): Boolean = updatedAt != null && now - updatedAt >= OLD_READY_MILLIS
+
 /** How many of a project's sessions wait for an answer and how many run, by its latest list. */
 data class SessionCounts(val waiting: Int = 0, val running: Int = 0)
+
+/**
+ * How many of [sessions] are ready (open, idle, top-level, the Ready group's rule) and unread by
+ * [marks]: their result is one the user has not seen yet. This is the "N new" badge of a project
+ * row. It lives apart from [SessionCounts] because unread is phone-local (see [sessionUnread]):
+ * the repository counts by the Mac's list alone, so the view applies the marks. A session
+ * without a mark counts as read.
+ */
+internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
+    sessions.count {
+        val mark = it.optionalText("id")?.let(marks::get)
+        isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId")) &&
+            sessionUnread(mark, it["updatedAt"]?.jsonPrimitive?.longOrNull, open = false) &&
+            !sessionHidden(mark, it.optionalText("status"), sessionUpdatedAt(it))
+    }
 
 /**
  * A project's sessions for views across projects, such as an activity board, badges or a

@@ -136,6 +136,10 @@ internal fun SessionListRow(
     onTogglePin: (() -> Unit)? = null,
     /** Marks the session read; the menu offers it only on an unread row. */
     onMarkRead: (() -> Unit)? = null,
+    /** When set, the time label reads as the age relative to this time ("5 minutes ago") instead of a clock time or date. */
+    now: Long? = null,
+    /** Marks a ready chat that has been idle for a day or more with an "Old" chip. */
+    old: Boolean = false,
     /** Hides the session on this phone; null where the row offers no Hide (see [canHideSession]). */
     onHide: (() -> Unit)? = null,
     /** Shows a hidden session again; null unless the row is listed as hidden. */
@@ -174,6 +178,7 @@ internal fun SessionListRow(
     val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
     val pinnedLabel = stringResource(R.string.remote_activity_pinned)
     val unreadLabel = stringResource(R.string.remote_activity_unread)
+    val oldLabel = stringResource(R.string.remote_session_old)
     val hiddenLabel = stringResource(R.string.remote_session_hidden_label)
     val hideLabel = stringResource(R.string.remote_menu_hide)
     val unhideLabel = stringResource(R.string.remote_menu_unhide)
@@ -219,6 +224,12 @@ internal fun SessionListRow(
             hiddenLabel.takeIf { hidden },
         )
     val ticketLabel = item.ticketRef?.let { stringResource(R.string.remote_ticket_chip, it) }
+    val relativeAge =
+        if (now != null)
+            item.updatedAt?.let {
+                DateUtils.getRelativeTimeSpanString(minOf(it, now), now, DateUtils.MINUTE_IN_MILLIS).toString()
+            }
+        else null
     val rowDescription =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
@@ -229,6 +240,8 @@ internal fun SessionListRow(
             pinnedLabel.takeIf { item.pinned },
             hiddenLabel.takeIf { hidden },
             unreadLabel.takeIf { item.unread },
+            oldLabel.takeIf { old },
+            relativeAge,
             item.preview,
             status,
         ).joinToString(", ")
@@ -395,9 +408,11 @@ internal fun SessionListRow(
                         item.updatedAt?.let {
                             val context = LocalContext.current
                             Text(
-                                (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
-                                    else DateFormat.getDateFormat(context))
-                                    .format(Date(it)),
+                                if (relativeAge != null) relativeAge
+                                else
+                                    (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
+                                        else DateFormat.getDateFormat(context))
+                                        .format(Date(it)),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -430,6 +445,14 @@ internal fun SessionListRow(
                             if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
                             statusColor,
                         )
+                        if (old)
+                            ProjectCountBadge(
+                                oldLabel,
+                                MaterialTheme.colorScheme.surfaceContainerHighest,
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                "sessionOld-${item.id}",
+                                Modifier,
+                            )
                         if (metaLabels.isNotEmpty() || item.ticketRef != null)
                             Text(
                                 (listOfNotNull(item.ticketRef) + metaLabels).joinToString(separator = " · ", prefix = "· "),

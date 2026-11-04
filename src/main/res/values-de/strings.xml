@@ -38,7 +38,8 @@
     <string name="remote_app_name">PocketPi</string>
     <string name="remote_hosts">Rechner</string>
     <string name="remote_projects">Projekte</string>
-    <string name="remote_projects_quick_chats">Schnellzugriff</string>
+    <!-- Überschrift der Gruppe offline, unbestätigter und beendeter Chats auf der Projektseite (RemoteScreens.kt); offene ruhende Chats stehen unter „Bereit“. -->
+    <string name="remote_projects_quick_chats">Zuletzt verwendet</string>
     <string name="remote_projects_shared">Geteilte Projekte</string>
     <string name="remote_sessions">Sitzungen</string>
     <string name="remote_chat">Sitzung</string>

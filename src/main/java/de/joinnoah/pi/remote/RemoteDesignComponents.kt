@@ -233,6 +233,8 @@ internal fun ProjectRow(
      * confirmed by the Mac (a cached one), which shows none.
      */
     counts: SessionCounts? = null,
+    /** How many of the project's ready sessions are unread (see [unreadReadyCount]), shown as the "new" badge. */
+    unreadReady: Int = 0,
 ) {
     val context = LocalContext.current
     val regionChild = rememberRegionChild()
@@ -240,8 +242,11 @@ internal fun ProjectRow(
         counts?.waiting?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_waiting_count, it, it) }
     val workingBadge =
         counts?.running?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_working_count, it, it) }
+    val readyBadge =
+        unreadReady.takeIf { counts != null && it > 0 }
+            ?.let { pluralStringResource(R.plurals.remote_mac_ready_count, it, it) }
     // With badges the row reads them after its name, as one label.
-    val badgeDescription = listOfNotNull(waitingBadge, workingBadge).takeIf { it.isNotEmpty() }
+    val badgeDescription = listOfNotNull(waitingBadge, workingBadge, readyBadge).takeIf { it.isNotEmpty() }
     val unshareLabel = stringResource(R.string.remote_project_unshare)
     val updateNeededLabel = stringResource(R.string.remote_project_unshare_update_needed)
     val updateHint = stringResource(R.string.remote_project_unshare_update_host)
@@ -338,6 +343,15 @@ internal fun ProjectRow(
                     "projectBadgeWorking-$projectId",
                 )
             }
+            readyBadge?.let {
+                ProjectCountBadge(
+                    it,
+                    // Unread, like the primary dot on a session row; the neutral surface is for the Old chip.
+                    MaterialTheme.colorScheme.primaryContainer,
+                    MaterialTheme.colorScheme.onPrimaryContainer,
+                    "projectBadgeReady-$projectId",
+                )
+            }
             Icon(Icons.AutoMirrored.Filled.NavigateNext, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -345,12 +359,18 @@ internal fun ProjectRow(
 
 /** A count of a project's sessions in one status, as a small pill in the status's colours. */
 @Composable
-private fun ProjectCountBadge(text: String, container: Color, content: Color, tag: String) {
+internal fun ProjectCountBadge(
+    text: String,
+    container: Color,
+    content: Color,
+    tag: String,
+    modifier: Modifier = Modifier.padding(start = 8.dp),
+) {
     Surface(
         shape = CircleShape,
         color = container,
         contentColor = content,
-        modifier = Modifier.padding(start = 8.dp).testTag(tag),
+        modifier = modifier.testTag(tag),
     ) {
         Text(
             text,
