@@ -612,6 +612,8 @@ internal data class SubagentStripEntry(
     val sessionId: String?,
     val agent: String?,
     val title: String,
+    /** What the child session's first prompt attached, when [title] is empty because it carried only that. */
+    val titleAttachment: TitleAttachment? = null,
     val state: String,
     val activity: String?,
     val abortable: Boolean,
@@ -685,6 +687,7 @@ internal fun subagentStrip(
                     sessionId = child.id,
                     agent = agent?.name,
                     title = child.title,
+                    titleAttachment = child.titleAttachment,
                     state =
                         when {
                             // A child waiting for input is not running, whatever its progress says.

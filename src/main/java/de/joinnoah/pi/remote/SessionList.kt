@@ -445,9 +445,18 @@ internal fun sessionBadgeGlyph(availability: SessionAvailability, lastKnown: Boo
  * file it named; else "New session".
  */
 @Composable
-internal fun sessionTitleLabel(item: SessionListItem): String {
-    if (item.title.isNotBlank()) return item.title
-    val attachment = item.titleAttachment ?: return stringResource(R.string.remote_new_session)
+internal fun sessionTitleLabel(item: SessionListItem): String = sessionTitleLabel(item.title, item.titleAttachment)
+
+/** The label for a session's raw title from the wire, which may carry attachment or quote markers. */
+@Composable
+internal fun rawSessionTitleLabel(raw: String): String =
+    displayTitle(raw).let { sessionTitleLabel(it.text, it.attachment) }
+
+/** The label for a title already run through [displayTitle]: [text] and the [attachment] it carried. */
+@Composable
+internal fun sessionTitleLabel(text: String, attachment: TitleAttachment?): String {
+    if (text.isNotBlank()) return text
+    if (attachment == null) return stringResource(R.string.remote_new_session)
     val name = attachment.name
     return when {
         name == null -> stringResource(R.string.remote_session_title_attachment)

@@ -198,6 +198,14 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun searchMatchesTheNameOfAnAttachmentOnlyTitle() {
+        val attached =
+            SessionListItem("1", "", null, 0, false, SessionAvailability.IDLE, null, null, false, false, false,
+                titleAttachment = TitleAttachment("shot.png", image = true))
+        assertEquals(listOf("1"), filterSessions(listOf(attached), "SHOT").map { it.id })
+    }
+
+    @Test
     fun theCollapsedListSurvivesRecreation() {
         val state = TwoPaneState()
         state.listCollapsed = true

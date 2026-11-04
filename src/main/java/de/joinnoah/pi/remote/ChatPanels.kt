@@ -502,7 +502,7 @@ private fun SubagentStripRow(
                 Text("π", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
+                Text(entry.agent ?: sessionTitleLabel(entry.title, entry.titleAttachment), style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     // A last-known state is muted and named as such, like the session list.
                     val color =
