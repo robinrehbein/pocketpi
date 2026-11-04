@@ -100,6 +100,8 @@ internal data class ActivityCard(
     val updatedAt: Long?,
     val pinned: Boolean,
     val unread: Boolean,
+    /** What the first prompt attached, when [title] is empty because it carried only that. */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 /**
@@ -145,14 +147,16 @@ internal fun activityCards(
         if (!seen.add(id)) return
         val mark = marks[id]
         val updatedAt = session["updatedAt"]?.jsonPrimitive?.longOrNull
+        val display = displayTitle(session.text("title"))
         cards +=
             ActivityCard(
                 routeId = route,
                 projectId = projectId,
                 projectName = projectName,
                 sessionId = id,
-                title = session.text("title"),
-                preview = session.optionalText("preview")?.takeIf { it.isNotBlank() },
+                title = display.text,
+                titleAttachment = display.attachment,
+                preview = session.optionalText("preview")?.let { displayTitle(it).text }?.takeIf { it.isNotBlank() },
                 status = session.text("status"),
                 updatedAt = updatedAt,
                 pinned = mark?.pinned == true,
@@ -380,7 +384,7 @@ private fun ActivityHeading(group: ActivityGroup, count: Int) {
 @Composable
 private fun ActivityCardView(card: ActivityCard, group: ActivityGroup, now: Long, onOpen: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    val title = card.title.ifBlank { stringResource(R.string.remote_new_session) }
+    val title = sessionTitleLabel(card.title, card.titleAttachment)
     val status = stringResource(group.cardLabelRes)
     val pinned = stringResource(R.string.remote_activity_pinned)
     val unread = stringResource(R.string.remote_activity_unread)

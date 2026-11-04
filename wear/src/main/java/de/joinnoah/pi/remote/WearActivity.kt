@@ -165,7 +165,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
             WatchScreen.SESSIONS -> {
                 action(R.string.wear_new_session, ready, model::createSession)
                 items(visibleSessionListItems(state.sessions, state.connected, state.loading, preferences.hideOfflineSessions, confirmed = state.sessionsFresh), key = { it.id }) { session ->
-                    WatchAction(session.title, { model.navigate(route.selection.copy(sessionId = session.id)) }, ready,
+                    WatchAction(sessionTitleLabel(session), { model.navigate(route.selection.copy(sessionId = session.id)) }, ready,
                         watchSessionStatus(session) + if (session.parentSessionId != null) " · " + stringResource(R.string.wear_subagent) else "")
                 }
                 action(R.string.wear_refresh, !busy, repository::refresh)

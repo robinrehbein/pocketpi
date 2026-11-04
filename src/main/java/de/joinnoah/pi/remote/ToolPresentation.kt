@@ -627,6 +627,8 @@ internal data class SubagentStripEntry(
      * Mac still reports them. Their terminal states stay as recorded.
      */
     val lastKnown: Boolean = false,
+    /** What the child session's first prompt attached, when [title] is empty because it carried only that. */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 internal data class SubagentStrip(
@@ -688,6 +690,7 @@ internal fun subagentStrip(
                     sessionId = child.id,
                     agent = agent?.name,
                     title = child.title,
+                    titleAttachment = child.titleAttachment,
                     state =
                         when {
                             // A child waiting for input is not running, whatever its progress says.
