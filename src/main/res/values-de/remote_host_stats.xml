@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The load section of a computer's connection details (MacConnectionDetailsDialog.kt, HostStatsSection). -->
+    <string name="remote_host_stats_title">Auslastung</string>
+    <string name="remote_host_stats_live_macos">live · macOS</string>
+    <string name="remote_host_stats_live_linux">live · Linux</string>
+    <string name="remote_host_stats_live">live</string>
+    <string name="remote_host_stats_container">Container</string>
+    <string name="remote_host_stats_cpu">CPU</string>
+    <string name="remote_host_stats_measuring">Wird gemessen …</string>
+    <string name="remote_host_stats_cores">%1$s Kerne</string>
+    <string name="remote_host_stats_load">Last %1$s / %2$s / %3$s</string>
+    <string name="remote_host_stats_cpu_limit">Limit %1$s Kerne</string>
+    <string name="remote_host_stats_memory">Arbeitsspeicher</string>
+    <string name="remote_host_stats_memory_limit">Limit %1$s</string>
+    <string name="remote_host_stats_pressure_normal">Speicherdruck: normal</string>
+    <string name="remote_host_stats_pressure_warn">Speicherdruck: erhöht</string>
+    <string name="remote_host_stats_pressure_critical">Speicherdruck: kritisch</string>
+    <string name="remote_host_stats_disk">Festplatte</string>
+    <string name="remote_host_stats_battery">Akku</string>
+    <string name="remote_host_stats_charging">lädt</string>
+    <string name="remote_host_stats_plugged_in">am Netzteil</string>
+    <string name="remote_host_stats_used_of">%1$s / %2$s</string>
+    <string name="remote_host_stats_percent">%1$s %%</string>
+    <string name="remote_host_stats_uptime">Läuft seit %1$s</string>
+    <string name="remote_host_stats_days_hours">%1$d T %2$d Std</string>
+    <string name="remote_host_stats_hours_minutes">%1$d Std %2$d Min</string>
+    <string name="remote_host_stats_minutes">%1$d Min</string>
+    <string name="remote_host_stats_container_note">Systemlast und Akku gehören zur Maschine, nicht zum Container, und werden deshalb nicht gezeigt.</string>
+    <string name="remote_host_stats_unavailable">Die Auslastung lässt sich gerade nicht lesen.</string>
+</resources>

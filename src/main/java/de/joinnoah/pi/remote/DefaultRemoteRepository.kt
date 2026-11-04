@@ -365,6 +365,7 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             // Only on capability route v3, never at authentication.
             SESSION_CLOSE_TERMINAL_CAPABILITY,
+            HOST_STATS_CAPABILITY,
             GIT_CAPABILITY,
             GIT_WRITE_CAPABILITY,
             GIT_PUSH_CAPABILITY,
@@ -9956,6 +9957,14 @@ class DefaultRemoteRepository(
         if (!current.connected) throw RemoteRequestException("offline")
         // An older host closes the connection on a command it does not know.
         if (!canUseTickets(current)) throw RemoteRequestException.unsupported()
+    }
+
+    override suspend fun hostStats(): HostStats {
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        // An older host closes the connection on a command it does not know.
+        if (!canUseHostStats(current)) throw RemoteRequestException.unsupported()
+        return parseHostStats(connectionRequest("host.stats"))
     }
 
     override suspend fun ticketProjects(): List<TicketProject> {

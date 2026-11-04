@@ -4500,6 +4500,7 @@ internal fun RemoteScreen(
             host = macHost,
             status = stringResource(macStatus),
             onDismiss = { macDetails = false },
+            loadStats = if (canUseHostStats(state)) model::hostStats else null,
         )
     removing?.let { host ->
         AlertDialog(

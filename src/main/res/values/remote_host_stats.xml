@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The load section of a computer's connection details (MacConnectionDetailsDialog.kt, HostStatsSection). -->
+    <string name="remote_host_stats_title">Load</string>
+    <string name="remote_host_stats_live_macos">live · macOS</string>
+    <string name="remote_host_stats_live_linux">live · Linux</string>
+    <string name="remote_host_stats_live">live</string>
+    <string name="remote_host_stats_container">Container</string>
+    <string name="remote_host_stats_cpu">CPU</string>
+    <string name="remote_host_stats_measuring">Measuring…</string>
+    <!-- %1$s is a number of CPU cores, possibly fractional, such as "1.5". -->
+    <string name="remote_host_stats_cores">%1$s cores</string>
+    <!-- 1, 5 and 15 minute load averages. -->
+    <string name="remote_host_stats_load">Load %1$s / %2$s / %3$s</string>
+    <string name="remote_host_stats_cpu_limit">Limit %1$s cores</string>
+    <string name="remote_host_stats_memory">Memory</string>
+    <string name="remote_host_stats_memory_limit">Limit %1$s</string>
+    <string name="remote_host_stats_pressure_normal">Memory pressure: normal</string>
+    <string name="remote_host_stats_pressure_warn">Memory pressure: elevated</string>
+    <string name="remote_host_stats_pressure_critical">Memory pressure: critical</string>
+    <string name="remote_host_stats_disk">Disk</string>
+    <string name="remote_host_stats_battery">Battery</string>
+    <string name="remote_host_stats_charging">charging</string>
+    <string name="remote_host_stats_plugged_in">plugged in</string>
+    <!-- Used of total, such as "22.1 GB / 32 GB". -->
+    <string name="remote_host_stats_used_of">%1$s / %2$s</string>
+    <!-- A percentage, such as "73%". -->
+    <string name="remote_host_stats_percent">%1$s%%</string>
+    <string name="remote_host_stats_uptime">Up for %1$s</string>
+    <string name="remote_host_stats_days_hours">%1$d d %2$d h</string>
+    <string name="remote_host_stats_hours_minutes">%1$d h %2$d min</string>
+    <string name="remote_host_stats_minutes">%1$d min</string>
+    <string name="remote_host_stats_container_note">System load and battery belong to the machine, not the container, so they are not shown.</string>
+    <string name="remote_host_stats_unavailable">The load cannot be read right now.</string>
+</resources>

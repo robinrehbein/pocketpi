@@ -434,6 +434,48 @@ class MacHubUiTest {
     }
 
     @Test
+    fun connectionDetailsShowTheLoadWhenTheHostOffersIt() {
+        repository.hostStatsResult =
+            HostStats(
+                platform = HostPlatform.DARWIN,
+                sampledAt = 1,
+                uptimeSeconds = 3 * 86400L + 4 * 3600L,
+                cpuPercent = 73.0,
+                cores = 10.0,
+                load = listOf(7.4, 5.1, 3.9),
+                memory = HostUsage(8L * 1024 * 1024 * 1024, 16L * 1024 * 1024 * 1024),
+                pressure = MemoryPressure.WARN,
+                disk = null,
+                battery = HostBattery(41.0, charging = true, onAc = true),
+                container = null,
+            )
+        render(listOf(project("p1", "Alpha")), capabilities = setOf(HOST_STATS_CAPABILITY))
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("hostStatsCpu").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("73%").assertIsDisplayed()
+        compose.onNodeWithText("Load 7.4 / 5.1 / 3.9", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_host_stats_pressure_warn)).assertIsDisplayed()
+        compose.onNodeWithText("41% · charging").assertIsDisplayed()
+        compose.onNodeWithText("Up for 3 d 4 h").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStatsDisk").assertCountEquals(0)
+    }
+
+    @Test
+    fun connectionDetailsHideTheLoadWithoutTheCapability() {
+        render(listOf(project("p1", "Alpha")))
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+
+        compose.onNodeWithTag("macDetailsBody").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStats").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, repository.hostStatsRequests) }
+    }
+
+    @Test
     fun aPullRevalidatesTheLists() {
         render(listOf(project("p1", "Alpha")))
 
