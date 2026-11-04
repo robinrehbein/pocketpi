@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources>
+    <string name="remote_palette_quick_access">Schnellzugriff</string>
+    <string name="remote_palette_search">Suchen</string>
+    <string name="remote_palette_search_compact">Suchen · &gt; / # @</string>
+    <string name="remote_palette_clear">Suche löschen</string>
+    <string name="remote_palette_mode_all">Alle</string>
+    <string name="remote_palette_mode_sessions"># Sitzungen</string>
+    <string name="remote_palette_mode_actions">&gt; Aktionen</string>
+    <string name="remote_palette_mode_commands">/ Befehle</string>
+    <string name="remote_palette_mode_files">\@ Dateien</string>
+    <string name="remote_palette_section_sessions">Sitzungen</string>
+    <string name="remote_palette_section_actions">Aktionen</string>
+    <string name="remote_palette_section_commands">Befehle</string>
+    <string name="remote_palette_section_projects">Projekte</string>
+    <string name="remote_palette_section_hosts">Macs</string>
+    <string name="remote_palette_section_files">Dateien</string>
     <string name="remote_paged_editor_load">Editor laden</string>
     <string name="remote_paged_editor_position">Textbereich %1$d–%2$d von %3$d</string>
     <string name="remote_paged_editor_first">Anfang</string>

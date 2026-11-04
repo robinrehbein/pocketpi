@@ -76,6 +76,67 @@ class PaletteSourcesTest {
     }
 
     @Test
+    fun emptyOverviewGroupsByFirstEncounterAndKeepsMembershipAndFirstItem() {
+        val action = CommandItem(ChatCommand.Action(ChatAction.HISTORY), "History", null, PaletteCategory.ACTION)
+        val control = CommandItem(ChatCommand.Control(SessionControl.MODEL), "Model", null, PaletteCategory.CONTROL)
+        val project = ProjectItem("host", "project", "Project", null)
+        val host = HostItem("host", "Host", null, false)
+        val action2 = CommandItem(ChatCommand.Action(ChatAction.SETTINGS), "Settings", null, PaletteCategory.ACTION)
+        val original = listOf(control, project, action, host, project, action2)
+        val expected = listOf(control, action, action2, project, project, host)
+
+        assertEquals(PaletteCategory.ACTION, paletteSection(control))
+        assertEquals(PaletteCategory.ACTION, paletteSection(action))
+        assertEquals(PaletteCategory.PROJECT, paletteSection(project))
+        for (query in listOf("", "  \t")) {
+            val displayed = paletteDisplayItems(original, query)
+            assertEquals(expected, displayed)
+            assertEquals(original.first(), displayed.first())
+            assertEquals(original.groupingBy { it }.eachCount(), displayed.groupingBy { it }.eachCount())
+        }
+        assertTrue(paletteDisplayItems(emptyList(), "").isEmpty())
+    }
+
+    @Test
+    fun searchesAndPrefixModesKeepOriginalRanking() {
+        val original = listOf(
+            ProjectItem("host", "one", "One", null),
+            HostItem("host", "Host", null, false),
+            ProjectItem("host", "two", "Two", null),
+        )
+        for (query in listOf("one", "  one  ", ">", "/", "#", "@", ">one", "/one", "#one", "@one")) {
+            assertEquals(query, original, paletteDisplayItems(original, query))
+        }
+    }
+
+    @Test
+    fun switchingModesPreservesParsedTextAndRewritesOnlyThePrefix() {
+        for (mode in PaletteMode.entries) {
+            val prefix = mode.prefix?.toString().orEmpty()
+            assertEquals(prefix + "hello world", paletteModeQuery("#  hello world  ", mode))
+            assertEquals(prefix, paletteModeQuery(">  ", mode))
+            assertEquals(prefix, paletteModeQuery("", mode))
+            assertEquals(prefix + "hello", paletteModeQuery(prefix + "hello", mode))
+        }
+        assertEquals("/foo", paletteModeQuery("> foo ", PaletteMode.COMMANDS))
+        assertEquals(" >x", paletteModeQuery(">>x", PaletteMode.ALL))
+        assertEquals("#>x", paletteModeQuery("  >x  ", PaletteMode.SESSIONS))
+        assertEquals("@/x", paletteModeQuery("//x", PaletteMode.FILES))
+    }
+
+    @Test
+    fun switchingModesKeepsModeAndTextForNestedPrefixes() {
+        val queries = listOf(">>x", "//x", "#@x", "@>x", "> >x", "  >x", ">", "", "   ", "x")
+        for (query in queries) {
+            for (mode in PaletteMode.entries) {
+                val rewritten = paletteModeQuery(query, mode)
+                assertEquals(PaletteQuery(mode, paletteQuery(query).text), paletteQuery(rewritten))
+                assertEquals(rewritten, paletteModeQuery(rewritten, mode))
+            }
+        }
+    }
+
+    @Test
     fun sessionModeListsWaitingAndRunningFirst() {
         val listed = sessions(input(paired, chat = true), "#")
         assertEquals(setOf("s2", "s3"), listed.take(2).map { it.sessionId }.toSet())
