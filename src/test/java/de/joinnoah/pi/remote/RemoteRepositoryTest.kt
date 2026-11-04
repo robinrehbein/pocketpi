@@ -18291,7 +18291,7 @@ class RemoteRepositoryTest {
      * read on every `sessions.list`, so a test changes what the Mac lists next. [holdClose] keeps
      * the close requests in the returned list unanswered.
      */
-    private fun TestScope.projectsPageWithClose(
+    private suspend fun TestScope.projectsPageWithClose(
         transport: Transport,
         lists: MutableMap<String, List<JsonObject>>,
         hold: (JsonObject) -> Boolean = { false },
