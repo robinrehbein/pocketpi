@@ -757,4 +757,216 @@ class MacHubUiTest {
             .assertIsNotEnabled()
         assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
     }
+
+    // "Review all" on the Ready group.
+
+    private fun startReview() {
+        compose.onNodeWithTag("readyReviewAll").performClick()
+        compose.waitForIdle()
+    }
+
+    private fun reviewCardShows(title: String) =
+        compose.onNode(hasTestTag("readyReviewCard") and hasContentDescription(title, substring = true)).assertExists()
+
+    @Test
+    fun reviewAllWalksTheReadyChatsAndClosesThroughTheProjectsPath() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p2", "Beta", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_ready_review_all, 2)).assertExists()
+        startReview()
+
+        reviewCardShows("Session one")
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_ready_review_progress, 1, 2)).assertExists()
+        // A chat the host runs closes at once: the review itself was the choice.
+        compose.onNodeWithTag("readyReviewClose").assertIsEnabled().performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "one"), repository.closedChats)
+
+        reviewCardShows("Session two")
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "one", "p2" to "two"), repository.closedChats)
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+    }
+
+    @Test
+    fun keepMarksTheChatSeenAndMovesOn() {
+        val marks = unreadMarks("studio", "one", "two")
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        startReview()
+
+        compose.onNodeWithTag("readyReviewKeep").performClick()
+        compose.waitForIdle()
+
+        assertTrue(!sessionUnread(marks.mark("studio", "one"), 20L, open = false))
+        assertTrue(sessionUnread(marks.mark("studio", "two"), 10L, open = false))
+        reviewCardShows("Session two")
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
+
+    @Test
+    fun reviewAllIsOfferedForTwoOrMoreReadyChatsOnly() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        compose.onAllNodesWithTag("readyReviewAll").assertCountEquals(0)
+    }
+
+    @Test
+    fun theReviewEndsWhenTheConnectionDrops() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p1", "Alpha", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(1)
+
+        repository.state.value = repository.state.value.copy(connected = false)
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+    }
+
+    @Test
+    fun theCardShowsThePreviewWhenTheRowHasOne() {
+        val withPreview =
+            ProjectChatSummary(
+                "p1", "Alpha",
+                buildJsonObject {
+                    put("id", "one")
+                    put("title", "Session one")
+                    put("status", "idle")
+                    put("origin", "rpc")
+                    put("updatedAt", 20L)
+                    put("preview", "The build passes now.")
+                },
+                verified = true,
+            )
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(withPreview, chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L)),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        reviewCardShows("The build passes now.")
+        compose.onNodeWithTag("readyReviewKeep").performClick()
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("readyReviewPreview", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun aTerminalChatAsksOnceMoreBeforeTheReviewClosesIt() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "tui", "idle", origin = "tui", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY, SESSION_CLOSE_TERMINAL_CAPABILITY),
+        )
+        startReview()
+
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.waitForIdle()
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+        compose.onNodeWithText(label(R.string.remote_session_close_terminal_confirmation)).assertExists()
+
+        compose.onNodeWithTag("readyReviewConfirmClose").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "tui"), repository.closedChats)
+        reviewCardShows("Session two")
+    }
+
+    @Test
+    fun closeGreysOutWhileThePageLoadsAndTheCardStays() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p1", "Alpha", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        repository.state.value = repository.state.value.copy(loading = true)
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("readyReviewClose").assertIsNotEnabled()
+        compose.onAllNodesWithTag("readyReviewHide").assertCountEquals(0)
+    }
+
+    @Test
+    fun aChatThePhoneCannotCloseIsHiddenWithAnUndoInTheSheet() {
+        val marks = SessionMarksStore(compose.activity)
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "pi", updatedAt = 30L),
+                    chat("p1", "Alpha", "two", "idle", origin = "pi", updatedAt = 20L),
+                    chat("p1", "Alpha", "three", "idle", origin = "pi", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        startReview()
+        compose.onAllNodesWithTag("readyReviewClose").assertCountEquals(0)
+
+        compose.onNodeWithTag("readyReviewHide").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("readyReviewHide").performClick()
+        compose.waitForIdle()
+        assertTrue(marks.mark("studio", "one")?.hiddenAt != null)
+        assertTrue(marks.mark("studio", "two")?.hiddenAt != null)
+
+        // Undo goes back through the hides, the latest first.
+        compose.onNodeWithTag("readyReviewUndo").performClick()
+        compose.waitForIdle()
+        assertNull(marks.mark("studio", "two")?.hiddenAt)
+        compose.onNodeWithTag("readyReviewUndo").performClick()
+        compose.waitForIdle()
+        assertNull(marks.mark("studio", "one")?.hiddenAt)
+        compose.onAllNodesWithTag("readyReviewUndo").assertCountEquals(0)
+        reviewCardShows("Session three")
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
+
+    @Test
+    fun openEndsTheReviewInTheChat() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        compose.onNodeWithTag("readyReviewOpen").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+        assertTrue(repository.activations.any { it.first.projectId == "p1" && it.first.sessionId == "one" })
+    }
 }

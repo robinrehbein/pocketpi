@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- "Review all" on the Projects page's Ready group: the finished chats one after another as cards. -->
+    <string name="remote_ready_review_all">Review all (%d)</string>
+    <string name="remote_ready_review_title">Finished chats</string>
+    <!-- The card's place in the review, such as "2 of 5". -->
+    <string name="remote_ready_review_progress">%1$d of %2$d</string>
+    <string name="remote_ready_review_close">Close</string>
+    <string name="remote_ready_review_keep">Keep</string>
+    <string name="remote_ready_review_open">Open</string>
+</resources>
