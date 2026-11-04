@@ -30,7 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class RemoteActivity : ComponentActivity() {
     private val app
         get() = application as RemoteApplication
 
@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
                     onUnlock = ::unlock,
                     colors =
                         remember(preferences.themeMode, preferences.theme, systemDark) {
-                            appColorScheme(this@MainActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
+                            appColorScheme(this@RemoteActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
                         },
                 ) {
                     RemoteApp(

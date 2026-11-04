@@ -29,13 +29,13 @@ class AliasLaunchEmulatorTest {
     fun theAliasIsNotExportedAndTargetsMainActivity() {
         val info = context.packageManager.getActivityInfo(ComponentName(context.packageName, LaunchIntents.ALIAS), 0)
         assertFalse(info.exported)
-        assertEquals(MainActivity::class.java.name, info.targetActivity)
+        assertEquals(RemoteActivity::class.java.name, info.targetActivity)
     }
 
     @Test
     fun aNotificationTapReachesTheRunningActivityThroughOnNewIntent() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            lateinit var running: MainActivity
+        ActivityScenario.launch(RemoteActivity::class.java).use { scenario ->
+            lateinit var running: RemoteActivity
             lateinit var launchIntent: Intent
             scenario.onActivity {
                 running = it

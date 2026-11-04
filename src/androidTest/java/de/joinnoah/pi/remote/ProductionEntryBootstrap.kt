@@ -38,13 +38,13 @@ internal object ProductionEntryBootstrap {
     fun awaitStarted() {
         check(started.await(20, TimeUnit.SECONDS) && installed && appCreated) { "Fixture application bootstrap did not complete" }
     }
-    data class ActivityEvent(val kind: String, val activity: MainActivity, val elapsed: Long, val hadSavedState: Boolean? = null)
+    data class ActivityEvent(val kind: String, val activity: RemoteActivity, val elapsed: Long, val hadSavedState: Boolean? = null)
     val activityEvents = mutableListOf<ActivityEvent>() // main thread only
     private var application: Application? = null
     private val callbacks = object : Application.ActivityLifecycleCallbacks {
-        private fun record(kind: String, activity: Activity) { if (activity is MainActivity) activityEvents.add(ActivityEvent(kind, activity, SystemClock.elapsedRealtime())) }
+        private fun record(kind: String, activity: Activity) { if (activity is RemoteActivity) activityEvents.add(ActivityEvent(kind, activity, SystemClock.elapsedRealtime())) }
         override fun onActivityCreated(activity: Activity, state: Bundle?) {
-            if (activity is MainActivity) activityEvents.add(ActivityEvent("created", activity, SystemClock.elapsedRealtime(), state != null))
+            if (activity is RemoteActivity) activityEvents.add(ActivityEvent("created", activity, SystemClock.elapsedRealtime(), state != null))
         }
         override fun onActivityStarted(activity: Activity) = record("started", activity)
         override fun onActivityResumed(activity: Activity) = record("resumed", activity)

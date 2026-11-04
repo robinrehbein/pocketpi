@@ -431,7 +431,8 @@ internal fun StatusPopover(
                 )
                 Text(
                     summary,
-                    modifier = Modifier.weight(1f, fill = false),
+                    // A weighted child gets zero width in the horizontally scrolling insights row.
+                    modifier = Modifier.widthIn(max = 200.dp),
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -608,7 +609,7 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // The TUI's dimmed pending snake, not a Material spinner. Decorative: the text says it.
+            // Pi core's dotted compaction loader. Decorative: the text says it.
             // StatusGlyph holds a static frame while system animations are off.
             CompactionGlyph(MaterialTheme.colorScheme.onSecondaryContainer)
             Column {
@@ -622,20 +623,20 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
 }
 
 /**
- * The compaction activity mark, shared by the banner and the compact status chip: the session snake
+ * The compaction activity mark, shared by the banner and the compact status chip: pi's braille loader
  * at a dimmed but still legible alpha of [base], 16dp, without semantics of its own.
  */
 @Composable
 internal fun CompactionGlyph(base: Color, modifier: Modifier = Modifier) {
     StatusGlyph(
-        kind = StatusGlyphKind.SESSION_RUNNING,
+        kind = StatusGlyphKind.COMPACTING,
         color = base.copy(alpha = COMPACTION_GLYPH_ALPHA),
         modifier = modifier.size(16.dp).testTag("compactionGlyph"),
     )
 }
 
 /**
- * Dimmed like the TUI's pending glyph. ChatPanelsTest checks 3:1 against the opaque containers of the
+ * Muted compaction color. ChatPanelsTest checks 3:1 against the opaque containers of the
  * built-in schemes; over translucent glass the result depends on the content behind it.
  */
 internal const val COMPACTION_GLYPH_ALPHA = 0.78f
