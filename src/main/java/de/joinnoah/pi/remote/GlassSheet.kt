@@ -274,16 +274,20 @@ private fun DrawScope.drawTopRim(color: Color) {
 /** A glass card inside a sheet: what a sheet is about, such as the current advisor. */
 @Composable
 internal fun SheetCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    FloatingSurface(modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), blur = false) { content() }
+    FloatingSurface(modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), blur = false) {
+        // FloatingSurface's outer Box relaxes minimum constraints. Give its painted Surface a
+        // full-width child too, so a short summary does not leave most of the card unpainted.
+        Box(Modifier.fillMaxWidth()) { content() }
+    }
 }
 
 /**
- * The container colour of a choice in a sheet: the selected one a tinted pill, the others the
- * page's low surface, so the choice reads without a border.
+ * The container colour of a choice in a sheet: the selected one a tinted pill, the others a
+ * raised surface that stays distinct from the frosted sheet, without adding a border.
  */
 @Composable
 internal fun sheetOptionColor(selected: Boolean) =
-    if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow
+    if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
 
 /** The shape of a choice row in a sheet. */
 internal val SHEET_OPTION_SHAPE = RoundedCornerShape(20.dp)
