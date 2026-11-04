@@ -331,6 +331,9 @@
     <string name="remote_attachment_uploading">Uploading attachments…</string>
     <string name="remote_cancel_attachment_work">Cancel attachment transfer</string>
     <string name="remote_add_attachment">Add attachment</string>
+    <string name="remote_attachment_menu_close">Close attachment options</string>
+    <string name="remote_menu_expanded">Expanded</string>
+    <string name="remote_menu_collapsed">Collapsed</string>
     <string name="remote_pick_photos">Choose photos</string>
     <string name="remote_pick_files">Choose files</string>
     <string name="remote_attachment_expires">Available until %1$s</string>

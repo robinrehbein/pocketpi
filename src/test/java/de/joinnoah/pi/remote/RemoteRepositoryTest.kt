@@ -18472,4 +18472,179 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(2, transport.sent.count { it.text("type") == "session.close" })
     }
+
+    /**
+     * A Mac with projects p1 and p2 that takes `session.close`, its Projects page open; [lists] is
+     * read on every `sessions.list`, so a test changes what the Mac lists next. [holdClose] keeps
+     * the close requests in the returned list unanswered.
+     */
+    private suspend fun TestScope.projectsPageWithClose(
+        transport: Transport,
+        lists: MutableMap<String, List<JsonObject>>,
+        hold: (JsonObject) -> Boolean = { false },
+        holdClose: Boolean = false,
+        capabilities: Set<String> = setOf(SESSION_CLOSE_CAPABILITY),
+    ): Pair<DefaultRemoteRepository, MutableList<JsonObject>> {
+        val held = configureProjects(transport, lists, hold)
+        transport.capabilities = capabilities
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.close") {
+                if (holdClose) {
+                    held += request
+                    null
+                } else Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            } else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        return repository to held
+    }
+
+    private fun DefaultRemoteRepository.featured(projectId: String) =
+        state.value.projectChats.filter { it.projectId == projectId }.map { it.session.text("id") to it.session.text("origin") }
+
+    @Test
+    fun closingAChatFromTheProjectsPageSendsItsProjectAndDropsTheRow() = runTest {
+        val transport = Transport()
+        val lists =
+            mutableMapOf(
+                "p1" to listOf(session("one", projectId = "p1")),
+                "p2" to listOf(session("two", projectId = "p2"), session("three", projectId = "p2")),
+            )
+        val (repository, _) = projectsPageWithClose(transport, lists)
+        assertTrue(closableProjectChat(repository.state.value, "p2", "two"))
+        val listsBefore = transport.lists("p2")
+        // The Mac lists the closed chat as history from now on.
+        lists["p2"] = listOf(session("two", origin = "history", projectId = "p2"), session("three", projectId = "p2"))
+
+        repository.closeProjectChat("p2", "two")
+        repository.closeProjectChat("p2", "two")
+        runCurrent()
+
+        val close = transport.sent.single { it.text("type") == "session.close" }
+        assertEquals("p2", close.text("projectId"))
+        assertEquals("two", close.text("sessionId"))
+        // The project's list is read again, and the live row gives way to its history row.
+        assertEquals(listsBefore + 1, transport.lists("p2"))
+        assertEquals(setOf("two" to "history", "three" to "rpc"), repository.featured("p2").toSet())
+        assertEquals(listOf("one" to "rpc"), repository.featured("p1"))
+        assertFalse(
+            repository.state.value.projectSessions.getValue("p2").sessions
+                .any { it.text("id") == "two" && it.text("origin") != "history" },
+        )
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aProjectListReplySentBeforeTheCloseDoesNotBringTheChatBack() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("p1" to listOf(session("one", projectId = "p1")), "p2" to listOf(session("two", projectId = "p2")))
+        var holding = false
+        val (repository, held) =
+            projectsPageWithClose(transport, lists, hold = { holding && it.text("projectId") == "p2" })
+        // A refresh sends p2's list; its reply, which still holds the chat, waits.
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        holding = true
+        repository.activate(RemoteSelection("host", "p1"), ActivationMode.USER_OPEN)
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        val stale = held.single { it.text("type") == "sessions.list" }
+        assertTrue(closableProjectChat(repository.state.value, "p2", "two"))
+
+        repository.closeProjectChat("p2", "two")
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.close" })
+        assertEquals(emptyList<Pair<String, String>>(), repository.featured("p2"))
+
+        transport.result(stale, data("sessions", listOf(session("two", projectId = "p2"))))
+        runCurrent()
+        assertEquals(emptyList<Pair<String, String>>(), repository.featured("p2"))
+        assertFalse(repository.state.value.projectSessions.getValue("p2").sessions.any { it.text("id") == "two" })
+    }
+
+    @Test
+    fun aProjectChatCloseSurvivesOpeningAnotherChatMeanwhile() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("p1" to listOf(session("one", projectId = "p1")), "p2" to listOf(session("two", projectId = "p2")))
+        val (repository, held) = projectsPageWithClose(transport, lists, holdClose = true)
+
+        repository.closeProjectChat("p2", "two")
+        runCurrent()
+        val close = held.single { it.text("type") == "session.close" }
+        // The user moves on before the Mac answers.
+        repository.cancelSelection()
+        repository.activate(RemoteSelection("host", "p1"), ActivationMode.USER_OPEN)
+        runCurrent()
+        lists["p2"] = emptyList()
+        transport.result(close, Wire.objectOf("kind" to "accepted", "sessionId" to "two"))
+        runCurrent()
+
+        assertEquals(emptyList<Pair<String, String>>(), repository.featured("p2"))
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun closingAChatFromTheProjectsPageRefusesTuiHistoryRunningAndNoCapability() = runTest {
+        val rows =
+            listOf(
+                session("tui", origin = "tui", projectId = "p2"),
+                session("history", origin = "history", projectId = "p2"),
+                session("running", status = "running", projectId = "p2"),
+                session("waiting", status = "waiting", projectId = "p2"),
+            )
+        val transport = Transport()
+        val (repository, _) = projectsPageWithClose(transport, mutableMapOf("p2" to rows))
+        for (row in rows) repository.closeProjectChat("p2", row.text("id"))
+        // Unknown or malformed IDs and a project that does not list the chat send nothing either.
+        repository.closeProjectChat("p2", "")
+        repository.closeProjectChat("p2", "x".repeat(257))
+        repository.closeProjectChat("p1", "tui")
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.close" })
+
+        val withoutCapability = Transport()
+        val (old, _) =
+            projectsPageWithClose(
+                withoutCapability,
+                mutableMapOf("p2" to listOf(session("idle", projectId = "p2"))),
+                capabilities = emptySet(),
+            )
+        old.closeProjectChat("p2", "idle")
+        runCurrent()
+        assertTrue(withoutCapability.sent.none { it.text("type") == "session.close" })
+    }
+
+    @Test
+    fun closingAProjectChatDoesNothingWhileAProjectIsSelected() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("p1" to listOf(session("one", projectId = "p1")), "p2" to listOf(session("two", projectId = "p2")))
+        val (repository, _) = projectsPageWithClose(transport, lists)
+        repository.activate(RemoteSelection("host", "p2"), ActivationMode.USER_OPEN)
+        runCurrent()
+
+        repository.closeProjectChat("p2", "two")
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.close" })
+    }
+
+    @Test
+    fun aFailedProjectChatCloseReportsAnErrorAndKeepsTheRow() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("p2" to listOf(session("two", projectId = "p2")))
+        val (repository, _) = projectsPageWithClose(transport, lists)
+        transport.failure = { if (it.text("type") == "session.close") "offline" else null }
+
+        repository.closeProjectChat("p2", "two")
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertEquals(listOf("two" to "rpc"), repository.featured("p2"))
+
+        // It is not kept as closed: the next try goes out again.
+        transport.failure = { null }
+        repository.closeProjectChat("p2", "two")
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.close" })
+    }
 }

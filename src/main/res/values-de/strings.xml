@@ -331,6 +331,9 @@
     <string name="remote_attachment_uploading">Anhänge werden hochgeladen…</string>
     <string name="remote_cancel_attachment_work">Anhangübertragung abbrechen</string>
     <string name="remote_add_attachment">Anhang hinzufügen</string>
+    <string name="remote_attachment_menu_close">Anhang-Auswahl schließen</string>
+    <string name="remote_menu_expanded">Ausgeklappt</string>
+    <string name="remote_menu_collapsed">Eingeklappt</string>
     <string name="remote_pick_photos">Fotos auswählen</string>
     <string name="remote_pick_files">Dateien auswählen</string>
     <string name="remote_attachment_expires">Verfügbar bis %1$s</string>
