@@ -15,6 +15,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -62,6 +63,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
     val preferences by settings.state.collectAsStateWithLifecycle()
     val repository = model.repository
     val context = LocalContext.current
+    val resources = LocalResources.current
     val app = context.applicationContext as? WearApplication
     val pairCode by (app?.pairCode ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) }).collectAsStateWithLifecycle()
     val pairWaiting by (app?.pairWaiting ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
@@ -186,7 +188,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 val message = messages.find { it.id == route.detailId }
                 if (message != null) {
                     val content = if (message is ConversationItem.Thinking && preferences.thinkingDisplay != ThinkingDisplay.TEXT) ""
-                        else watchMessageReaderContent(message, state.toolOutput) { context.getString(it) }
+                        else watchMessageReaderContent(message, state.toolOutput) { resources.getString(it) }
                     val truncated = when (message) {
                         is ConversationItem.Bubble -> message.truncated
                         is ConversationItem.Activity -> message.truncated || message.argumentsTruncated
@@ -385,8 +387,8 @@ private fun watchMessageLabel(item: ConversationItem): String = when (item) {
 
 @Composable
 private fun watchMessageText(item: ConversationItem, output: ToolOutputDownload? = null): String {
-    val context = LocalContext.current
-    return watchMessageReaderContent(item, output) { context.getString(it) }
+    val resources = LocalResources.current
+    return watchMessageReaderContent(item, output) { resources.getString(it) }
 }
 
 /** An explicitly downloaded full output stays readable, including for a questionnaire card. */
