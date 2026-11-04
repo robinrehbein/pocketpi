@@ -403,6 +403,27 @@ internal fun canCloseSession(
         !loading &&
         SESSION_CLOSE_CAPABILITY in capabilities
 
+/**
+ * The featured chat [sessionId] of [projectId], as the Projects page shows it, can be closed from
+ * there: a live, finished, top-level session the host runs, while no project is open. The displayed
+ * status counts, so a main session that a waiting or running subagent lends its activity to is not
+ * closable; the page closes finished sessions only. The UI and the repository share this check.
+ */
+internal fun closableProjectChat(state: RemoteState, projectId: String, sessionId: String): Boolean {
+    if (state.selection.projectId != null) return false
+    if (!state.connected || state.loading) return false
+    if (SESSION_CLOSE_CAPABILITY !in state.capabilities) return false
+    val chat =
+        mainSessionChats(state.projectChats).find {
+            it.projectId == projectId && it.session.optionalText("id") == sessionId
+        } ?: return false
+    return chat.verified &&
+        chat.session.optionalText("status") == "idle" &&
+        chat.session.optionalText("origin") != "history" &&
+        chat.session.optionalText("parentSessionId").isNullOrBlank() &&
+        hostOwned(state, chat.session)
+}
+
 /** The marks of [routeId]'s sessions by session ID, for [visibleSessionListItems]. */
 internal fun sessionMarksById(marks: Map<Pair<String, String>, SessionMark>, routeId: String?): Map<String, SessionMark> =
     if (routeId == null) emptyMap()
