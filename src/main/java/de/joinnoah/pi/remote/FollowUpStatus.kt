@@ -15,7 +15,11 @@ import androidx.compose.ui.unit.dp
 
 /** Keep unfinished delivery visible outside the input; confirmed deliveries need no dismissal. */
 @Composable
-internal fun FollowUpStatus(state: RemoteState, onDismissFollowUp: (String) -> Unit) {
+internal fun FollowUpStatus(
+    state: RemoteState,
+    onDismissFollowUp: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val delivered = state.followUps.filter { it.status == "delivered" }.map { it.requestId }
     LaunchedEffect(state.selection, state.loading, delivered) {
         // DestinationViewModel rejects actions while loading; retry after reconnect completes.
@@ -24,7 +28,7 @@ internal fun FollowUpStatus(state: RemoteState, onDismissFollowUp: (String) -> U
     val visible = state.followUps.filter { it.status != "delivered" }
             if (visible.isNotEmpty()) {
                 // It floats over the chat like the composer under it, so it sits on the same glass.
-                FloatingSurface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
+                FloatingSurface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
                 Column(
                     Modifier.fillMaxWidth().heightIn(max = 112.dp)
                         .verticalScroll(rememberScrollState())
