@@ -146,6 +146,16 @@ class RemoteNavigationUiTest {
         compose.onNodeWithContentDescription(label(R.string.remote_settings)).performClick()
     }
 
+    /** Chat actions live in the morphing menu, not a permanently visible Settings shortcut. */
+    private fun chatSettings() {
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodes(hasTestTag("chatActionMenu_settings") and isEnabled())
+                .fetchSemanticsNodes().size == 1
+        }
+        compose.onNodeWithTag("chatActionMenu_settings").assertIsDisplayed().assertIsEnabled().performClick()
+    }
+
     private fun openChat(title: String = "Live session") {
         compose.onNodeWithText("Test computer").performClick()
         compose.onNodeWithText("Project one").performClick()
@@ -902,7 +912,7 @@ class RemoteNavigationUiTest {
                 )
         }
         captureFixture("questionnaire")
-        settings()
+        chatSettings()
         captureFixture("settings")
     }
 
@@ -1928,7 +1938,7 @@ class RemoteNavigationUiTest {
         openChat()
         compose.onNodeWithText("Message for live").assertIsDisplayed()
         val activations = repository.activations.size
-        settings()
+        chatSettings()
         compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         back()
         assertEquals(activations, repository.activations.size)
@@ -2006,7 +2016,7 @@ class RemoteNavigationUiTest {
             compose.runOnIdle { gate.complete(Unit) }
             compose.waitForIdle()
             compose.onNodeWithText("Message for notified").assertIsDisplayed()
-            settings()
+            chatSettings()
             back()
             assertEquals(1, repository.notifications)
         } finally {
