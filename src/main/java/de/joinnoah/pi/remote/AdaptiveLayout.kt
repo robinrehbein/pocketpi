@@ -1327,7 +1327,9 @@ internal fun filterSessions(items: List<SessionListItem>, query: String): List<S
     val needle = query.trim()
     if (needle.isEmpty()) return items
     return items.filter {
-        it.title.contains(needle, ignoreCase = true) || it.preview?.contains(needle, ignoreCase = true) == true
+        it.title.contains(needle, ignoreCase = true) ||
+            it.titleAttachment?.name?.contains(needle, ignoreCase = true) == true ||
+            it.preview?.contains(needle, ignoreCase = true) == true
     }
 }
 

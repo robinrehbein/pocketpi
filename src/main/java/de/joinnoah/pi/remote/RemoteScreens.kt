@@ -1379,7 +1379,7 @@ internal fun RemoteScreen(
                 else showFeedback(artifactsUnavailableNotice(state))
             LocalCommand.NAME -> {
                 val session = state.session ?: return
-                if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
+                if (argument.isEmpty()) startRename(session.text("id"), displayTitle(session.text("title")).text)
                 else model.renameSession(session.text("id"), argument)
             }
         }
@@ -1429,7 +1429,7 @@ internal fun RemoteScreen(
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.TERMINAL -> openInspector(InspectorTab.TERMINAL)
             ChatAction.RENAME ->
-                state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
+                state.session?.let { session -> startRename(session.text("id"), displayTitle(session.text("title")).text) }
             ChatAction.NEW_SESSION -> newSessionOpen = true
             ChatAction.STATUS -> statusSheet = true
             ChatAction.REFRESH -> model.refresh()
@@ -1677,6 +1677,7 @@ internal fun RemoteScreen(
                                     // Only the title opens the switcher, so the TUI info button stays a target of its own.
                                     Text(
                                         state.session?.optionalText("title")?.takeIf(String::isNotBlank)
+                                            ?.let { rawSessionTitleLabel(it) }
                                             ?: title,
                                         modifier =
                                             Modifier.widthIn(max = maxTitleWidth)
@@ -2173,7 +2174,7 @@ internal fun RemoteScreen(
             }
             Shortcut.RENAME -> {
                 val session = state.session?.takeIf { canRenameSession(state) } ?: return false
-                startRename(session.text("id"), session.text("title"))
+                startRename(session.text("id"), displayTitle(session.text("title")).text)
                 true
             }
             Shortcut.FORK -> {
@@ -4096,7 +4097,7 @@ internal fun RemoteScreen(
                 }
             }, onDismiss = { insightSheet = null })
             InsightSheetKind.TASKS -> TaskInsightSheet(
-                state.tasks, state.session?.optionalText("title")?.takeIf(String::isNotBlank),
+                state.tasks, state.session?.optionalText("title")?.let { displayTitle(it).text }?.takeIf(String::isNotBlank),
                 onDismiss = { insightSheet = null },
             )
             InsightSheetKind.JOBS -> sheetJobs?.let { jobs ->
@@ -4150,7 +4151,7 @@ internal fun RemoteScreen(
                 Text(
                     stringResource(
                         R.string.remote_insights_abort_child_body,
-                        entry.agent ?: entry.title,
+                        entry.agent ?: sessionTitleLabel(entry.title, entry.titleAttachment),
                     )
                 )
             },
