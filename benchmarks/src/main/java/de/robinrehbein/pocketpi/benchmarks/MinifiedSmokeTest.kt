@@ -92,9 +92,13 @@ class MinifiedSmokeTest {
     @Test
     fun projectNavigationRecoversFromStrayChat() {
         launch()
-        check(device.wait(Until.hasObject(By.text(SHORT_CHAT)), 30_000)) { "The featured chat did not load. " + device.screenTexts() }
+        val featuredRow = "projectChatRow-project-pocketpi-session-short"
+        check(device.wait(Until.hasObject(By.res(featuredRow)), 30_000)) { "The featured chat did not load. " + device.screenTexts() }
         device.waitForIdle(2_000)
-        device.tapUntil(SHORT_CHAT, By.text(SHORT_TAIL), "The featured chat did not open", timeoutMs = 30_000)
+        device.tapUntil(
+            SHORT_CHAT, By.text(SHORT_TAIL), "The featured chat did not open",
+            timeoutMs = 30_000, rowTag = featuredRow,
+        )
         check(device.hasObject(By.res("composerField"))) { "The fixture chat did not show its composer. " + device.screenTexts() }
         openChat(UNCACHED_CHAT, UNCACHED_TAIL)
     }
