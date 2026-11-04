@@ -37,8 +37,6 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -331,8 +329,7 @@ internal fun SessionListRow(
                             else if (item.lastKnown) SessionAvailability.OFFLINE
                             else item.availability,
                             statusColor,
-                            // Polite: "Closing…" is announced without interrupting.
-                            Modifier.semantics { if (closing) liveRegion = LiveRegionMode.Polite },
+                            Modifier,
                         )
                         if (metaLabels.isNotEmpty() || item.ticketRef != null)
                             Text(

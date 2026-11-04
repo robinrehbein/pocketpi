@@ -3168,7 +3168,7 @@ internal fun RemoteScreen(
                                     marks = routeMarks,
                                     connected = state.connected,
                                     ticketRef = homeTicketRef,
-                                    closable = { (it.projectId to it.session.text("id")) in closableIds },
+                                    closable = { (it.projectId to it.session.text("id")) in closableIds && it.session.text("id") !in state.closingSessions },
                                     closing = state.closingSessions,
                                     swipe =
                                         (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
@@ -4388,14 +4388,25 @@ internal fun RemoteScreen(
             },
         )
     }
-    // A finished close without a refusal is announced; a refusal is announced as the error.
-    val closeView = androidx.compose.ui.platform.LocalView.current
+    // A finished close without a refusal is announced; a refusal is announced as the error. The
+    // announcement is a polite live region on a node of its own, which no row merges away.
     val closedAnnouncement = stringResource(R.string.remote_session_closed_announcement)
     var previousClosing by remember { mutableStateOf(state.closingSessions) }
+    var errorAtClose by remember { mutableStateOf(state.error) }
+    var closedMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state.closingSessions) {
         val finished = previousClosing - state.closingSessions
+        if (previousClosing.isEmpty() && state.closingSessions.isNotEmpty()) errorAtClose = state.error
         previousClosing = state.closingSessions
-        if (finished.isNotEmpty() && state.error == null) closeView.announceForAccessibility(closedAnnouncement)
+        // An error that was already showing before this close does not hide its announcement.
+        if (finished.isNotEmpty() && (state.error == null || state.error == errorAtClose)) {
+            closedMessage = closedAnnouncement
+            delay(3_000)
+            closedMessage = null
+        }
+    }
+    closedMessage?.let { message ->
+        Box(Modifier.size(1.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = message })
     }
     // A chat closed from Projects that left the page (closed elsewhere, or no longer featured)
     // takes its dialog along.
