@@ -44,7 +44,7 @@ internal const val FIXTURE_PROJECT_ROW = "projectRow-project-pocketpi"
  * A composed row can exist below the fold. Bring its full touch target away from the list edges
  * before clicking; finding its resource ID alone does not establish that it is safe to tap.
  */
-private fun UiDevice.projectRow(rowTag: String): UiObject2? {
+private fun UiDevice.projectRow(rowTag: String, trace: MutableList<String>): UiObject2? {
     val minimumSize = 48 * InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
     var searchDirection = Direction.DOWN
     var edgeReached = false
@@ -58,6 +58,7 @@ private fun UiDevice.projectRow(rowTag: String): UiObject2? {
             if (viewport.isEmpty) return null
             val node = findObject(By.res(rowTag))
             val bounds = node?.visibleBounds
+            trace += "viewport=$viewport row=$bounds edgeReached=$edgeReached"
             val margin = viewport.height() / 10
             val validTouchTarget = bounds != null && !bounds.isEmpty &&
                 bounds.height() >= minimumSize && bounds.width() >= minimumSize && viewport.contains(bounds)
@@ -69,7 +70,12 @@ private fun UiDevice.projectRow(rowTag: String): UiObject2? {
             val direction =
                 if (bounds == null || bounds.isEmpty) searchDirection
                 else if (bounds.centerY() < viewport.centerY()) Direction.UP else Direction.DOWN
-            if (list.scroll(direction, 0.3f)) {
+            // List pages draw under the floating header/footer. The default 10% gesture
+            // margin can start a swipe on the footer rather than the scrollable content.
+            list.setGestureMarginsPercentage(0.1f, 0.3f, 0.1f, 0.3f)
+            val scrollResult = list.scroll(direction, 0.3f)
+            trace += "scroll=$direction result=$scrollResult verticalGestureMargins=30%"
+            if (scrollResult) {
                 searchDirection = direction
                 edgeReached = false
             } else {
@@ -98,6 +104,7 @@ internal fun UiDevice.openProjectUntil(
 ) {
     val sessions = By.res("sessionsProjectTitle")
     val composer = By.res("composerField")
+    val trace = mutableListOf<String>()
     fun requireApp() {
         check(currentPackageName == "de.robinrehbein.pocketpi.benchmark") {
             "$what. Left the benchmark app. " + screenTexts()
@@ -118,7 +125,7 @@ internal fun UiDevice.openProjectUntil(
         // The list finder must never scroll a chat, a host picker, or the system launcher.
         if (!hasObject(By.res("projectsMacHeading"))) return@repeat
         try {
-            projectRow(rowTag)?.click()
+            projectRow(rowTag, trace)?.click()
         } catch (_: StaleObjectException) {
             return@repeat
         }
@@ -127,5 +134,5 @@ internal fun UiDevice.openProjectUntil(
         ) return
         requireApp()
     }
-    error("$what. " + screenTexts())
+    error("$what. " + screenTexts() + " Navigation: " + trace.joinToString(" | "))
 }
