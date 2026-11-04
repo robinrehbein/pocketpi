@@ -33,6 +33,8 @@ import androidx.compose.material3.contentColorFor
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -124,10 +126,11 @@ internal fun ProvideGlass(
     background: Color = MaterialTheme.colorScheme.background,
     content: @Composable () -> Unit,
 ) {
+    val diagnostics by ChatRenderingDiagnostics.options.collectAsState()
     val state = rememberHazeState()
     val rootView = LocalView.current.rootView
     val backdrop = remember(state, background, rootView) { GlassBackdrop(state, background, rootView) }
-    CompositionLocalProvider(LocalGlassBackdrop provides backdrop, content = content)
+    CompositionLocalProvider(LocalGlassBackdrop provides backdrop.takeUnless { diagnostics.disableGlass }, content = content)
 }
 
 /**

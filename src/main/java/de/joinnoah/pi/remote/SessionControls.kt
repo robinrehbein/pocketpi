@@ -493,7 +493,7 @@ internal fun SessionControls(
                 )
         }
     }
-    val sessionTitle = state.session?.optionalText("title")?.takeIf(String::isNotBlank)
+    val sessionTitle = state.session?.optionalText("title")?.let { displayTitle(it).text }?.takeIf(String::isNotBlank)
     val projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank)
     val confirmedModel = confirmed?.model
     val sessionInfo =

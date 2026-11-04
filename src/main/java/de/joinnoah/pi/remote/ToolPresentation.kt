@@ -417,6 +417,7 @@ internal fun isErrorItem(item: ConversationItem): Boolean =
         is ConversationItem.Subagent -> item.agents.any { it.state == "failed" }
         is ConversationItem.Bubble -> item.error
         is ConversationItem.Thinking -> false
+        is ConversationItem.QuestionnaireAnswer -> false
     }
 
 internal fun onlyErrors(items: List<ConversationItem>): List<ConversationItem> = items.filter(::isErrorItem)
@@ -440,6 +441,7 @@ internal fun timelineMarkerKind(item: ConversationItem): TimelineMarkerKind? =
     when {
         isErrorItem(item) -> TimelineMarkerKind.ERROR
         item is ConversationItem.Bubble -> if (item.role == "user") TimelineMarkerKind.USER else null
+        item is ConversationItem.QuestionnaireAnswer -> TimelineMarkerKind.QUESTION
         item !is ConversationItem.Activity -> null
         isQuestionTool(item.name) -> TimelineMarkerKind.QUESTION
         item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
@@ -485,7 +487,7 @@ internal fun chatHistory(items: List<ConversationItem>): List<ChatHistoryEntry> 
             item.id,
             kind,
             historyText(item, kind),
-            (item as? ConversationItem.Bubble)?.timestamp,
+            (item as? ConversationItem.Bubble)?.timestamp ?: (item as? ConversationItem.QuestionnaireAnswer)?.timestamp,
         )
     }
 
@@ -505,6 +507,7 @@ private fun historyText(item: ConversationItem, kind: TimelineMarkerKind): Strin
         is ConversationItem.Subagent ->
             historyLine(item.agents.filter { it.state == "failed" }.joinToString(", ") { it.name })
         is ConversationItem.Thinking -> null
+        is ConversationItem.QuestionnaireAnswer -> historyLine(item.presentation.questions.joinToString(" · ") { it.prompt })
         is ConversationItem.Activity ->
             when (kind) {
                 TimelineMarkerKind.QUESTION -> historyLine(questionnaireTitle(item.arguments))
@@ -624,6 +627,8 @@ internal data class SubagentStripEntry(
      * Mac still reports them. Their terminal states stay as recorded.
      */
     val lastKnown: Boolean = false,
+    /** What the child session's first prompt attached, when [title] is empty because it carried only that. */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 internal data class SubagentStrip(
@@ -685,6 +690,7 @@ internal fun subagentStrip(
                     sessionId = child.id,
                     agent = agent?.name,
                     title = child.title,
+                    titleAttachment = child.titleAttachment,
                     state =
                         when {
                             // A child waiting for input is not running, whatever its progress says.

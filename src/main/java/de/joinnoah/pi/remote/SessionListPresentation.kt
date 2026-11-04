@@ -47,6 +47,9 @@ internal data class SessionListItem(
      * offline phone reads every row as offline). [sessionHidden] never hides such a row.
      */
     val busyStatus: Boolean = false,
+    val compacting: Boolean = false,
+    /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 data class ProjectChatSummary(
@@ -278,6 +281,8 @@ internal fun sessionListItem(
     stale: Boolean = false,
     // No default: a caller that forgets it would let an earlier connection's rows claim to be live.
     confirmed: Boolean,
+    compaction: SessionCompaction? = null,
+    nowMillis: Long = System.currentTimeMillis(),
 ): SessionListItem {
     val availability =
         if (!connected && !stale) SessionAvailability.OFFLINE
@@ -288,14 +293,16 @@ internal fun sessionListItem(
                 "waiting" -> SessionAvailability.WAITING
                 else -> SessionAvailability.OFFLINE
             }
+    val display = displayTitle(session.text("title"))
     return SessionListItem(
         id = session.text("id"),
-        title = session.text("title"),
+        title = display.text,
+        titleAttachment = display.attachment,
         parentSessionId = session.optionalText("parentSessionId")?.takeIf { it.isNotBlank() },
         depth = 0,
         hasChildren = false,
         availability = availability,
-        preview = session.optionalText("preview")?.takeIf { it.isNotBlank() },
+        preview = session.optionalText("preview")?.let { displayTitle(it).text }?.takeIf { it.isNotBlank() },
         updatedAt = sessionUpdatedAt(session),
         continuesAsCopy = session.text("origin") == "history",
         daemonOwned = session.text("origin") == "rpc",
@@ -304,6 +311,9 @@ internal fun sessionListItem(
         lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
         busyStatus = session.text("status").let { it == "running" || it == "waiting" },
+        compacting = connected && confirmed && !loading &&
+            availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
+            compactionVisible(compaction, nowMillis),
     )
 }
 
@@ -332,6 +342,8 @@ internal fun visibleSessionListItems(
     confirmed: Boolean,
     /** List the sessions hidden on this phone too, marked [SessionListItem.hidden]. */
     showHidden: Boolean = false,
+    compactions: Map<String, SessionCompaction> = emptyMap(),
+    nowMillis: Long = System.currentTimeMillis(),
 ): List<SessionListItem> {
     val markHidden =
         sessions.associate { session ->
@@ -340,7 +352,10 @@ internal fun visibleSessionListItems(
         }
     val items =
         sessions.map { session ->
-            val item = sessionListItem(session, connected, loading, stale, confirmed)
+            val item = sessionListItem(
+                session, connected, loading, stale, confirmed,
+                compactions[session.text("id")], nowMillis,
+            )
             val mark = marks[item.id]
             item.copy(
                 ticketRef = ticketRef(item.id),
@@ -464,6 +479,48 @@ internal fun canCloseSession(
         connected &&
         !loading &&
         SESSION_CLOSE_CAPABILITY in capabilities
+
+/**
+ * The featured chat [sessionId] of [projectId], as the Projects page shows it, can be closed from
+ * there: a live, finished, top-level session the host runs, while no project is open. The displayed
+ * status counts, so a main session that a waiting or running subagent lends its activity to is not
+ * closable; the page closes finished sessions only. The UI and the repository share this check.
+ */
+internal fun closableProjectChat(state: RemoteState, projectId: String, sessionId: String): Boolean {
+    if (!closableProjectPage(state)) return false
+    val chat =
+        mainSessionChats(state.projectChats).find {
+            it.projectId == projectId && it.session.optionalText("id") == sessionId
+        } ?: return false
+    return closableMainChat(state, chat)
+}
+
+/** What the Projects page needs for any of its chats to close: no open project, a live host that offers it. */
+internal fun closableProjectPage(state: RemoteState): Boolean =
+    state.selection.projectId == null &&
+        state.connected &&
+        !state.loading &&
+        SESSION_CLOSE_CAPABILITY in state.capabilities
+
+/**
+ * The per-chat part of [closableProjectChat], for a [chat] already taken from [mainSessionChats] (whose
+ * displayed status it reads) when [closableProjectPage] holds.
+ */
+internal fun closableMainChat(state: RemoteState, chat: ProjectChatSummary): Boolean =
+    chat.verified &&
+        chat.session.optionalText("status") == "idle" &&
+        chat.session.optionalText("origin") != "history" &&
+        chat.session.optionalText("parentSessionId").isNullOrBlank() &&
+        hostOwned(state, chat.session)
+
+/** The (project, session) IDs of the [mainChats] the Projects page can close, computed once per pass. */
+internal fun closableProjectChatIds(state: RemoteState, mainChats: List<ProjectChatSummary>): Set<Pair<String, String>> =
+    if (!closableProjectPage(state)) emptySet()
+    else
+        mainChats
+            .filter { closableMainChat(state, it) }
+            .mapNotNull { chat -> chat.session.optionalText("id")?.let { chat.projectId to it } }
+            .toSet()
 
 /** The marks of [routeId]'s sessions by session ID, for [visibleSessionListItems]. */
 internal fun sessionMarksById(marks: Map<Pair<String, String>, SessionMark>, routeId: String?): Map<String, SessionMark> =

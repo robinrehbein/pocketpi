@@ -154,6 +154,35 @@ class SessionListPresentationTest {
     }
 
     @Test
+    fun compactionIsAnActivityWithOfflineWaitingAndTimeoutTakingPrecedence() {
+        val compaction = SessionCompaction("manual", 100)
+        for (status in listOf("idle", "running", "waiting", "offline")) {
+            val session = Wire.objectOf("id" to "s", "title" to "Session", "origin" to "rpc", "status" to status)
+            assertEquals(status in setOf("idle", "running"),
+                sessionListItem(session, true, false, confirmed = true, compaction = compaction, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, false, false, confirmed = false, compaction = compaction, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, true, false, confirmed = true, compaction = compaction, nowMillis = 600100).compacting)
+            assertFalse(sessionListItem(session, true, false, confirmed = true, compaction = null, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, true, false, confirmed = false, compaction = compaction, nowMillis = 200).compacting)
+            assertFalse(sessionListItem(session, true, true, confirmed = true, compaction = compaction, nowMillis = 200).compacting)
+        }
+    }
+
+    @Test
+    fun compactionDoesNotChangeWaitingFirstOrParentChildOrder() {
+        val sessions = listOf(
+            Wire.objectOf("id" to "parent", "title" to "Parent", "origin" to "rpc", "status" to "idle"),
+            Wire.objectOf("id" to "child", "title" to "Child", "origin" to "rpc", "parentSessionId" to "parent", "status" to "running"),
+            Wire.objectOf("id" to "waiting", "title" to "Waiting", "origin" to "rpc", "status" to "waiting"),
+        )
+        val items = visibleSessionListItems(sessions, true, false, false, confirmed = true,
+            compactions = mapOf("child" to SessionCompaction("threshold", 100)), nowMillis = 200)
+        assertEquals(listOf("waiting", "parent", "child"), items.map { it.id })
+        assertTrue(items.last().compacting)
+        assertEquals(1, items.last().depth)
+    }
+
+    @Test
     fun disconnectionOverridesAvailabilityButLoadingDoesNot() {
         for ((status, availability) in
             listOf(
@@ -798,5 +827,125 @@ class SessionListPresentationTest {
         val idle = mainSessionChats(listOf(chat("main", "idle"), chat("sub", "idle", parent = "main")))
         assertTrue(idle.filterNot { projectChatHidden(it, marks) }.isEmpty())
         assertFalse(projectChatHidden(idle.single(), mapOf("main" to hiddenMark(0))))
+    }
+
+    private fun projectChat(
+        id: String,
+        status: String = "idle",
+        origin: String = "rpc",
+        parent: String? = null,
+        verified: Boolean = true,
+        extra: Map<String, Any> = emptyMap(),
+    ): ProjectChatSummary {
+        val fields = mutableListOf<Pair<String, Any>>("id" to id, "status" to status, "origin" to origin, "updatedAt" to 1)
+        if (parent != null) fields += "parentSessionId" to parent
+        fields += extra.toList()
+        return ProjectChatSummary("p2", "Beta", Wire.objectOf(*fields.toTypedArray()), verified)
+    }
+
+    private fun closableState(vararg chats: ProjectChatSummary, capabilities: Set<String> = setOf(SESSION_CLOSE_CAPABILITY)) =
+        RemoteState(
+            selection = RemoteSelection(routeId = "host"),
+            connected = true,
+            capabilities = capabilities,
+            projectChats = chats.toList(),
+        )
+
+    @Test
+    fun aProjectChatIsClosableOnlyWhenIdleLiveTopLevelAndHostOwned() {
+        val state = closableState(projectChat("idle"), projectChat("running", status = "running"), projectChat("waiting", status = "waiting"))
+        assertTrue(closableProjectChat(state, "p2", "idle"))
+        assertFalse(closableProjectChat(state, "p2", "running"))
+        assertFalse(closableProjectChat(state, "p2", "waiting"))
+        // Another project's ID or an unknown session is not this row.
+        assertFalse(closableProjectChat(state, "p1", "idle"))
+        assertFalse(closableProjectChat(state, "p2", "missing"))
+        assertFalse(closableProjectChat(state.copy(connected = false), "p2", "idle"))
+        assertFalse(closableProjectChat(state.copy(loading = true), "p2", "idle"))
+        assertFalse(closableProjectChat(state.copy(capabilities = emptySet()), "p2", "idle"))
+        // A host worker is host-owned only while the host advertises the worker controls.
+        val worker = projectChat("worker", origin = "tui", extra = mapOf(HOST_WORKER_KEY to true))
+        assertFalse(closableProjectChat(closableState(worker), "p2", "worker"))
+        assertTrue(
+            closableProjectChat(
+                closableState(worker, capabilities = setOf(SESSION_CLOSE_CAPABILITY, HOST_WORKER_V2_CAPABILITY)),
+                "p2",
+                "worker",
+            ),
+        )
+    }
+
+    @Test
+    fun aMainSessionWithAWaitingSubagentIsNotClosable() {
+        val state = closableState(projectChat("main"), projectChat("sub", status = "waiting", parent = "main"))
+        assertFalse(closableProjectChat(state, "p2", "main"))
+        assertFalse(closableProjectChat(state, "p2", "sub"))
+        // Once the subagent is done, the main session reads idle and can be closed.
+        val done = closableState(projectChat("main"), projectChat("sub", parent = "main"))
+        assertTrue(closableProjectChat(done, "p2", "main"))
+    }
+
+    @Test
+    fun anOrphanSubagentIsNotClosable() {
+        val state = closableState(projectChat("orphan", parent = "gone"))
+        assertFalse(closableProjectChat(state, "p2", "orphan"))
+    }
+
+    @Test
+    fun aHistoryOrTuiOrUnverifiedChatIsNotClosable() {
+        val state =
+            closableState(
+                projectChat("history", origin = "history"),
+                projectChat("tui", origin = "tui"),
+                projectChat("pi", origin = "pi"),
+                projectChat("unverified", verified = false),
+            )
+        assertFalse(closableProjectChat(state, "p2", "history"))
+        assertFalse(closableProjectChat(state, "p2", "tui"))
+        assertFalse(closableProjectChat(state, "p2", "pi"))
+        assertFalse(closableProjectChat(state, "p2", "unverified"))
+    }
+
+    @Test
+    fun nothingIsClosableWhileAProjectIsSelected() {
+        val state = closableState(projectChat("idle"))
+        assertTrue(closableProjectChat(state, "p2", "idle"))
+        assertFalse(closableProjectChat(state.copy(selection = RemoteSelection("host", "p2")), "p2", "idle"))
+        assertFalse(closableProjectChat(state.copy(selection = RemoteSelection("host", "p1")), "p2", "idle"))
+    }
+
+    @Test
+    fun sessionListItemShowsATitleWithoutTheAttachmentMarker() {
+        val session =
+            Wire.objectOf(
+                "id" to "s",
+                "title" to "[PocketPi attachments v1]\n[{\"name\":\"a.png\",\"kind\":\"image\",\"mim",
+                "origin" to "rpc",
+                "status" to "idle",
+            )
+        val item = sessionListItem(session, connected = true, loading = false, confirmed = true)
+        assertEquals("", item.title)
+        assertEquals(TitleAttachment("a.png", true), item.titleAttachment)
+    }
+
+    @Test
+    fun sessionListItemCleansThePreview() {
+        val quoted = "[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"x\"}\n[/PocketPi quote]\n\nWhy?"
+        val item =
+            sessionListItem(
+                Wire.objectOf("id" to "s", "title" to "T", "origin" to "rpc", "status" to "idle", "preview" to quoted),
+                connected = true,
+                loading = false,
+                confirmed = true,
+            )
+        assertEquals("Why?", item.preview)
+        val onlyMarker =
+            sessionListItem(
+                Wire.objectOf("id" to "s", "title" to "T", "origin" to "rpc", "status" to "idle", "preview" to "[PocketPi quote v1]\n{"),
+                connected = true,
+                loading = false,
+                confirmed = true,
+            )
+        assertNull(onlyMarker.preview)
     }
 }

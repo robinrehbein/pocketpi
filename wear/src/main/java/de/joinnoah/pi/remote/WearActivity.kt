@@ -15,6 +15,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -62,6 +63,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
     val preferences by settings.state.collectAsStateWithLifecycle()
     val repository = model.repository
     val context = LocalContext.current
+    val resources = LocalResources.current
     val app = context.applicationContext as? WearApplication
     val pairCode by (app?.pairCode ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) }).collectAsStateWithLifecycle()
     val pairWaiting by (app?.pairWaiting ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
@@ -163,7 +165,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
             WatchScreen.SESSIONS -> {
                 action(R.string.wear_new_session, ready, model::createSession)
                 items(visibleSessionListItems(state.sessions, state.connected, state.loading, preferences.hideOfflineSessions, confirmed = state.sessionsFresh), key = { it.id }) { session ->
-                    WatchAction(session.title, { model.navigate(route.selection.copy(sessionId = session.id)) }, ready,
+                    WatchAction(sessionTitleLabel(session), { model.navigate(route.selection.copy(sessionId = session.id)) }, ready,
                         watchSessionStatus(session) + if (session.parentSessionId != null) " · " + stringResource(R.string.wear_subagent) else "")
                 }
                 action(R.string.wear_refresh, !busy, repository::refresh)
@@ -186,8 +188,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 val message = messages.find { it.id == route.detailId }
                 if (message != null) {
                     val content = if (message is ConversationItem.Thinking && preferences.thinkingDisplay != ThinkingDisplay.TEXT) ""
-                        else if (message is ConversationItem.Activity) state.toolOutput?.takeIf { it.toolCallId == message.toolCallId }?.text ?: watchMessageText(message)
-                        else watchMessageText(message)
+                        else watchMessageReaderContent(message, state.toolOutput) { resources.getString(it) }
                     val truncated = when (message) {
                         is ConversationItem.Bubble -> message.truncated
                         is ConversationItem.Activity -> message.truncated || message.argumentsTruncated
@@ -379,10 +380,48 @@ private fun watchMessageLabel(item: ConversationItem): String = when (item) {
     is ConversationItem.Activity -> item.name ?: stringResource(R.string.wear_tool)
     is ConversationItem.Subagent -> stringResource(R.string.wear_subagent)
     is ConversationItem.Thinking -> stringResource(R.string.wear_thinking_status)
+    is ConversationItem.QuestionnaireAnswer -> stringResource(
+        if (item.targetId == null) R.string.remote_questionnaire_earlier_title else R.string.remote_questionnaire_answered
+    )
 }
-private fun watchMessageText(item: ConversationItem): String = when (item) {
+
+@Composable
+private fun watchMessageText(item: ConversationItem, output: ToolOutputDownload? = null): String {
+    val resources = LocalResources.current
+    return watchMessageReaderContent(item, output) { resources.getString(it) }
+}
+
+/** An explicitly downloaded full output stays readable, including for a questionnaire card. */
+internal fun watchMessageReaderContent(item: ConversationItem, output: ToolOutputDownload?, text: (Int) -> String): String =
+    if (item is ConversationItem.Activity && item.toolCallId != null)
+        output?.takeIf { it.toolCallId == item.toolCallId }?.text ?: watchMessageContent(item, text)
+    else watchMessageContent(item, text)
+
+internal fun watchMessageContent(item: ConversationItem, text: (Int) -> String): String = when (item) {
     is ConversationItem.Bubble -> item.text
-    is ConversationItem.Activity -> listOfNotNull(item.arguments, item.output).joinToString("\n\n")
+    is ConversationItem.Activity -> item.questionnaire?.let { watchQuestionnaireSummary(it, text) }
+        ?: listOfNotNull(item.arguments, item.output).joinToString("\n\n")
     is ConversationItem.Subagent -> item.output ?: item.agents.joinToString("\n") { it.name + ": " + (it.preview ?: it.state) }
     is ConversationItem.Thinking -> item.text
+    is ConversationItem.QuestionnaireAnswer -> if (item.targetId == null) watchQuestionnaireSummary(item.presentation, text)
+        else text(R.string.remote_questionnaire_answered)
 }
+
+internal fun watchQuestionnaireSummary(presentation: QuestionnairePresentation, text: (Int) -> String): String = buildList {
+    add(text(when (presentation.state) {
+        QuestionnaireState.PENDING -> R.string.remote_questionnaire_pending
+        QuestionnaireState.ANSWERED -> R.string.remote_questionnaire_answered
+        QuestionnaireState.CANCELLED -> R.string.remote_questionnaire_cancelled
+    }))
+    presentation.questions.forEach { question ->
+        add(question.prompt)
+        if (presentation.state == QuestionnaireState.ANSWERED) {
+            add(when {
+                question.skipped -> text(R.string.remote_questionnaire_skipped)
+                question.answers.isEmpty() -> text(R.string.remote_questionnaire_missing)
+                else -> question.answers.joinToString(", ")
+            })
+            question.note?.takeIf { it.isNotBlank() }?.let(::add)
+        }
+    }
+}.joinToString("\n")

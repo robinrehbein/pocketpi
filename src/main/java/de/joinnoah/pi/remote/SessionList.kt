@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -141,17 +142,19 @@ internal fun SessionListRow(
     onUnhide: (() -> Unit)? = null,
     /** The row is hidden on this phone and listed only because hidden rows are shown. */
     hidden: Boolean = false,
+    compactionFrame: State<Int>? = null,
 ) {
     fun available(action: SwipeAction): SessionSwipe =
         effectiveSessionSwipe(action, closeAvailable, onRename != null, onHide != null, onUnhide != null && hidden)
     val endToStart = available(swipe.first)
     val regionChild = rememberRegionChild()
     val startToEnd = available(swipe.second)
-    val title = item.title.ifBlank { stringResource(R.string.remote_new_session) }
+    val title = sessionTitleLabel(item)
     val subagentLabel = stringResource(R.string.remote_subagent)
     val reported =
         stringResource(
-            when (item.availability) {
+            if (item.compacting) R.string.remote_status_compacting
+            else when (item.availability) {
                 SessionAvailability.IDLE -> R.string.remote_status_idle
                 SessionAvailability.RUNNING -> R.string.remote_status_running
                 SessionAvailability.WAITING -> R.string.remote_status_waiting
@@ -413,7 +416,16 @@ internal fun SessionListRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        SessionStatusLabel(
+                        if (item.compacting) {
+                            BrailleSpinner(compactionFrame, statusColor)
+                            Text(
+                                status,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = statusColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        } else SessionStatusLabel(
                             status,
                             if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
                             statusColor,
@@ -550,3 +562,28 @@ internal fun sessionBadgeGlyph(availability: SessionAvailability, lastKnown: Boo
         availability == SessionAvailability.WAITING -> StatusGlyphKind.NEEDS_INPUT
         else -> null
     }
+
+/**
+ * The title [item] shows: what the user typed; for a first prompt that was only an attachment, the
+ * file it named; else "New session".
+ */
+@Composable
+internal fun sessionTitleLabel(item: SessionListItem): String = sessionTitleLabel(item.title, item.titleAttachment)
+
+/** The label for a session's raw title from the wire, which may carry attachment or quote markers. */
+@Composable
+internal fun rawSessionTitleLabel(raw: String): String =
+    displayTitle(raw).let { sessionTitleLabel(it.text, it.attachment) }
+
+/** The label for a title already run through [displayTitle]: [text] and the [attachment] it carried. */
+@Composable
+internal fun sessionTitleLabel(text: String, attachment: TitleAttachment?): String {
+    if (text.isNotBlank()) return text
+    if (attachment == null) return stringResource(R.string.remote_new_session)
+    val name = attachment.name
+    return when {
+        name == null -> stringResource(R.string.remote_session_title_attachment)
+        attachment.image -> stringResource(R.string.remote_session_title_image, name)
+        else -> stringResource(R.string.remote_session_title_file, name)
+    }
+}
