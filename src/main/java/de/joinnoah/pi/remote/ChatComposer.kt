@@ -390,6 +390,8 @@ internal fun ChatComposer(
     onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
+    /** Keeps floating composer chrome reachable while recognition is listening or finishing. */
+    onVoiceActiveChanged: (Boolean) -> Unit = {},
     focusRequester: FocusRequester? = null,
     /** A hardware keyboard is attached; only then do Enter and Ctrl+Enter send. */
     hardwareKeyboard: Boolean = false,
@@ -571,6 +573,10 @@ internal fun ChatComposer(
     val send: () -> Unit = if (childResume) onResumeChild else onSend
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
+    val voiceActive = voiceInput.state is VoiceInputState.Listening || voiceInput.state is VoiceInputState.Finishing
+    val voiceActivityCallback by rememberUpdatedState(onVoiceActiveChanged)
+    LaunchedEffect(voiceActive) { voiceActivityCallback(voiceActive) }
+    DisposableEffect(Unit) { onDispose { voiceActivityCallback(false) } }
     SideEffect {
         draft.onTyped = voiceInput::userEdited
         draft.canOfferLongPaste = onPasteAttachments != null
