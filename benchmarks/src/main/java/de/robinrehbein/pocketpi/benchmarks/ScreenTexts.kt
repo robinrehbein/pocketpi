@@ -1,8 +1,10 @@
 package de.robinrehbein.pocketpi.benchmarks
 
+import android.graphics.Rect
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
-import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -45,24 +47,28 @@ internal const val FIXTURE_PROJECT_ROW = "projectRow-project-pocketpi"
 private fun UiDevice.projectRow(rowTag: String): UiObject2? {
     val row = By.res(rowTag)
     wait(Until.findObject(row), 10_000)?.let { return it }
-    // The page list is the tallest scrollable; a swipeable chat row also reports itself as one, and
-    // a swipe on it can open the chat. The page's floating glass pills overlay the list's edges, so
-    // the swipe starts well inside it. Compose sends no scroll events for UiObject2.scrollUntil to
-    // wait on, so look for the row after every step instead.
-    val list = findObjects(By.scrollable(true)).maxByOrNull { it.visibleBounds.height() } ?: return null
-    list.setGestureMarginPercentage(0.25f)
+    // No swipe: a swipe that the list cannot take lands on a chat row as a tap and opens that chat.
+    // The page list's own scroll action moves it without touching any row.
     repeat(PROJECT_ROW_SCROLLS) {
-        list.scroll(Direction.DOWN, 0.5f)
+        if (!scrollPageForward()) return wait(Until.findObject(row), 10_000)
         waitForIdle()
-        if (hasObject(row)) {
-            // A row that just scrolled in can still sit under the floating pill; one more step
-            // brings it clear of the pill before the tap.
-            list.scroll(Direction.DOWN, 0.3f)
-            waitForIdle()
-            return findObject(row)
-        }
+        findObject(row)?.let { return it }
     }
-    return null
+    return findObject(row)
+}
+
+/** Scrolls the tallest scrollable of the active window one page forward; false when it cannot. */
+private fun scrollPageForward(): Boolean {
+    val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow ?: return false
+    val scrollables = mutableListOf<AccessibilityNodeInfo>()
+    fun collect(node: AccessibilityNodeInfo) {
+        if (node.isScrollable) scrollables += node
+        for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+    }
+    collect(root)
+    val bounds = Rect()
+    val list = scrollables.maxByOrNull { node -> node.getBoundsInScreen(bounds); bounds.height() } ?: return false
+    return list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
 }
 
 private const val PROJECT_ROW_SCROLLS = 6
