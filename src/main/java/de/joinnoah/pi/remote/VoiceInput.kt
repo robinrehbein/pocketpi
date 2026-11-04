@@ -53,6 +53,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import kotlin.math.abs
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -241,6 +244,9 @@ internal fun VoiceInput(
     // Own touch streams in every mode: a press begun on voice or idle Send must not become a
     // busy action on release. Observed context changes cancel the detector; the protocol has no
     // run generation with which to distinguish an unobserved run replacement.
+    val switchModeLabel = stringResource(
+        if (busyAction == BusyComposerAction.Steer) R.string.remote_send_when_done else R.string.remote_send_now
+    )
     val touchModifier = if (enabled) {
         Modifier.pointerInput(pressContext) {
             awaitEachGesture {
@@ -295,6 +301,14 @@ internal fun VoiceInput(
             onClick = activate,
             interactionSource = interactionSource,
             modifier = modifier.then(touchModifier)
+                .semantics {
+                    if (enabled && canChooseBusyAction && canSwitchBusyAction) {
+                        customActions = listOf(CustomAccessibilityAction(switchModeLabel) {
+                            latestSwitch()
+                            true
+                        })
+                    }
+                }
                 .onFocusChanged {
                     if (!it.isFocused) {
                         heldKey = null

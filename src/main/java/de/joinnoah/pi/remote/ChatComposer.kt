@@ -17,7 +17,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardTab
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.OpenInFull
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,7 +44,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
@@ -986,30 +984,6 @@ internal fun ChatComposer(
                             enabled = state.connected && !state.loading,
                             modifier = Modifier.size(48.dp).testTag("stopRun"),
                         ) { Icon(Icons.Default.Stop, stringResource(R.string.remote_stop)) }
-                    }
-                }
-                if (showBusyAction && canSteerNow && canFollowUpNow) {
-                    var modeMenu by remember(state.selection) { mutableStateOf(false) }
-                    Box {
-                        val modeLabel = stringResource(R.string.remote_send_mode)
-                        val currentMode = stringResource(busyAction!!.labelRes())
-                        ShortcutTooltip("$modeLabel: $currentMode") {
-                            IconButton(
-                                onClick = { modeMenu = true },
-                                modifier = Modifier.size(48.dp).testTag("sendModeMenu")
-                                    .semantics { stateDescription = currentMode },
-                            ) { Icon(Icons.Default.MoreVert, modeLabel) }
-                        }
-                        GlassDropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                            listOf(BusyComposerAction.Steer, BusyComposerAction.FollowUp).forEach { mode ->
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(mode.labelRes())) },
-                                    onClick = { preferredBusyAction = mode; modeMenu = false },
-                                    modifier = Modifier.testTag(if (mode == BusyComposerAction.Steer) "sendNow" else "sendWhenDone")
-                                        .semantics { selected = mode == busyAction },
-                                )
-                            }
-                        }
                     }
                 }
                 // Names what the primary button does now, and its key. While pi runs it never stops:
