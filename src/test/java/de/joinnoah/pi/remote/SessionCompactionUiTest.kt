@@ -50,7 +50,7 @@ class SessionCompactionUiTest {
                 )
             }
         }
-        compose.onNodeWithText("Needs an answer").assertExists()
+        compose.onNodeWithText("Needs you").assertExists()
         compose.onNodeWithText("Compacting context …").assertDoesNotExist()
     }
 }

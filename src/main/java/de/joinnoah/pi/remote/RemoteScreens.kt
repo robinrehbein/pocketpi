@@ -1554,10 +1554,16 @@ internal fun RemoteScreen(
     // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
     var runningShowAll by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
-    val projectQuickChats = quickChats(
-        if (key is RemoteNavKey.Projects && !projectSelected) mainSessionChats(state.projectChats) else emptyList(),
-        state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
-    )
+    // Keep this captured value stable: recreating it on chat recomposition invalidates the lazy
+    // content, whose layoutInfo observation would otherwise trigger another measurement.
+    val projectQuickChats = remember(
+        key, projectSelected, state.projectChats, state.connected, runningShowAll, recentShowAll,
+    ) {
+        quickChats(
+            if (key is RemoteNavKey.Projects && !projectSelected) mainSessionChats(state.projectChats) else emptyList(),
+            state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
+        )
+    }
     val compactionFrame = rememberBrailleSpinnerFrame(
         (key is RemoteNavKey.Sessions && listedSessions.any { it.compacting }) ||
             (projectQuickChats.waiting + projectQuickChats.running + projectQuickChats.recent).any { chat ->
