@@ -7,13 +7,17 @@ import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -315,6 +319,56 @@ class HomeSurfacesShortcutSignatureTest {
         home.onState(listing("c"))
         assertFalse(shortcuts.dynamicShortcuts.any { it.id == a })
         assertFalse(shortcuts.pinnedShortcuts.any { it.id == a && it.isEnabled })
+    }
+
+    @Test
+    @Config(shadows = [RejectingShortcutManager::class])
+    fun aDelayedOlderUpdateCannotRollBackNewerShortcuts() = runBlocking {
+        FakeAndroidKeyStore.install()
+        persist(emptyList())
+        val job = SupervisorJob()
+        val olderAtWidget = CompletableDeferred<Unit>()
+        val releaseOlder = CompletableDeferred<Unit>()
+        val widgetUpdates = AtomicInteger()
+        val home = HomeSurfaces(
+            context, CoroutineScope(job + Dispatchers.Unconfined), Pairings(),
+            updateWidgets = {
+                // The first update is onState. Pause the first push after its snapshot is saved,
+                // but before its shortcut publication, while the second push finishes normally.
+                if (widgetUpdates.incrementAndGet() == 2) {
+                    olderAtWidget.complete(Unit)
+                    releaseOlder.await()
+                }
+            },
+        )
+        try {
+            home.onState(listing("a"))
+            home.onPush(PushPayload("route", "n1", "event-1", PushEvent.COMPLETE))
+            withTimeout(5_000) { olderAtWidget.await() }
+            val olderJob = job.children.single()
+            home.onPush(PushPayload("route", "n2", "event-2", PushEvent.COMPLETE))
+            withTimeout(5_000) {
+                job.children.filter { it !== olderJob }.toList().forEach { it.join() }
+            }
+            val latestSnapshot = home.snapshot.value
+            val latestIds = shortcuts.dynamicShortcuts.map { it.id }.toSet()
+            assertTrue(latestIds.contains(shortcutId("route", "n2")))
+            val latestSignature = publishedSignature(home)
+            val persistedSignature = prefs.getString(PUBLISHED_SHORTCUTS_KEY, null)
+            val publishes = RejectingShortcutManager.dynamicPublishes
+
+            releaseOlder.complete(Unit)
+            withTimeout(5_000) { olderJob.join() }
+
+            assertEquals(latestSnapshot, home.snapshot.value)
+            assertEquals(latestIds, shortcuts.dynamicShortcuts.map { it.id }.toSet())
+            assertEquals(latestSignature, publishedSignature(home))
+            assertEquals(persistedSignature, prefs.getString(PUBLISHED_SHORTCUTS_KEY, null))
+            assertEquals(publishes, RejectingShortcutManager.dynamicPublishes)
+        } finally {
+            releaseOlder.complete(Unit)
+            job.cancelAndJoin()
+        }
     }
 
     @Test

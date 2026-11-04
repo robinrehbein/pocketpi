@@ -35,6 +35,7 @@ internal class HomeSurfaces(
     private val scope: CoroutineScope,
     private val pairings: PairingStorage,
     private val file: EncryptedFileStore = context.stores.home,
+    private val updateWidgets: suspend () -> Unit = { PocketPiWidget().updateAll(context) },
 ) {
     private val mutex = Mutex()
     private var loaded = false
@@ -234,29 +235,33 @@ internal class HomeSurfaces(
         force: Boolean = false,
         change: suspend (HomeSnapshot) -> HomeSnapshot,
     ) {
-        val next =
-            mutex.withLock {
-                ensureLoaded()
-                val previous = mutable.value
-                val next = change(previous)
-                if (next != previous) {
-                    withContext(Dispatchers.IO) { file.write(next.json().toString().toByteArray()) }
-                    mutable.value = next
-                } else if (!force && closed.isEmpty() && reconciled) return
-                next
-            }
+        mutex.withLock {
+            ensureLoaded()
+            val previous = mutable.value
+            val next = change(previous)
+            if (next != previous) {
+                withContext(Dispatchers.IO) { file.write(next.json().toString().toByteArray()) }
+                mutable.value = next
+            } else if (!force && closed.isEmpty() && reconciled) return
+        }
         try {
-            PocketPiWidget().updateAll(context)
+            updateWidgets()
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {}
-        withContext(Dispatchers.IO) { publishShortcuts(next) }
+        // Updates can finish widget work out of order. Sample the latest committed snapshot
+        // only after acquiring the publication lock, so a delayed update cannot roll it back.
+        withContext(Dispatchers.IO) { publishShortcuts { mutable.value } }
     }
 
-    /** Runs off the main thread: ShortcutManager calls are binder calls. */
+    /** Explicit snapshots are only for shortcut-plan tests, not asynchronous state updates. */
     @androidx.annotation.VisibleForTesting
-    internal suspend fun publishShortcuts(snapshot: HomeSnapshot) =
+    internal suspend fun publishShortcuts(snapshot: HomeSnapshot) = publishShortcuts { snapshot }
+
+    /** Runs off the main thread: ShortcutManager calls are binder calls. */
+    private suspend fun publishShortcuts(currentSnapshot: () -> HomeSnapshot) =
         shortcutMutex.withLock {
+            val snapshot = currentSnapshot()
             try {
                 // One set for the ranked and the notified sessions: setDynamicShortcuts replaces
                 // every dynamic shortcut, so a shortcut pushed on its own would be wiped here.
