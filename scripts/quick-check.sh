@@ -56,7 +56,7 @@ if $full; then
     echo "quick-check: --full, running the full local set"
     ./gradlew ${gradle_args[@]+"${gradle_args[@]}"} \
         testDebugUnitTest assembleDebug lintDebug \
-        :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug \
+        :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:assembleDebugAndroidTest \
         assembleDebugAndroidTest :assembleBenchmark :benchmarks:assembleBenchmark
     exit 0
 fi
@@ -194,13 +194,14 @@ fi
 
 # Compiling these covers every source set a change can break: app main and unit tests, the
 # androidTest fakes, the app's benchmark variant (src/benchmark, src/testBenchmark), the benchmarks
-# module and the wear module, which compiles every file in src/main/java.
+# module and the wear module (unit and emulator tests), which compiles every file in src/main/java.
 tasks=(
     :compileDebugUnitTestKotlin
     :compileDebugAndroidTestKotlin
     :compileBenchmarkUnitTestKotlin
     :benchmarks:compileBenchmarkKotlin
     :wear:compileDebugUnitTestKotlin
+    :wear:compileDebugAndroidTestKotlin
 )
 if [[ -n "$whole_suite" ]]; then
     echo "quick-check: whole :testDebugUnitTest ($whole_suite)"

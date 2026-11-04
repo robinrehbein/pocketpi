@@ -182,6 +182,18 @@ class WatchTileTest {
         assertEquals(listOf("Fix the tile", context.getString(R.string.remote_widget_untitled)), tile.rows.map { it.title })
         assertEquals(listOf("needs you · PR #7 · checks running · now", "working"), tile.rows.map { it.detail })
     }
+    @Test fun `tile text is light on the black tile background`() {
+        fun colors(glance: WatchGlance): List<Int> {
+            val layout = androidx.wear.protolayout.material.layouts.PrimaryLayout.fromLayoutElement(
+                watchTileLayout(context, watchTileContent(context, glance, now), device))!!
+            return listOfNotNull(layout.primaryLabelTextContent, layout.secondaryLabelTextContent, layout.content)
+                .mapNotNull { androidx.wear.protolayout.material.Text.fromLayoutElement(it)?.color?.argb }
+        }
+        // Unpaired: the title and the pairing hint. Paired and empty: the title, its time and the empty hint.
+        assertEquals(List(2) { WATCH_TILE_TEXT_COLOR }, colors(WatchGlance()))
+        assertEquals(List(3) { WATCH_TILE_TEXT_COLOR }, colors(WatchGlance(HomeSnapshot(true, emptyList(), now))))
+        assertEquals(0xFFFFFFFF.toInt(), WATCH_TILE_TEXT_COLOR)
+    }
     @Test fun `a tile tap opens a validated session or else the app`() {
         val extras = android.os.Bundle().apply { WatchTileTarget.intentExtras(WatchTileRow("route", "a", "", false, null, null)).forEach(::putString) }
         assertEquals(NotificationTarget("route", "a"), WatchTileTarget.target(extras))
