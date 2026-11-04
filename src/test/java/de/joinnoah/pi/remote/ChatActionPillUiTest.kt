@@ -22,6 +22,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -94,10 +95,42 @@ class ChatActionPillUiTest {
             MaterialTheme { ChatActionPill(layout, Color.DarkGray, {}) }
         }
         compose.onNodeWithTag("chatActionsMore").performClick()
-        val tops = layout.menu.map { action -> menuItem(action).fetchSemanticsNode().boundsInWindow.top }
+        // Measure the full content order, including rows initially below the scroll viewport.
+        val tops = layout.menu.map { action -> menuItem(action).fetchSemanticsNode().positionInRoot.y }
         assertEquals(tops.sorted(), tops)
         // The full menu also contains the action that was visible as the shortcut.
         menuItem(ChatAction.CHANGES).assertIsDisplayed()
+        menuItem(ChatAction.CLOSE).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun terminalIsALabelledMenuRowThatRunsOnceClosesAndBecomesTheShortcut() {
+        val selected = mutableListOf<ChatAction>()
+        compose.setContent {
+            MaterialTheme {
+                ChatActionPill(
+                    chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.TERMINAL)),
+                    Color.DarkGray,
+                    selected::add,
+                )
+            }
+        }
+        // The default shortcut never falls to Terminal: it is last in the fallback order.
+        compose.onNodeWithTag("chatAction_changes").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_terminal").assertDoesNotExist()
+        compose.onNodeWithText(label(R.string.remote_terminal_title)).assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNode(
+            hasText(label(R.string.remote_terminal_title)).and(hasAnyAncestor(hasTestTag("chatActionMenu_terminal"))),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        menuItem(ChatAction.TERMINAL).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(ChatAction.TERMINAL), selected)
+        menuItem(ChatAction.TERMINAL).assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_terminal")
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals(label(R.string.remote_terminal_title))
     }
 
     @Test

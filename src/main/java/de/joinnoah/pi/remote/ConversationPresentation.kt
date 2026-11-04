@@ -27,6 +27,16 @@ internal sealed interface ConversationItem {
         val interrupted: Boolean = false,
     ) : ConversationItem
 
+    /** A host-identified async answer, either a jump marker or a standalone history fallback. */
+    data class QuestionnaireAnswer(
+        override val id: String,
+        override val sourceId: String,
+        val presentation: QuestionnairePresentation,
+        val targetId: String?,
+        val timestamp: Long?,
+        val rawText: String,
+    ) : ConversationItem
+
     data class Thinking(
         override val id: String,
         override val sourceId: String,
@@ -47,6 +57,7 @@ internal sealed interface ConversationItem {
         val outputMessageId: String? = null,
         val argumentsTruncated: Boolean = false,
         val details: ToolDetails? = null,
+        val questionnaire: QuestionnairePresentation? = null,
     ) : ConversationItem
 
     data class Subagent(
@@ -71,6 +82,17 @@ internal data class AgentProgress(
     val sessionId: String? = null,
     val step: Int? = null,
     val usage: AgentUsage? = null,
+    /** Stable ID of this agent run (`session_activity.v1`); the actor ledger's key part. */
+    val instanceId: String? = null,
+    /** The parent tool call that spawned this agent (`session_activity.v1`). */
+    val spawnToolCallId: String? = null,
+    /**
+     * The structured activity the transcript recorded. Historical: it never proves the agent is
+     * live and nothing animates from it; only the repository's actor ledger does.
+     */
+    val executionActivity: ActivitySnapshot? = null,
+    /** The agent's own `needsInput: true` as recorded; like [executionActivity], not live proof. */
+    val needsInput: Boolean = false,
 )
 
 /** Token usage of one assistant message; [cost] is USD when the host knew it. */
@@ -175,8 +197,38 @@ private fun agentUsage(agent: JsonObject): AgentUsage? {
 
 private val agentStates = setOf("queued", "running", "succeeded", "failed", "cancelled")
 
+private class StructuredAgentFields(
+    val instanceId: String?,
+    val spawnToolCallId: String?,
+    val executionActivity: ActivitySnapshot?,
+    val needsInput: Boolean,
+)
+
+/**
+ * `instanceId`, `spawnToolCallId`, `executionActivity` and `needsInput` of one progress agent, or
+ * null when one is present but invalid (parse.ts: opaque IDs, a valid snapshot, `needsInput` only
+ * `true`). `needsInput` counts only on a running agent, as the host only ever sends it there.
+ */
+private fun structuredAgentFields(agent: JsonObject): StructuredAgentFields? {
+    fun id(key: String): Result<String?> =
+        if (!agent.containsKey(key)) Result.success(null)
+        else agent.safeText(key)?.takeIf(::validActivityId)?.let { Result.success(it) }
+            ?: Result.failure(IllegalArgumentException(key))
+    val instanceId = id("instanceId").getOrElse { return null }
+    val spawnToolCallId = id("spawnToolCallId").getOrElse { return null }
+    val executionActivity =
+        if (!agent.containsKey("executionActivity")) null
+        else parseActivitySnapshot(agent["executionActivity"]) ?: return null
+    val needsInput =
+        if (!agent.containsKey("needsInput")) false
+        else if (agent.safeFlag("needsInput") == true) agent.safeText("state") == "running"
+        else return null
+    return StructuredAgentFields(instanceId, spawnToolCallId, executionActivity, needsInput)
+}
+
 /** Tools rendered as a subagent card: the retired `subagent` tool and the fork's `Agent` tool. */
 private val SUBAGENT_TOOLS = setOf("subagent", "Agent")
+private val QUESTIONNAIRE_TOOLS = setOf("AskUserQuestion", "questionnaire", "questionnaire_async")
 
 private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
     val progress = message["subagentProgress"] as? JsonObject
@@ -187,6 +239,10 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
         val name = agent.safeText("agent")?.takeIf { it.isNotBlank() && it.length <= 80 }
             ?: return@mapNotNull null
         val state = agent.safeText("state")?.takeIf { it in agentStates } ?: return@mapNotNull null
+        // `session_activity.v1` fields as the host's parse.ts checks them: a present field that is
+        // invalid there rejects the message on the host, so here it drops the agent, never just the
+        // field, so a bad instance or a `needsInput: false` cannot leave a live-looking row.
+        val structured = structuredAgentFields(agent) ?: return@mapNotNull null
         AgentProgress(
             name,
             state,
@@ -196,8 +252,20 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
             sessionId = agent.safeText("sessionId")?.takeIf(::isOpaqueId),
             step = agent.safeCount("step")?.takeIf { it in 1L..10000L }?.toInt(),
             usage = agentUsage(agent),
+            instanceId = structured.instanceId,
+            spawnToolCallId = structured.spawnToolCallId,
+            executionActivity = structured.executionActivity,
+            needsInput = structured.needsInput,
         )
-    }.orEmpty()
+    }.orEmpty().let { agents ->
+        // An instance ID listed twice names no single run: neither row keeps its structured fields.
+        val counts = agents.mapNotNull { it.instanceId }.groupingBy { it }.eachCount()
+        agents.map {
+            if (it.instanceId != null && counts.getValue(it.instanceId) > 1)
+                it.copy(instanceId = null, spawnToolCallId = null, executionActivity = null, needsInput = false)
+            else it
+        }
+    }
     return ConversationItem.Subagent(
         message.text("id"),
         message.text("id"),
@@ -373,6 +441,7 @@ private class MessageLinks(val message: JsonObject) {
         message.parts().filter { it.optionalText("type") == "toolCall" }.map { it.text("id") }
 
     val thinks = message.parts().any { it.optionalText("type") == "thinking" }
+    val questionnaire = questionnairePresentation(message)
 }
 
 /**
@@ -388,12 +457,17 @@ private class MessageContext(
     val paired: Boolean,
     /** The outputs of the message's calls, in the order of [MessageLinks.callIds]. */
     val outputs: List<JsonObject?>,
+    val questionnaireResponses: List<JsonObject?>,
+    val questionnaireTarget: String?,
 ) {
     // Outputs compare by identity: Timeline keeps an unchanged message's instance.
     fun sameAs(other: MessageContext): Boolean =
         last == other.last &&
             pending == other.pending &&
             paired == other.paired &&
+            questionnaireTarget == other.questionnaireTarget &&
+            questionnaireResponses.size == other.questionnaireResponses.size &&
+            questionnaireResponses.indices.all { questionnaireResponses[it] === other.questionnaireResponses[it] } &&
             outputs.size == other.outputs.size &&
             outputs.indices.all { outputs[it] === other.outputs[it] }
 }
@@ -411,6 +485,28 @@ private class ConversationLinks(private val links: List<MessageLinks>, sessionAc
         for (link in links) link.toolCallId?.let { put(it, link.message) }
     }
 
+    private val questionnaireCalls = buildMap<String, String> {
+        for (link in links) for (part in link.message.parts()) {
+            if (part.optionalText("type") == "toolCall" &&
+                part.optionalText("name") in QUESTIONNAIRE_TOOLS)
+                put(part.text("id"), "${link.id}-call-${part.text("id")}")
+        }
+    }
+    private fun matchesQuestionnaireCall(question: QuestionnairePresentation): Boolean {
+        if (question.toolCallId !in questionnaireCalls) return false
+        val output = outputs[question.toolCallId] ?: return true
+        if (output["questionnaire"] == null || output["questionnaire"] == JsonNull) return true
+        val original = questionnairePresentation(output) ?: return false
+        return (original.requestId == null || original.requestId == question.requestId) &&
+            original.questions.map { it.id to it.prompt } == question.questions.map { it.id to it.prompt }
+    }
+    private val questionnaireResponses = buildMap<String, JsonObject> {
+        for (link in links) {
+            val question = link.questionnaire ?: continue
+            if (link.role == "user" && matchesQuestionnaireCall(question)) put(question.toolCallId, link.message)
+        }
+    }
+
     fun context(index: Int): MessageContext {
         val link = links[index]
         return MessageContext(
@@ -418,6 +514,10 @@ private class ConversationLinks(private val links: List<MessageLinks>, sessionAc
             pending = link.callIds.isNotEmpty() && link.id == pendingAssistant,
             paired = link.toolCallId in calls,
             outputs = link.callIds.map { outputs[it] },
+            questionnaireResponses = link.callIds.map { questionnaireResponses[it] },
+            questionnaireTarget = if (link.role == "user") link.questionnaire?.let {
+                if (questionnaireResponses[it.toolCallId] === link.message) questionnaireCalls[it.toolCallId] else null
+            } else null,
         )
     }
 }
@@ -581,6 +681,10 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
     val role = links.role
     val truncated = message["truncated"]?.jsonPrimitive?.booleanOrNull == true
     val timestamp = message.messageTimestamp()
+    if (role == "user" && links.questionnaire != null) {
+        add(ConversationItem.QuestionnaireAnswer(id, id, links.questionnaire, context.questionnaireTarget, timestamp, userMessageBody(message)))
+        return@buildList
+    }
     if (role == "tool") {
         if (context.paired) return@buildList
         if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
@@ -602,6 +706,7 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                 toolCallId = message.safeText("toolCallId"),
                 outputMessageId = id,
                 details = if (messageAuthor(message) == "edit") toolDetails(message) else null,
+                questionnaire = links.questionnaire.takeIf { message.optionalText("toolName") in QUESTIONNAIRE_TOOLS },
             )
         )
         return@buildList
@@ -733,6 +838,11 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                         toolCallId = part.text("id"),
                         outputMessageId = output?.text("id"),
                         argumentsTruncated = parsedToolArguments(arguments) == null,
+                        questionnaire = if (part.text("name") in QUESTIONNAIRE_TOOLS) {
+                            context.questionnaireResponses.getOrNull(links.callIds.indexOf(part.text("id")))
+                                ?.let(::questionnairePresentation)
+                                ?: output?.let(::questionnairePresentation)
+                        } else null,
                         details =
                             output
                                 ?.takeIf { part.text("name") == "edit" }

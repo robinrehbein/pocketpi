@@ -18,6 +18,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -69,12 +72,19 @@ class MacHubUiTest {
         put("name", name)
     }
 
-    private fun session(id: String, status: String, origin: String = "pi", parent: String? = null) = buildJsonObject {
+    // updatedAt = 1 is long ago: a ready row with it reads as old. Tests of fresh rows pass a recent time.
+    private fun session(
+        id: String,
+        status: String,
+        updatedAt: Long = 1L,
+        origin: String = "pi",
+        parent: String? = null,
+    ) = buildJsonObject {
         put("id", id)
         put("title", "Session $id")
         put("status", status)
         put("origin", origin)
-        put("updatedAt", 1L)
+        put("updatedAt", updatedAt)
         if (parent != null) put("parentSessionId", parent)
     }
 
@@ -84,9 +94,10 @@ class MacHubUiTest {
         id: String,
         status: String,
         verified: Boolean = true,
+        updatedAt: Long = 1L,
         origin: String = "pi",
         parent: String? = null,
-    ) = ProjectChatSummary(projectId, projectName, session(id, status, origin, parent), verified)
+    ) = ProjectChatSummary(projectId, projectName, session(id, status, updatedAt, origin, parent), verified)
 
     private fun render(
         projects: List<JsonObject>,
@@ -97,6 +108,8 @@ class MacHubUiTest {
         connection: Int? = null,
         capabilities: Set<String> = emptySet(),
         tickets: TicketsState = TicketsState(),
+        fontScale: Float? = null,
+        marks: SessionMarksStore? = null,
         pointerMenu: Boolean = false,
     ) {
         repository.state.value =
@@ -114,13 +127,25 @@ class MacHubUiTest {
                 tickets = tickets,
             )
         compose.setContent {
-            androidx.compose.material3.MaterialTheme {
-                if (pointerMenu) PointerMenuHost { RemoteNavigation(repository, settings, false, {}) }
-                else RemoteNavigation(repository, settings, false, {})
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides if (fontScale != null) Density(density.density, fontScale) else density,
+                LocalSessionMarks provides marks,
+            ) {
+                androidx.compose.material3.MaterialTheme {
+                    if (pointerMenu) PointerMenuHost { RemoteNavigation(repository, settings, false, {}) }
+                    else RemoteNavigation(repository, settings, false, {})
+                }
             }
         }
         compose.waitForIdle()
     }
+
+    /** A store that marks these sessions of the route as finished while the user was away, so unread. */
+    private fun unreadMarks(routeId: String, vararg sessionIds: String) =
+        SessionMarksStore(compose.activity).also { store ->
+            sessionIds.forEach { store.markFinished(routeId, it, now = 5) }
+        }
 
     private fun label(id: Int) = compose.activity.getString(id)
 
@@ -182,21 +207,28 @@ class MacHubUiTest {
     }
 
     @Test
-    fun waitingChatsLeadThenWorkingChatsThenSharedProjectsThenRecentChats() {
+    fun needsYouLeadsThenReadyThenWorkingThenProjectsThenRecent() {
         render(
             listOf(project("p1", "Alpha"), project("p2", "Beta")),
             chats =
                 listOf(
-                    chat("p2", "Beta", "recent", "idle"),
+                    chat("p2", "Beta", "recent", "idle", verified = false),
+                    chat("p2", "Beta", "done", "idle"),
                     chat("p1", "Alpha", "working", "running"),
                     chat("p1", "Alpha", "waiting", "waiting"),
                 ),
         )
 
         val needsYou = label(R.string.remote_status_needs_you)
+        val ready = label(R.string.remote_status_ready)
         val working = label(R.string.remote_status_working)
         val shared = label(R.string.remote_projects_shared)
         val quick = label(R.string.remote_projects_quick_chats)
+        assertTrue(headingTop(needsYou) < headingTop(ready))
+        assertTrue(headingTop(ready) < headingTop(working))
+        // The unverified idle chat sits under Recent, the verified one under Ready.
+        assertTrue(headingTop(quick) < compose.onNodeWithText("Session recent").fetchSemanticsNode().positionInRoot.y)
+        assertTrue(compose.onNodeWithText("Session done").fetchSemanticsNode().positionInRoot.y < headingTop(working))
         assertTrue(headingTop(needsYou) < headingTop(working))
         assertTrue(headingTop(working) < headingTop(shared))
         assertTrue(headingTop(shared) < headingTop(quick))
@@ -213,7 +245,97 @@ class MacHubUiTest {
         compose.onNode(hasText(label(R.string.remote_status_needs_you)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             .assertIsDisplayed()
         compose.onAllNodesWithText(label(R.string.remote_status_working)).assertCountEquals(0)
+        compose.onAllNodesWithText(label(R.string.remote_status_ready)).assertCountEquals(0)
         compose.onAllNodesWithText(label(R.string.remote_projects_quick_chats)).assertCountEquals(0)
+    }
+
+    private fun readyHeading() =
+        hasText(label(R.string.remote_status_ready)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+
+    @Test
+    fun anOfflineMacShowsItsChatsUnderRecentNotReady() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "done", "idle", updatedAt = System.currentTimeMillis())),
+            connected = false,
+        )
+
+        compose.onAllNodes(readyHeading()).assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_projects_quick_chats)).assertIsDisplayed()
+        compose.onNodeWithText("Session done").assertIsDisplayed()
+    }
+
+    @Test
+    fun aReadyRowOlderThanADayShowsTheOldChip() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "stale", "idle", updatedAt = System.currentTimeMillis() - 2 * OLD_READY_MILLIS),
+                    chat("p1", "Alpha", "fresh", "idle", updatedAt = System.currentTimeMillis()),
+                ),
+        )
+
+        compose.onNodeWithTag("sessionOld-stale", useUnmergedTree = true).assertIsDisplayed()
+        compose.onAllNodesWithTag("sessionOld-fresh", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun aFreshReadyRowShowsItsRelativeAge() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "done", "idle", updatedAt = System.currentTimeMillis() - 5 * 60_000L)),
+        )
+
+        compose.onNodeWithText("5 minutes ago").assertIsDisplayed()
+    }
+
+    @Test
+    fun aProjectRowShowsItsUnreadReadyCount() {
+        render(
+            listOf(project("p1", "Alpha")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            List(4) { Wire.objectOf("id" to "s$it", "status" to "idle", "origin" to "rpc", "updatedAt" to 10) },
+                            verified = true,
+                            counts = SessionCounts(running = 1),
+                        ),
+                ),
+            marks = unreadMarks("studio", "s0", "s1", "s2"),
+        )
+
+        compose.onNodeWithText("3 new").assertIsDisplayed()
+        compose.onNodeWithTag("projectBadgeReady-p1", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Alpha, 1 working, 3 new").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "de-w411dp-h1600dp")
+    fun threeBadgesKeepTheProjectNameVisibleAtLargeFont() {
+        render(
+            fontScale = 2f,
+            projects = listOf(project("p1", "Alpha")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            List(3) { Wire.objectOf("id" to "s$it", "status" to "idle", "origin" to "rpc", "updatedAt" to 10) },
+                            verified = true,
+                            counts = SessionCounts(waiting = 2, running = 1),
+                        ),
+                ),
+            marks = unreadMarks("studio", "s0", "s1", "s2"),
+        )
+
+        val name = compose.onNode(hasText("Alpha") and hasAnyAncestor(hasTestTag("projectRow-p1")), useUnmergedTree = true)
+        name.assertIsDisplayed()
+        assertTrue(name.fetchSemanticsNode().size.width >= 48 * compose.activity.resources.displayMetrics.density)
     }
 
     @Test
@@ -238,8 +360,8 @@ class MacHubUiTest {
         compose.onNodeWithText("2 need you").assertIsDisplayed()
         compose.onNodeWithText("1 working").assertIsDisplayed()
         compose.onNodeWithContentDescription("Alpha, 2 need you, 1 working").assertIsDisplayed()
-        compose.onAllNodesWithTag("projectBadgeWaiting-p2").assertCountEquals(0)
-        compose.onAllNodesWithTag("projectBadgeWorking-p2").assertCountEquals(0)
+        compose.onAllNodesWithTag("projectBadgeWaiting-p2", useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithTag("projectBadgeWorking-p2", useUnmergedTree = true).assertCountEquals(0)
         compose.onNodeWithTag("projectRow-p2").assertIsDisplayed()
     }
 

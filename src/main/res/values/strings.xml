@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_questionnaire_earlier_title">Answer to earlier question</string>
+    <string name="remote_questionnaire_pending">Pending</string>
+    <string name="remote_questionnaire_answered">Answered</string>
+    <string name="remote_questionnaire_cancelled">Cancelled</string>
+    <string name="remote_questionnaire_skipped">Skipped</string>
+    <string name="remote_questionnaire_missing">No answer available</string>
+    <string name="remote_questionnaire_show_more">Show more</string>
+    <string name="remote_questionnaire_show_less">Show less</string>
     <string name="remote_palette_quick_access">Quick access</string>
     <string name="remote_palette_search">Search</string>
     <string name="remote_palette_search_compact">Search · &gt; / # @</string>
@@ -30,7 +38,8 @@
     <string name="remote_app_name">PocketPi</string>
     <string name="remote_hosts">Computers</string>
     <string name="remote_projects">Projects</string>
-    <string name="remote_projects_quick_chats">Quick access</string>
+    <!-- Heading of the Projects page group of offline, unverified and history chats (RemoteScreens.kt); open idle chats are under "Ready". -->
+    <string name="remote_projects_quick_chats">Recently used</string>
     <string name="remote_projects_shared">Shared projects</string>
     <string name="remote_sessions">Sessions</string>
     <string name="remote_chat">Session</string>
@@ -262,6 +271,7 @@
     <string name="remote_appearance">Appearance</string>
     <string name="remote_pair_code">Pairing code</string>
     <string name="remote_status_idle">Ready</string>
+    <string name="remote_status_compacting">Compacting context …</string>
     <string name="remote_status_running">Working</string>
     <string name="remote_status_waiting">Needs you</string>
     <string name="remote_status_offline">Offline</string>
@@ -859,6 +869,18 @@
     <string name="remote_app_icon_black_white">Black · White</string>
     <string name="remote_app_icon_color_white">Pi colors · White</string>
     <string name="remote_app_icon_error">Could not change the app icon. Please try again.</string>
+    <string name="remote_chat_activity_thinking">Pi is thinking</string>
+    <string name="remote_chat_activity_writing">Pi is writing</string>
+    <plurals name="remote_chat_activity_more_tools">
+        <item quantity="one">+%d more</item>
+        <item quantity="other">+%d more</item>
+    </plurals>
+    <string name="remote_chat_activity_more_tools_many">+%1$d+ more</string>
+    <string name="remote_subagent_phase_pending">Starting</string>
+    <string name="remote_subagent_phase_thinking">Thinking</string>
+    <string name="remote_subagent_phase_writing">Writing</string>
+    <string name="remote_subagent_phase_tool">Running a tool</string>
+    <string name="remote_questionnaire_answer_sent">Answer submitted · Go to question</string>
     <string name="remote_render_diagnostics_title">Chat rendering diagnostics</string>
     <string name="remote_render_diagnostics_help">Temporary tests, reset when the app restarts. Enable recording, return to the chat, and take a screenshot when the problem appears. Then tap the diagnostic button in the chat header. Only layout numbers and device information are recorded, never message text or screenshots. Test glass and animations separately.</string>
     <string name="remote_render_record">Record recent chat layout</string>

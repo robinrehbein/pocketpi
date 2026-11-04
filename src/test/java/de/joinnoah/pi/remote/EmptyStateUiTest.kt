@@ -59,7 +59,7 @@ class EmptyStateUiTest {
         put("name", name)
     }
 
-    private fun chat(id: String, status: String): ProjectChatSummary =
+    private fun chat(id: String, status: String, verified: Boolean = true): ProjectChatSummary =
         ProjectChatSummary(
             "p1",
             "Alpha",
@@ -70,7 +70,7 @@ class EmptyStateUiTest {
                 put("origin", "pi")
                 put("updatedAt", 1L)
             },
-            verified = true,
+            verified = verified,
         )
 
     private fun render(
@@ -206,7 +206,7 @@ class EmptyStateUiTest {
 
     @Test
     fun quickAccessShowsAllBeyondThreeChatsAndFoldsBack() {
-        val recent = (1..4).map { chat("r$it", "idle") }
+        val recent = (1..4).map { chat("r$it", "idle", verified = false) }
         render(projects = listOf(project("p1", "Alpha")), chats = recent)
 
         compose.onNodeWithText("Session r3").assertIsDisplayed()
@@ -241,7 +241,7 @@ class EmptyStateUiTest {
 
     @Test
     fun quickAccessHasNoShowAllWhileThreeChatsFit() {
-        render(projects = listOf(project("p1", "Alpha")), chats = (1..3).map { chat("r$it", "idle") })
+        render(projects = listOf(project("p1", "Alpha")), chats = (1..3).map { chat("r$it", "idle", verified = false) })
 
         compose.onAllNodesWithTag("quickChatsShowAllRecent").assertCountEquals(0)
         compose.onAllNodesWithTag("quickChatsShowAllRunning").assertCountEquals(0)

@@ -6,4 +6,20 @@
     <string name="remote_swipe_action_close">Schließen</string>
     <string name="remote_swipe_action_rename">Umbenennen</string>
     <string name="remote_swipe_action_none">Aus</string>
+    <string name="remote_menu_hide">Ausblenden</string>
+    <string name="remote_menu_unhide">Wieder einblenden</string>
+    <string name="remote_swipe_action_hide">Ausblenden</string>
+    <string name="remote_swipe_action_unhide">Wieder einblenden</string>
+    <string name="remote_session_hidden_label">Ausgeblendet</string>
+    <string name="remote_session_hidden_snackbar">Auf diesem Handy ausgeblendet</string>
+    <string name="remote_session_hidden_snackbar_a11y">„%1$s“ auf diesem Handy ausgeblendet</string>
+    <string name="remote_undo">Rückgängig</string>
+    <plurals name="remote_sessions_hidden_count">
+        <item quantity="one">%d ausgeblendete Sitzung</item>
+        <item quantity="other">%d ausgeblendete Sitzungen</item>
+    </plurals>
+    <string name="remote_sessions_show_hidden">Anzeigen</string>
+    <string name="remote_sessions_hide_hidden">Ausgeblendete verbergen</string>
+    <string name="remote_sessions_hidden_state_shown">Angezeigt</string>
+    <string name="remote_sessions_hidden_state_collapsed">Eingeklappt</string>
 </resources>

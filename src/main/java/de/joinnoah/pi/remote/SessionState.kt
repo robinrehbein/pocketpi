@@ -8,10 +8,10 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.longOrNull
 import java.util.IdentityHashMap
 
-/** A compaction the host reported as running for the selected session. */
+/** A compaction the host reported as running; timestamps are local receipt times. */
 data class SessionCompaction(val reason: String?, val startedAtMillis: Long)
 
-private const val COMPACTION_VISIBLE_MILLIS = 10 * 60 * 1000L
+internal const val COMPACTION_VISIBLE_MILLIS = 10 * 60 * 1000L
 
 /** Hides a compaction whose terminal event never arrived after ten minutes. */
 fun compactionVisible(c: SessionCompaction?, nowMillis: Long): Boolean =
@@ -686,6 +686,9 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             "session.pull_request" -> sessionPullRequest(event)?.let { pullRequest = it.pullRequest }
             // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
             "advisor.status" -> Unit
+            // `session_activity.v1`: the repository applies it to its activity view on receipt and
+            // on replay; here it only advances the revision, never a message or tool state.
+            "session.activity" -> Unit
             else -> unknownKindSeen = true
         }
         applying?.add(event)

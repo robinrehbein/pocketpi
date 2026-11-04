@@ -40,6 +40,14 @@ internal data class SessionListItem(
     val ticketRef: String? = null,
     /** A pi the host runs in a terminal of its own (see [isHostWorker]); it may be offline until it reports. */
     val hostWorker: Boolean = false,
+    /** Hidden on this phone (see [sessionHidden]); listed only while the hidden rows are shown. */
+    val hidden: Boolean = false,
+    /**
+     * The status the session reported is running or waiting, whatever [availability] shows (an
+     * offline phone reads every row as offline). [sessionHidden] never hides such a row.
+     */
+    val busyStatus: Boolean = false,
+    val compacting: Boolean = false,
     /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
     val titleAttachment: TitleAttachment? = null,
 )
@@ -93,18 +101,27 @@ internal fun mainSessionChats(chats: List<ProjectChatSummary>): List<ProjectChat
 }
 
 /**
- * The featured chats: waiting, then running, then the most recently updated, twelve of them. The
- * main sessions of the busy subagents among them come along beyond the twelve, so
- * [mainSessionChats] can show each such subagent as the session it works for.
+ * The featured chats: waiting, then running, then open idle top-level chats (the ready ones), then the
+ * rest (unverified, history and idle subagent rows), each by recency, twelve of them. Ready chats
+ * keep their place ahead of just-closed history rows, but they compete for the twelve with the
+ * waiting and running chats, so a busy project can feature fewer ready chats than it has. The main sessions of the busy subagents among them come along beyond
+ * the twelve, so [mainSessionChats] can show each such subagent as the session it works for.
  */
 internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectChatSummary> {
     val kept = chats.sortedWith(
         compareBy<ProjectChatSummary> {
-            if (!it.verified) 2
+            if (!it.verified) 3
             else when (it.session.text("status")) {
                 "waiting" -> 0
                 "running" -> 1
-                else -> 2
+                "idle" ->
+                    if (isReadyRow(
+                            "idle",
+                            it.session.optionalText("origin"),
+                            it.session.optionalText("parentSessionId"),
+                        )
+                    ) 2 else 3
+                else -> 3
             }
         }.thenByDescending { it.session["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L }
     ).take(12)
@@ -124,14 +141,22 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
     return kept + ancestors.values
 }
 
-/** How many running and how many recent quick chats a Mac's Projects page shows until "Show all". */
+/** How many ready, running and recent quick chats a Mac's Projects page shows until "Show all". */
 internal const val QUICK_CHAT_LIMIT = 3
 
 /** The quick chats of a Projects page, grouped by what they need; see [quickChats]. */
 internal data class QuickChats(
+    /** Every waiting chat, never cut. */
     val waiting: List<ProjectChatSummary>,
+    /**
+     * The open idle chats among the featured ones (at most twelve featured chats across all projects, see
+     * [sortedProjectChats]), unread first, cut to [QUICK_CHAT_LIMIT] until shown in full.
+     */
+    val ready: List<ProjectChatSummary>,
     val running: List<ProjectChatSummary>,
     val recent: List<ProjectChatSummary>,
+    /** Whether the ready group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
+    val readyExpandable: Boolean,
     /** Whether the running group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
     val runningExpandable: Boolean,
     /** Whether the recent group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
@@ -139,24 +164,49 @@ internal data class QuickChats(
 )
 
 /**
- * The quick chats of a Mac's Projects page: every waiting chat, and the running and the recent ones up to
- * [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showRunningAll], [showRecentAll]). A chat
- * counts as waiting or running only on a connected Mac and once verified; all others are recent.
+ * Whether a row with this status, origin and parent is an open idle top-level session: not a history row (a closed session the
+ * Mac lists as a copy to continue) and no subagent. The Ready group and [unreadReadyCount]
+ * share this.
+ */
+private fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
+    status == "idle" && origin != "history" && parentSessionId.isNullOrBlank()
+
+/**
+ * The quick chats of a Mac's Projects page. On a connected Mac, a verified chat is waiting, running
+ * or ready (idle, open, top-level); waiting chats are not cut here, only by the twelve featured chats. Ready, running and recent
+ * chats are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showReadyAll], [showRunningAll],
+ * [showRecentAll]). Everything else is recent: offline, unverified, last-known and history chats,
+ * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by
+ * [marks]; a chat without a mark counts as read), then the most recently updated.
  */
 internal fun quickChats(
     chats: List<ProjectChatSummary>,
     connected: Boolean,
     showRunningAll: Boolean,
     showRecentAll: Boolean,
+    marks: Map<String, SessionMark> = emptyMap(),
+    showReadyAll: Boolean = false,
 ): QuickChats {
-    val waiting = chats.filter { it.verified && connected && it.session.text("status") == "waiting" }
-    val running = chats.filter { it.verified && connected && it.session.text("status") == "running" }
-    val recent =
-        chats.filter {
-            !it.verified || !connected || it.session.text("status") !in setOf("waiting", "running")
-        }
+    fun ProjectChatSummary.live() = verified && connected
+    fun ProjectChatSummary.status() = session.optionalText("status")
+    fun ProjectChatSummary.updatedAt() = session["updatedAt"]?.jsonPrimitive?.longOrNull
+    fun ProjectChatSummary.ready() =
+        live() && isReadyRow(status(), session.optionalText("origin"), session.optionalText("parentSessionId"))
+    val waiting = chats.filter { it.live() && it.status() == "waiting" }
+    val running = chats.filter { it.live() && it.status() == "running" }
+    val ready =
+        chats
+            .filter { it.ready() }
+            .sortedWith(
+                compareByDescending<ProjectChatSummary> {
+                    sessionUnread(it.session.optionalText("id")?.let(marks::get), it.updatedAt(), open = false)
+                }.thenByDescending { it.updatedAt() ?: 0L }
+            )
+    val recent = chats.filter { !it.live() || (it.status() !in setOf("waiting", "running") && !it.ready()) }
     return QuickChats(
         waiting = waiting,
+        ready = ready.take(if (showReadyAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        readyExpandable = ready.size > QUICK_CHAT_LIMIT,
         running = running.take(if (showRunningAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         runningExpandable = running.size > QUICK_CHAT_LIMIT,
@@ -164,8 +214,29 @@ internal fun quickChats(
     )
 }
 
+/** A ready chat idle for this long wears an "Old" chip. */
+internal const val OLD_READY_MILLIS = 24 * 60 * 60 * 1000L
+
+/** Whether a chat last updated at [updatedAt] has been idle for a day or more by [now]; a future time is not old. */
+internal fun readyIsOld(updatedAt: Long?, now: Long): Boolean = updatedAt != null && now - updatedAt >= OLD_READY_MILLIS
+
 /** How many of a project's sessions wait for an answer and how many run, by its latest list. */
 data class SessionCounts(val waiting: Int = 0, val running: Int = 0)
+
+/**
+ * How many of [sessions] are ready (open, idle, top-level, the Ready group's rule) and unread by
+ * [marks]: their result is one the user has not seen yet. This is the "N new" badge of a project
+ * row. It lives apart from [SessionCounts] because unread is phone-local (see [sessionUnread]):
+ * the repository counts by the Mac's list alone, so the view applies the marks. A session
+ * without a mark counts as read.
+ */
+internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
+    sessions.count {
+        val mark = it.optionalText("id")?.let(marks::get)
+        isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId")) &&
+            sessionUnread(mark, it["updatedAt"]?.jsonPrimitive?.longOrNull, open = false) &&
+            !sessionHidden(mark, it.optionalText("status"), sessionUpdatedAt(it))
+    }
 
 /**
  * A project's sessions for views across projects, such as an activity board, badges or a
@@ -273,6 +344,8 @@ internal fun sessionListItem(
     stale: Boolean = false,
     // No default: a caller that forgets it would let an earlier connection's rows claim to be live.
     confirmed: Boolean,
+    compaction: SessionCompaction? = null,
+    nowMillis: Long = System.currentTimeMillis(),
 ): SessionListItem {
     val availability =
         if (!connected && !stale) SessionAvailability.OFFLINE
@@ -293,13 +366,17 @@ internal fun sessionListItem(
         hasChildren = false,
         availability = availability,
         preview = session.optionalText("preview")?.let { displayTitle(it).text }?.takeIf { it.isNotBlank() },
-        updatedAt = session["updatedAt"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 },
+        updatedAt = sessionUpdatedAt(session),
         continuesAsCopy = session.text("origin") == "history",
         daemonOwned = session.text("origin") == "rpc",
         liveMacTui = session.text("origin") == "tui" &&
             availability != SessionAvailability.OFFLINE && !loading && confirmed,
         lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
+        busyStatus = session.text("status").let { it == "running" || it == "waiting" },
+        compacting = connected && confirmed && !loading &&
+            availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
+            compactionVisible(compaction, nowMillis),
     )
 }
 
@@ -326,15 +403,28 @@ internal fun visibleSessionListItems(
     ticketRef: (String) -> String? = { null },
     /** See [sessionListItem]; pass [RemoteState.sessionsFresh]. No default, on purpose. */
     confirmed: Boolean,
+    /** List the sessions hidden on this phone too, marked [SessionListItem.hidden]. */
+    showHidden: Boolean = false,
+    compactions: Map<String, SessionCompaction> = emptyMap(),
+    nowMillis: Long = System.currentTimeMillis(),
 ): List<SessionListItem> {
+    val markHidden =
+        sessions.associate { session ->
+            val id = session.text("id")
+            id to sessionHidden(marks[id], session.optionalText("status"), sessionUpdatedAt(session))
+        }
     val items =
         sessions.map { session ->
-            val item = sessionListItem(session, connected, loading, stale, confirmed)
+            val item = sessionListItem(
+                session, connected, loading, stale, confirmed,
+                compactions[session.text("id")], nowMillis,
+            )
             val mark = marks[item.id]
             item.copy(
                 ticketRef = ticketRef(item.id),
                 pinned = mark?.pinned == true,
                 unread = sessionUnread(mark, item.updatedAt, open = item.id == openSessionId),
+                hidden = markHidden[item.id] == true,
             )
         }
     val itemsById = items.associateBy(SessionListItem::id)
@@ -354,10 +444,20 @@ internal fun visibleSessionListItems(
 
     val childrenByParentId = items.groupBy(::validParentId)
 
+    fun hasLiveDescendant(item: SessionListItem): Boolean =
+        childrenByParentId[item.id].orEmpty().any {
+            it.availability == SessionAvailability.RUNNING ||
+                it.availability == SessionAvailability.WAITING ||
+                hasLiveDescendant(it)
+        }
+    // A hidden parent with a running subagent stays listed, with the subagent under it.
+    val hiddenIds = items.filter { it.hidden && !hasLiveDescendant(it) }.mapTo(mutableSetOf()) { it.id }
+
     fun isVisible(item: SessionListItem): Boolean =
-        !hideOffline ||
-            item.availability != SessionAvailability.OFFLINE ||
-            childrenByParentId[item.id].orEmpty().any(::isVisible)
+        (item.id !in hiddenIds || showHidden) &&
+            (!hideOffline ||
+                item.availability != SessionAvailability.OFFLINE ||
+                childrenByParentId[item.id].orEmpty().any(::isVisible))
 
     val result = mutableListOf<SessionListItem>()
     fun addVisibleItems(parentId: String?, depth: Int) {
@@ -377,6 +477,7 @@ internal fun visibleSessionListItems(
             if (isVisible(item)) {
                 val visibleChildren = childrenByParentId[item.id].orEmpty().count(::isVisible)
                 result += item.copy(
+                    hidden = item.id in hiddenIds,
                     depth = depth,
                     hasChildren = visibleChildren > 0,
                     childCount = visibleChildren,
@@ -387,6 +488,41 @@ internal fun visibleSessionListItems(
     }
     addVisibleItems(parentId = null, depth = 0)
     return result
+}
+
+/**
+ * How many top-level sessions of [items] are hidden on this phone. Pass the list built with
+ * `showHidden = true`, so the count and the list come from the same computation.
+ */
+internal fun hiddenSessionCount(items: List<SessionListItem>): Int = items.count { it.depth == 0 && it.hidden }
+
+/**
+ * Hide is offered for a finished main session that the phone can never close (a terminal, history
+ * or offline row), so each row has one obvious verb. [shownSessionId] is the chat open beside the
+ * list. The test is [hostOwned], a property of the row, not [canCloseSession], which also turns
+ * false while the list loads or the connection drops.
+ */
+internal fun canHideSession(
+    item: SessionListItem,
+    capabilities: Set<String>,
+    shownSessionId: String? = null,
+): Boolean =
+    (item.availability == SessionAvailability.IDLE || item.availability == SessionAvailability.OFFLINE) &&
+        item.parentSessionId == null &&
+        !item.pinned &&
+        !item.hidden &&
+        !item.busyStatus &&
+        item.id != shownSessionId &&
+        (!hostOwned(item, capabilities) || item.availability == SessionAvailability.OFFLINE)
+
+/**
+ * Whether the main session [chat] of the Projects page is hidden on this phone. Call it after
+ * [mainSessionChats], which lifts a busy subagent's status onto its main session, and hide with
+ * the same [sessionUpdatedAt].
+ */
+internal fun projectChatHidden(chat: ProjectChatSummary, marks: Map<String, SessionMark>): Boolean {
+    val id = chat.session.optionalText("id") ?: return false
+    return sessionHidden(marks[id], chat.session.optionalText("status"), sessionUpdatedAt(chat.session))
 }
 
 /**

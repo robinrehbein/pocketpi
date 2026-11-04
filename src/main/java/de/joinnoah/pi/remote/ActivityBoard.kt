@@ -70,7 +70,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
-private const val ELAPSED_TICK_MILLIS = 60_000L
+internal const val ELAPSED_TICK_MILLIS = 60_000L
 
 // The activity board: every session of the connected Mac that waits for the user, runs, or
 // finished since the user last looked. It reads the app's state only; it never asks the Mac.
