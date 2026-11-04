@@ -5677,6 +5677,7 @@ class RemoteRepositoryTest {
         val repository = DefaultRemoteRepository(
             Pairings(listOf(host, other)), drafts, transport, backgroundScope,
             StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
         )
         val original = RemoteSelection("host", "project", "session")
         repository.activate(original)
@@ -5709,6 +5710,7 @@ class RemoteRepositoryTest {
         val repository = DefaultRemoteRepository(
             Pairings(listOf(host, other)), drafts, transport, backgroundScope,
             StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
         )
         repository.activate(RemoteSelection("host", "project", "session"))
         transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",

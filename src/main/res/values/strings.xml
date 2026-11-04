@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_chat_activity_completed">Worked for %1$s</string>
+    <string name="remote_chat_duration_join">%1$s and %2$s</string>
+    <string name="remote_chat_duration_three">%1$s, %2$s and %3$s</string>
+    <plurals name="remote_chat_duration_seconds">
+        <item quantity="one">%d second</item>
+        <item quantity="other">%d seconds</item>
+    </plurals>
+    <plurals name="remote_chat_duration_minutes">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
+    <plurals name="remote_chat_duration_hours">
+        <item quantity="one">%d hour</item>
+        <item quantity="other">%d hours</item>
+    </plurals>
     <string name="remote_questionnaire_earlier_title">Answer to earlier question</string>
     <string name="remote_questionnaire_pending">Pending</string>
     <string name="remote_questionnaire_answered">Answered</string>

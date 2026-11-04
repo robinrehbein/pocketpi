@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources>
+    <string name="remote_chat_activity_completed">Für %1$s gearbeitet</string>
+    <string name="remote_chat_duration_join">%1$s und %2$s</string>
+    <string name="remote_chat_duration_three">%1$s, %2$s und %3$s</string>
+    <plurals name="remote_chat_duration_seconds">
+        <item quantity="one">%d Sekunde</item>
+        <item quantity="other">%d Sekunden</item>
+    </plurals>
+    <plurals name="remote_chat_duration_minutes">
+        <item quantity="one">%d Minute</item>
+        <item quantity="other">%d Minuten</item>
+    </plurals>
+    <plurals name="remote_chat_duration_hours">
+        <item quantity="one">%d Stunde</item>
+        <item quantity="other">%d Stunden</item>
+    </plurals>
     <string name="remote_questionnaire_earlier_title">Antwort auf frühere Frage</string>
     <string name="remote_questionnaire_pending">Ausstehend</string>
     <string name="remote_questionnaire_answered">Beantwortet</string>

@@ -229,6 +229,8 @@ data class RemoteState(
     val messages: List<JsonObject> = emptyList(),
     val questions: List<JsonObject> = emptyList(),
     val status: String = "offline",
+    /** Observed run timing for the selected chat; never restored from a snapshot or cache. */
+    val chatWorkTiming: ChatWorkTiming = ChatWorkTiming(),
     val nextCursor: String? = null,
     val draft: String = "",
     val quote: MessageQuote? = null,

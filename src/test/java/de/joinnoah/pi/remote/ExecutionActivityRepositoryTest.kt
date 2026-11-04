@@ -142,6 +142,23 @@ class ExecutionActivityRepositoryTest {
 
     private fun DefaultRemoteRepository.activity() = state.value.executionActivity
 
+    @Test fun observedRunDurationReachesTheChatLineWithNegotiatedActivity() = runTest {
+        val transport = Transport().apply { snapshotActivity = active(1, 1_500) }
+        val repo = repository(transport)
+        repo.activate(selection); runCurrent()
+        // Opening an already running session must not manufacture a start time.
+        transport.deliver(transport.event("session.status", "session", "status" to "idle")); runCurrent()
+        assertNull(repo.state.value.chatWorkTiming.durationMillis)
+        monotonic = 60_000
+        transport.deliver(transport.event("session.status", "session", "status" to "running")); runCurrent()
+        assertEquals(60_000L, repo.state.value.chatWorkTiming.startedAtMillis)
+        monotonic = 114_000
+        transport.deliver(transport.event("session.status", "session", "status" to "idle")); runCurrent()
+        val state = repo.state.value
+        assertEquals(54_000L, state.chatWorkTiming.durationMillis)
+        assertEquals(StatusGlyphKind.DONE, sessionActivityLine(state, emptyList(), selection, monotonic)?.glyphKind)
+    }
+
     @Test fun v3DiscoveryOptsInAndTheRouteAnswerGrants() = runTest {
         val transport = Transport().apply { snapshotActivity = active(1, 1_500) }
         val repo = repository(transport)
