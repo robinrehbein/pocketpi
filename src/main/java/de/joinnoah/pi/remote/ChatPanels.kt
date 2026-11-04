@@ -678,14 +678,14 @@ internal fun ContextOfferBanner(
                 // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
                 TextButton(
                     onClick = onDismiss,
-                    modifier = Modifier.testTag("contextOfferDismiss"),
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferDismiss"),
                     colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
                 ) { Text(dismissLabel) }
                 if (ContextOfferAction.COMPACT in offer.actions)
                     Button(
                         onClick = onCompact,
                         // Labelled "Compact now" only: the heading already reads out the fill.
-                        modifier = Modifier.testTag("contextOfferCompact"),
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferCompact"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = scheme.onSecondaryContainer,
                             contentColor = scheme.secondaryContainer,
