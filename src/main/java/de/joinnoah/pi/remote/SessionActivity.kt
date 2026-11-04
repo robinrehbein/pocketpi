@@ -53,6 +53,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,13 @@ internal data class SessionActivityLine(
     @StringRes val labelRes: Int,
     val detail: String? = null,
     val glyphKind: StatusGlyphKind = StatusGlyphKind.SESSION_RUNNING,
+    /** False draws the glyph's static frame in a muted colour: nothing typed proves current work. */
+    val animate: Boolean = true,
+    /** The typed phase that colours the glyph; null keeps the legacy primary colour. */
+    val phase: ActivityPhase? = null,
+    val thinkingLevel: String? = null,
+    /** Running tools beyond the one named (typed only); see [activityExtraTools]. */
+    val extraTools: Int = 0,
 )
 
 internal fun sessionActivityAllowed(state: RemoteState, destination: RemoteSelection?): Boolean =
@@ -84,7 +92,20 @@ internal fun sessionActivityLine(
     state: RemoteState,
     items: List<ConversationItem>,
     destination: RemoteSelection?,
+    /**
+     * Monotonic now ([rememberActivityNow]); freshness of a negotiated connection is read at it.
+     * Without it a negotiated connection reads as static (never animates, never the legacy path).
+     */
+    now: Long? = null,
 ): SessionActivityLine? {
+    val typed = if (now != null) {
+        typedSessionActivity(state, destination?.sessionId, now)
+    } else if (state.executionActivity.negotiated) {
+        TypedActivity.Static
+    } else {
+        null
+    }
+    if (typed != null) return typedActivityLine(state, destination, typed)
     if (!sessionActivityAllowed(state, destination)) return null
     val task = state.tasks.items.firstOrNull { it.status == TaskStatus.IN_PROGRESS }
     if (state.tasks.freshness == TaskFreshness.LIVE && task != null) {
@@ -98,6 +119,44 @@ internal fun sessionActivityLine(
     // A shell command belongs to the tool card, not the compact line; path tools keep their file.
     val detail = summary.detail.takeUnless { tool.name in setOf("bash", "bash_bg", USER_BASH_TOOL) }
     return SessionActivityLine(summary.labelRes, detail, StatusGlyphKind.TOOL_RUNNING)
+}
+
+/**
+ * The line of a connection that negotiated `session_activity.v1`: its phase comes only from the
+ * typed, fresh view. The line shows under the legacy gates, or for a live typed state alone; with
+ * nothing live it stays static and muted. An explicit wait shows no line. The glyph and label are
+ * always the typed phase's; a live task only adds its text. Transcript streaming never picks a phase.
+ */
+private fun typedActivityLine(state: RemoteState, destination: RemoteSelection?, typed: TypedActivity): SessionActivityLine? {
+    val live = (typed as? TypedActivity.Live)?.snapshot
+    // An explicit wait (status or open question) owns the header diamond; no phase line beside it.
+    val gated = destination != null && state.selection == destination && destination.sessionId != null &&
+        state.connected && !state.loading && !state.stale && !state.preview && state.questions.isEmpty() &&
+        state.status != "waiting"
+    if (!gated || (live == null && state.status != "running")) return null
+    if (live == null) return SessionActivityLine(R.string.remote_chat_activity_working, animate = false)
+    // Tasks stay their own UI: a live task only names what the typed phase works on, as detail.
+    val task = state.tasks.items.firstOrNull { it.status == TaskStatus.IN_PROGRESS }
+        ?.takeIf { state.tasks.freshness == TaskFreshness.LIVE }
+        ?.let { (it.activeForm?.takeIf(String::isNotBlank) ?: it.text).takeIf(String::isNotBlank) }
+    val kind = activityGlyphKind(live.phase)
+    return when (live.phase) {
+        ActivityPhase.Pending -> SessionActivityLine(R.string.remote_waiting_for_output, task, kind, phase = live.phase)
+        ActivityPhase.Thinking ->
+            SessionActivityLine(R.string.remote_chat_activity_thinking, task, kind, phase = live.phase, thinkingLevel = live.thinkingLevel)
+        ActivityPhase.Writing -> SessionActivityLine(R.string.remote_chat_activity_writing, task, kind, phase = live.phase)
+        ActivityPhase.Tool -> {
+            // The first tool in host order; the rest are a bounded count, never guessed names.
+            val first = live.tools.firstOrNull()
+            val label = first?.let { toolSummary(it.name, null).labelRes }
+            SessionActivityLine(
+                label ?: R.string.remote_chat_activity_working,
+                if (label == null) first?.name?.let(::toolNameDetail) else null,
+                kind, phase = live.phase,
+                extraTools = if (first == null) live.toolsOmitted ?: 0 else activityExtraTools(live),
+            )
+        }
+    }
 }
 
 private fun genericLine(detail: String? = null, glyphKind: StatusGlyphKind = StatusGlyphKind.SESSION_RUNNING) =
@@ -118,14 +177,25 @@ internal fun waitingForOutputAllowed(
 internal fun ChatCurrentActivity(line: SessionActivityLine?) {
     if (line == null) return
     val label = stringResource(line.labelRes)
-    val text = line.detail?.let { "$label · $it" } ?: label
+    val more = when {
+        line.extraTools <= 0 -> null
+        line.extraTools > MAX_SHOWN_EXTRA_TOOLS -> stringResource(R.string.remote_chat_activity_more_tools_many, MAX_SHOWN_EXTRA_TOOLS)
+        else -> pluralStringResource(R.plurals.remote_chat_activity_more_tools, line.extraTools, line.extraTools)
+    }
+    val text = listOfNotNull(line.detail?.let { "$label · $it" } ?: label, more).joinToString(" ")
+    val color = when {
+        !line.animate && line.phase == null -> MaterialTheme.colorScheme.outline
+        line.phase != null && line.animate -> activityPhaseColor(line.phase, line.thinkingLevel)
+        line.phase == null -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outline
+    }
     Row(
         // Move the icon and label together while preserving the marquee viewport width.
         Modifier.fillMaxWidth().testTag("chatCurrentActivity").padding(start = 10.dp, end = 22.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusGlyph(line.glyphKind, MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
+        StatusGlyph(line.glyphKind, color, Modifier.size(14.dp).testTag("chatCurrentActivityGlyph"), animate = line.animate)
         ActivityMarquee(text, Modifier.weight(1f), motionEnabled = activityMotionEnabled(), active = activityLifecycleResumed())
     }
 }

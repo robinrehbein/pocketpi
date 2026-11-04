@@ -1,0 +1,1775 @@
+{
+  "version": 1,
+  "capability": "session_activity.v1",
+  "optIn": {
+    "granted": [
+      "capabilities.v3:optin=session_activity.v1:n0nce",
+      "capabilities.v3:optin=question_details.v1+session_activity.v1:abc"
+    ],
+    "refused": [
+      "capabilities.v2:optin=session_activity.v1:n0nce",
+      "capabilities.v3:optin=session_activity.v1",
+      "capabilities.v3:optin=session_activity.v1:",
+      "capabilities.v3:optin=session_activity.v1:a b",
+      "capabilities.v3:optin=session_activity.v2:n",
+      "capabilities.v3:optin=Session_activity.v1:n",
+      "capabilities.v3:optin=+session_activity.v1:n",
+      "capabilities.v3:session_activity.v1:n"
+    ]
+  },
+  "wireValid": [
+    {
+      "name": "event-active-pending",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "event-active-thinking-level",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "thinking",
+          "tools": [],
+          "thinkingLevel": "high"
+        }
+      }
+    },
+    {
+      "name": "event-active-writing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 5,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "writing",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "event-active-tools-nested",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 6,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "call-a",
+              "name": "read"
+            },
+            {
+              "toolCallId": "call-b",
+              "name": "read"
+            },
+            {
+              "toolCallId": "call-c",
+              "name": "bash",
+              "parentToolCallId": "call-sub"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "event-active-tools-omitted-only",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 7,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [],
+          "toolsOmitted": 3
+        }
+      }
+    },
+    {
+      "name": "event-idle",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 8,
+          "state": "idle"
+        }
+      }
+    },
+    {
+      "name": "event-unknown",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 9,
+          "state": "unknown"
+        }
+      }
+    },
+    {
+      "name": "event-utf8-name",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "c1",
+              "name": "grüße👋"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sessions-with-clock",
+      "payload": {
+        "type": "result",
+        "requestId": "list-1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "projectId": "proj-1",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "running",
+              "activity": {
+                "clockId": "clk-7f3a9c",
+                "epoch": "gen-1",
+                "seq": 4,
+                "state": "active",
+                "expiresAt": 120000,
+                "phase": "pending",
+                "tools": []
+              }
+            },
+            {
+              "id": "s2",
+              "projectId": "proj-1",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "running"
+            }
+          ],
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "sessions-clock-only",
+      "payload": {
+        "type": "result",
+        "requestId": "list-2",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "projectId": "proj-1",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "running"
+            }
+          ],
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "sessions-legacy",
+      "payload": {
+        "type": "result",
+        "requestId": "list-3",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "projectId": "proj-1",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "running"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "snapshot-with-activity",
+      "payload": {
+        "type": "result",
+        "requestId": "snap-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 9,
+          "status": "running",
+          "messages": [],
+          "pendingQuestions": [],
+          "activity": {
+            "clockId": "clk-7f3a9c",
+            "epoch": "gen-1",
+            "seq": 3,
+            "state": "idle"
+          },
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-clock-only",
+      "payload": {
+        "type": "result",
+        "requestId": "snap-2",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 9,
+          "status": "running",
+          "messages": [],
+          "pendingQuestions": [],
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "pong-with-clock",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-1",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": 40,
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "subagent-structured",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "event-with-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        },
+        "after": 9
+      }
+    },
+    {
+      "name": "session-events-with-activity-and-clock",
+      "payload": {
+        "type": "result",
+        "requestId": "resume.v1:-:0:r1",
+        "ok": true,
+        "data": {
+          "kind": "session.events",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "AAAAAAAAAAAAAAAAAAAAAA",
+          "from": 9,
+          "revision": 12,
+          "events": [
+            {
+              "type": "event",
+              "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "revision": 10,
+              "kind": "session.activity",
+              "activity": {
+                "clockId": "clk-7f3a9c",
+                "epoch": "gen-1",
+                "seq": 4,
+                "state": "active",
+                "expiresAt": 120000,
+                "phase": "pending",
+                "tools": []
+              }
+            },
+            {
+              "type": "event",
+              "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "revision": 12,
+              "after": 10,
+              "kind": "session.activity",
+              "activity": {
+                "clockId": "clk-7f3a9c",
+                "epoch": "gen-1",
+                "seq": 8,
+                "state": "idle"
+              }
+            }
+          ],
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "idle-with-tools",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 8,
+          "state": "idle",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "unknown-with-expires",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 8,
+          "state": "unknown",
+          "expiresAt": 1
+        }
+      }
+    },
+    {
+      "name": "idle-with-thinking",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 8,
+          "state": "idle",
+          "thinkingLevel": "off"
+        }
+      }
+    },
+    {
+      "name": "null-activity",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": null
+      }
+    },
+    {
+      "name": "unknown-state",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 8,
+          "state": "done"
+        }
+      }
+    },
+    {
+      "name": "active-missing-expires",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "negative-seq",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": -1,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "fraction-seq",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 1.5,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "unsafe-seq",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 9007199254740992,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "negative-expires",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": -1,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "bad-phase",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "queued",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "bad-thinking-level",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": [],
+          "thinkingLevel": "ultra"
+        }
+      }
+    },
+    {
+      "name": "pending-with-tools",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": "read"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "writing-with-omitted",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "writing",
+          "tools": [],
+          "toolsOmitted": 1
+        }
+      }
+    },
+    {
+      "name": "tool-empty",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "omitted-zero",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": "read"
+            }
+          ],
+          "toolsOmitted": 0
+        }
+      }
+    },
+    {
+      "name": "omitted-over-max",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [],
+          "toolsOmitted": 1000001
+        }
+      }
+    },
+    {
+      "name": "duplicate-tool-ids",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": "read"
+            },
+            {
+              "toolCallId": "a",
+              "name": "bash"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-too-many",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "t0",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t1",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t2",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t3",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t4",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t5",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t6",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t7",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t8",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t9",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t10",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t11",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t12",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t13",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t14",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t15",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t16",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t17",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t18",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t19",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t20",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t21",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t22",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t23",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t24",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t25",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t26",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t27",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t28",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t29",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t30",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t31",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t32",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t33",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t34",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t35",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t36",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t37",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t38",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t39",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t40",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t41",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t42",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t43",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t44",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t45",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t46",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t47",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t48",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t49",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t50",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t51",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t52",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t53",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t54",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t55",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t56",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t57",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t58",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t59",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t60",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t61",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t62",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t63",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t64",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t65",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t66",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t67",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t68",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t69",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t70",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t71",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t72",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t73",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t74",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t75",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t76",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t77",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t78",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t79",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t80",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t81",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t82",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t83",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t84",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t85",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t86",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t87",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t88",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t89",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t90",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t91",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t92",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t93",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t94",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t95",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t96",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t97",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t98",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t99",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t100",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t101",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t102",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t103",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t104",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t105",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t106",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t107",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t108",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t109",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t110",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t111",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t112",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t113",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t114",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t115",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t116",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t117",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t118",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t119",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t120",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t121",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t122",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t123",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t124",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t125",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t126",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t127",
+              "name": "read"
+            },
+            {
+              "toolCallId": "t128",
+              "name": "read"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-name-too-long",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-name-empty",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-id-whitespace",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a b",
+              "name": "read"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-id-too-long",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "name": "read"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-self-parent",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": "read",
+              "parentToolCallId": "a"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool-args",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "tool",
+          "tools": [
+            {
+              "toolCallId": "a",
+              "name": "read",
+              "arguments": "{}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "empty-clock-id",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "epoch-control-char",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "g\u0001",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        }
+      }
+    },
+    {
+      "name": "extra-field",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": [],
+          "label": "Thinking…"
+        }
+      }
+    },
+    {
+      "name": "sessions-activity-without-clock",
+      "payload": {
+        "type": "result",
+        "requestId": "l",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "projectId": "proj-1",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "running",
+              "activity": {
+                "clockId": "clk-7f3a9c",
+                "epoch": "gen-1",
+                "seq": 4,
+                "state": "active",
+                "expiresAt": 120000,
+                "phase": "pending",
+                "tools": []
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sessions-clock-mismatch",
+      "payload": {
+        "type": "result",
+        "requestId": "l",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+              "projectId": "proj-1",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "running",
+              "activity": {
+                "clockId": "other",
+                "epoch": "gen-1",
+                "seq": 4,
+                "state": "active",
+                "expiresAt": 120000,
+                "phase": "pending",
+                "tools": []
+              }
+            }
+          ],
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-activity-without-clock",
+      "payload": {
+        "type": "result",
+        "requestId": "s",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 9,
+          "status": "running",
+          "messages": [],
+          "pendingQuestions": [],
+          "activity": {
+            "clockId": "clk-7f3a9c",
+            "epoch": "gen-1",
+            "seq": 4,
+            "state": "active",
+            "expiresAt": 120000,
+            "phase": "pending",
+            "tools": []
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-clock-mismatch",
+      "payload": {
+        "type": "result",
+        "requestId": "s",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 9,
+          "status": "running",
+          "messages": [],
+          "pendingQuestions": [],
+          "activity": {
+            "clockId": "other",
+            "epoch": "gen-1",
+            "seq": 4,
+            "state": "active",
+            "expiresAt": 120000,
+            "phase": "pending",
+            "tools": []
+          },
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 100000
+          }
+        }
+      }
+    },
+    {
+      "name": "pong-clock-negative",
+      "payload": {
+        "type": "result",
+        "requestId": "p",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": -1
+          }
+        }
+      }
+    },
+    {
+      "name": "pong-clock-extra",
+      "payload": {
+        "type": "result",
+        "requestId": "p",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "activityClock": {
+            "clockId": "clk-7f3a9c",
+            "sampledAt": 1,
+            "wall": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "subagent-bad-execution",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "executionActivity": {
+                  "clockId": "clk-7f3a9c",
+                  "epoch": "gen-1",
+                  "seq": 1,
+                  "state": "idle",
+                  "phase": "pending"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "subagent-bad-instance",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": ""
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "subagent-needs-input-false",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "needsInput": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "event-after-not-below-revision",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 10,
+        "kind": "session.activity",
+        "activity": {
+          "clockId": "clk-7f3a9c",
+          "epoch": "gen-1",
+          "seq": 4,
+          "state": "active",
+          "expiresAt": 120000,
+          "phase": "pending",
+          "tools": []
+        },
+        "after": 10
+      }
+    },
+    {
+      "name": "session-events-bad-clock",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "session.events",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "AAAAAAAAAAAAAAAAAAAAAA",
+          "from": 9,
+          "revision": 9,
+          "events": [],
+          "activityClock": {
+            "clockId": "",
+            "sampledAt": 1
+          }
+        }
+      }
+    }
+  ]
+}

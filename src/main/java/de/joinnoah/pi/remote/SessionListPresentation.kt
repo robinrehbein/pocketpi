@@ -40,6 +40,7 @@ internal data class SessionListItem(
     val ticketRef: String? = null,
     /** A pi the host runs in a terminal of its own (see [isHostWorker]); it may be offline until it reports. */
     val hostWorker: Boolean = false,
+    val compacting: Boolean = false,
     /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
     val titleAttachment: TitleAttachment? = null,
 )
@@ -338,6 +339,8 @@ internal fun sessionListItem(
     stale: Boolean = false,
     // No default: a caller that forgets it would let an earlier connection's rows claim to be live.
     confirmed: Boolean,
+    compaction: SessionCompaction? = null,
+    nowMillis: Long = System.currentTimeMillis(),
 ): SessionListItem {
     val availability =
         if (!connected && !stale) SessionAvailability.OFFLINE
@@ -365,6 +368,9 @@ internal fun sessionListItem(
             availability != SessionAvailability.OFFLINE && !loading && confirmed,
         lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
+        compacting = connected && confirmed && !loading &&
+            availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
+            compactionVisible(compaction, nowMillis),
     )
 }
 
@@ -391,10 +397,15 @@ internal fun visibleSessionListItems(
     ticketRef: (String) -> String? = { null },
     /** See [sessionListItem]; pass [RemoteState.sessionsFresh]. No default, on purpose. */
     confirmed: Boolean,
+    compactions: Map<String, SessionCompaction> = emptyMap(),
+    nowMillis: Long = System.currentTimeMillis(),
 ): List<SessionListItem> {
     val items =
         sessions.map { session ->
-            val item = sessionListItem(session, connected, loading, stale, confirmed)
+            val item = sessionListItem(
+                session, connected, loading, stale, confirmed,
+                compactions[session.text("id")], nowMillis,
+            )
             val mark = marks[item.id]
             item.copy(
                 ticketRef = ticketRef(item.id),

@@ -66,6 +66,13 @@ Use the Mac's device revocation command to invalidate the device key on the Mac 
 The session list shows each session's title, available preview and last update. A green dot
 means the session is ready; a gray dot means it is offline or is a historical session that opens as a fork.
 Subagent sessions appear below their parent and keep their own status, preview and controls.
+While the host reports context compaction, session rows show a Braille spinner and
+"Compacting context …", including for chats that are not open. Offline and waiting-for-answer
+statuses take precedence. With system animations disabled, the spinner stays on its first frame.
+Hosts advertising `session.compaction.list.v1` restore the whole list after reconnecting through
+an explicit `includeCompaction: true` opt-in. Events received during a refresh take precedence over
+its list metadata. Older hosts recover state through individual chat snapshots or new events.
+Activity expires after ten minutes if its terminal event never arrives.
 The floating plus button starts a session in the selected shared project.
 
 The Tasks pill opens a read-only session task sheet with progress and task statuses. It requires
@@ -246,7 +253,11 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew pixel2Api36DebugAndroidTest`; for CI's tablet subset, run
 `./gradlew pixelTabletApi36DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen`.
 
-Unit tests consume the twenty-two JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+The `insights-v1.json` fixture, including compaction-list opt-in cases, is a byte-for-byte copy of
+`packages/pi-atlas/extensions/remote/protocol/fixtures/insights-v1.json` at noah-monorepo commit
+`b9548a8ba7a978722dad92444e2b3bce02d7a086`.
+
+Unit tests consume the twenty-two JSON fixtures in `src/test/resources/`. The other four original fixtures are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
