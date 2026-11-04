@@ -19,7 +19,7 @@ class ShortcutHelpTest {
 
     private fun groups(): List<KeyboardShortcutGroup> {
         // Built but not created: the override needs no window or repository.
-        val activity = Robolectric.buildActivity(MainActivity::class.java).get()
+        val activity = Robolectric.buildActivity(RemoteActivity::class.java).get()
         val data = mutableListOf<KeyboardShortcutGroup>()
         activity.onProvideKeyboardShortcuts(data, null, -1)
         return data

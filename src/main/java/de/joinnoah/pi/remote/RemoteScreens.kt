@@ -2923,6 +2923,7 @@ internal fun RemoteScreen(
                             }
                         }
                     }
+                    item(key = "settings-app-icon") { AppIconSettingsSection() }
                     // Only the wide layout has widths and columns to reset.
                     twoPane?.let { item(key = "settings-layout") { LayoutSettingsSection(it) } }
                     item(key = SETTINGS_GROUP_KEY_PREFIX + "chat") {

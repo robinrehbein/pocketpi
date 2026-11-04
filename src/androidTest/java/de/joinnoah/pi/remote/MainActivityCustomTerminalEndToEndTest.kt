@@ -81,7 +81,7 @@ class MainActivityCustomTerminalEndToEndTest {
             waitFor("composer draft propagated") { repository.state.value.draft == value }
             compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
         }
-        var scenario: ActivityScenario<MainActivity>? = null
+        var scenario: ActivityScenario<RemoteActivity>? = null
         try {
             record("launch")
             scenario = ActivityScenario.launch(LaunchIntents.session(app, route, session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

@@ -70,7 +70,7 @@ class PagedEditorNativeProductionFactoryEndToEndTest {
         val proof = JSONObject().put("label", label).put("routeId", route).put("projectId", project).put("sessionId", session)
         val proofFile = File(app.filesDir, "production-entry-paged-factory-$label.json")
         fun record(stage: String) { proof.put("stage", stage); proofFile.outputStream().use { it.write(proof.toString().toByteArray()); it.fd.sync() } }
-        var scenario: ActivityScenario<MainActivity>? = null
+        var scenario: ActivityScenario<RemoteActivity>? = null
         try {
             record("launch")
             scenario = ActivityScenario.launch(LaunchIntents.session(app, route, session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
