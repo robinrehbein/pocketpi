@@ -410,19 +410,40 @@ internal fun canCloseSession(
  * closable; the page closes finished sessions only. The UI and the repository share this check.
  */
 internal fun closableProjectChat(state: RemoteState, projectId: String, sessionId: String): Boolean {
-    if (state.selection.projectId != null) return false
-    if (!state.connected || state.loading) return false
-    if (SESSION_CLOSE_CAPABILITY !in state.capabilities) return false
+    if (!closableProjectPage(state)) return false
     val chat =
         mainSessionChats(state.projectChats).find {
             it.projectId == projectId && it.session.optionalText("id") == sessionId
         } ?: return false
-    return chat.verified &&
+    return closableMainChat(state, chat)
+}
+
+/** What the Projects page needs for any of its chats to close: no open project, a live host that offers it. */
+internal fun closableProjectPage(state: RemoteState): Boolean =
+    state.selection.projectId == null &&
+        state.connected &&
+        !state.loading &&
+        SESSION_CLOSE_CAPABILITY in state.capabilities
+
+/**
+ * The per-chat part of [closableProjectChat], for a [chat] already taken from [mainSessionChats] (whose
+ * displayed status it reads) when [closableProjectPage] holds.
+ */
+internal fun closableMainChat(state: RemoteState, chat: ProjectChatSummary): Boolean =
+    chat.verified &&
         chat.session.optionalText("status") == "idle" &&
         chat.session.optionalText("origin") != "history" &&
         chat.session.optionalText("parentSessionId").isNullOrBlank() &&
         hostOwned(state, chat.session)
-}
+
+/** The (project, session) IDs of the [mainChats] the Projects page can close, computed once per pass. */
+internal fun closableProjectChatIds(state: RemoteState, mainChats: List<ProjectChatSummary>): Set<Pair<String, String>> =
+    if (!closableProjectPage(state)) emptySet()
+    else
+        mainChats
+            .filter { closableMainChat(state, it) }
+            .mapNotNull { chat -> chat.session.optionalText("id")?.let { chat.projectId to it } }
+            .toSet()
 
 /** The marks of [routeId]'s sessions by session ID, for [visibleSessionListItems]. */
 internal fun sessionMarksById(marks: Map<Pair<String, String>, SessionMark>, routeId: String?): Map<String, SessionMark> =

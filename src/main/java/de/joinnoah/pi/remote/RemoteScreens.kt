@@ -3033,10 +3033,12 @@ internal fun RemoteScreen(
                             // project the chats hide, as before.
                             // Every waiting chat leads, since the heading promises all of them; running and recent
                             // chats are capped at three each until their "Show all" (see quickChats).
+                            // Main sessions only: a busy subagent shows as the session it works for.
+                            val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
+                            val closableIds = closableProjectChatIds(state, mainChats)
                             val quick =
                                 quickChats(
-                                    // Main sessions only: a busy subagent shows as the session it works for.
-                                    if (projectSelected) emptyList() else mainSessionChats(state.projectChats),
+                                    mainChats,
                                     state.connected,
                                     showRunningAll = runningShowAll,
                                     showRecentAll = recentShowAll,
@@ -3052,7 +3054,7 @@ internal fun RemoteScreen(
                                     marks = routeMarks,
                                     connected = state.connected,
                                     ticketRef = homeTicketRef,
-                                    closable = { closableProjectChat(state, it.projectId, it.session.text("id")) },
+                                    closable = { (it.projectId to it.session.text("id")) in closableIds },
                                     swipe =
                                         (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
                                             (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
@@ -4277,9 +4279,9 @@ internal fun RemoteScreen(
                             is ChatViewModel -> model.closeSession(session.id)
                             is ProjectsViewModel ->
                                 if (projectId != null) {
-                                    model.closeChat(projectId, session.id)
-                                    // A history row the Mac may list for it later starts read.
-                                    state.selection.routeId?.let {
+                                    // Only a close that was sent marks the chat read, so a history row the Mac
+                                    // may list for it later starts read.
+                                    if (model.closeChat(projectId, session.id)) state.selection.routeId?.let {
                                         sessionMarkStore?.markSeen(it, session.id, session.updatedAt, System.currentTimeMillis())
                                     }
                                 }

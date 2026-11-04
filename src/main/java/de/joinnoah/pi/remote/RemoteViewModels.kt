@@ -230,7 +230,15 @@ internal class ProjectsViewModel(
 
     fun unshare(projectId: String) = active { repository.unshareProject(projectId) }
 
-    fun closeChat(projectId: String, sessionId: String) = active { repository.closeProjectChat(projectId, sessionId) }
+    /** Whether the close was handed to the repository, which still refuses what is no longer closable. */
+    fun closeChat(projectId: String, sessionId: String): Boolean {
+        var forwarded = false
+        active {
+            repository.closeProjectChat(projectId, sessionId)
+            forwarded = true
+        }
+        return forwarded
+    }
 
     fun queueAccept(projectId: String, ref: String, comment: String) =
         active { repository.queueAccept(projectId, ref, comment) }

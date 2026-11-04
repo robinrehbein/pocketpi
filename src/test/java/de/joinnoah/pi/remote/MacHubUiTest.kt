@@ -583,4 +583,56 @@ class MacHubUiTest {
         confirmClose()
         assertEquals(listOf("p2" to "two"), repository.closedChats)
     }
+
+    @Test
+    fun swipingAProjectsRowOpensTheCloseDialogByDefault() {
+        render(
+            listOf(project("p2", "Beta")),
+            chats = listOf(chat("p2", "Beta", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        chatRow("p2", "two").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.onAllNodes(isDialog()).assertCountEquals(1)
+        confirmClose()
+        assertEquals(listOf("p2" to "two"), repository.closedChats)
+    }
+
+    @Test
+    fun theCloseDialogGoesWhenItsChatLeavesTheProjectsPage() {
+        render(
+            listOf(project("p2", "Beta")),
+            chats = listOf(chat("p2", "Beta", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        compose.runOnUiThread { closeActions("p2", "two").single().action() }
+        compose.waitForIdle()
+        compose.onAllNodes(isDialog()).assertCountEquals(1)
+
+        repository.state.value = repository.state.value.copy(projectChats = emptyList())
+        compose.waitForIdle()
+
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
+
+    @Test
+    fun theCloseButtonGreysOutWhenTheChatRunsAgain() {
+        render(
+            listOf(project("p2", "Beta")),
+            chats = listOf(chat("p2", "Beta", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        compose.runOnUiThread { closeActions("p2", "two").single().action() }
+        compose.waitForIdle()
+
+        repository.state.value =
+            repository.state.value.copy(projectChats = listOf(chat("p2", "Beta", "two", "running", origin = "rpc")))
+        compose.waitForIdle()
+
+        compose.onNode(hasText(label(R.string.remote_session_close)) and hasClickAction() and hasAnyAncestor(isDialog()))
+            .assertIsNotEnabled()
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
 }
