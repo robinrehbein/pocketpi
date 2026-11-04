@@ -42,6 +42,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -95,8 +96,44 @@ class ComposerControlPillDesignTest {
         }
     }
 
+    @Test
+    fun nestedControlsKeepTheirRimButDoNotCastClippedShadows() {
+        compose.setContent {
+            Column {
+                listOf(false, true).forEach { dark ->
+                    MaterialTheme(colorScheme = remoteColorScheme(dark)) {
+                        ComposerControlPill(
+                            onClick = {},
+                            modifier = Modifier.background(Color.Magenta).testTag("rim-control-$dark"),
+                            leadingIcon = { Box(Modifier.size(16.dp)) },
+                            label = { Box(Modifier.width(80.dp).height(16.dp)) },
+                        )
+                        ReferenceSample("rim-reference-$dark", old = false, shadowElevation = 0.dp)
+                        ReferenceSample("elevated-reference-$dark", old = false)
+                    }
+                }
+            }
+        }
+        for (dark in listOf(false, true)) {
+            val control = compose.onNodeWithTag("rim-control-$dark").captureToImage().toPixelMap()
+            val rim = compose.onNodeWithTag("rim-reference-$dark").captureToImage().toPixelMap()
+            val elevated = compose.onNodeWithTag("elevated-reference-$dark").captureToImage().toPixelMap()
+            assertEquals(rim.width, control.width)
+            assertEquals(rim.height, control.height)
+            var detectsElevation = false
+            // The painted capsule ends at 40dp inside the 48dp touch target. Inspect below it.
+            for (y in (control.height * 5 / 6) until control.height) {
+                for (x in (control.width / 3) until (control.width * 2 / 3)) {
+                    assertEquals("no child shadow at ($x,$y), dark=$dark", rim[x, y], control[x, y])
+                    if (elevated[x, y] != rim[x, y]) detectsElevation = true
+                }
+            }
+            assertTrue("renderer must detect the old shadow, dark=$dark", detectsElevation)
+        }
+    }
+
     @Composable
-    private fun ReferenceSample(tag: String, old: Boolean) {
+    private fun ReferenceSample(tag: String, old: Boolean, shadowElevation: Dp = 8.dp) {
         Box(
             Modifier.background(Color.Magenta).testTag(tag).defaultMinSize(minHeight = 48.dp, minWidth = 48.dp),
             contentAlignment = Alignment.Center,
@@ -104,7 +141,7 @@ class ComposerControlPillDesignTest {
             if (old) {
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) { SampleContents() }
             } else {
-                FloatingSurface(shape = CircleShape, blur = false) { SampleContents() }
+                FloatingSurface(shape = CircleShape, blur = false, shadowElevation = shadowElevation) { SampleContents() }
             }
         }
     }

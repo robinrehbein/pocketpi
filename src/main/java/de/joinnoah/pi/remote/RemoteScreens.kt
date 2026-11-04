@@ -215,6 +215,7 @@ internal fun conversationContentType(item: ConversationItem): String =
         is ConversationItem.Thinking -> "thinking"
         is ConversationItem.Activity -> "activity"
         is ConversationItem.Subagent -> "subagent"
+        is ConversationItem.QuestionnaireAnswer -> "questionnaire-answer"
     }
 
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
@@ -3483,6 +3484,7 @@ internal fun RemoteScreen(
                                         item,
                                         thinkingDisplay,
                                         thinkingActive = thinkingActive,
+                                        onJumpToQuestion = ::jumpTo,
                                         hideThinkingStatus = currentActivity != null,
                                         onQuote = model::quote,
                                         onOpenTool = {
