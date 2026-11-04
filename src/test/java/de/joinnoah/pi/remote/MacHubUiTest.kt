@@ -253,8 +253,8 @@ class MacHubUiTest {
                 ),
         )
 
-        compose.onNodeWithTag("sessionOld-stale").assertIsDisplayed()
-        compose.onAllNodesWithTag("sessionOld-fresh").assertCountEquals(0)
+        compose.onNodeWithTag("sessionOld-stale", useUnmergedTree = true).assertIsDisplayed()
+        compose.onAllNodesWithTag("sessionOld-fresh", useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test
@@ -279,7 +279,7 @@ class MacHubUiTest {
         )
 
         compose.onNodeWithText("3 ready").assertIsDisplayed()
-        compose.onNodeWithTag("projectBadgeReady-p1").assertIsDisplayed()
+        compose.onNodeWithTag("projectBadgeReady-p1", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Alpha, 1 working, 3 ready").assertIsDisplayed()
     }
 
@@ -329,8 +329,8 @@ class MacHubUiTest {
         compose.onNodeWithText("2 need you").assertIsDisplayed()
         compose.onNodeWithText("1 working").assertIsDisplayed()
         compose.onNodeWithContentDescription("Alpha, 2 need you, 1 working").assertIsDisplayed()
-        compose.onAllNodesWithTag("projectBadgeWaiting-p2").assertCountEquals(0)
-        compose.onAllNodesWithTag("projectBadgeWorking-p2").assertCountEquals(0)
+        compose.onAllNodesWithTag("projectBadgeWaiting-p2", useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithTag("projectBadgeWorking-p2", useUnmergedTree = true).assertCountEquals(0)
         compose.onNodeWithTag("projectRow-p2").assertIsDisplayed()
     }
 
