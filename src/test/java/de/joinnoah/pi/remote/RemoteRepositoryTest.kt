@@ -6906,6 +6906,193 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun failedCrossHostNotificationDoesNotRestoreStaleListCompaction() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, host.copy(routeId = "other")))
+        val selection = RemoteSelection("host", "project")
+        repository.activate(selection)
+        transport.deliver(Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "session",
+            "revision" to 5, "state" to "running",
+        ))
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.containsKey("session"))
+        assertNull(repository.openNotification("other", "missing"))
+        runCurrent()
+        assertEquals(selection, repository.state.value.selection)
+        assertTrue(repository.state.value.sessionCompactions.isEmpty())
+    }
+
+    @Test
+    fun compactionListOptInRequiresCapabilityAndRecoversAfterReconnect() = runTest {
+        for (supported in listOf(false, true)) {
+            val transport = Transport()
+            configure(transport, sessions = listOf(JsonObject(session("other") + ("compacting" to JsonPrimitive(true)))))
+            if (supported) advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_COMPACTION_LIST_CAPABILITY))))
+            val repository = repository(transport)
+            val selection = RemoteSelection("host", "project")
+            repository.activate(selection)
+            val request = transport.sent.last { it.text("type") == "sessions.list" }
+            if (supported) assertEquals(JsonPrimitive(true), request["includeCompaction"])
+            else assertFalse(request.containsKey("includeCompaction"))
+            assertEquals(supported, repository.state.value.sessionCompactions.containsKey("other"))
+            transport.listener.failed(false, R.string.remote_connection_error)
+            runCurrent()
+            assertTrue(repository.state.value.sessionCompactions.isEmpty())
+            repository.activate(selection)
+            assertEquals(supported, repository.state.value.sessionCompactions.containsKey("other"))
+
+            transport.deliver(Wire.objectOf(
+                "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+                "revision" to 10, "state" to "running",
+            ))
+            runCurrent()
+            assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+            configure(transport, sessions = listOf(session("other")))
+            advanceTimeBy(5_001)
+            repository.refreshSessions()
+            runCurrent()
+            val refreshed = transport.sent.last { it.text("type") == "sessions.list" }
+            assertNotEquals(request.text("requestId"), refreshed.text("requestId"))
+            assertEquals(!supported, repository.state.value.sessionCompactions.containsKey("other"))
+            repository.disconnect()
+        }
+    }
+
+    @Test
+    fun negotiatedCompactionCapabilityOptsInProjectQuickChatsAndSessionLists() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(JsonObject(session("other") + ("compacting" to JsonPrimitive(true)))))
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_COMPACTION_LIST_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        assertTrue(SESSION_COMPACTION_LIST_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+        assertTrue(transport.sent.filter { it.text("type") == "sessions.list" }.all {
+            it["includeCompaction"] == JsonPrimitive(true)
+        })
+        val before = transport.sent.count { it.text("type") == "sessions.list" }
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        advanceTimeBy(5_001)
+        repository.refreshSessions()
+        runCurrent()
+        assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > before)
+        assertEquals(JsonPrimitive(true), transport.sent.last { it.text("type") == "sessions.list" }["includeCompaction"])
+    }
+
+    @Test
+    fun compactionEventsDuringListRefreshWinOverStaleMetadata() = runTest {
+        val transport = Transport().also { it.capabilities = setOf(SESSION_COMPACTION_LIST_CAPABILITY) }
+        configure(transport, sessions = listOf(session("other")))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        val original = transport.response
+        var held: JsonObject? = null
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") { held = request; null }
+            else original(request)
+        }
+        for ((revision, state) in listOf(1 to "running", 2 to "done")) {
+            held = null
+            advanceTimeBy(5_001)
+            repository.refreshSessions()
+            runCurrent()
+            val request = checkNotNull(held)
+            transport.deliver(Wire.objectOf(
+                "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+                "revision" to revision, "state" to state,
+            ))
+            runCurrent()
+            assertEquals(state == "running", repository.state.value.sessionCompactions.containsKey("other"))
+            val stale = if (state == "done")
+                JsonObject(session("other") + ("compacting" to JsonPrimitive(true)))
+            else session("other")
+            transport.result(request, data("sessions", listOf(stale)))
+            runCurrent()
+            assertEquals(state == "running", repository.state.value.sessionCompactions.containsKey("other"))
+        }
+    }
+
+    @Test
+    fun compactionForUnselectedSessionsIsGlobalAndSurvivesChatSelection() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(), session("other")))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        fun activity(revision: Int, state: String) = Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+            "revision" to revision, "state" to state, "reason" to "manual",
+        )
+        transport.deliver(activity(10, "running"))
+        runCurrent()
+        assertEquals("manual", repository.state.value.sessionCompactions["other"]?.reason)
+        assertNull(repository.state.value.compaction)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertNotNull(repository.state.value.sessionCompactions["other"])
+        transport.deliver(activity(12, "aborted"))
+        transport.deliver(activity(11, "running"))
+        runCurrent()
+        assertFalse(repository.state.value.sessionCompactions.containsKey("other"))
+    }
+
+    @Test
+    fun connectionLossClearsGlobalCompactionAndReconnectAcceptsFreshRevisions() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(), session("other")))
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        fun running(revision: Int) = Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+            "revision" to revision, "state" to "running",
+        )
+        transport.deliver(running(100))
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.isEmpty())
+        repository.activate(selection)
+        transport.deliver(running(2))
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+        repository.disconnect()
+        assertTrue(repository.state.value.sessionCompactions.isEmpty())
+        repository.activate(selection)
+        transport.deliver(running(1))
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+    }
+
+    @Test
+    fun compactionRevisionsResetForNewJournalEpochAndIgnoreRetiredEpoch() = runTest {
+        val transport = Transport().also { configure(it, sessions = listOf(session("other"))) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        fun activity(epoch: String, revision: Int, state: String) = Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+            "epoch" to epoch, "revision" to revision, "state" to state,
+        )
+        val oldEpoch = "A".repeat(22)
+        val newEpoch = "B".repeat(22)
+        transport.deliver(activity(oldEpoch, 100, "running"))
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+        transport.deliver(activity(newEpoch, 1, "done"))
+        runCurrent()
+        assertFalse(repository.state.value.sessionCompactions.containsKey("other"))
+        transport.deliver(activity(oldEpoch, 101, "running"))
+        runCurrent()
+        assertFalse(repository.state.value.sessionCompactions.containsKey("other"))
+        transport.deliver(activity(newEpoch, 2, "running"))
+        runCurrent()
+        assertTrue(repository.state.value.sessionCompactions.containsKey("other"))
+    }
+
+    @Test
     fun compactionEventsReachStateAndResetOnSelection() = runTest {
         val running = insight("compaction-running")
         val sessionId = running.text("sessionId")

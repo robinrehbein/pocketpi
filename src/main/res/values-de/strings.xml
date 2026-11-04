@@ -262,6 +262,7 @@
     <string name="remote_appearance">Darstellung</string>
     <string name="remote_pair_code">Kopplungscode</string>
     <string name="remote_status_idle">Bereit</string>
+    <string name="remote_status_compacting">Kontext wird verdichtet …</string>
     <string name="remote_status_running">Arbeitet</string>
     <string name="remote_status_waiting">Braucht dich</string>
     <string name="remote_status_offline">Offline</string>

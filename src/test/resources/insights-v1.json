@@ -1,5 +1,57 @@
 {
   "version": 1,
+  "compactionListValid": [
+    {
+      "name": "sessions-list-compaction-opt-in",
+      "payload": {
+        "type": "sessions.list",
+        "requestId": "host_worker.v1:compaction-list",
+        "projectId": "project-1",
+        "includeCompaction": true
+      }
+    },
+    {
+      "name": "sessions-list-compaction-result",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:compaction-list",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "active-worker",
+              "projectId": "project-1",
+              "title": "Compacting",
+              "origin": "worker",
+              "status": "idle",
+              "compacting": true
+            },
+            {
+              "id": "inactive-session",
+              "projectId": "project-1",
+              "title": "Idle",
+              "origin": "tui",
+              "status": "idle"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "session-compaction-list-capability",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v2:compaction-list",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": ["session.compaction.list.v1"]
+        }
+      }
+    }
+  ],
   "valid": [
     {
       "name": "message-usage",
@@ -268,11 +320,79 @@
               "name": "noah"
             }
           ],
-          "capabilities": [
-            "session.steer.v1",
-            "session.follow_up.v1",
-            "session.tool_output.v1"
+          "capabilities": ["session.steer.v1", "session.follow_up.v1", "session.tool_output.v1"]
+        }
+      }
+    }
+  ],
+  "compactionListInvalid": [
+    {
+      "name": "sessions-list-item-compacting-false",
+      "payload": {
+        "type": "result",
+        "requestId": "compaction-list",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "active-session",
+              "projectId": "project-1",
+              "title": "Compacting",
+              "origin": "tui",
+              "status": "idle",
+              "compacting": false
+            }
           ]
+        }
+      }
+    },
+    {
+      "name": "sessions-list-item-compacting-string",
+      "payload": {
+        "type": "result",
+        "requestId": "compaction-list",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "active-session",
+              "projectId": "project-1",
+              "title": "Compacting",
+              "origin": "tui",
+              "status": "idle",
+              "compacting": "true"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sessions-list-compaction-false",
+      "payload": {
+        "type": "sessions.list",
+        "requestId": "compaction-list",
+        "projectId": "project-1",
+        "includeCompaction": false
+      }
+    },
+    {
+      "name": "compaction-on-default-session",
+      "payload": {
+        "type": "result",
+        "requestId": "open-session",
+        "ok": true,
+        "data": {
+          "kind": "session",
+          "session": {
+            "id": "active-session",
+            "projectId": "project-1",
+            "title": "Compacting",
+            "origin": "tui",
+            "status": "idle",
+            "compacting": true
+          }
         }
       }
     }

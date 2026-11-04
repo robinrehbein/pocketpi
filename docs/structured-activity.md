@@ -2,7 +2,8 @@
 
 Implementation and contract note for PocketPi. The Android implementation is available in
 [Draft PR #242](https://github.com/robinrehbein/pocketpi/pull/242). Local checks and independent
-reviews passed; final-head CI, current-main integration and real-device checks remain outstanding.
+reviews passed. The latest integrated main revision is recorded below; validation results and CI for
+the current head are tracked on the PR. Real-device checks are pending (Robin).
 
 ## Host source
 
@@ -159,9 +160,11 @@ behavior.
 
 ## Validation
 
-- [x] `scripts/quick-check.sh`: resource parity, all app/androidTest/benchmark/Wear compilations,
+- [x] Initial implementation validation: `scripts/quick-check.sh`: resource parity, all
+      app/androidTest/benchmark/Wear compilations,
       4,074 app unit tests and 67 Wear unit tests; no failures, errors or skipped tests.
-      Log: `build/structured-activity-final-check-fixed.log` (148 seconds).
+      Log: `build/structured-activity-final-check-fixed.log` (148 seconds; historical run, not a
+      current-head count).
 - [x] Shared host fixture and ordering/freshness vectors, legacy host fixture and ungranted
       connection behavior are covered by the app suite.
 - [x] Real fullscreen recomposition regression: identical ledger instance, all four lifecycle/input
@@ -170,8 +173,9 @@ behavior.
       watermark makes the terminal-row regression fail; production source was restored
       byte-identically and all 29 tests passed again.
 - [x] Independent Opus reviews of the implementation and both final test corrections.
-- [ ] CI on the final PR head: unit/build, lint, benchmark isolation, phone emulator, minified smoke
-      and tablet emulator. Earlier-head results do not count as final-head validation.
+- [ ] CI on the exact final PR head: latest CI results are tracked on the PR; all six required
+      checks (unit/build, lint, benchmark isolation, phone emulator, minified smoke, tablet
+      emulator) must pass on that exact head. Earlier-head results do not count.
 
 The three chat Settings instrumentation selectors use the existing main-branch fix from
 `2f2d871a105b13e55d8bc74cb358b3f7c95438eb`, transplanted only into
@@ -188,10 +192,13 @@ memory. Production Timeline retry hardening is a separate proposed follow-up, no
 
 ### Main-branch integration
 
-CI checks out the PR head explicitly, not a synthetic merge. Main has advanced in repository and
-screen code since this branch's last update. Passing head CI therefore does not validate that
-integration. Keep the PR as Draft; updating against current main needs a separate check/review pass
-before readiness or merge.
+The branch integrates `main` at `74f23d577b1914e1af5431cc4efe779edea46b8c`. That merge preserves
+main's phone diagnostics and session titles and keeps main's separate Braille compaction indicator
+alongside typed activity. Validation and review results for the integration are tracked on the PR.
+
+CI checks out the PR head explicitly, not a synthetic merge. When `main` advances beyond the
+integrated revision, a fresh integration with its own check/review pass is needed before readiness
+or merge.
 
 ## Real device checks (pending, Robin)
 
