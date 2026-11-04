@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.wear.protolayout.ActionBuilders
+import androidx.wear.protolayout.ColorBuilders
 import androidx.wear.protolayout.DeviceParametersBuilders.DeviceParameters
 import androidx.wear.protolayout.DimensionBuilders
 import androidx.wear.protolayout.LayoutElementBuilders
@@ -13,6 +14,7 @@ import androidx.wear.protolayout.ModifiersBuilders
 import androidx.wear.protolayout.ResourceBuilders
 import androidx.wear.protolayout.TimelineBuilders
 import androidx.wear.protolayout.material.Chip
+import androidx.wear.protolayout.material.Colors
 import androidx.wear.protolayout.material.Text
 import androidx.wear.protolayout.material.Typography
 import androidx.wear.protolayout.material.layouts.PrimaryLayout
@@ -194,12 +196,16 @@ internal fun watchTileContent(context: Context, glance: WatchGlance, now: Long):
     )
 }
 
+/** Text on the tile's black background; material Text defaults to the dark on-primary colour meant for chips. */
+internal val WATCH_TILE_TEXT_COLOR = Colors.DEFAULT.onSurface
+
 internal fun watchTileLayout(context: Context, content: WatchTileContent, device: DeviceParameters): LayoutElementBuilders.LayoutElement {
-    fun caption(text: String) = Text.Builder(context, text).setTypography(Typography.TYPOGRAPHY_CAPTION1).setMaxLines(1).build()
+    val color = ColorBuilders.argb(WATCH_TILE_TEXT_COLOR)
+    fun caption(text: String) = Text.Builder(context, text).setTypography(Typography.TYPOGRAPHY_CAPTION1).setColor(color).setMaxLines(1).build()
     val layout = PrimaryLayout.Builder(device).setResponsiveContentInsetEnabled(true).setPrimaryLabelTextContent(caption(content.title))
     content.updated?.let { layout.setSecondaryLabelTextContent(caption(it)) }
     content.hint?.let { hint ->
-        return layout.setContent(Text.Builder(context, hint).setTypography(Typography.TYPOGRAPHY_BODY2).setMaxLines(3)
+        return layout.setContent(Text.Builder(context, hint).setTypography(Typography.TYPOGRAPHY_BODY2).setColor(color).setMaxLines(3)
             .setModifiers(ModifiersBuilders.Modifiers.Builder().setClickable(clickable(context, "app", WatchTileTarget.intentExtras(null))).build()).build()).build()
     }
     val column = LayoutElementBuilders.Column.Builder()
