@@ -1,8 +1,11 @@
 package de.robinrehbein.pocketpi.benchmarks
 
+import android.graphics.Rect
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Direction
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -38,22 +41,54 @@ internal fun UiDevice.tapUntil(tap: String, expected: BySelector, what: String, 
 internal const val FIXTURE_PROJECT_ROW = "projectRow-project-pocketpi"
 
 /**
- * The Projects page row of the project tagged [rowTag], scrolled into view if needed. The project's
- * name alone is no selector: the featured chats above the projects (Ready, Working) each repeat
- * their project's name as a label. Needs the tags exposed as resource IDs, as both activities do.
+ * A composed row can exist below the fold. Bring its full touch target away from the list edges
+ * before clicking; finding its resource ID alone does not establish that it is safe to tap.
  */
 private fun UiDevice.projectRow(rowTag: String): UiObject2? {
-    val row = By.res(rowTag)
-    wait(Until.findObject(row), 10_000)?.let { return it }
-    return findObjects(By.scrollable(true)).firstNotNullOfOrNull { list ->
-        list.scrollUntil(Direction.DOWN, Until.findObject(row))
+    val minimumSize = 48 * InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+    var searchDirection = Direction.DOWN
+    var edgeReached = false
+    if (!hasObject(By.res(rowTag))) wait(Until.hasObject(By.scrollable(true)), 10_000)
+    repeat(6) {
+        // Smoke tests disable implicit idle waits. Reacquire nodes after this bounded settle.
+        waitForIdle(2_000)
+        try {
+            val list = findObjects(By.scrollable(true)).maxByOrNull { it.visibleBounds.height() }
+            val viewport = list?.visibleBounds ?: Rect(0, 0, displayWidth, displayHeight)
+            if (viewport.isEmpty) return null
+            val node = findObject(By.res(rowTag))
+            val bounds = node?.visibleBounds
+            val margin = viewport.height() / 10
+            val validTouchTarget = bounds != null && !bounds.isEmpty &&
+                bounds.height() >= minimumSize && bounds.width() >= minimumSize && viewport.contains(bounds)
+            val awayFromEdges = bounds != null &&
+                bounds.top >= viewport.top + margin && bounds.bottom <= viewport.bottom - margin
+            if (validTouchTarget && (awayFromEdges || (list != null && edgeReached))) return node
+            // With no scroll container, retain the margin to stay clear of system bars.
+            if (list == null) return null
+            val direction =
+                if (bounds == null || bounds.isEmpty) searchDirection
+                else if (bounds.centerY() < viewport.centerY()) Direction.UP else Direction.DOWN
+            if (list.scroll(direction, 0.3f)) {
+                searchDirection = direction
+                edgeReached = false
+            } else {
+                // The end may prevent centring a valid row. Settle and recheck fresh bounds on
+                // the next pass before accepting it; a missing row may be above this position.
+                edgeReached = true
+                searchDirection = if (direction == Direction.DOWN) Direction.UP else Direction.DOWN
+            }
+        } catch (_: StaleObjectException) {
+            // A layout change invalidated this pass; the next pass obtains fresh nodes.
+        }
     }
+    return null
 }
 
 /**
- * Opens the project of [rowTag] from its Projects row and waits for its session list: the row has
- * gone and [expected] shows. [expected] alone could be a featured chat still on the Projects page.
- * Like [tapUntil], it taps at most three times.
+ * Opens a real Sessions screen, not a matching featured chat on Projects. A stray chat tap can
+ * be recovered with one Back (the navigator keeps Sessions beneath Chat). Never Back on Projects,
+ * click an offscreen row, or relaunch after leaving the app: those must remain visible failures.
  */
 internal fun UiDevice.openProjectUntil(
     expected: BySelector,
@@ -61,9 +96,36 @@ internal fun UiDevice.openProjectUntil(
     rowTag: String = FIXTURE_PROJECT_ROW,
     timeoutMs: Long = 20_000,
 ) {
+    val sessions = By.res("sessionsProjectTitle")
+    val composer = By.res("composerField")
+    fun requireApp() {
+        check(currentPackageName == "de.robinrehbein.pocketpi.benchmark") {
+            "$what. Left the benchmark app. " + screenTexts()
+        }
+    }
+    fun sessionsLoaded() = hasObject(sessions) && hasObject(expected) && !hasObject(composer)
     repeat(3) {
-        projectRow(rowTag)?.click()
-        if (wait(Until.gone(By.res(rowTag)), timeoutMs) && wait(Until.hasObject(expected), timeoutMs)) return
+        waitForIdle(2_000)
+        requireApp()
+        if (sessionsLoaded()) return
+        if (hasObject(composer)) {
+            pressBack()
+            if (wait(Until.hasObject(sessions), timeoutMs) &&
+                wait(Until.hasObject(expected), timeoutMs) && sessionsLoaded()
+            ) return
+            requireApp()
+        }
+        // The list finder must never scroll a chat, a host picker, or the system launcher.
+        if (!hasObject(By.res("projectsMacHeading"))) return@repeat
+        try {
+            projectRow(rowTag)?.click()
+        } catch (_: StaleObjectException) {
+            return@repeat
+        }
+        if (wait(Until.hasObject(sessions), timeoutMs) &&
+            wait(Until.hasObject(expected), timeoutMs) && sessionsLoaded()
+        ) return
+        requireApp()
     }
     error("$what. " + screenTexts())
 }
