@@ -15,6 +15,17 @@ internal class NavigationFakeRepository : RemoteRepository {
         selection
     }
     var notification: RemoteSelection? = null
+    /** Whether the open session's terminal can be attached; off, as on a host without the terminal. */
+    var terminalAttachable = false
+    /** Attach requests, as (cols, rows); they never attach, so no terminal WebView composes. */
+    val terminalAttaches = mutableListOf<Pair<Int, Int>>()
+
+    override fun canAttachTerminal(): Boolean = terminalAttachable
+
+    override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
+        terminalAttaches += cols to rows
+        return false
+    }
     val cachedChats = mutableMapOf<RemoteSelection, ChatPreview>()
 
     override fun peekCachedChat(selection: RemoteSelection): ChatPreview? = cachedChats[selection]

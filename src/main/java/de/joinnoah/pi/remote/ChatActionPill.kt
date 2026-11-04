@@ -54,7 +54,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
         ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR -> Icons.Default.Language
-        ChatAction.JOBS -> Icons.Outlined.Terminal
+        ChatAction.JOBS, ChatAction.TERMINAL -> Icons.Outlined.Terminal
         ChatAction.TREE -> Icons.Default.AccountTree
         ChatAction.ARTIFACTS -> Icons.Default.Collections
         ChatAction.RENAME -> Icons.Default.Edit
@@ -81,7 +81,8 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
         ChatAction.HISTORY -> Shortcut.HISTORY
         ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD,
-        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR -> null
+        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR,
+        ChatAction.TERMINAL -> null
     }
 
 internal fun ChatAction.label(): Int =
@@ -91,6 +92,7 @@ internal fun ChatAction.label(): Int =
         ChatAction.BROWSER -> R.string.browser_title
         ChatAction.PREVIEW -> R.string.preview_title
         ChatAction.EMULATOR -> R.string.emulator_title
+        ChatAction.TERMINAL -> R.string.remote_terminal_title
         ChatAction.JOBS -> R.string.remote_jobs_title
         ChatAction.TREE -> R.string.remote_tree_title
         ChatAction.ARTIFACTS -> R.string.remote_artifacts_title

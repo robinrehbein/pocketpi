@@ -25,7 +25,7 @@ enum class ChatAction {
     NEW_SESSION,
     /** The session's pi settings sheet; [SETTINGS] is the app's own settings. */
     SESSION_SETTINGS,
-    /** The chat history; a header wide enough shows it as its own button instead, see [withHistory]. */
+    /** The chat history; always offered in the pill's menu, never as a button of its own, see [withHistory]. */
     HISTORY,
     /** The compaction and export banners, in a sheet; offered in the compact header's menu only, see [compact]. */
     STATUS,
@@ -33,6 +33,8 @@ enum class ChatAction {
     BROWSER,
     PREVIEW,
     EMULATOR,
+    /** The session's shared terminal, offered only while the repository can attach it. */
+    TERMINAL,
     /** Closes the session on the Mac after a confirmation; only ever in the menu, see [withClose]. */
     CLOSE,
 }
@@ -51,7 +53,8 @@ internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
         ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS,
-        ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.HISTORY, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR)
+        ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.HISTORY, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR,
+        ChatAction.TERMINAL)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())

@@ -101,6 +101,36 @@ class ChatActionPillUiTest {
     }
 
     @Test
+    fun terminalIsALabelledMenuRowThatRunsOnceClosesAndBecomesTheShortcut() {
+        val selected = mutableListOf<ChatAction>()
+        compose.setContent {
+            MaterialTheme {
+                ChatActionPill(
+                    chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.TERMINAL)),
+                    Color.DarkGray,
+                    selected::add,
+                )
+            }
+        }
+        // The default shortcut never falls to Terminal: it is last in the fallback order.
+        compose.onNodeWithTag("chatAction_changes").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_terminal").assertDoesNotExist()
+        compose.onNodeWithText(label(R.string.remote_terminal_title)).assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNode(
+            hasText(label(R.string.remote_terminal_title)).and(hasAnyAncestor(hasTestTag("chatActionMenu_terminal"))),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        menuItem(ChatAction.TERMINAL).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(ChatAction.TERMINAL), selected)
+        menuItem(ChatAction.TERMINAL).assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_terminal")
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals(label(R.string.remote_terminal_title))
+    }
+
+    @Test
     fun externalUsageUpdateSupersedesTheOptimisticMenuSelection() {
         val usage = mutableStateOf(mapOf(ChatAction.CHANGES to ActionUsage(100.0, 10)))
         compose.setContent {

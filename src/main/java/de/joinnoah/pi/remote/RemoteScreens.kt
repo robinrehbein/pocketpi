@@ -50,7 +50,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -157,8 +156,6 @@ private class LeadingItems {
 /** Rail marker for a pending question; it has no conversation item and jumps to the latest one. */
 private const val PENDING_QUESTION_MARKER = "__pending_question__"
 
-/** From this header width on, History gets its own button beside the action pill. */
-private val HISTORY_BUTTON_MIN_HEADER = 600.dp
 private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
@@ -1430,6 +1427,7 @@ internal fun RemoteScreen(
             ChatAction.EMULATOR -> { if (state.emulator == null) chatModel?.openEmulator() }
             ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
+            ChatAction.TERMINAL -> openInspector(InspectorTab.TERMINAL)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
             ChatAction.NEW_SESSION -> newSessionOpen = true
@@ -1581,8 +1579,8 @@ internal fun RemoteScreen(
                 chatSessionId?.let { ticketForSession(state, it) }
             }
             val headerColor = MaterialTheme.colorScheme.surfaceContainer
-            // History never competes for the pill's places: it would push Settings into the menu.
-            fun actionLayout(withHistory: Boolean) =
+            // Every action, History included, lives behind the pill's shortcut and chevron.
+            fun actionLayout() =
                 chatActionLayout(
                     DEFAULT_CHAT_ACTIONS,
                     buildSet {
@@ -1591,6 +1589,7 @@ internal fun RemoteScreen(
                         if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
                         if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
                         if (state.emulator != null || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
+                        if (chatModel?.canAttachTerminal() == true) add(ChatAction.TERMINAL)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -1603,7 +1602,7 @@ internal fun RemoteScreen(
                         // while pi runs, so the open menu keeps its rows; runChatAction explains a busy one.
                         addAll(localCommandActions(chatMenuLocalCommands(state)))
                     },
-                ).let { if (withHistory) it.withHistory() else it }
+                ).withHistory()
                     .let { if (closableSession != null) it.withClose() else it }
             fun runAction(action: ChatAction) {
                 if (action == ChatAction.CLOSE) closing = closableSession
@@ -1612,31 +1611,16 @@ internal fun RemoteScreen(
             // Not ::runAction: references to one local function compare equal whatever they captured,
             // so the pill's remembered row callbacks and rememberUpdatedState would keep the first one.
             val currentRunAction by rememberUpdatedState { action: ChatAction -> runAction(action) }
-            val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (standaloneHistory) FloatingSurface(shape = CircleShape, color = headerColor) {
-                        IconButton(
-                            onClick = ::toggleHistory,
-                            modifier = Modifier.size(48.dp).testTag("chatHistoryButton"),
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
-                        }
-                    }
-                    if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
-                        Text(stringResource(R.string.remote_terminal_title))
-                    }
-                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, usage = chatActionUsage, sessionIdentity = key, onAction = { currentRunAction(it) })
-                }
+            // The right side is exactly the pill's two controls; nothing else sits beside it.
+            val actionsControl: @Composable (ChatActionLayout) -> Unit = { actionLayout ->
+                ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, usage = chatActionUsage, sessionIdentity = key, onAction = { currentRunAction(it) })
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val narrow = maxWidth < 360.dp
-                // A phone's title keeps its room: History then joins the pill or its menu.
-                val standaloneHistory = maxWidth >= HISTORY_BUTTON_MIN_HEADER
                 // Compact, the banners' entry joins the menu while they show; see the status sheet.
-                val actionLayout = actionLayout(!standaloneHistory).let { if (compact) it.withStatus(bannersShown) else it }
-                val actionsWidth =
-                    96.dp +
-                        if (standaloneHistory) 56.dp else 0.dp
+                val actionLayout = actionLayout().let { if (compact) it.withStatus(bannersShown) else it }
+                // The shortcut and the chevron, 48dp each; the title takes everything else.
+                val actionsWidth = 96.dp
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
@@ -1740,7 +1724,7 @@ internal fun RemoteScreen(
                                 }
                             }
                         }
-                        if (!narrow) actionsControl(actionLayout, standaloneHistory)
+                        if (!narrow) actionsControl(actionLayout)
                     }
                     if (narrow) {
                         Row(
@@ -1748,7 +1732,7 @@ internal fun RemoteScreen(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            actionsControl(actionLayout, standaloneHistory)
+                            actionsControl(actionLayout)
                         }
                     }
                     // Compact, the banners wait in the pill's menu, see the status sheet.

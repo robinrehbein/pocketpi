@@ -93,9 +93,23 @@ class MainActivityCustomTerminalEndToEndTest {
             waitFor("custom component opened") { status().optBoolean("opened") }
             assertTrue("Fixture must start with a local attachment", status().getBoolean("localAttachedInitially"))
             record("opened")
-            val terminalTitle = app.getString(R.string.remote_terminal_title)
-            waitFor("terminal action") { textExists(terminalTitle) }
-            compose.onNodeWithText(terminalTitle).performClick()
+            // Terminal sits in the header's action menu, or is the shortcut once it was last used.
+            waitFor("terminal action") { repository.canAttachTerminal() && tagExists("chatActionsMore") }
+            if (tagExists("chatAction_terminal")) compose.onNodeWithTag("chatAction_terminal").performClick()
+            else {
+                compose.onNodeWithTag("chatActionsMore").performClick()
+                waitFor("terminal menu row") { tagExists("chatActionMenu_terminal") }
+                // Rows turn interactive only once the menu finished opening; Terminal may sit below the fold.
+                compose.waitForIdle()
+                waitFor("terminal menu row enabled") {
+                    compose.onAllNodes(hasTestTag("chatActionMenu_terminal") and isEnabled()).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithTag("chatActionMenu_terminal")
+                    .performScrollTo()
+                    .assertIsDisplayed()
+                    .assertIsEnabled()
+                    .performClick()
+            }
             waitFor("terminal attachment or takeover") {
                 val terminal = repository.state.value.terminal
                 terminal != null && !terminal.attaching
