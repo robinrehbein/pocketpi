@@ -4821,7 +4821,7 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
 
 /**
  * The compact chat's status in one line, at the start of the insights row while a banner waits in
- * the status sheet: what runs (compaction shows the dimmed snake, other [running] work a spinner) or
+ * the status sheet: what runs (compaction shows the dotted braille loader, other [running] work a spinner) or
  * what is done. A tap opens the sheet; the line is
  * read out as it changes.
  */
@@ -4837,7 +4837,7 @@ internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Compaction shows the TUI's dimmed snake (static when animations are off), dimmed from
+            // Compaction shows pi core's dotted loader (static when animations are off), dimmed from
             // the chip's own content color like the text beside it; export keeps its spinner.
             if (line == R.string.remote_panel_compacting)
                 CompactionGlyph(LocalContentColor.current)
