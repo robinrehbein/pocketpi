@@ -855,4 +855,12 @@
     <string name="remote_app_icon_black_white">Schwarz · Weiß</string>
     <string name="remote_app_icon_color_white">Pi-Farben · Weiß</string>
     <string name="remote_app_icon_error">Das App-Icon konnte nicht geändert werden. Bitte versuche es erneut.</string>
+    <string name="remote_render_diagnostics_title">Chat-Darstellung untersuchen</string>
+    <string name="remote_render_diagnostics_help">Temporäre Tests; sie werden beim Neustart der App zurückgesetzt. Aktiviere die Aufzeichnung, gehe zurück zum Chat und mache beim Auftreten einen Screenshot. Tippe danach auf den Diagnoseknopf im Chat-Kopf. Es werden nur Layoutzahlen und Geräteinformationen erfasst, niemals Nachrichtentexte oder Screenshots. Teste Glas und Animationen getrennt.</string>
+    <string name="remote_render_record">Letzte Chat-Layoutzustände aufzeichnen</string>
+    <string name="remote_render_no_glass">Glaseffekte vorübergehend ausschalten</string>
+    <string name="remote_render_no_motion">Chat-Zeilenanimationen vorübergehend ausschalten</string>
+    <string name="remote_render_capture">Chat-Layoutbericht erfassen</string>
+    <string name="remote_render_snapshot_help">Dieser Bericht enthält letzte Layoutpositionen, Geräteinformationen und Diagnoseoptionen. Er enthält keine Nachrichtentexte, IDs oder Screenshots. Teile ihn zusammen mit deinem separat aufgenommenen Screenshot. Das Öffnen dieser Ansicht oder das Ändern der Diagnoseoptionen kann den Chat neu zeichnen.</string>
+    <string name="remote_render_share">Layoutbericht teilen</string>
 </resources>

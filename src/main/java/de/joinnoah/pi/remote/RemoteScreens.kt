@@ -515,6 +515,14 @@ internal fun RemoteScreen(
         mutableStateOf(savedViewport?.following == false)
     }
     val listState = rememberLazyListState()
+    val renderOptions by ChatRenderingDiagnostics.options.collectAsStateWithLifecycle()
+    val renderRecorder = remember(key) { ChatRenderRecorder() }
+    DisposableEffect(renderRecorder) { onDispose { renderRecorder.clear() } }
+    var renderSnapshot by remember(key) { mutableStateOf<String?>(null) }
+    LaunchedEffect(renderOptions) { renderRecorder.clear() }
+    renderSnapshot?.let { snapshot ->
+        ChatRenderingSnapshotDialog(snapshot) { renderSnapshot = null }
+    }
     // The large page title leaves the list for the header's back pill once it scrolls under the header.
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val titleInPill by remember(listState) { derivedStateOf { pageTitleScrolledAway(listState.layoutInfo, headerSize.height) } }
@@ -1622,6 +1630,13 @@ internal fun RemoteScreen(
                     if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
                         Text(stringResource(R.string.remote_terminal_title))
                     }
+                    if (renderOptions.recording) IconButton(
+                        onClick = {
+                            renderSnapshot = renderRecorder.export(Build.MODEL, Build.VERSION.SDK_INT, BuildConfig.VERSION_CODE,
+                                density.density, density.fontScale, renderOptions)
+                        },
+                        modifier = Modifier.size(48.dp).testTag("captureChatRender"),
+                    ) { Icon(Icons.Outlined.Info, stringResource(R.string.remote_render_capture)) }
                     ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = { currentRunAction(it) })
                 }
             }
@@ -1633,7 +1648,7 @@ internal fun RemoteScreen(
                 val actionLayout = actionLayout(!standaloneHistory).let { if (compact) it.withStatus(bannersShown) else it }
                 val actionsWidth =
                     48.dp * (actionLayout.shown.size + if (actionLayout.menu.isEmpty()) 0 else 1) +
-                        if (standaloneHistory) 56.dp else 0.dp
+                        (if (standaloneHistory) 56.dp else 0.dp) + (if (renderOptions.recording) 56.dp else 0.dp)
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
@@ -2545,7 +2560,10 @@ internal fun RemoteScreen(
         val list: @Composable () -> Unit = {
             LazyColumn(
                 if (key is RemoteNavKey.Chat)
-                    Modifier.fillMaxSize().testTag("conversationList").glassSource().then(underlay)
+                    Modifier.fillMaxSize().testTag("conversationList")
+                        .chatRenderFrames(renderRecorder, renderOptions.recording, { listState.layoutInfo }, { autoFollow }, thinkingDisplay == ThinkingDisplay.TEXT,
+                            { listState.isScrollInProgress }, { listState.canScrollForward })
+                        .glassSource().then(underlay)
                         .nestedScroll(headerScroll)
                         .onFocusChanged { conversationFocused = it.hasFocus }
                 else Modifier.fillMaxSize().then(listRegion).glassSource(),
@@ -3421,7 +3439,8 @@ internal fun RemoteScreen(
                                 val highlighted = item.id == highlightedId
                                 ConversationItemColumn(
                                     item,
-                                    Modifier.conversationItemMotion(this).then(
+                                    Modifier.conversationItemMotion(this, enabled = !renderOptions.disableMotion)
+                        .chatRenderRow(renderRecorder, pendingKeys.keyOf(item), renderOptions.recording).then(
                                         if (highlighted)
                                             Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
                                         else Modifier

@@ -108,7 +108,8 @@ internal fun conversationItemWidth(item: ConversationItem): Dp =
  * Keep chat motion consistent with other lists, including moving rows when a tool is expanded.
  * Disabling placement motion did not resolve the persistent overlap reported on the device.
  */
-internal fun Modifier.conversationItemMotion(item: LazyItemScope): Modifier = itemMotion(item)
+internal fun Modifier.conversationItemMotion(item: LazyItemScope, enabled: Boolean = true): Modifier =
+    if (enabled) itemMotion(item) else this
 
 /**
  * One chat item in its reading column, at most [conversationItemWidth] wide and anchored to the
