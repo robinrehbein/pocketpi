@@ -5,6 +5,11 @@
     <string name="remote_notification_channel_updates">Updates</string>
     <string name="remote_notification_channel_updates_help">When a session, subagent or background job finishes</string>
     <string name="remote_notification_complete_named">%1$s finished</string>
+    <string name="remote_notification_run_failed">pi stopped with an error</string>
+    <string name="remote_notification_run_failed_named">%1$s stopped with an error</string>
+    <string name="remote_notification_failure_agent_error">The model or pi reported an error. Open the session to see it and continue.</string>
+    <string name="remote_notification_failure_worker_exited">The connection to pi ended during the run. Open the session to continue.</string>
+    <string name="remote_notification_failure_unknown">The run ended without an answer. Open the session to see why.</string>
     <string name="remote_notification_answer">Answer</string>
     <string name="remote_notification_open_action">Open</string>
     <string name="remote_notification_reply">Reply</string>

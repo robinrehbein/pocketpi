@@ -29,6 +29,38 @@ accidental activation and background/battery behavior. No Wear emulator is
 required for the current Android-focused work; local checks do not replace the
 physical-watch checks below.
 
+## Watch feature list
+
+What a watch adds to a mobile agentic development environment, and where each lives.
+"In app" means one tap from the session's chat; actions always open the app first.
+
+| Feature | Status | Where |
+| --- | --- | --- |
+| Agent/session status at a glance | Existing | Status tile (two rows, waiting first) |
+| Status on the watch face | Added | Complication: waiting or working count; top session with its checks |
+| Host connection status | Existing | Connection line on every host-bound screen; tile "Not paired" and age |
+| Question, completion, subagent and job notifications | Existing | Opt-in push, routed to the session |
+| Failed-run notifications | Added | A `complete` push with `failure` (`push.run_failure.v1`, needs the host from noah-monorepo PR #60): title and reason, routed to the session |
+| Answer questions, confirm prompts, approve plans | Existing | Questions screen, one question at a time |
+| Short replies, dictated prompts | Existing | Composer with dictation; Send, Steer now or Send later |
+| Stop or interrupt a run | Existing | Controls, with confirmation; subagents and background jobs too |
+| Pull request and CI checks | Existing (tile), added (chat) | Tile row detail; chat shows `PR #189 · 2 failing` |
+| Model, thinking, commands | Existing | Controls |
+| Short reads: files, diffs, tool output | Existing | Bounded wrapped pages with line review comments |
+
+Not on the watch, and why:
+
+- **Answers or approvals from a notification action.** A notification carries no question text, so
+  an Approve button would approve something the user cannot see. Answers need the encrypted
+  connection and the full prompt, so they stay in the app.
+- **Code editing, terminal, browser and preview panes, emulator control.** They need a keyboard,
+  a pointer or a spatial canvas far larger than a round 1.5-inch display; the watch offers phone
+  handoff instead.
+- **Photos, documents, camera capture and starting ticket tasks.** See below; these need context or
+  input the watch cannot show.
+- **Glass/frosted surfaces.** The phone's haze treatment stays on the phone. The watch uses dark Wear
+  Compose Material chips and ProtoLayout Material, which read better on OLED and save power.
+
 ## Small-screen interaction
 
 - Dark Wear Compose surfaces, generous side margins, full-width chips and scroll
@@ -76,6 +108,7 @@ physical-watch checks below.
 | Send journal | Inspect delivery status and confirm dismissal; never automatically resend |
 | Notifications | Optional independent Firebase event notifications with watch routing |
 | Status tile | Up to two sessions that need you or are working, with their last-seen pull request checks |
+| Complication | Waiting or working count (short text) or the top session with its checks (long text) |
 | Phone handoff | Open the matching phone session for photos/documents or a larger view |
 | Settings | Thinking visibility, offline-session filtering and watch notification opt-in |
 
@@ -123,6 +156,19 @@ The tile sets no update interval, so nothing refreshes on a schedule.
 Fresh pull request checks for every row would need the Mac to include a compact pull
 request summary in `sessions.list`. That is a protocol change for noah-monorepo first
 and is not part of this client.
+
+## Complication
+
+The **PocketPi status** complication puts the tile's answer on the watch face. Short text shows
+how many sessions wait for you (`2 waiting`), or, when none wait, how many are working; long
+text names the top session with the tile's row detail, for example
+`needs you · PR #189 · 2 failing · 5 min`. Unpaired, it reads `Pair` (long text: `Not paired`). A tap opens that session
+through the tile's validated trampoline, or the app when no session is active.
+
+The complication reads only the tile's stored snapshot and never asks the Mac itself: watch faces
+request it far more often than the tile. Every change of the snapshot (app state, pushes, tile
+refreshes) asks watch faces to read it again, and a five-minute update period re-reads the stored
+snapshot without any network use, so the shown age and the 24-hour pull request expiry move on.
 
 ## Pairing
 
@@ -192,7 +238,7 @@ Use JDK 25 and Android SDK platform 37, as for the phone:
 ```sh
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug \
-  :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug
+  :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:assembleDebugAndroidTest
 
 adb -s PHONE_SERIAL install build/outputs/apk/debug/pocketpi-debug.apk
 adb -s WATCH_SERIAL install wear/build/outputs/apk/debug/wear-debug.apk
@@ -201,6 +247,34 @@ adb -s WATCH_SERIAL install wear/build/outputs/apk/debug/wear-debug.apk
 CI includes watch unit/UI tests, debug assembly and Lint alongside the phone checks.
 Watch UI tests use a 240dp round Robolectric configuration on API 35. Existing phone
 API 36 instrumentation tests remain in CI; no real-watch acceptance is implied.
+
+### Emulator smoke test
+
+CI only compiles the watch's emulator tests (`wear/src/androidTest`); run them by hand on a
+Wear OS emulator (system image `android-36;android-wear-signed`). `WearNotificationsDeviceTest`
+posts a question, a completion and both failed-run notices and reads them back from the system:
+
+```sh
+ANDROID_SERIAL=WATCH_SERIAL ./gradlew :wear:connectedDebugAndroidTest
+```
+
+Gradle uninstalls the app afterwards. To look at the cards, install both APKs and keep the notices in the stream:
+
+```sh
+./gradlew :wear:assembleDebug :wear:assembleDebugAndroidTest
+adb install -r wear/build/outputs/apk/debug/wear-debug.apk
+adb install -r wear/build/outputs/apk/androidTest/debug/wear-debug-androidTest.apk
+adb shell am instrument -w -e keepNotifications true \
+  -e class de.joinnoah.pi.remote.WearNotificationsDeviceTest \
+  de.robinrehbein.pocketpi.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+`adb shell cmd locale set-app-locales de.robinrehbein.pocketpi --locales de-DE` and
+`adb shell settings put system font_scale 1.3` check German and large text. The status tile is
+added with `adb shell am broadcast -a com.google.android.wearable.app.DEBUG_SURFACE --es operation
+add-tile --ecn component de.robinrehbein.pocketpi/de.joinnoah.pi.remote.WatchTileService` and
+shown by swiping left from the watch face; the complication is picked in a watch face's editor
+(Utility has short-text slots). The emulator does not replace the Galaxy Watch Ultra checks below.
 
 ## Release boundaries
 
@@ -254,6 +328,10 @@ until performed; a testing release does not establish device acceptance.
 - Status tile: add it, round clipping of two rows at large font scale, TalkBack, tap
   routing to a session and to the app, swipe refresh over WLAN and LTE (and its
   battery cost), stale rows after a failed refresh, and push-driven row changes.
+- Complication: add short and long text to a Samsung watch face, clipping at large font scale,
+  TalkBack, tap routing to a session and to the app, update after a push and after a tile refresh,
+  ambient/always-on display, and whether the German titles `arbeitet`/`arbeiten` fit.
+- Chat pull request line: appears with an open session that has a pull request.
 
 Do not treat a built APK or a round Robolectric test as evidence that these Samsung
 hardware, network, push and power-management behaviors have been accepted.

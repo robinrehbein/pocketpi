@@ -86,6 +86,8 @@ class WatchGlanceTest {
         val base = glance(row("a", "running"))
         assertEquals("waiting", base.withPush(PushPayload("route", "a", "e1", PushEvent.QUESTION)).home.sessions.single().status)
         assertEquals("idle", base.withPush(PushPayload("route", "a", "e2", PushEvent.COMPLETE)).home.sessions.single().status)
+        // A failed run ended too (push.run_failure.v1).
+        assertEquals("idle", base.withPush(PushPayload("route", "a", "e6", PushEvent.COMPLETE, failure = RunFailure.AGENT_ERROR)).home.sessions.single().status)
         // A push confirms no other row, so the time stays and a swipe right after it still refreshes.
         assertEquals(base.home.refreshedAt, base.withPush(PushPayload("route", "a", "e3", PushEvent.COMPLETE)).home.refreshedAt)
         assertEquals(base, base.withPush(PushPayload("route", "x", "e4", PushEvent.QUESTION)))
@@ -179,6 +181,18 @@ class WatchTileTest {
         assertEquals("1 session needs you", tile.title)
         assertEquals(listOf("Fix the tile", context.getString(R.string.remote_widget_untitled)), tile.rows.map { it.title })
         assertEquals(listOf("needs you · PR #7 · checks running · now", "working"), tile.rows.map { it.detail })
+    }
+    @Test fun `tile text is light on the black tile background`() {
+        fun colors(glance: WatchGlance): List<Int> {
+            val layout = androidx.wear.protolayout.material.layouts.PrimaryLayout.fromLayoutElement(
+                watchTileLayout(context, watchTileContent(context, glance, now), device))!!
+            return listOfNotNull(layout.primaryLabelTextContent, layout.secondaryLabelTextContent, layout.content)
+                .mapNotNull { androidx.wear.protolayout.material.Text.fromLayoutElement(it)?.color?.argb }
+        }
+        // Unpaired: the title and the pairing hint. Paired and empty: the title, its time and the empty hint.
+        assertEquals(List(2) { WATCH_TILE_TEXT_COLOR }, colors(WatchGlance()))
+        assertEquals(List(3) { WATCH_TILE_TEXT_COLOR }, colors(WatchGlance(HomeSnapshot(true, emptyList(), now))))
+        assertEquals(0xFFFFFFFF.toInt(), WATCH_TILE_TEXT_COLOR)
     }
     @Test fun `a tile tap opens a validated session or else the app`() {
         val extras = android.os.Bundle().apply { WatchTileTarget.intentExtras(WatchTileRow("route", "a", "", false, null, null)).forEach(::putString) }

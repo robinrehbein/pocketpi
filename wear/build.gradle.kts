@@ -133,6 +133,7 @@ dependencies {
     implementation(libs.androidx.wear.tiles)
     implementation(libs.androidx.wear.protolayout)
     implementation(libs.androidx.wear.protolayout.material)
+    implementation(libs.androidx.wear.watchface.complications.data.source.ktx)
     implementation(libs.androidx.concurrent.futures.ktx)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
@@ -142,6 +143,9 @@ dependencies {
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.test.manifest)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core.ktx)
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {

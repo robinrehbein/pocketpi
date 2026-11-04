@@ -38,14 +38,32 @@ internal data class GitPushReviewState(
     val result: GitWriteResult.Push? = null, val pending: GitPushIntent? = null,
     val recovery: GitWriteResult.PushStatus? = null, val checking: Boolean = false,
     val canCheckRemote: Boolean = false, val error: GitPushReviewError? = null,
-    val invalidated: Boolean = false,
+    val invalidated: Boolean = false, val canResend: Boolean = false,
+    // A resend's outcome that leaves the push unknown: still no answer, a refusal that cannot speak
+    // for the first send, or a window that has closed.
+    val resendNotice: GitPushResendNotice? = null, val resendRefusal: GitPushReason? = null,
 )
+internal enum class GitPushResendNotice { UNANSWERED, REFUSED, EXPIRED }
+/**
+ * How long after the first dispatch a resend under the same request ID still reaches the Host's
+ * ledger record of it. The Host keeps a record while the push runs and five minutes after it ends,
+ * so four minutes from dispatch is always inside it.
+ */
+internal const val GIT_PUSH_RESEND_WINDOW_MILLIS = 4 * 60_000L
 
 internal class GitPushReviewController(
     private val repository: RemoteRepository,
     private val scope: CoroutineScope,
     private val targetSelection: RemoteSelection,
+    // Milliseconds that keep counting through deep sleep, like the Host's wall clock its ledger
+    // window runs on: SystemClock.elapsedRealtime in the app.
+    private val now: () -> Long,
 ) {
+    // The intent this process dispatched, and when. An intent restored from storage has no known
+    // dispatch time, so it is never resent.
+    private var dispatchedAt: Pair<GitPushIntent, Long>? = null
+    private fun resendable(intent: GitPushIntent?): Boolean =
+        intent != null && dispatchedAt?.let { (sent, at) -> sent == intent && now() - at < GIT_PUSH_RESEND_WINDOW_MILLIS } == true
     private val mutable = MutableStateFlow(GitPushReviewState())
     val state: StateFlow<GitPushReviewState> = mutable
     private val storage = Mutex()
@@ -61,8 +79,9 @@ internal class GitPushReviewController(
     private fun current(serial: Long, capability: String): Boolean = serial == generation && has(capability) &&
         repository.state.value.gitReviewGeneration == authorityGeneration
     private fun refreshCheck() {
-        mutable.value = mutable.value.copy(canCheckRemote = mutable.value.open && pending != null &&
-            !mutable.value.checking && !mutable.value.sending && has(GIT_PUSH_STATUS_CAPABILITY))
+        val idle = mutable.value.open && pending != null && !mutable.value.checking && !mutable.value.sending
+        mutable.value = mutable.value.copy(canCheckRemote = idle && has(GIT_PUSH_STATUS_CAPABILITY),
+            canResend = idle && mutable.value.result == GitWriteResult.Push.Unknown && resendable(pending) && has(GIT_PUSH_CAPABILITY))
     }
     private fun hydrate() {
         if (hydrated || hydrating || mutable.value.loading || mutable.value.sending ||
@@ -143,7 +162,9 @@ internal class GitPushReviewController(
                     storage.withLock { repository.saveGitPushIntent(targetSelection, null); pending = null }
                     mutable.value = mutable.value.copy(sending = false, confirmation = null, invalidated = true); refreshCheck(); return@launch
                 }
-                val result = repository.gitPush(checkNotNull(targetSelection.sessionId), intent.writeId, intent.requestId) { dispatched = true }
+                val result = repository.gitPush(checkNotNull(targetSelection.sessionId), intent.writeId, intent.requestId) {
+                    dispatched = true; dispatchedAt = intent to now()
+                }
                 if (result != GitWriteResult.Push.Unknown) known = result
                 if (known != null) {
                     withContext(NonCancellable) {
@@ -203,6 +224,56 @@ internal class GitPushReviewController(
                 refreshCheck()
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { if (serial == generation) { mutable.value = mutable.value.copy(checking = false, error = GitPushReviewError.REQUEST); refreshCheck() } }
+        }
+    }
+    /**
+     * Sends the pending push again with its original request ID, only when the user asks, and only
+     * within [GIT_PUSH_RESEND_WINDOW_MILLIS] of the first dispatch from this process. Inside that
+     * window the Host's command ledger answers a request ID it holds with the first answer, waiting
+     * for it if the push still runs, so a push that reached the Mac is not run twice, and one that
+     * never arrived runs now. Only a push or `up_to_date` settles the intent: any other answer may
+     * come from a fresh run (a Host restart forgets the ledger) and says nothing about the first.
+     * Such a fresh run cannot push twice: the Host answers `up_to_date` when the remote branch
+     * already points at the reviewed commit, and otherwise pushes it without force.
+     */
+    fun resend() {
+        val intent = pending ?: return
+        val value = mutable.value
+        if (!value.open || value.sending || value.checking || value.result != GitWriteResult.Push.Unknown || !has(GIT_PUSH_CAPABILITY)) return
+        if (!resendable(intent)) { mutable.value = value.copy(resendNotice = GitPushResendNotice.EXPIRED, resendRefusal = null); refreshCheck(); return }
+        val serial = ++generation; authorityGeneration = repository.state.value.gitReviewGeneration
+        mutable.value = value.copy(sending = true, error = null, recovery = null, canCheckRemote = false, canResend = false,
+            preparation = null, confirmation = null, resendNotice = null, resendRefusal = null)
+        scope.launch {
+            var settled = false
+            try {
+                val result = repository.gitPush(checkNotNull(targetSelection.sessionId), intent.writeId, intent.requestId) {}
+                val definite = result is GitWriteResult.Push.Pushed || result == GitWriteResult.Push.Refused(GitPushReason.UP_TO_DATE)
+                if (!definite) {
+                    mutable.value = mutable.value.copy(sending = false, result = GitWriteResult.Push.Unknown,
+                        resendNotice = if (result is GitWriteResult.Push.Refused) GitPushResendNotice.REFUSED else GitPushResendNotice.UNANSWERED,
+                        resendRefusal = (result as? GitWriteResult.Push.Refused)?.reason,
+                        invalidated = mutable.value.invalidated || !current(serial, GIT_PUSH_CAPABILITY))
+                    refreshCheck(); return@launch
+                }
+                settled = true
+                withContext(NonCancellable) {
+                    var storageError = false
+                    try { storage.withLock { if (pending == intent) { repository.saveGitPushIntent(targetSelection, null); pending = null } } }
+                    catch (_: Exception) { storageError = true }
+                    mutable.value = mutable.value.copy(sending = false, pending = pending, result = if (storageError) GitWriteResult.Push.Unknown else result,
+                        invalidated = mutable.value.invalidated || !current(serial, GIT_PUSH_CAPABILITY),
+                        error = if (storageError) GitPushReviewError.STORAGE else null)
+                    refreshCheck()
+                }
+            } catch (e: CancellationException) {
+                if (!settled) withContext(NonCancellable) { mutable.value = mutable.value.copy(sending = false, result = GitWriteResult.Push.Unknown); refreshCheck() }
+                throw e
+            } catch (_: Exception) {
+                // A failure of the resend says nothing about the first send.
+                mutable.value = mutable.value.copy(sending = false, result = GitWriteResult.Push.Unknown, error = GitPushReviewError.REQUEST)
+                refreshCheck()
+            }
         }
     }
     /** User explicitly acknowledges after inspecting the remote or checking it manually. */

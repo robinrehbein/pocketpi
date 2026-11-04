@@ -134,7 +134,9 @@ internal class LabelUpgrader(
                         val known =
                             cache.get(payload.routeId, payload.sessionId)
                                 ?: seed(payload.routeId, payload.sessionId)
-                        fetch(host, payload.sessionId, payload.event == PushEvent.COMPLETE, known)
+                        // A failed run's notice says why, not how its last answer ended.
+                        val withPreview = payload.event == PushEvent.COMPLETE && payload.failure == null
+                        fetch(host, payload.sessionId, withPreview, known)
                             .also {
                                 if (known == null && (it.title != null || it.project != null || it.projectId != null))
                                     cache.put(
@@ -195,13 +197,14 @@ private fun shortened(text: String): String {
 internal object CompletionUpgrades {
     internal val names = SessionNameCache()
     internal val gate = LabelGate()
-    private val keys = listOf("routeId", "target", "eventId", "event", "parent", "jobId", "count")
+    private val keys = listOf("routeId", "target", "eventId", "event", "parent", "jobId", "count", "failure")
 
     fun workName(payload: PushPayload) =
         "label:${RemoteNotifications.tag(payload.routeId, payload.sessionId)}:" +
             RemoteNotifications.idFor(payload.event)
 
-    fun schedule(context: Context, payload: PushPayload) {
+    /** The worker's input: the push's own fields, which [payload] reads back. */
+    internal fun inputData(payload: PushPayload): androidx.work.Data {
         val data =
             mapOf(
                 "routeId" to payload.routeId,
@@ -211,12 +214,18 @@ internal object CompletionUpgrades {
                 "parent" to payload.parent,
                 "jobId" to payload.jobId,
                 "count" to payload.count.toString(),
+                // Without it the named notice would replace a failed run's with a plain completion.
+                "failure" to payload.failure?.wire,
             )
+        return workDataOf(*data.map { (k, v) -> k to v }.toTypedArray())
+    }
+
+    fun schedule(context: Context, payload: PushPayload) {
         val request =
             OneTimeWorkRequestBuilder<LabelUpgradeWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .addTag(QuestionUpgrades.routeTag(payload.routeId))
-                .setInputData(workDataOf(*data.map { (k, v) -> k to v }.toTypedArray()))
+                .setInputData(inputData(payload))
                 .build()
         WorkManager.getInstance(context)
             .enqueueUniqueWork(workName(payload), ExistingWorkPolicy.REPLACE, request)

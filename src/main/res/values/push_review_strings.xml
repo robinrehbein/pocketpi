@@ -18,6 +18,11 @@
     <string name="remote_push_status_absent">The remote branch does not currently exist.</string>
     <string name="remote_push_status_different">The remote branch currently points to a different commit.</string>
     <string name="remote_push_status_unavailable">The current remote state could not be checked.</string>
+    <string name="remote_push_resend">Send the push again</string>
+    <string name="remote_push_resend_explanation">If the Mac already received this push in the last few minutes, sending it again returns that result instead of pushing twice.</string>
+    <string name="remote_push_resend_unanswered">Still no answer from the Mac. The outcome remains unknown.</string>
+    <string name="remote_push_resend_refused">The resend was answered: %1$s This does not show what happened to the first push.</string>
+    <string name="remote_push_resend_expired">Too much time has passed to send this push again safely. Check the remote branch.</string>
     <string name="remote_push_ack">I checked the branch and history</string>
     <string name="remote_push_ack_title">Clear the unknown outcome?</string>
     <string name="remote_push_ack_body">Check the remote branch and its history first. Clearing this notice does not retry the push. A new push requires a fresh review.</string>

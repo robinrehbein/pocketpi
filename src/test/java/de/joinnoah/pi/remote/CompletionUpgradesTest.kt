@@ -211,6 +211,19 @@ class CompletionUpgradesTest {
     }
 
     @Test
+    fun aFailedRunsLabelReadsNoAnswerPreview() = runTest {
+        val previews = mutableListOf<Boolean>()
+        val upgrader =
+            LabelUpgrader { _, _, withPreview, _ ->
+                previews += withPreview
+                SessionLabel("T", "P", null)
+            }
+        upgrader.run(host, complete) { true }
+        upgrader.run(host, complete.copy(eventId = "f", failure = RunFailure.AGENT_ERROR)) { true }
+        assertEquals(listOf(true, false), previews)
+    }
+
+    @Test
     fun repeatedPushesForASessionWalkTheProjectsOnce() = runTest {
         val cache = SessionNameCache(now = { currentTime })
         val seen = mutableListOf<SessionName?>()

@@ -45,6 +45,15 @@ internal fun watchTileRows(glance: WatchGlance, now: Long, limit: Int = WATCH_TI
 internal fun watchTileRowDetail(row: WatchTileRow, resources: Resources, now: Long): String = buildList {
     add(resources.getString(if (row.waiting) R.string.wear_tile_needs_you else R.string.wear_tile_working))
     val pr = row.pullRequest ?: return@buildList
+    addAll(watchPullRequestParts(pr, resources))
+    row.pullRequestSeenAt?.let { add(watchAge(resources, now - it)) }
+}.joinToString(" · ")
+
+/** `PR #189 · 2 failing`: the number, then the checks without the review, as on the tile. */
+internal fun watchPullRequestSummary(pr: PullRequestChipModel, resources: Resources): String =
+    watchPullRequestParts(pr, resources).joinToString(" · ")
+
+private fun watchPullRequestParts(pr: PullRequestChipModel, resources: Resources): List<String> = buildList {
     add(resources.getString(R.string.remote_pr_chip_number, pr.number))
     when (val checks = pr.checks) {
         is PullRequestChecksWord.Failing -> add(resources.getQuantityString(R.plurals.remote_pr_checks_failing, checks.count, checks.count))
@@ -52,8 +61,7 @@ internal fun watchTileRowDetail(row: WatchTileRow, resources: Resources, now: Lo
         PullRequestChecksWord.Passed -> add(resources.getString(R.string.remote_pr_checks_passed))
         null -> Unit
     }
-    row.pullRequestSeenAt?.let { add(watchAge(resources, now - it)) }
-}.joinToString(" · ")
+}
 
 private fun watchAge(resources: Resources, millis: Long): String = when {
     millis < 60_000L -> resources.getString(R.string.wear_tile_age_now)

@@ -181,13 +181,26 @@ internal object RemoteNotifications {
      */
     fun postComplete(context: Context, payload: PushPayload, label: SessionLabel? = null) {
         val localized = localized(context)
-        val generic = localized.getString(R.string.remote_notification_complete)
+        // A failed run (push.run_failure.v1) says so, and why, instead of the answer's end.
+        val failure = payload.failure?.let { localized.getString(runFailureText(it)) }
+        val generic =
+            localized.getString(
+                if (failure != null) R.string.remote_notification_run_failed
+                else R.string.remote_notification_complete
+            )
         val title =
-            label?.title?.let { localized.getString(R.string.remote_notification_complete_named, it) }
-                ?: generic
-        val open = localized.getString(R.string.remote_notification_open)
+            label?.title?.let {
+                localized.getString(
+                    if (failure != null) R.string.remote_notification_run_failed_named
+                    else R.string.remote_notification_complete_named,
+                    it,
+                )
+            } ?: generic
+        val open = failure ?: localized.getString(R.string.remote_notification_open)
         val message =
-            listOfNotNull(label?.project, label?.preview).joinToString("\n").ifEmpty { open }
+            listOfNotNull(failure, label?.project, label?.preview.takeIf { failure == null })
+                .joinToString("\n")
+                .ifEmpty { open }
         val builder =
             base(
                     context,
@@ -197,7 +210,7 @@ internal object RemoteNotifications {
                     channel = UPDATES_CHANNEL,
                 )
                 .setContentTitle(title)
-                .setContentText(label?.project ?: label?.preview ?: open)
+                .setContentText(failure ?: label?.project ?: label?.preview ?: open)
                 .conversation(
                     payload.routeId,
                     payload.sessionId,
@@ -205,8 +218,9 @@ internal object RemoteNotifications {
                 )
                 .setPublicVersion(publicVersion(context, generic, UPDATES_CHANNEL))
         // The session is idle now, so a reply starts its next run. Like an answer it needs an
-        // unlocked phone, which an action can only require from Android 12 on.
-        if (Build.VERSION.SDK_INT >= 31)
+        // unlocked phone, which an action can only require from Android 12 on. A session whose pi
+        // went away is offline: there a reply could not start anything.
+        if (Build.VERSION.SDK_INT >= 31 && payload.failure != RunFailure.WORKER_EXITED)
             builder.addAction(completionReplyAction(context, localized, payload.routeId, payload.sessionId))
         post(context, payload.routeId, payload.sessionId, builder.build())
     }

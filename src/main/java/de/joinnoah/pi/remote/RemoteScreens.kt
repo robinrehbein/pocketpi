@@ -1733,6 +1733,7 @@ internal fun RemoteScreen(
                                 confirm = pushController::confirm,
                                 checkRemote = pushController::checkRemote,
                                 acknowledgeUnknown = pushController::acknowledgeUnknown,
+                                resend = pushController::resend,
                             )
                         },
                         Modifier.fillMaxSize(),
@@ -3767,7 +3768,7 @@ internal fun RemoteScreen(
                         onEditPagedEditor = model::editPagedEditor,
                         onSubmitPagedEditor = model::submitPagedEditor,
                         onRetryPagedEditorStorage = model::retryPagedEditorStorage,
-                        suggestions = {
+                        suggestions = { attachmentControl ->
                             val typed = composer.text
                             SessionControls(
                                 remember(state, typed) { state.copy(draft = typed) },
@@ -3820,6 +3821,7 @@ internal fun RemoteScreen(
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
+                                leadingControl = attachmentControl,
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,
