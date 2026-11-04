@@ -1,0 +1,388 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "name": "status-command",
+      "payload": {
+        "type": "session.git.pull_request.status",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ"
+      }
+    },
+    {
+      "name": "status-found",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "status-different",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "different",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "status-absent",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "absent"
+        }
+      }
+    },
+    {
+      "name": "status-unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "unavailable"
+        }
+      }
+    },
+    {
+      "name": "create-true",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": true,
+          "number": 12,
+          "url": "https://github.com/example/repo/pull/12",
+          "base": "dev"
+        }
+      }
+    },
+    {
+      "name": "create-false",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "available": true,
+          "created": false,
+          "number": 12,
+          "url": "https://github.com/example/repo/pull/12",
+          "base": "dev"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "bad-token",
+      "payload": {
+        "type": "session.git.pull_request.status",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "bad"
+      }
+    },
+    {
+      "name": "noncanonical-token",
+      "payload": {
+        "type": "session.git.pull_request.status",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMR"
+      }
+    },
+    {
+      "name": "bad-request-id",
+      "payload": {
+        "type": "session.git.pull_request.status",
+        "requestId": "bad id",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ"
+      }
+    },
+    {
+      "name": "bad-session-id",
+      "payload": {
+        "type": "session.git.pull_request.status",
+        "requestId": "req-1",
+        "sessionId": "",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ"
+      }
+    },
+    {
+      "name": "command-extra",
+      "payload": {
+        "type": "session.git.pull_request.status",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "writeId": "d3JpdGUtaWQtdG9rZW4tMQ",
+        "extra": true
+      }
+    },
+    {
+      "name": "found-missing",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found"
+        }
+      }
+    },
+    {
+      "name": "different-missing",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "different"
+        }
+      }
+    },
+    {
+      "name": "absent-identity",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "absent",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "unavailable-identity",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "unavailable",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "zero-number",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 0,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "unsafe-number",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 9007199254740992,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "fraction-number",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 1.5,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "bad-url",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 12,
+            "url": "http://example.com/pr",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "empty-url",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://",
+            "base": "dev"
+          }
+        }
+      }
+    },
+    {
+      "name": "bad-base",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "/main"
+          }
+        }
+      }
+    },
+    {
+      "name": "identity-extra",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": {
+            "number": 12,
+            "url": "https://github.com/example/repo/pull/12",
+            "base": "dev",
+            "extra": true
+          }
+        }
+      }
+    },
+    {
+      "name": "null-identity",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "found",
+          "pullRequest": null
+        }
+      }
+    },
+    {
+      "name": "unknown-state",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "created"
+        }
+      }
+    },
+    {
+      "name": "status-extra",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "git.pull_request.status",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "state": "absent",
+          "extra": true
+        }
+      }
+    }
+  ]
+}

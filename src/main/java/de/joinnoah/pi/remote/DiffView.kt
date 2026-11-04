@@ -6,10 +6,13 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +25,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -30,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 
 /**
  * Rows wider than this are cut on screen; the soft split in [outputLines] keeps output below it.
@@ -47,8 +54,16 @@ internal const val MAX_CODE_CONTENT_WIDTH_PX = 200_000
 /** [widthPx] limited to [MAX_CODE_CONTENT_WIDTH_PX], never negative. */
 internal fun clampCodeContentWidthPx(widthPx: Float): Float = widthPx.coerceIn(0f, MAX_CODE_CONTENT_WIDTH_PX.toFloat())
 
+/** The code text style, scaled by [zoom] (see [CodeZoom]); 1 keeps the body size. */
 @Composable
-internal fun monoTextStyle(): TextStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+internal fun monoTextStyle(zoom: Float = 1f): TextStyle {
+    val body = MaterialTheme.typography.bodySmall
+    return body.copy(
+        fontFamily = FontFamily.Monospace,
+        fontSize = body.fontSize * zoom,
+        lineHeight = if (body.lineHeight.isSpecified) body.lineHeight * zoom else body.lineHeight,
+    )
+}
 
 /** The advance of one monospace character in [style]. */
 @Composable
@@ -82,7 +97,19 @@ internal fun rememberCodeContentWidth(texts: List<String>, style: TextStyle): Dp
     }
 }
 
-private fun digits(value: Int): Int = value.coerceAtLeast(1).toString().length
+/** Measure the complete monospace number in whole pixels before converting to dp. Keep gutter
+ * padding outside this width so independently rounded padding cannot consume a text pixel. */
+@Composable
+internal fun rememberLineNumberWidth(maxNumber: Int, style: TextStyle): Dp {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(maxNumber, style, measurer, density) {
+        with(density) {
+            measurer.measure(maxNumber.coerceAtLeast(1).toString(), style, softWrap = false, maxLines = 1)
+                .size.width.toDp()
+        }
+    }
+}
 
 /** Measurements and colors every row of one diff shares, so rows line up in a plain or lazy list. */
 @Immutable
@@ -97,27 +124,75 @@ internal class DiffRowStyle(
     val addedContent: Color,
     val removedContainer: Color,
     val removedContent: Color,
+    val labels: DiffLineLabels,
+)
+
+/** The formats TalkBack reads a diff line with, resolved once per diff instead of per row. */
+@Immutable
+internal class DiffLineLabels(
+    val addedLine: String,
+    val removedLine: String,
+    val contextLine: String,
+    val added: String,
+    val removed: String,
+    val blank: String,
 )
 
 @Composable
-internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolean = true): DiffRowStyle {
-    val style = monoTextStyle()
+private fun rememberDiffLineLabels(): DiffLineLabels {
+    val addedLine = stringResource(R.string.remote_chat_a11y_diff_added_line)
+    val removedLine = stringResource(R.string.remote_chat_a11y_diff_removed_line)
+    val contextLine = stringResource(R.string.remote_chat_a11y_diff_context_line)
+    val added = stringResource(R.string.remote_chat_a11y_diff_added)
+    val removed = stringResource(R.string.remote_chat_a11y_diff_removed)
+    val blank = stringResource(R.string.remote_chat_a11y_diff_blank)
+    return remember(addedLine, removedLine, contextLine, added, removed, blank) {
+        DiffLineLabels(addedLine, removedLine, contextLine, added, removed, blank)
+    }
+}
+
+/**
+ * What TalkBack reads for [line]: whether it was added or removed, its line number and its text,
+ * so the change never rests on the colour or the '+' and '-' signs alone. [number] is the line
+ * number to read, for a split diff the number on that side. A hunk header reads as it is.
+ */
+internal fun diffLineDescription(
+    line: DiffLine,
+    labels: DiffLineLabels,
+    number: Int? = when (line.kind) {
+        DiffKind.ADDED -> line.newLine
+        DiffKind.REMOVED -> line.oldLine
+        DiffKind.CONTEXT -> line.newLine ?: line.oldLine
+        DiffKind.HUNK -> null
+    },
+): String? {
+    val text = line.text.take(MAX_CODE_LINE_CHARS).ifBlank { labels.blank }
+    return when (line.kind) {
+        DiffKind.ADDED -> number?.let { labels.addedLine.format(it, text) } ?: labels.added.format(text)
+        DiffKind.REMOVED -> number?.let { labels.removedLine.format(it, text) } ?: labels.removed.format(text)
+        DiffKind.CONTEXT -> number?.let { labels.contextLine.format(it, text) } ?: text
+        DiffKind.HUNK -> null
+    }
+}
+
+@Composable
+internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolean = true, zoom: Float = 1f): DiffRowStyle {
+    val style = monoTextStyle(zoom)
     val texts = remember(lines) { lines.map { it.text } }
     val contentWidth = rememberCodeContentWidth(texts, style)
     val charWidth = rememberMonoCharWidth(style)
     val numbered = showLineNumbers && lines.any { it.oldLine != null || it.newLine != null }
-    val numberWidth =
-        remember(lines, charWidth) {
-            charWidth * digits(lines.maxOfOrNull { maxOf(it.oldLine ?: 0, it.newLine ?: 0) } ?: 0)
-        }
+    val maxNumber = remember(lines) { lines.maxOfOrNull { maxOf(it.oldLine ?: 0, it.newLine ?: 0) } ?: 1 }
+    val numberWidth = rememberLineNumberWidth(maxNumber, style)
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val addedContainer = diffAddedContainer()
     val addedContent = diffAddedContent()
     val removedContainer = diffRemovedContainer()
     val removedContent = diffRemovedContent()
+    val labels = rememberDiffLineLabels()
     return remember(
         style, charWidth, numberWidth, contentWidth, numbered, muted,
-        addedContainer, addedContent, removedContainer, removedContent,
+        addedContainer, addedContent, removedContainer, removedContent, labels,
     ) {
         DiffRowStyle(
             style,
@@ -130,13 +205,15 @@ internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolea
             addedContent,
             removedContainer,
             removedContent,
+            labels,
         )
     }
 }
 
 /**
  * One diff line: old and new line numbers, a '+', '-' or ' ' prefix, and the text. Rows of one
- * diff share [scroll] so they move sideways together. An empty hunk line is a divider.
+ * diff share [scroll] so they move sideways together; with [wrap] long lines break instead. An
+ * empty hunk line is a divider.
  */
 @Composable
 internal fun DiffRow(
@@ -144,6 +221,11 @@ internal fun DiffRow(
     rowStyle: DiffRowStyle,
     scroll: ScrollState,
     modifier: Modifier = Modifier,
+    wrap: Boolean = false,
+    selected: Boolean = false,
+    selectable: Boolean = false,
+    leading: (@Composable () -> Unit)? = null,
+    gutter: Modifier = Modifier,
 ) {
     if (line.kind == DiffKind.HUNK && line.text.isEmpty()) {
         HorizontalDivider(modifier.padding(vertical = 4.dp))
@@ -156,18 +238,34 @@ internal fun DiffRow(
             DiffKind.HUNK -> null to rowStyle.muted
             DiffKind.CONTEXT -> null to LocalContentColor.current
         }
-    val prefix =
-        when (line.kind) {
-            DiffKind.ADDED -> "+"
-            DiffKind.REMOVED -> "-"
-            DiffKind.CONTEXT -> " "
-            DiffKind.HUNK -> ""
-        }
-    Row(modifier.fillMaxWidth().then(if (container != null) Modifier.background(container) else Modifier).semantics(mergeDescendants = true) {}) {
+    val prefix = diffPrefix(line.kind)
+    val picked = selected
+    Row(
+        modifier
+            .fillMaxWidth()
+            .then(if (container != null) Modifier.background(container) else Modifier)
+            .then(if (picked) Modifier.background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)) else Modifier)
+            .semantics(mergeDescendants = true) {
+                if (selectable) this.selected = picked
+                diffLineDescription(line, rowStyle.labels)?.let { contentDescription = it }
+            },
+    ) {
+        leading?.invoke()
         if (rowStyle.numbered) {
-            GutterNumber(line.oldLine, rowStyle.numberWidth, rowStyle.text, rowStyle.muted)
-            GutterNumber(line.newLine, rowStyle.numberWidth, rowStyle.text, rowStyle.muted)
+            GutterNumber(line.oldLine, rowStyle.numberWidth, rowStyle.text, rowStyle.muted, gutter)
+            GutterNumber(line.newLine, rowStyle.numberWidth, rowStyle.text, rowStyle.muted, gutter)
         }
+        // Only the code is selectable, within its own row: a tap on a line number never starts a text selection.
+        if (selectable) SelectionContainer(Modifier.weight(1f)) { Row(Modifier.fillMaxWidth()) { DiffLineText(line, prefix, content, rowStyle, scroll, wrap) } }
+        else DiffLineText(line, prefix, content, rowStyle, scroll, wrap)
+    }
+}
+
+/** The '+', '-' or ' ' [prefix] and the text of [line]; [wrap] breaks long lines instead of scrolling sideways. */
+@Composable
+internal fun RowScope.DiffLineText(line: DiffLine, prefix: String, content: Color, rowStyle: DiffRowStyle, scroll: ScrollState, wrap: Boolean) {
+    // The marker is no part of the code: a text selection over the row never takes it along.
+    DisableSelection {
         Text(
             prefix,
             Modifier.width(rowStyle.charWidth + 8.dp).padding(start = 4.dp),
@@ -175,19 +273,28 @@ internal fun DiffRow(
             style = rowStyle.text,
             maxLines = 1,
         )
-        Box(Modifier.weight(1f).horizontalScroll(scroll)) {
-            Text(
-                line.text.take(MAX_CODE_LINE_CHARS),
-                Modifier.width(rowStyle.contentWidth),
-                color = content,
-                style = rowStyle.text,
-                softWrap = false,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-            )
-        }
+    }
+    Box(Modifier.weight(1f).then(if (wrap) Modifier else Modifier.horizontalScroll(scroll))) {
+        Text(
+            line.text.take(MAX_CODE_LINE_CHARS),
+            if (wrap) Modifier else Modifier.width(rowStyle.contentWidth),
+            color = content,
+            style = rowStyle.text,
+            softWrap = wrap,
+            maxLines = if (wrap) Int.MAX_VALUE else 1,
+            overflow = TextOverflow.Clip,
+        )
     }
 }
+
+/** The '+', '-' or ' ' a diff line starts with; nothing for a hunk header. */
+internal fun diffPrefix(kind: DiffKind): String =
+    when (kind) {
+        DiffKind.ADDED -> "+"
+        DiffKind.REMOVED -> "-"
+        DiffKind.CONTEXT -> " "
+        DiffKind.HUNK -> ""
+    }
 
 /**
  * A unified diff. The gutter shows old and new line numbers and a '+', '-' or ' ' prefix, so the
@@ -218,14 +325,36 @@ internal fun DiffView(
     }
 }
 
+/** A line number cell; [modifier] adds what the cell does with a press, such as picking the line. */
 @Composable
-private fun GutterNumber(number: Int?, width: Dp, style: TextStyle, color: Color) {
+internal fun GutterNumber(number: Int?, width: Dp, style: TextStyle, color: Color, modifier: Modifier = Modifier) {
     Text(
         number?.toString().orEmpty(),
-        Modifier.width(width + 8.dp).padding(start = 4.dp, end = 4.dp),
+        Modifier.then(modifier).padding(start = 4.dp, end = 4.dp).width(width),
         color = color,
         style = style,
         textAlign = TextAlign.End,
+        softWrap = false,
         maxLines = 1,
     )
+}
+
+/**
+ * The hunk around [lines] at [index] as unified diff text: its @@ header and every line up to the
+ * next one, each with its '+', '-' or ' ' prefix. Dividers between hunks are left out.
+ */
+internal fun diffHunkText(lines: List<DiffLine>, index: Int): String {
+    if (index !in lines.indices) return ""
+    val start = (index downTo 0).firstOrNull { lines[it].kind == DiffKind.HUNK } ?: 0
+    val end = (index + 1 until lines.size).firstOrNull { lines[it].kind == DiffKind.HUNK } ?: lines.size
+    return lines.subList(start, end)
+        .filterNot { it.kind == DiffKind.HUNK && it.text.isEmpty() }
+        .joinToString("\n") { line ->
+            when (line.kind) {
+                DiffKind.ADDED -> "+" + line.text
+                DiffKind.REMOVED -> "-" + line.text
+                DiffKind.CONTEXT -> " " + line.text
+                DiffKind.HUNK -> line.text
+            }
+        }
 }

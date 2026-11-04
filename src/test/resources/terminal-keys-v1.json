@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "name": "ctrl-c",
+      "payload": {
+        "type": "session.terminal.key",
+        "requestId": "r",
+        "sessionId": "s",
+        "attachmentGeneration": 1,
+        "inputSeq": 0,
+        "key": {
+          "name": "c",
+          "ctrl": true
+        }
+      }
+    },
+    {
+      "name": "alt-enter",
+      "payload": {
+        "type": "session.terminal.key",
+        "requestId": "r",
+        "sessionId": "s",
+        "attachmentGeneration": 1,
+        "inputSeq": 1,
+        "key": {
+          "name": "enter",
+          "alt": true
+        }
+      }
+    },
+    {
+      "name": "german-shifted-digit",
+      "payload": {
+        "type": "session.terminal.key",
+        "requestId": "r",
+        "sessionId": "s",
+        "attachmentGeneration": 1,
+        "inputSeq": 2,
+        "key": {
+          "name": "2",
+          "alt": true,
+          "shift": true,
+          "shifted": "\""
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "raw-escape",
+      "payload": {
+        "type": "session.terminal.key",
+        "requestId": "r",
+        "sessionId": "s",
+        "attachmentGeneration": 1,
+        "inputSeq": 0,
+        "key": {
+          "name": "\u001b"
+        }
+      }
+    },
+    {
+      "name": "false-modifier",
+      "payload": {
+        "type": "session.terminal.key",
+        "requestId": "r",
+        "sessionId": "s",
+        "attachmentGeneration": 1,
+        "inputSeq": 0,
+        "key": {
+          "name": "c",
+          "ctrl": false
+        }
+      }
+    },
+    {
+      "name": "shifted-without-shift",
+      "payload": {
+        "type": "session.terminal.key",
+        "requestId": "r",
+        "sessionId": "s",
+        "attachmentGeneration": 1,
+        "inputSeq": 0,
+        "key": {
+          "name": "2",
+          "shifted": "\""
+        }
+      }
+    }
+  ]
+}

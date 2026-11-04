@@ -1,11 +1,12 @@
 name: Publish PocketPi to Play testing
 
+# Releases are deliberate: run this workflow by hand on main once the Android CI push run for the
+# current main commit is green. Merging alone no longer publishes.
 on:
-  workflow_run:
-    workflows: ["Android CI"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -15,29 +16,31 @@ concurrency:
 
 jobs:
   publish:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: play-testing
     env:
       POCKETPI_CLOSED_TRACK: ${{ vars.POCKETPI_CLOSED_TRACK }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Require CI success for the current main commit
         env:
-          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          current="$(git ls-remote origin refs/heads/main | cut -f1)"
-          test -n "$current" && test "$current" = "$CI_SHA" || {
-            echo 'The green CI run does not match current main'; exit 1;
+          current="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test -n "$current" && test "$current" = "$RELEASE_SHA" || {
+            echo 'main moved since this run started; run the release again on the new head'; exit 1;
+          }
+          green="$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$RELEASE_SHA&status=success" --jq '.total_count')"
+          test "$green" -ge 1 || {
+            echo 'No successful Android CI push run for this main commit yet'; exit 1;
           }
       - name: Require protected release configuration
         env:
@@ -45,18 +48,18 @@ jobs:
           PLAY_SERVICE_ACCOUNT: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT POCKETPI_CLOSED_TRACK; do
+          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT; do
             test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
           done
           python3 scripts/release/play_release.py validate-track
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install Play API client
         run: python -m pip install 'google-api-python-client==2.150.0' 'google-auth==2.35.0'
       - id: prepare_auth
         name: Authenticate to the PocketPi Play service account
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
@@ -73,12 +76,12 @@ jobs:
           [[ "$version" =~ ^[0-9]+$ ]] || exit 1
           echo "code=$version" >> "$GITHUB_OUTPUT"
           echo "name=0.3.19-ci.$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "25"
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           cmdline-tools-version: "16111833"
           packages: ""
@@ -119,22 +122,25 @@ jobs:
           printf '%s' "$POCKETPI_UPLOAD_KEYSTORE_B64" | base64 --decode > "$POCKETPI_UPLOAD_KEYSTORE"
           test -s "$POCKETPI_UPLOAD_KEYSTORE"
           export POCKETPI_UPLOAD_KEYSTORE
-          ./gradlew --no-daemon bundleRelease \
+          ./gradlew --no-daemon :bundleRelease \
             "-PPOCKETPI_VERSION_CODE=$VERSION_CODE" \
             "-PPOCKETPI_VERSION_NAME=$VERSION_NAME"
           bundle='build/outputs/bundle/release/pocketpi-release.aab'
           test -s "$bundle"
           python scripts/release/verify_bundle.py "$bundle"
+          test -s build/outputs/mapping/release/mapping.txt || {
+            echo 'R8 wrote no mapping.txt for the release bundle'; exit 1;
+          }
       - id: publish_auth
         name: Refresh the Play API access token
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
           create_credentials_file: false
-      - name: Commit one Play edit for Internal and Closed Alpha
+      - name: Commit one Play edit for configured testing tracks
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.publish_auth.outputs.access_token }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
@@ -142,4 +148,15 @@ jobs:
           set -euo pipefail
           python scripts/release/play_release.py publish \
             --version-code "$VERSION_CODE" \
-            --bundle build/outputs/bundle/release/pocketpi-release.aab
+            --bundle build/outputs/bundle/release/pocketpi-release.aab \
+            --mapping build/outputs/mapping/release/mapping.txt
+      # A Play edit that fails on a Console declaration (foreground service, data safety and the
+      # like) can only be unblocked by uploading this bundle by hand once.
+      - name: Keep the signed bundle when the Play edit fails
+        if: failure() && steps.version.outputs.code != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pocketpi-release-${{ steps.version.outputs.code }}
+          path: build/outputs/bundle/release/pocketpi-release.aab
+          if-no-files-found: ignore
+          retention-days: 3

@@ -17,6 +17,12 @@ import java.io.File
 import java.security.KeyStore
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -61,17 +67,38 @@ class RemoteNavigationUiTest {
                             activity.flush = { fresh.flush() }
                             val settings = UiSettingsRepository().also { uiSettings = it }
                             val content: @Composable () -> Unit = {
-                                RemoteApp(
-                                    fresh,
-                                    settings,
-                                    false,
-                                    {},
-                                    activity.notification,
-                                    {
-                                        if (activity.notification == it)
-                                            activity.notification = null
-                                    },
-                                )
+                                val base = androidx.compose.ui.platform.LocalConfiguration.current
+                                // A Book Cover Keyboard for the tests that ask for one and none for the
+                                // others, whatever the emulator has. The managed emulators report a
+                                // QWERTY keyboard, and with one a chat opens with the composer focused,
+                                // which there also brings up the on-screen keyboard: the touch tests
+                                // would then run with the IME open and Back closing it first.
+                                val keyboard = hardwareKeyboard.value
+                                val configuration =
+                                    remember(base, keyboard) {
+                                        android.content.res.Configuration(base).apply {
+                                            if (keyboard) {
+                                                this.keyboard = android.content.res.Configuration.KEYBOARD_QWERTY
+                                                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                                            } else {
+                                                this.keyboard = android.content.res.Configuration.KEYBOARD_NOKEYS
+                                                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
+                                            }
+                                        }
+                                    }
+                                CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration) {
+                                    RemoteApp(
+                                        fresh,
+                                        settings,
+                                        false,
+                                        {},
+                                        activity.notification,
+                                        {
+                                            if (activity.notification == it)
+                                                activity.notification = null
+                                        },
+                                    )
+                                }
                             }
                             content
                         }
@@ -89,7 +116,23 @@ class RemoteNavigationUiTest {
             )
             .around(compose)
 
+    private val hardwareKeyboard = mutableStateOf(false)
+
     private fun label(id: Int) = compose.activity.getString(id)
+
+    /** Presses [code] through the system's input pipeline, as a hardware keyboard does. */
+    private fun key(code: Int, meta: Int = 0) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val now = android.os.SystemClock.uptimeMillis()
+        instrumentation.sendKeySync(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_DOWN, code, 0, meta))
+        instrumentation.sendKeySync(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP, code, 0, meta))
+        compose.waitForIdle()
+    }
+
+    private fun attachHardwareKeyboard() {
+        compose.runOnUiThread { hardwareKeyboard.value = true }
+        compose.waitForIdle()
+    }
 
     private fun click(id: Int) {
         compose.onNodeWithText(label(id)).performClick()
@@ -111,6 +154,85 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun aDoubleEscStopsARunningSessionAndNeverLeavesTheChat() {
+        attachHardwareKeyboard()
+        openChat()
+        compose.runOnUiThread { repository.state.value = repository.state.value.copy(status = "running") }
+        compose.waitForIdle()
+        key(android.view.KeyEvent.KEYCODE_ESCAPE)
+        compose.onNodeWithTag("escapeStopHint").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, repository.aborts) }
+        key(android.view.KeyEvent.KEYCODE_ESCAPE)
+        compose.runOnIdle { assertEquals(1, repository.aborts) }
+        compose.onNodeWithTag("escapeStopHint").assertDoesNotExist()
+        // Esc never became Back: the chat is still open.
+        compose.onNodeWithTag("composerField").assertIsDisplayed()
+        compose.onNodeWithText("Message for live").assertIsDisplayed()
+    }
+
+    @Test
+    fun typingAfterCtrlDownLandsInTheNextSessionsComposer() {
+        attachHardwareKeyboard()
+        openChat()
+        key(android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON)
+        compose.runOnIdle { assertEquals("history", repository.activations.last().first.sessionId) }
+        key(android.view.KeyEvent.KEYCODE_H)
+        key(android.view.KeyEvent.KEYCODE_I)
+        compose.onNodeWithTag("composerField").assertIsFocused().assert(hasText("hi"))
+    }
+
+    private fun longChat() {
+        repository.messagesForSession = { id ->
+            (1..80).map { Wire.objectOf("id" to "message-$id-$it", "role" to "assistant", "text" to "Line $it of $id") }
+        }
+    }
+
+    private fun scrollToLatestShown() =
+        compose.onAllNodesWithContentDescription(label(R.string.remote_scroll_to_bottom)).fetchSemanticsNodes().isNotEmpty()
+
+    @Test
+    fun pageDownScrollsTheChatWhileTheComposerKeepsFocus() {
+        attachHardwareKeyboard()
+        longChat()
+        openChat()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        key(android.view.KeyEvent.KEYCODE_PAGE_UP)
+        key(android.view.KeyEvent.KEYCODE_PAGE_UP)
+        compose.onNodeWithText("Line 80 of live").assertIsNotDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertTrue(scrollToLatestShown())
+        repeat(3) { key(android.view.KeyEvent.KEYCODE_PAGE_DOWN) }
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertFalse(scrollToLatestShown())
+    }
+
+    @Test
+    fun ctrlEndGoesToTheLatestMessageAndFollowsAgain() {
+        attachHardwareKeyboard()
+        longChat()
+        openChat()
+        val ctrl = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+        key(android.view.KeyEvent.KEYCODE_MOVE_HOME, ctrl)
+        compose.onNodeWithText("Line 1 of live").assertIsDisplayed()
+        assertTrue(scrollToLatestShown())
+        key(android.view.KeyEvent.KEYCODE_MOVE_END, ctrl)
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        compose.onNodeWithTag("composerField").assertIsFocused()
+    }
+
+    @Test
+    fun aTypedSlashOpensTheSlashSuggestions() {
+        attachHardwareKeyboard()
+        openChat()
+        key(android.view.KeyEvent.KEYCODE_SLASH)
+        compose.onNodeWithTag("composerField").assert(hasText("/"))
+        compose.onNodeWithText("/new").assertIsDisplayed()
+    }
+
+    @Test
     fun encryptedDraftStoreRestoresOrderedFollowUps() {
         val store = isolatedDrafts(compose.activity)
         val key = DraftKey("host", "live")
@@ -123,6 +245,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun followUpWarningsCanBeDismissedButPendingCannot() {
         openChat()
         val pending = PendingFollowUp(Wire.random(), "still queued")
@@ -182,7 +305,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
-    fun runningChatSwipesBetweenSteerAndFollowUpWithoutStopping() {
+    fun runningChatChoosesTheSendModeWithoutStopping() {
         openChat()
         compose.runOnUiThread {
             repository.state.value = repository.state.value.copy(
@@ -192,8 +315,10 @@ class RemoteNavigationUiTest {
                 session = Wire.objectOf("id" to "live", "title" to "Live session", "origin" to "rpc"),
             )
         }
-        compose.onNodeWithTag("steer").assertIsDisplayed()
-        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
+        compose.onNodeWithTag("sendModeMenu").performClick()
+        compose.onNodeWithText(label(R.string.remote_send_now)).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_send_when_done)).assertIsDisplayed()
+        compose.onNodeWithTag("sendWhenDone").performClick()
         compose.onNodeWithTag("followUp").assertIsDisplayed().performClick()
         assertEquals(1, repository.followUps)
         assertEquals(0, repository.aborts)
@@ -256,6 +381,21 @@ class RemoteNavigationUiTest {
         compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
             .performScrollToIndex(3)
         compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+    }
+
+    private fun enterReadingPosition() {
+        compose.waitForIdle()
+        Thread.sleep(300) // Let the navigation transition and initial follow settle before dragging.
+        compose.onNodeWithTag("conversationList").performTouchInput {
+            swipe(
+                start = androidx.compose.ui.geometry.Offset(center.x, height / 4f),
+                end = androidx.compose.ui.geometry.Offset(center.x, height / 2f),
+                durationMillis = 500,
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertIsDisplayed()
+        showEarlyConversationMessages()
     }
 
     private fun assertMessageMovedUp(before: androidx.compose.ui.geometry.Rect) {
@@ -335,8 +475,9 @@ class RemoteNavigationUiTest {
 
     @Test
     @Suppress("DEPRECATION")
-    fun systemBarIconsFollowResolvedThemeAndManualOverrides() {
-        for (theme in listOf("light", "dark", "light", "system", "dark", "system")) {
+    @LargeScreen
+    fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
+        for (theme in listOf(ThemePalette.BRAND, ThemePalette.SYNTHWAVE, ThemePalette.BRAND)) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
             compose.waitForIdle()
             compose.runOnIdle {
@@ -344,12 +485,7 @@ class RemoteNavigationUiTest {
                     compose.activity.resources.configuration.uiMode and
                         android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
                         android.content.res.Configuration.UI_MODE_NIGHT_YES
-                val dark =
-                    when (theme) {
-                        "dark" -> true
-                        "light" -> false
-                        else -> systemDark
-                    }
+                val dark = systemDark
                 val controller =
                     androidx.core.view.WindowCompat.getInsetsController(
                         compose.activity.window,
@@ -384,6 +520,33 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun forcedModeDrivesSystemBarIcons() {
+        val systemDark =
+            compose.activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        try {
+            for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.SYSTEM)) {
+                compose.runOnIdle { uiSettings.setThemeMode(mode) }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val controller =
+                        androidx.core.view.WindowCompat.getInsetsController(
+                            compose.activity.window,
+                            compose.activity.window.decorView,
+                        )
+                    // Light icons on a dark app, whatever the device is set to.
+                    val dark = mode.isDark(systemDark)
+                    assertEquals("Status bar icons for $mode", !dark, controller.isAppearanceLightStatusBars)
+                    assertEquals("Navigation bar icons for $mode", !dark, controller.isAppearanceLightNavigationBars)
+                }
+            }
+        } finally {
+            compose.runOnIdle { uiSettings.setThemeMode(ThemeMode.SYSTEM) }
+        }
+    }
+
+    @Test
     fun chatHeaderUsesFloatingControlsAndAccessibleStatusDot() {
         openChat()
         val longTitle = "A very long session title that must fit beside all the header controls without wrapping"
@@ -401,15 +564,16 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText(longTitle).assertIsDisplayed()
         val dot = { compose.onNodeWithTag("chatStatusDot") }
         dot().assertIsDisplayed().assertContentDescriptionEquals(label(R.string.remote_status_idle))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.READY))
         compose.onNodeWithText(label(R.string.remote_status_idle)).assertDoesNotExist()
         val back = compose.onNodeWithContentDescription(label(R.string.remote_back))
         val rename = compose.onNodeWithContentDescription(label(R.string.remote_rename_session))
         val refresh = compose.onNodeWithContentDescription(label(R.string.remote_refresh))
-        val settings = compose.onNodeWithContentDescription(label(R.string.remote_settings))
-        for (action in listOf(back, rename, refresh, settings)) {
+        val more = compose.onNodeWithTag("chatActionsMore")
+        for (action in listOf(back, rename, refresh, more)) {
             action.assertIsDisplayed().assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
         }
-        val controls = listOf(back, rename, refresh, settings).map {
+        val controls = listOf(back, rename, refresh, more).map {
             it.fetchSemanticsNode().boundsInRoot
         }
         assertTrue(controls.zipWithNext().all { (left, right) -> left.right <= right.left })
@@ -419,16 +583,20 @@ class RemoteNavigationUiTest {
 
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_running))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.RUNNING))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "waiting") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_waiting))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.WAITING))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "unrecognized") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_unknown))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(connected = false) }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_offline))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.OFFLINE))
         rename.assertDoesNotExist()
         refresh.assertIsDisplayed()
-        settings.performClick()
-        compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+        // Offline leaves only Refresh and Settings, so Settings moves back into the pill.
+        compose.onNodeWithContentDescription(label(R.string.remote_settings)).performClick()
+        compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
     }
 
     @Test
@@ -458,8 +626,8 @@ class RemoteNavigationUiTest {
             val dot = compose.onNodeWithTag("chatStatusDot")
             val rename = compose.onNodeWithContentDescription(label(R.string.remote_rename_session))
             val refresh = compose.onNodeWithContentDescription(label(R.string.remote_refresh))
-            val settings = compose.onNodeWithContentDescription(label(R.string.remote_settings))
-            for (action in listOf(back, rename, refresh, settings)) {
+            val more = compose.onNodeWithTag("chatActionsMore")
+            for (action in listOf(back, rename, refresh, more)) {
                 action.assertIsDisplayed().assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
             }
             title.assertIsDisplayed()
@@ -469,20 +637,22 @@ class RemoteNavigationUiTest {
             val dotBounds = dot.fetchSemanticsNode().boundsInRoot
             val renameBounds = rename.fetchSemanticsNode().boundsInRoot
             val refreshBounds = refresh.fetchSemanticsNode().boundsInRoot
-            val settingsBounds = settings.fetchSemanticsNode().boundsInRoot
+            val moreBounds = more.fetchSemanticsNode().boundsInRoot
             assertTrue("Title has less than 48dp: $titleBounds", titleBounds.width >= 48 * metrics.density)
             assertTrue(backBounds.right <= dotBounds.left)
             assertTrue(dotBounds.right <= titleBounds.left)
-            assertTrue("Actions should sit below the title on a narrow screen", titleBounds.bottom <= settingsBounds.top)
+            assertTrue("Actions should sit below the title on a narrow screen", titleBounds.bottom <= moreBounds.top)
             assertTrue(refreshBounds.top >= backBounds.bottom)
             assertTrue(renameBounds.top >= backBounds.bottom)
             assertTrue(renameBounds.right <= refreshBounds.left)
-            assertTrue(refreshBounds.right <= settingsBounds.left)
+            assertTrue(refreshBounds.right <= moreBounds.left)
             dot.assertContentDescriptionEquals(label(R.string.remote_status_idle))
             rename.performClick()
             compose.onNodeWithText(label(R.string.remote_cancel)).performClick()
-            settings.performClick()
-            compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+            more.performClick()
+            compose.onNodeWithTag("chatActionMenu_new_session").assertIsDisplayed()
+            compose.onNodeWithTag("chatActionMenu_settings").performClick()
+            compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         } finally {
             device.executeShellCommand(if (overrideSize == null) "wm size reset" else "wm size $overrideSize")
             device.waitForIdle()
@@ -665,7 +835,8 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("│ A │").assertIsDisplayed()
         compose.onNodeWithText("After art").assertIsDisplayed()
         compose.onNodeWithText("Plain explanation").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_copy_code)).performClick()
+        // The code block copies through its icon button, named for TalkBack.
+        compose.onNodeWithContentDescription(label(R.string.remote_copy_code)).performClick()
         compose.onNodeWithText("Drawn choice").assertIsNotSelected()
         compose.onNodeWithText("Drawn choice").performClick().assertIsSelected()
     }
@@ -953,6 +1124,180 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun reconnectingAndUncertainNoticesStayAboveTheComposerWhileScrolledUp() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply {
+                messagesForSession = { longConversation() }
+            }
+        }
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    connected = false,
+                    stale = true,
+                    connection = R.string.remote_reconnecting,
+                    uncertain = true,
+                )
+        }
+        compose.waitForIdle()
+        // The chat stays where the reader left it; the notices sit right above the field.
+        compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+        val field = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot
+        for (text in listOf(label(R.string.remote_reconnecting), label(R.string.remote_draft_uncertain))) {
+            val notice =
+                compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag("floatingComposer")))
+                    .assertIsDisplayed()
+                    .fetchSemanticsNode()
+                    .boundsInRoot
+            assertTrue("'$text' ends at ${notice.bottom}, below the field at ${field.top}", notice.bottom <= field.top)
+        }
+    }
+
+    @Test
+    fun listPagesLeadWithTheKeyedConnectionChip() {
+        compose.onNodeWithText("Test computer").performClick()
+        compose.waitForIdle()
+        fun assertChipLeads() {
+            val indexForKey =
+                compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes()
+                    .map { it.config[SemanticsProperties.IndexForKey] }
+                    .single { it("page-title") >= 0 }
+            assertEquals(0, indexForKey(CONNECTION_STATUS_KEY))
+            assertEquals(1, indexForKey("page-title"))
+        }
+        assertChipLeads()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("connectionStatusChip") and hasText(label(R.string.remote_reconnecting)))
+            .assertIsDisplayed()
+        assertChipLeads()
+    }
+
+    @Test
+    fun returningToChatRestoresAnchorAfterHistoryIsPrepended() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply {
+                messagesForSession = { longConversation() }
+            }
+        }
+        // The activity is already created by the rule: apply the same fixture to its repository.
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        val before = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot.top
+        back()
+        compose.onNodeWithText("Historical session").performClick()
+        compose.waitForIdle()
+        assertLatestMessageIsAboveComposer() // Another session has its own follow/scroll state.
+        back()
+        back() // Return to projects so the previous chat entry is removed.
+        compose.onNodeWithText("Project one").performClick()
+        compose.runOnIdle {
+            repository.messagesForSession = {
+                (1..20).map { index -> Wire.objectOf("id" to "older-$index", "role" to "user", "text" to "Older $index") } + longConversation()
+            }
+        }
+        compose.onNodeWithText("Live session").performClick()
+        compose.waitForIdle()
+        val after = compose.onNodeWithText("Scroll message 06").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        assertEquals(before, after, 2 * compose.activity.resources.displayMetrics.density)
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertIsDisplayed()
+    }
+
+    @Test
+    fun activityRecreationKeepsReadingPositionAndDoesNotFollowNewMessages() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply { messagesForSession = { longConversation() } }
+        }
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        val before = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot.top
+        compose.activityRule.scenario.recreate()
+        compose.waitForIdle()
+        val restored = compose.onNodeWithText("Scroll message 06").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        assertEquals(before, restored, 2 * compose.activity.resources.displayMetrics.density)
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(
+                status = "running",
+                messages = repository.state.value.messages + Wire.objectOf(
+                    "id" to "new-stream", "role" to "assistant", "text" to "New streamed message", "state" to "streaming",
+                ),
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+        compose.onNodeWithText("New streamed message").assertDoesNotExist()
+    }
+
+    @Test
+    fun filteredRecreationDoesNotConsumeNormalReadingAnchor() {
+        val messages = longConversation().mapIndexed { index, message ->
+            JsonObject(message + ("state" to kotlinx.serialization.json.JsonPrimitive(
+                if (index % 10 == 9) "error" else "complete"
+            )))
+        }
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply { messagesForSession = { messages } }
+        }
+        compose.runOnIdle { repository.messagesForSession = { messages } }
+        openChat()
+        enterReadingPosition()
+        val before = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot.top
+        compose.onNodeWithTag("errorFilterChip").performClick()
+        compose.onNodeWithTag("insightErrorFilter").performClick()
+        compose.onNodeWithContentDescription(label(R.string.insight_sheet_close)).performClick()
+        compose.onNodeWithText("Scroll message 06").assertDoesNotExist()
+        compose.activityRule.scenario.recreate()
+        compose.waitForIdle()
+        compose.onNodeWithTag("errorFilterChip").assertIsSelected().performClick()
+        compose.onNodeWithTag("insightErrorFilter").performClick()
+        compose.onNodeWithContentDescription(label(R.string.insight_sheet_close)).performClick()
+        compose.waitForIdle()
+        val after = compose.onNodeWithText("Scroll message 06").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        assertEquals(before, after, 2 * compose.activity.resources.displayMetrics.density)
+    }
+
+    @Test
+    fun scrollToLatestWhileLoadingCancelsPendingReadingRestore() {
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        back()
+        compose.runOnIdle { repository.chatLoading = true }
+        compose.onNodeWithText("Live session").performClick()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).performClick()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(loading = false) }
+        compose.waitForIdle()
+        assertLatestMessageIsAboveComposer()
+        compose.onNodeWithText("Scroll message 06").assertDoesNotExist()
+    }
+
+    @Test
+    fun returningToFollowingChatShowsItsNewTail() {
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        compose.waitForIdle()
+        assertLatestMessageIsAboveComposer()
+        back()
+        compose.runOnIdle {
+            repository.messagesForSession = { longConversation() + Wire.objectOf(
+                "id" to "new-tail", "role" to "assistant", "text" to "New tail after navigation",
+            ) }
+        }
+        compose.onNodeWithText("Live session").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("New tail after navigation").assertIsDisplayed()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertDoesNotExist()
+    }
+
+    @Test
     fun longConversationFollowsViewportResizeUnlessScrolledUp() {
         openChat()
         compose.runOnIdle {
@@ -981,14 +1326,13 @@ class RemoteNavigationUiTest {
             assertLatestMessageIsAboveComposer()
 
             val message = compose.onNodeWithText("Scroll message 40").fetchSemanticsNode().boundsInRoot
-            val start = message.center
-            swipeUp(
-                start,
-                androidx.compose.ui.geometry.Offset(
-                    start.x,
-                    start.y + 200 * compose.activity.resources.displayMetrics.density,
-                ),
-            )
+            val viewport = compose.onNodeWithTag("conversationList").fetchSemanticsNode().boundsInRoot
+            val start = message.center - viewport.topLeft
+            val distance = 200 * compose.activity.resources.displayMetrics.density
+            compose.onNodeWithTag("conversationList").performTouchInput {
+                swipe(start, androidx.compose.ui.geometry.Offset(start.x, start.y + distance), durationMillis = 500)
+            }
+            compose.waitForIdle()
             compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom))
                 .assertIsDisplayed()
             compose.onNode(hasSetTextAction()).performTextInput("\nLine five\nLine six")
@@ -1060,9 +1404,9 @@ class RemoteNavigationUiTest {
                         }
                 )
         }
-        for (theme in listOf("light", "dark")) {
-            compose.runOnIdle { uiSettings.setTheme(theme) }
-            captureFixture("sessions-$theme")
+        for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
+            compose.runOnIdle { uiSettings.setThemeMode(mode) }
+            captureFixture("sessions-${mode.stored}")
         }
 
         compose
@@ -1072,7 +1416,7 @@ class RemoteNavigationUiTest {
             .performClick()
         compose.onNodeWithText("Message for created").assertIsDisplayed()
         compose.runOnIdle {
-            uiSettings.setThinkingDisplay("text")
+            uiSettings.setThinkingDisplay(ThinkingDisplay.TEXT)
             repository.state.value =
                 repository.state.value.copy(
                     capabilities =
@@ -1128,9 +1472,9 @@ class RemoteNavigationUiTest {
                             .map { it.jsonObject },
                 )
         }
-        for (theme in listOf("light", "dark")) {
-            compose.runOnIdle { uiSettings.setTheme(theme) }
-            captureFixture("chat-$theme")
+        for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
+            compose.runOnIdle { uiSettings.setThemeMode(mode) }
+            captureFixture("chat-${mode.stored}")
         }
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         val previousIme =
@@ -1340,9 +1684,9 @@ class RemoteNavigationUiTest {
                     super.getSharedPreferences(preferenceName, mode)
             }
         try {
-            assertFalse(DefaultSettingsRepository(context).state.value.hideOfflineSessions)
-            DefaultSettingsRepository(context).setHideOfflineSessions(true)
-            assertTrue(DefaultSettingsRepository(context).state.value.hideOfflineSessions)
+            assertFalse(DefaultSettingsRepository(context) {}.state.value.hideOfflineSessions)
+            DefaultSettingsRepository(context) {}.setHideOfflineSessions(true)
+            assertTrue(DefaultSettingsRepository(context) {}.state.value.hideOfflineSessions)
         } finally {
             context
                 .getSharedPreferences(preferenceName, android.content.Context.MODE_PRIVATE)
@@ -1353,8 +1697,11 @@ class RemoteNavigationUiTest {
     }
 
     @Test
-    fun settingsSwitchAndThemeCardsExposeOneSelectableTargetEach() {
+    fun settingsSwitchesExposeOneToggleTargetEach() {
         settings()
+        // Thinking display is in the Chat group, below General's notifications and appearance.
+        val list = compose.onNode(hasScrollToIndexAction())
+        list.performScrollToNode(hasTestTag("thinkingSwitch"))
         val thinking = { compose.onNodeWithTag("thinkingSwitch") }
         thinking().assert(hasClickAction()).assertIsOff()
             .assertTextContains(label(R.string.remote_design_show_thinking))
@@ -1365,30 +1712,31 @@ class RemoteNavigationUiTest {
         ).assertCountEquals(0)
         thinking().performClick()
         thinking().assertIsOn()
-        compose.runOnIdle { assertEquals("text", uiSettings.state.value.thinkingDisplay) }
+        compose.runOnIdle { assertEquals(ThinkingDisplay.TEXT, uiSettings.state.value.thinkingDisplay) }
         thinking().performClick()
         thinking().assertIsOff()
-        compose.runOnIdle { assertEquals("status", uiSettings.state.value.thinkingDisplay) }
+        compose.runOnIdle { assertEquals(ThinkingDisplay.STATUS, uiSettings.state.value.thinkingDisplay) }
 
-        val themes = listOf("themeSystem" to "system", "themeLight" to "light", "themeDark" to "dark")
-        compose.onNodeWithTag("themeSystem").assertIsSelected()
-        for ((tag, value) in themes.drop(1) + themes.first()) {
-            compose.onNodeWithTag(tag)
-                .assert(hasClickAction())
-                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
-                .performClick()
-            compose.waitForIdle()
-            for ((candidate, _) in themes) {
-                compose.onNodeWithTag(candidate).let {
-                    if (candidate == tag) it.assertIsSelected() else it.assertIsNotSelected()
-                }
-                compose.onAllNodes(
-                    hasClickAction() and hasAnyAncestor(hasTestTag(candidate)),
-                    useUnmergedTree = true,
-                ).assertCountEquals(0)
-            }
-            compose.runOnIdle { assertEquals(value, uiSettings.state.value.theme) }
+        // Mode and palette are two pickers: each shows one selection and changes only its own setting.
+        list.performScrollToNode(hasTestTag("themeMode-dark"))
+        compose.onNodeWithTag("themeMode-dark").performScrollTo().performClick().assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        compose.runOnIdle { assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode) }
+        compose.onNodeWithTag("themeMode-system").assertIsNotSelected()
+        compose.onNodeWithTag("themePalette-synthwave").performScrollTo().performClick().assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        compose.runOnIdle {
+            assertEquals(ThemePalette.SYNTHWAVE, uiSettings.state.value.theme)
+            assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode)
         }
+        compose.onNodeWithTag("themePalette-system").assertIsNotSelected()
+        // Scrolling up just far enough would leave the mode row at the list's top edge, under the
+        // floating header that takes the tap; the whole Appearance card comes back into view instead.
+        list.performScrollToKey("settings-appearance")
+        compose.onNodeWithTag("themeMode-system").assertIsDisplayed().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemeMode.SYSTEM, uiSettings.state.value.themeMode) }
+        compose.onNodeWithTag("themePalette-system").performScrollTo().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemePalette.BRAND, uiSettings.state.value.theme) }
     }
 
     @Test
@@ -1400,29 +1748,47 @@ class RemoteNavigationUiTest {
                     super.getSharedPreferences(preferenceName, mode)
             }
         val preferences = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        // Persistence only: the real night mode call would force the app dark for every later test.
+        val newSettings = { DefaultSettingsRepository(context) {} }
         try {
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "status").commit()
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "unknown").commit()
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit()
                 .putString("thinking_display", "text")
                 .putBoolean("hide_offline_sessions", true)
                 .commit()
-            for (theme in listOf("system", "light", "dark")) {
-                DefaultSettingsRepository(context).setTheme(theme)
-                assertEquals(theme, preferences.getString("theme", null))
-                val restored = DefaultSettingsRepository(context).state.value
-                assertEquals(theme, restored.theme)
-                assertEquals("text", restored.thinkingDisplay)
+            for (palette in ThemePalette.entries) {
+                newSettings().setTheme(palette)
+                assertEquals(palette.stored, preferences.getString("theme", null))
+                val restored = newSettings().state.value
+                assertEquals(palette, restored.theme)
+                assertEquals(ThinkingDisplay.TEXT, restored.thinkingDisplay)
                 assertTrue(restored.hideOfflineSessions)
             }
-            val repository = DefaultSettingsRepository(context)
-            repository.setThinkingDisplay("status")
-            val restored = DefaultSettingsRepository(context).state.value
-            assertEquals("status", restored.thinkingDisplay)
-            assertEquals("dark", restored.theme)
+            for (mode in ThemeMode.entries) {
+                newSettings().setThemeMode(mode)
+                assertEquals(mode.stored, preferences.getString("theme_mode", null))
+                assertEquals(mode, newSettings().state.value.themeMode)
+            }
+            // A forced mode that older builds stored as the palette moves to the mode, once.
+            for ((legacyTheme, mode) in mapOf("light" to ThemeMode.LIGHT, "dark" to ThemeMode.DARK)) {
+                preferences.edit().remove("theme_mode").putString("theme", legacyTheme).commit()
+                val migrated = newSettings().state.value
+                assertEquals(ThemePalette.BRAND, migrated.theme)
+                assertEquals(mode, migrated.themeMode)
+                assertEquals(mode.stored, preferences.getString("theme_mode", null))
+            }
+            val settings = newSettings()
+            settings.setTheme(ThemePalette.SYNTHWAVE)
+            settings.setThemeMode(ThemeMode.DARK)
+            settings.setThinkingDisplay(ThinkingDisplay.STATUS)
+            val restored = newSettings().state.value
+            assertEquals(ThinkingDisplay.STATUS, restored.thinkingDisplay)
+            assertEquals(ThemePalette.SYNTHWAVE, restored.theme)
+            assertEquals(ThemeMode.DARK, restored.themeMode)
             assertTrue(restored.hideOfflineSessions)
         } finally {
             preferences.edit().clear().commit()
@@ -1477,18 +1843,61 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun ticketAcceptFlow() {
+        repository.enableTickets()
+        compose.onNodeWithText("Test computer").performClick()
+        compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertIsDisplayed()
+        compose.onNodeWithText("Fix login redirect", substring = true).performClick()
+        // The detail page: Abnehmen opens the accept sheet, whose confirm queues the accept.
+        click(R.string.remote_ticket_accept)
+        compose.onNodeWithTag("ticketSheetConfirm").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("ticketUndoBar").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(label(R.string.remote_tickets_undo)).assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, repository.ticketMoves.size) }
+        // After the window the fake host has moved the ticket to Done and it left the section.
+        compose.waitUntil(10_000) { repository.ticketMoves.size == 1 }
+        compose.runOnIdle {
+            assertEquals("DEV-12", repository.ticketMoves.single().second)
+            assertNull(repository.state.value.tickets.pendingAccept)
+            assertTrue(acceptanceItems(repository.state.value.tickets).isEmpty())
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("ticketUndoBar").fetchSemanticsNodes().isEmpty()
+        }
+        back()
+        compose.onNodeWithText("Project one").assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertDoesNotExist()
+        compose.onNodeWithText("Fix login redirect", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun ticketsFromMacMenu() {
+        repository.enableTickets()
+        compose.onNodeWithText("Test computer").performClick()
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macTickets").performClick()
+        compose.onNodeWithTag("ticketsList").assertIsDisplayed()
+        compose.onNodeWithText("Fix login redirect", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun disconnectAsksForConfirmationFirst() {
         compose.onNodeWithText("Test computer").performClick()
         compose.onNodeWithText("Project one").assertIsDisplayed()
         val title = compose.activity.getString(R.string.remote_disconnect_title, "Test computer")
-        click(R.string.remote_disconnect)
+        // Disconnect lives in the Mac's overflow on its Projects page.
+        compose.onNodeWithTag("macOverflow").performClick()
+        click(R.string.remote_mac_disconnect)
         compose.onNodeWithText(title).assertIsDisplayed()
         compose.onNode(hasText(label(R.string.remote_cancel)) and hasAnyAncestor(isDialog()))
             .performClick()
         compose.onNodeWithText(title).assertDoesNotExist()
         compose.runOnIdle { assertNotNull(repository.state.value.host) }
 
-        click(R.string.remote_disconnect)
+        compose.onNodeWithTag("macOverflow").performClick()
+        click(R.string.remote_mac_disconnect)
         compose.onNodeWithTag("confirmDisconnect").performClick()
         compose.runOnIdle {
             assertEquals(1, repository.disconnects)
@@ -1520,7 +1929,7 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Message for live").assertIsDisplayed()
         val activations = repository.activations.size
         settings()
-        compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+        compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         back()
         assertEquals(activations, repository.activations.size)
         compose.onNodeWithText("Message for live").assertIsDisplayed()
@@ -1549,6 +1958,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun savedActivityStateAndFreshViewModelsRestoreIdsAndEncryptedDraftWithoutPromptReplay() {
         openChat()
         compose
@@ -1706,7 +2116,8 @@ class RemoteNavigationUiTest {
         }
         compose.waitForIdle()
         assertFalse(toolHeader("src/a.kt").isDisplayed())
-        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().performClick()
+        // The insight chips scroll sideways; others, such as a last-known subagent, can come first.
+        compose.onNodeWithTag("touchedFilesSummary").performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithTag("touchedFilesSheet").assertIsDisplayed()
         compose.mainClock.autoAdvance = false
         try {
@@ -1731,12 +2142,16 @@ class RemoteNavigationUiTest {
         scrollChatTo(toolHeaderMatcher("src/a.kt"))
         scrollChatTo(toolHeaderMatcher("./gradlew test"))
         compose.onNodeWithTag("errorFilterChip").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("insightErrorFilter").performClick()
+        compose.onNodeWithContentDescription(label(R.string.insight_sheet_close)).performClick()
         // Filtered, the list holds only the failed run, which fits: nothing else is composed.
         compose.onNodeWithText("Message for live").assertDoesNotExist()
         compose.onAllNodesWithTag("toolCard").assertCountEquals(1)
         toolHeader("./gradlew test").assertExists()
         toolHeader("src/a.kt").assertDoesNotExist()
         compose.onNodeWithTag("errorFilterChip").performClick()
+        compose.onNodeWithTag("insightErrorFilter").performClick()
+        compose.onNodeWithContentDescription(label(R.string.insight_sheet_close)).performClick()
         scrollChatTo(hasText("Message for live"))
         scrollChatTo(toolHeaderMatcher("src/a.kt"))
         scrollChatTo(toolHeaderMatcher("./gradlew test"))
@@ -1752,8 +2167,28 @@ class RemoteNavigationUiTest {
                     compaction = SessionCompaction("threshold", System.currentTimeMillis())
                 )
         }
+        // A compact chat (always, on a phone) keeps the banner out of the conversation: a one-line
+        // status chip says what runs, the header menu offers Status while it shows, and the banner
+        // is in the sheet that opens.
+        compose.onNodeWithTag("compactionBanner").assertDoesNotExist()
+        // The chip merges its label into itself, as a button does.
+        compose.onNode(hasTestTag("chatStatusChip") and hasText(label(R.string.remote_panel_compacting)))
+            .assertIsDisplayed()
+        // The chip shows the TUI's snake, not a Material spinner.
+        compose.onNode(hasTestTag("compactionGlyph") and hasAnyAncestor(hasTestTag("chatStatusChip")), useUnmergedTree = true)
+            .assertExists()
+        compose.onAllNodes(
+            SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo) and
+                hasAnyAncestor(hasTestTag("chatStatusChip")),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNodeWithTag("chatActionMenu_status").performClick()
         compose.onNodeWithTag("compactionBanner").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_panel_compacting)).assertIsDisplayed()
+        compose.onNode(hasText(label(R.string.remote_panel_compacting)) and hasAnyAncestor(hasTestTag("compactionBanner")))
+            .assertIsDisplayed()
+        compose.onNode(hasTestTag("compactionGlyph") and hasAnyAncestor(hasTestTag("compactionBanner")), useUnmergedTree = true)
+            .assertExists()
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(compaction = null)
         }
@@ -1819,6 +2254,10 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
     val sessionAborts = mutableListOf<String>()
     val toolOutputLoads = mutableListOf<String>()
     var restoreGate: CompletableDeferred<Unit>? = null
+    var chatLoading = false
+    var messagesForSession: (String) -> List<JsonObject> = { id ->
+        listOf(Wire.objectOf("id" to "message-$id", "role" to "assistant", "text" to "Message for $id"))
+    }
     private var epoch = 0
 
     private fun update(selection: RemoteSelection) {
@@ -1827,9 +2266,12 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
             RemoteState(
                 hosts = listOf(host),
                 host = if (selection.routeId != null) host else null,
+                loading = chatLoading && selection.sessionId != null,
                 selection = selection,
                 connected = selection.routeId != null,
                 connection = R.string.remote_connected,
+                // The fake answers sessions.list on the connection it reports, so its rows are current.
+                sessionsFresh = selection.routeId != null,
                 projects = listOf(project),
                 project = if (selection.projectId != null) project else null,
                 sessions =
@@ -1865,19 +2307,112 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
                 messages =
                     selection.sessionId
                         ?.let {
-                            listOf(
-                                Wire.objectOf(
-                                    "id" to "message-$it",
-                                    "role" to "assistant",
-                                    "text" to "Message for $it",
-                                )
-                            ) + if (insights) insightMessages() else emptyList()
+                            messagesForSession(it) + if (insights) insightMessages() else emptyList()
                         }
                         .orEmpty(),
                 draft = stored?.text.orEmpty(),
                 uncertain = stored?.mutationId != null,
                 status = "idle",
+                capabilities = ticketCapabilities,
+                tickets = tickets,
             )
+    }
+
+    /** Ticket capability and state the fake host advertises; see [enableTickets]. */
+    private var ticketCapabilities = emptySet<String>()
+    private var tickets = TicketsState()
+    // The UI calls the ticket methods on the main thread, and the delayed accept applies there too,
+    // so [tickets] and [state] change on one thread only.
+    private val ticketScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var acceptJob: Job? = null
+
+    /** How long an accept waits before the fake host applies it; the real window is 5 s. */
+    var acceptWindowMillis = 1_500L
+
+    /** The accepts the fake host applied; the test thread reads it while the main thread appends. */
+    val ticketMoves: MutableList<Triple<String, String, String>> =
+        java.util.Collections.synchronizedList(mutableListOf())
+
+    /** Makes the host advertise `tickets.v1` with one ticket awaiting acceptance. */
+    fun enableTickets() {
+        val ticket =
+            Ticket(
+                ref = "DEV-12",
+                title = "Fix login redirect",
+                url = "https://plane.invalid/dev/12",
+                state = "Review",
+                stateGroup = TicketStateGroup.STARTED,
+                type = "feature",
+                priority = TicketPriority.HIGH,
+                assignedToMe = true,
+                section = TicketSection.ACCEPTANCE,
+                prOpen = false,
+                actions = setOf(TicketAction.ACCEPT, TicketAction.COMMENT, TicketAction.MOVE),
+                moveTargets = listOf("Done", "Cancelled"),
+                updatedAt = 1_700_000_000_000L,
+                sessions = emptyList(),
+            )
+        val projectTickets = TicketProject("project", "Project one", listOf("DEV"), true, null, true, null)
+        ticketCapabilities = setOf(TICKETS_CAPABILITY)
+        tickets =
+            TicketsState(
+                routeId = "host",
+                projects = listOf(projectTickets),
+                pages =
+                    mapOf(
+                        "project" to
+                            TicketsPage("project", true, null, System.currentTimeMillis(), listOf(ticket), null)
+                    ),
+            )
+        state.value = state.value.copy(capabilities = ticketCapabilities, tickets = tickets)
+    }
+
+    private fun ticketsChanged(change: (TicketsState) -> TicketsState) {
+        tickets = change(tickets)
+        state.value = state.value.copy(tickets = tickets)
+    }
+
+    override fun refreshTickets(force: Boolean) {}
+
+    override fun openTicket(projectId: String, ref: String) {
+        val ticket = tickets.pages[projectId]?.items?.firstOrNull { it.ref == ref } ?: return
+        ticketsChanged {
+            it.copy(
+                detail = TicketDetail(ticket, description = "Redirects loop after login."),
+                detailRef = ref,
+                detailFailure = null,
+            )
+        }
+    }
+
+    override fun queueAccept(projectId: String, ref: String, comment: String) {
+        if (tickets.pendingAccept != null) return
+        val deadline = System.currentTimeMillis() + acceptWindowMillis
+        ticketsChanged { it.copy(pendingAccept = PendingAccept(projectId, ref, comment, deadline)) }
+        acceptJob =
+            ticketScope.launch {
+                delay(acceptWindowMillis)
+                ticketMoves += Triple(projectId, ref, comment)
+                ticketsChanged { current ->
+                    current.copy(
+                        pendingAccept = null,
+                        pages =
+                            current.pages.mapValues { (id, page) ->
+                                if (id == projectId) page.copy(items = page.items.filterNot { it.ref == ref })
+                                else page
+                            },
+                    )
+                }
+            }
+    }
+
+    override fun undoAccept() {
+        acceptJob?.cancel()
+        ticketsChanged { it.copy(pendingAccept = null) }
+    }
+
+    override fun dismissTicketNotice() {
+        ticketsChanged { it.copy(writeFailure = null, outcomeUnknown = false, writeRef = null) }
     }
 
     override suspend fun activate(
@@ -2006,18 +2541,22 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
     override fun setPushToken(token: String?) {}
 }
 
-private class UiSettingsRepository : SettingsRepository {
+internal class UiSettingsRepository : SettingsRepository {
     override val state = MutableStateFlow(RemoteSettings())
 
-    override fun setTheme(theme: String) {
+    override fun setTheme(theme: ThemePalette) {
         state.value = state.value.copy(theme = theme)
+    }
+
+    override fun setThemeMode(mode: ThemeMode) {
+        state.value = state.value.copy(themeMode = mode)
     }
 
     override fun setPushEnabled(enabled: Boolean) {
         state.value = state.value.copy(pushEnabled = enabled)
     }
 
-    override fun setThinkingDisplay(display: String) {
+    override fun setThinkingDisplay(display: ThinkingDisplay) {
         state.value = state.value.copy(thinkingDisplay = display)
     }
 

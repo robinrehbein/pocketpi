@@ -1,0 +1,107 @@
+package de.joinnoah.pi.remote
+
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class NotificationPermissionPromptTest {
+    private fun offer(settings: SettingsRepository, sdk: Int = 34, granted: Boolean = false) =
+        offerNotificationPermission(sdk, granted, pushConfigured = true, settings)
+
+    @Test
+    fun theFirstPairingOffersThePermissionOnce() {
+        val settings = FakeSettingsRepository()
+        assertEquals(PairingNotificationStep.ASK, offer(settings))
+        assertTrue(settings.state.value.notificationPromptShown)
+        assertEquals("A second pairing doesn't ask again", PairingNotificationStep.NOTHING, offer(settings))
+    }
+
+    @Test
+    fun aDenialNeverPromptsAgain() {
+        val settings = FakeSettingsRepository()
+        assertEquals(PairingNotificationStep.ASK, offer(settings))
+        // The user denied: push stays off, the permission stays missing.
+        assertFalse(settings.state.value.pushEnabled)
+        repeat(3) { assertEquals(PairingNotificationStep.NOTHING, offer(settings)) }
+    }
+
+    @Test
+    fun belowAndroid13PushIsSwitchedOnDirectlyOnce() {
+        val settings = FakeSettingsRepository()
+        assertEquals(PairingNotificationStep.ENABLE, offer(settings, sdk = 31))
+        assertTrue(settings.state.value.notificationPromptShown)
+        assertEquals(PairingNotificationStep.NOTHING, offer(settings, sdk = 31))
+    }
+
+    @Test
+    fun nothingHappensOnceGrantedWithoutPushOrAfterSwitchingOff() {
+        assertEquals(PairingNotificationStep.NOTHING, offer(FakeSettingsRepository(), granted = true))
+        assertEquals(
+            PairingNotificationStep.NOTHING,
+            offerNotificationPermission(34, false, pushConfigured = false, FakeSettingsRepository()),
+        )
+        val enabled = FakeSettingsRepository().apply { setPushEnabled(true) }
+        assertEquals(PairingNotificationStep.NOTHING, offer(enabled))
+        assertFalse("Nothing was recorded for a prompt that never showed", enabled.state.value.notificationPromptShown)
+        val optedOut = FakeSettingsRepository().apply { setPushEnabled(true); setPushEnabled(false) }
+        assertEquals(PairingNotificationStep.NOTHING, offer(optedOut))
+        assertEquals(PairingNotificationStep.NOTHING, offer(optedOut, sdk = 31))
+    }
+
+    @Test
+    fun theNavigatorReportsOnlyASuccessfulPairing() = runTest {
+        val repository = NavigationFakeRepository()
+        var paired = 0
+        val navigation =
+            RemoteNavigator(repository, mutableListOf(RemoteNavKey.Hosts), backgroundScope) { paired++ }
+
+        navigation.pair("bad")
+        runCurrent()
+        assertEquals(0, paired)
+
+        repository.pairResult = RemoteSelection("host")
+        navigation.pair("good")
+        runCurrent()
+        assertEquals(1, paired)
+    }
+
+    @Test
+    fun theCardShowsOnlyWhileTheUserNeverDecidedAndDidNotSayNotNow() {
+        assertTrue(showsNotificationCard(pushConfigured = true, pushEnabled = false, decided = false, dismissed = false))
+        assertFalse("Not now hides it on this Mac", showsNotificationCard(true, false, false, dismissed = true))
+        assertFalse("A decision hides it", showsNotificationCard(true, false, decided = true, dismissed = false))
+        assertFalse("Push on needs no card", showsNotificationCard(true, pushEnabled = true, false, false))
+        assertFalse("A build without push shows none", showsNotificationCard(false, false, false, false))
+    }
+
+    @Test
+    fun theDecisionsAreTheOnesTheSettingsRecord() {
+        assertFalse(RemoteSettings().notificationsDecided)
+        assertTrue(RemoteSettings(pushEnabled = true).notificationsDecided)
+        assertTrue("Switching push off is an answer", RemoteSettings(pushOptedOut = true).notificationsDecided)
+        assertTrue("A denial after the offer is an answer", RemoteSettings(notificationPromptShown = true).notificationsDecided)
+    }
+
+    @Test
+    fun aRecordedPromptCountsAsAnAnswerAndHidesTheCard() {
+        val settings = FakeSettingsRepository()
+
+        // What the card records when its own permission request is denied, as the pairing's does.
+        // The launcher that calls it is not exercised here.
+        settings.markNotificationPromptShown()
+
+        assertTrue(settings.state.value.notificationsDecided)
+        assertFalse(showsNotificationCard(true, false, settings.state.value.notificationsDecided, dismissed = false))
+    }
+
+    @Test
+    fun switchingPushOffInTheAppHidesTheCardForGood() {
+        val settings = FakeSettingsRepository().apply { setPushEnabled(true); setPushEnabled(false) }
+
+        assertTrue(settings.state.value.pushOptedOut)
+        assertFalse(showsNotificationCard(true, settings.state.value.pushEnabled, settings.state.value.notificationsDecided, false))
+    }
+}

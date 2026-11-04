@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import java.util.IdentityHashMap
 import kotlinx.serialization.json.*
 
 internal sealed interface ConversationItem {
@@ -18,6 +19,12 @@ internal sealed interface ConversationItem {
         val attachments: List<RemoteAttachment> = emptyList(),
         val error: Boolean = false,
         val usage: MessageUsage? = null,
+        /** True while the host is still producing this message; its text is not complete yet. */
+        val streaming: Boolean = false,
+        /** Set only on the pending prompt at the chat's tail; its label shows below the bubble. */
+        val pendingState: PendingSendState? = null,
+        /** A terminal interruption, without implying who initiated it. */
+        val interrupted: Boolean = false,
     ) : ConversationItem
 
     data class Thinking(
@@ -35,7 +42,7 @@ internal sealed interface ConversationItem {
         val output: String?,
         val state: String,
         val truncated: Boolean,
-        val summary: ToolSummary = toolSummary(name, arguments),
+        val summary: ToolSummary = toolSummary(name, arguments, output),
         val toolCallId: String? = null,
         val outputMessageId: String? = null,
         val argumentsTruncated: Boolean = false,
@@ -204,26 +211,59 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
     )
 }
 
+/** The tool name of a shell command the user ran with `!` in pi or from the phone. */
+internal const val USER_BASH_TOOL = "user_bash"
+
 /** A readable header for a tool card; a null [labelRes] means "show the raw tool name". */
 internal data class ToolSummary(val labelRes: Int?, val detail: String?)
 
-internal fun toolSummary(name: String?, arguments: String?): ToolSummary {
+/**
+ * The card header of tool [name]. A shell command typed by the user (`user_bash`) has no arguments:
+ * its [output] starts with `$ `, the command and a newline, so the command comes from there.
+ */
+internal fun toolSummary(name: String?, arguments: String?, output: String? = null): ToolSummary {
+    if (name == USER_BASH_TOOL)
+        return ToolSummary(
+            R.string.remote_shell_command,
+            output?.takeIf { it.startsWith("$ ") }?.substring(2)?.lineSequence()?.first()?.trim()?.takeIf(String::isNotEmpty),
+        )
+    val args = arguments?.let(::parsedToolArguments)
     val label =
         when (name) {
             "read" -> R.string.remote_tool_read
             "edit" -> R.string.remote_tool_edit
             "write" -> R.string.remote_tool_write
-            "bash" -> R.string.remote_tool_bash
+            "bash" ->
+                if (runsInBackground(args)) R.string.remote_tool_bash_background
+                else R.string.remote_tool_bash
+            // Older sessions start background jobs with `bash_bg`, which also takes `command`.
+            "bash_bg" -> R.string.remote_tool_bash_background
+            // The advisor tool; sessions saved before its rename hold calls as `consult_advisor`.
+            "advisor", "consult_advisor" -> R.string.remote_tool_advisor
+            "grep" -> R.string.remote_tool_search
+            "find" -> R.string.remote_tool_find
+            "ls" -> R.string.remote_tool_list
+            "web_search" -> R.string.remote_tool_web_search
+            "web_fetch", "fetch" -> R.string.remote_tool_web_fetch
             else -> return ToolSummary(null, null)
         }
-    val args = arguments?.let(::parsedToolArguments)
     fun field(key: String): String? =
         (args?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
     val detail =
-        if (name == "bash") field("command")?.trim()?.lineSequence()?.first()?.trim()
-        else field("path") ?: field("file_path")
+        when (name) {
+            "bash", "bash_bg" -> field("command")
+            "advisor", "consult_advisor" -> field("question")
+            "grep", "find" -> field("pattern")
+            "web_search" -> field("query")
+            "web_fetch", "fetch" -> field("url")
+            else -> field("path") ?: field("file_path")
+        }?.trim()?.lineSequence()?.first()?.trim()
     return ToolSummary(label, detail?.takeIf(String::isNotEmpty))
 }
+
+/** Whether a `bash` call's arguments carry the JSON boolean `run_in_background: true`. */
+internal fun runsInBackground(args: JsonObject?): Boolean =
+    (args?.get("run_in_background") as? JsonPrimitive)?.let { !it.isString && it.booleanOrNull == true } == true
 
 private val toolArgumentsCache =
     object : LinkedHashMap<String, JsonObject?>(64, 0.75f, true) {
@@ -245,12 +285,12 @@ internal fun parsedToolArguments(arguments: String): JsonObject? =
 /** False for items that render nothing, so the list does not reserve a slot for them. */
 internal fun conversationItemVisible(
     item: ConversationItem,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
 ): Boolean =
     when (item) {
         is ConversationItem.Thinking ->
-            (thinkingDisplay == "text" && item.text.isNotEmpty()) ||
+            (thinkingDisplay == ThinkingDisplay.TEXT && item.text.isNotEmpty()) ||
                 (item.streaming && thinkingActive)
         else -> true
     }
@@ -290,194 +330,483 @@ internal fun quoteFromMessage(message: JsonObject): MessageQuote? {
         .takeIf { QuoteCodec.parse(it.json()) != null }
 }
 
+/**
+ * The text of a user message as its bubbles show it: the body after the quote and attachment
+ * envelopes, one line per text part. [PendingSend] matches the host's copy of a prompt by it.
+ */
+internal fun userMessageBody(message: JsonObject): String {
+    fun body(encoded: String) = QuoteCodec.decode(AttachmentCodec.decode(encoded).body).body
+    val parts = message.parts().filter { it.optionalText("type") == "text" }
+    return if (message.parts().isEmpty()) body(message.text("text"))
+    else parts.joinToString("\n") { body(it.text("text")) }
+}
+
+/**
+ * The chat's tail bubble for a plain prompt that the timeline does not show yet. Attachment names
+ * stand in for the text of an attachments-only prompt, so the bubble is never empty.
+ */
+internal fun pendingSendItem(pending: PendingSend): ConversationItem.Bubble {
+    val id = "pending-${pending.mutationId}"
+    return ConversationItem.Bubble(
+        id = id,
+        sourceId = id,
+        role = "user",
+        author = null,
+        text = pending.text.ifEmpty { pending.attachments.joinToString("\n") { it.name } },
+        quote = pending.quote,
+        truncated = false,
+        timestamp = null,
+        pendingState = pending.state,
+    )
+}
+
+/** What the items of one message read from the message itself to pair it with the others. */
+private class MessageLinks(val message: JsonObject) {
+    val id = message.text("id")
+    val role = message.text("role")
+
+    /** The call a tool output answers; null for other messages. */
+    val toolCallId = if (role == "tool") message.optionalText("toolCallId") else null
+
+    /** The IDs of the message's tool calls, in part order. */
+    val callIds =
+        message.parts().filter { it.optionalText("type") == "toolCall" }.map { it.text("id") }
+
+    val thinks = message.parts().any { it.optionalText("type") == "thinking" }
+}
+
+/**
+ * What the items of one message read from the rest of the conversation. Only what the message
+ * can use is set, so a delta elsewhere leaves it equal and the message's items are kept.
+ */
+private class MessageContext(
+    /** The conversation's last message, whose streaming thinking part shows as active. */
+    val last: Boolean,
+    /** The assistant message the running session is still answering: calls without output stream. */
+    val pending: Boolean,
+    /** A tool output that one of the conversation's calls shows, so it adds no item of its own. */
+    val paired: Boolean,
+    /** The outputs of the message's calls, in the order of [MessageLinks.callIds]. */
+    val outputs: List<JsonObject?>,
+) {
+    // Outputs compare by identity: Timeline keeps an unchanged message's instance.
+    fun sameAs(other: MessageContext): Boolean =
+        last == other.last &&
+            pending == other.pending &&
+            paired == other.paired &&
+            outputs.size == other.outputs.size &&
+            outputs.indices.all { outputs[it] === other.outputs[it] }
+}
+
+/** The pairing across a whole conversation: its calls, their outputs and the pending reply. */
+private class ConversationLinks(private val links: List<MessageLinks>, sessionActive: Boolean) {
+    private val pendingAssistant: String? =
+        run {
+            val lastUser = links.indexOfLast { it.role == "user" }
+            val lastAssistant = links.indexOfLast { it.role == "assistant" }
+            if (sessionActive && lastAssistant > lastUser) links[lastAssistant].id else null
+        }
+    private val calls = links.flatMapTo(HashSet()) { it.callIds }
+    private val outputs = HashMap<String, JsonObject>().apply {
+        for (link in links) link.toolCallId?.let { put(it, link.message) }
+    }
+
+    fun context(index: Int): MessageContext {
+        val link = links[index]
+        return MessageContext(
+            last = link.thinks && index == links.lastIndex,
+            pending = link.callIds.isNotEmpty() && link.id == pendingAssistant,
+            paired = link.toolCallId in calls,
+            outputs = link.callIds.map { outputs[it] },
+        )
+    }
+}
+
 internal fun conversationItems(
     messages: List<JsonObject>,
     sessionActive: Boolean = false,
-): List<ConversationItem> {
-    val lastUser = messages.indexOfLast { it.text("role") == "user" }
-    val lastAssistant = messages.indexOfLast { it.text("role") == "assistant" }
-    val pendingAssistant =
-        if (sessionActive && lastAssistant > lastUser) messages.getOrNull(lastAssistant)?.text("id")
-        else null
-    val calls =
-        messages
-            .flatMap { it.parts() }
-            .filter { it.optionalText("type") == "toolCall" }
-            .map { it.text("id") }
-            .toSet()
-    val outputs =
-        messages
-            .filter { it.text("role") == "tool" && it.optionalText("toolCallId") != null }
-            .associateBy { it.text("toolCallId") }
-    return buildList {
-        for ((messageIndex, message) in messages.withIndex()) {
-            val id = message.text("id")
-            val role = message.text("role")
-            val truncated = message["truncated"]?.jsonPrimitive?.booleanOrNull == true
-            val timestamp = message.messageTimestamp()
-            if (role == "tool") {
-                if (message.optionalText("toolCallId") in calls) continue
-                if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
-                    val progress = subagentProgress(message)
-                    if (progress.agents.isNotEmpty()) {
-                        add(progress)
-                        continue
-                    }
-                }
-                add(
-                    ConversationItem.Activity(
-                        id,
-                        id,
-                        messageAuthor(message),
-                        null,
-                        message.text("text"),
-                        message.optionalText("state") ?: "complete",
-                        truncated,
-                        toolCallId = message.safeText("toolCallId"),
-                        outputMessageId = id,
-                        details = if (messageAuthor(message) == "edit") toolDetails(message) else null,
-                    )
-                )
-                continue
+): List<ConversationItem> = Diagnostics.trace("PocketPi.conversationItems") {
+    val links = messages.map(::MessageLinks)
+    val conversation = ConversationLinks(links, sessionActive)
+    links.flatMapIndexed { index, link -> messageItems(link, conversation.context(index)) }
+}
+
+/**
+ * A chat's [conversationItems] with what the chat screen derives from them. [ConversationPresenter]
+ * builds it; a derived list or set stays the previous instance while its value is the same.
+ */
+internal class ConversationPresentation(
+    val items: List<ConversationItem>,
+    val touchedFiles: TouchedFiles,
+    val errorCount: Int,
+    /** [forkableBubbleIds] of [items]. */
+    val forkableBubbleIds: Set<String>,
+    /** The subagent cards of [items], in order. */
+    val subagents: List<ConversationItem.Subagent>,
+)
+
+/** One message's items and what the derived values need from them, computed once per message. */
+private class Segment(val links: MessageLinks, val context: MessageContext, val items: List<ConversationItem>) {
+    val errors = items.count(::isErrorItem)
+
+    /** The bubble that offers the rewind control for this message, when it is the user's. */
+    val forkable = items.firstOrNull { it is ConversationItem.Bubble && it.role == "user" } as ConversationItem.Bubble?
+
+    /** File touches with their index in [items]. */
+    val touches = items.withIndex().mapNotNull { (index, item) -> fileTouch(item)?.let { index to it } }
+
+    val subagents = items.filterIsInstance<ConversationItem.Subagent>()
+}
+
+/**
+ * Builds one chat's [ConversationPresentation] incrementally. Each message's items are kept while
+ * the message is the same instance (Timeline replaces only the message an upsert names) and what
+ * it reads from the others is unchanged, so a streamed delta rebuilds the items of the message it
+ * touched. The derived values reuse each message's share of them. Not thread-safe: the chat
+ * screen calls it from composition.
+ */
+internal class ConversationPresenter {
+    private var segments = IdentityHashMap<JsonObject, Segment>()
+    private var order = emptyList<Segment>()
+    private var presentation: ConversationPresentation? = null
+
+    /** Messages whose items were built rather than kept, since this presenter was made. */
+    var built = 0
+        private set
+
+    fun present(messages: List<JsonObject>, sessionActive: Boolean): ConversationPresentation =
+        Diagnostics.trace("PocketPi.conversationItems") {
+            val previous = segments
+            val links = messages.map { previous[it]?.links ?: MessageLinks(it) }
+            val conversation = ConversationLinks(links, sessionActive)
+            val next = IdentityHashMap<JsonObject, Segment>(messages.size)
+            val shown = links.mapIndexed { index, link ->
+                val context = conversation.context(index)
+                val segment =
+                    previous[link.message]?.takeIf { it.context.sameAs(context) }
+                        ?: Segment(link, context, messageItems(link, context)).also { built++ }
+                next[link.message] = segment
+                segment
             }
-            // Every bubble split off this message carries the same usage; only the last one keeps
-            // it so a multi-part reply does not repeat the token count on each of its bubbles.
-            val bubbleStart = size
-            val attached = AttachmentCodec.decode(message.text("text"))
-            val attachments =
-                (message["attachments"] as? JsonArray)?.mapNotNull {
-                    runCatching { remoteAttachment(it.jsonObject) }.getOrNull()
-                } ?: attached.attachments
-            val decoded = QuoteCodec.decode(attached.body)
-            val quote = (message["quote"] as? JsonObject)?.let(QuoteCodec::parse) ?: decoded.quote
-            val parts = message.parts()
-            val error = message.safeText("state") == "error"
-            val usage = messageUsage(message)
-            if (parts.isEmpty()) {
-                if (decoded.body.isNotEmpty() || quote != null || attachments.isNotEmpty()) {
+            segments = next
+            val last = presentation
+            if (last != null && shown.size == order.size && shown.indices.all { shown[it] === order[it] })
+                return@trace last
+            order = shown
+            derive(shown, last).also { presentation = it }
+        }
+
+    private fun derive(shown: List<Segment>, last: ConversationPresentation?): ConversationPresentation {
+        val items = ArrayList<ConversationItem>(shown.sumOf { it.items.size })
+        shown.forEach { items.addAll(it.items) }
+        val touched = groupTouchedFiles { visit ->
+            var offset = 0
+            for (segment in shown) {
+                for ((index, touch) in segment.touches) visit(offset + index, touch)
+                offset += segment.items.size
+            }
+        }
+        // A message split into several bubbles offers the rewind control once.
+        val forkable =
+            shown.mapNotNull { it.forkable }.distinctBy { it.sourceId }.mapTo(HashSet()) { it.id }
+        val subagents = shown.flatMap { it.subagents }
+        return ConversationPresentation(
+            items,
+            kept(touched, last?.touchedFiles) { a, b -> a == b },
+            shown.sumOf { it.errors },
+            kept(forkable, last?.forkableBubbleIds) { a, b -> a == b },
+            kept(subagents, last?.subagents, ::sameItems),
+        )
+    }
+
+    private var stripSubagents: List<ConversationItem.Subagent>? = null
+    private var stripChildren: List<SessionListItem>? = null
+    private var stripParent: String? = null
+    private var strip: SubagentStrip? = null
+
+    /** [subagentStrip] of [presentation], recomputed only when its subagents or [children] change. */
+    fun subagentStrip(
+        presentation: ConversationPresentation,
+        children: List<SessionListItem>,
+        parentSessionId: String,
+    ): SubagentStrip {
+        val kept = strip
+        if (kept != null && stripSubagents === presentation.subagents && stripChildren == children &&
+            stripParent == parentSessionId) return kept
+        return de.joinnoah.pi.remote.subagentStrip(presentation.subagents, children, parentSessionId).also {
+            strip = it
+            stripSubagents = presentation.subagents
+            stripChildren = children
+            stripParent = parentSessionId
+        }
+    }
+
+    private var markerItems = emptyList<ConversationItem>()
+    private var markers = emptyList<TimelineMarker>()
+
+    /**
+     * [timelineMarkers] of [items]. The markers of the leading items that are the same instances as
+     * last time are kept; only those from the first changed item on are classified again.
+     */
+    fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> {
+        val before = markerItems
+        var common = 0
+        val limit = minOf(before.size, items.size)
+        while (common < limit && before[common] === items[common]) common++
+        if (common == items.size && common == before.size) return markers
+        val keep = markers.binarySearchBy(common) { it.index }.let { if (it < 0) -it - 1 else it }
+        val result = ArrayList<TimelineMarker>(keep + 8)
+        result.addAll(markers.subList(0, keep))
+        for (index in common until items.size) {
+            val item = items[index]
+            timelineMarkerKind(item)?.let { result.add(TimelineMarker(item.id, it, index)) }
+        }
+        markerItems = items
+        markers = result
+        return result
+    }
+}
+
+private fun <T> sameItems(a: List<T>, b: List<T>): Boolean = a.size == b.size && a.indices.all { a[it] === b[it] }
+
+/** [previous] when it is the [same] as [value], so whoever holds it sees no change. */
+private inline fun <T : Any> kept(value: T, previous: T?, same: (T, T) -> Boolean): T =
+    if (previous != null && same(value, previous)) previous else value
+
+/** The items of one message; every input besides the message itself comes in [context]. */
+private fun messageItems(links: MessageLinks, context: MessageContext): List<ConversationItem> = buildList {
+    val message = links.message
+    val outputs = links.callIds.zip(context.outputs).toMap()
+    val id = links.id
+    val role = links.role
+    val truncated = message["truncated"]?.jsonPrimitive?.booleanOrNull == true
+    val timestamp = message.messageTimestamp()
+    if (role == "tool") {
+        if (context.paired) return@buildList
+        if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
+            val progress = subagentProgress(message)
+            if (progress.agents.isNotEmpty()) {
+                add(progress)
+                return@buildList
+            }
+        }
+        add(
+            ConversationItem.Activity(
+                id,
+                id,
+                messageAuthor(message),
+                null,
+                message.text("text"),
+                message.optionalText("state") ?: "complete",
+                truncated,
+                toolCallId = message.safeText("toolCallId"),
+                outputMessageId = id,
+                details = if (messageAuthor(message) == "edit") toolDetails(message) else null,
+            )
+        )
+        return@buildList
+    }
+    // Every bubble split off this message carries the same usage; only the last one keeps
+    // it so a multi-part reply does not repeat the token count on each of its bubbles.
+    val attached = AttachmentCodec.decode(message.text("text"))
+    val attachments =
+        (message["attachments"] as? JsonArray)?.mapNotNull {
+            runCatching { remoteAttachment(it.jsonObject) }.getOrNull()
+        } ?: attached.attachments
+    val decoded = QuoteCodec.decode(attached.body)
+    val quote = (message["quote"] as? JsonObject)?.let(QuoteCodec::parse) ?: decoded.quote
+    val parts = message.parts()
+    val interrupted = role == "assistant" && message.safeText("state") == "error" &&
+        message.optionalText("terminalOutcome") == "interrupted"
+    val error = message.safeText("state") == "error" && !interrupted
+    val usage = messageUsage(message)
+    val streaming = message.optionalText("state") == "streaming"
+    if (parts.isEmpty()) {
+        if (decoded.body.isNotEmpty() || quote != null || attachments.isNotEmpty()) {
+            add(
+                ConversationItem.Bubble(
+                    id,
+                    id,
+                    role,
+                    messageAuthor(message),
+                    decoded.body,
+                    quote,
+                    truncated,
+                    timestamp,
+                    attachments,
+                    error,
+                    usage,
+                    streaming,
+                    interrupted = interrupted,
+                )
+            )
+        }
+        return@buildList
+    }
+    val lastMeaningfulPart = parts.indexOfLast {
+        it.optionalText("type") == "toolCall" || !it.optionalText("text").isNullOrBlank()
+    }
+    if (parts.none { it.optionalText("type") == "text" } && attachments.isNotEmpty()) {
+        add(
+            ConversationItem.Bubble(
+                "$id-attachments",
+                id,
+                role,
+                messageAuthor(message),
+                "",
+                quote,
+                truncated,
+                timestamp,
+                attachments,
+                error,
+                usage,
+                streaming,
+            )
+        )
+    }
+    var quoteShown = false
+    for ((index, part) in parts.withIndex()) {
+        when (part.text("type")) {
+            "text" -> {
+                val text =
+                    QuoteCodec.decode(AttachmentCodec.decode(part.text("text")).body).body
+                if (
+                    text.isNotEmpty() ||
+                        quote != null ||
+                        (!quoteShown && attachments.isNotEmpty())
+                ) {
                     add(
                         ConversationItem.Bubble(
-                            id,
+                            "$id-text-$index",
                             id,
                             role,
                             messageAuthor(message),
-                            decoded.body,
-                            quote,
+                            text,
+                            if (!quoteShown) quote else null,
                             truncated,
                             timestamp,
-                            attachments,
+                            if (!quoteShown) attachments else emptyList(),
                             error,
                             usage,
+                            streaming,
                         )
                     )
                 }
-                continue
+                quoteShown = true
             }
-            val lastMeaningfulPart = parts.indexOfLast {
-                it.optionalText("type") == "toolCall" || !it.optionalText("text").isNullOrBlank()
-            }
-            if (parts.none { it.optionalText("type") == "text" } && attachments.isNotEmpty()) {
+            "thinking" ->
                 add(
-                    ConversationItem.Bubble(
-                        "$id-attachments",
+                    ConversationItem.Thinking(
+                        "$id-thinking-$index",
                         id,
-                        role,
-                        messageAuthor(message),
-                        "",
-                        quote,
-                        truncated,
-                        timestamp,
-                        attachments,
-                        error,
-                        usage,
+                        part.text("text"),
+                        message.optionalText("state") == "streaming" &&
+                            context.last &&
+                            index == lastMeaningfulPart,
+                    )
+                )
+            "toolCall" -> {
+                val output = outputs[part.text("id")]
+                if (part.text("name") in SUBAGENT_TOOLS && output?.get("subagentProgress") != null) {
+                    val progress = subagentProgress(output)
+                    if (progress.agents.isNotEmpty()) {
+                        add(
+                            progress.copy(
+                                id = "$id-call-${part.text("id")}",
+                                toolCallId = part.text("id"),
+                            )
+                        )
+                        continue
+                    }
+                }
+                val arguments = part.text("arguments")
+                add(
+                    ConversationItem.Activity(
+                        "$id-call-${part.text("id")}",
+                        output?.text("id") ?: id,
+                        part.text("name"),
+                        arguments,
+                        output?.text("text"),
+                        output?.optionalText("state")
+                            ?: if (context.pending) "streaming" else "unavailable",
+                        output?.get("truncated")?.jsonPrimitive?.booleanOrNull == true,
+                        toolCallId = part.text("id"),
+                        outputMessageId = output?.text("id"),
+                        argumentsTruncated = parsedToolArguments(arguments) == null,
+                        details =
+                            output
+                                ?.takeIf { part.text("name") == "edit" }
+                                ?.let(::toolDetails),
                     )
                 )
             }
-            var quoteShown = false
-            for ((index, part) in parts.withIndex()) {
-                when (part.text("type")) {
-                    "text" -> {
-                        val text =
-                            QuoteCodec.decode(AttachmentCodec.decode(part.text("text")).body).body
-                        if (
-                            text.isNotEmpty() ||
-                                quote != null ||
-                                (!quoteShown && attachments.isNotEmpty())
-                        ) {
-                            add(
-                                ConversationItem.Bubble(
-                                    "$id-text-$index",
-                                    id,
-                                    role,
-                                    messageAuthor(message),
-                                    text,
-                                    if (!quoteShown) quote else null,
-                                    truncated,
-                                    timestamp,
-                                    if (!quoteShown) attachments else emptyList(),
-                                    error,
-                                    usage,
-                                )
-                            )
-                        }
-                        quoteShown = true
-                    }
-                    "thinking" ->
-                        add(
-                            ConversationItem.Thinking(
-                                "$id-thinking-$index",
-                                id,
-                                part.text("text"),
-                                message.optionalText("state") == "streaming" &&
-                                    messageIndex == messages.lastIndex &&
-                                    index == lastMeaningfulPart,
-                            )
-                        )
-                    "toolCall" -> {
-                        val output = outputs[part.text("id")]
-                        if (part.text("name") in SUBAGENT_TOOLS && output?.get("subagentProgress") != null) {
-                            val progress = subagentProgress(output)
-                            if (progress.agents.isNotEmpty()) {
-                                add(
-                                    progress.copy(
-                                        id = "$id-call-${part.text("id")}",
-                                        toolCallId = part.text("id"),
-                                    )
-                                )
-                                continue
-                            }
-                        }
-                        val arguments = part.text("arguments")
-                        add(
-                            ConversationItem.Activity(
-                                "$id-call-${part.text("id")}",
-                                output?.text("id") ?: id,
-                                part.text("name"),
-                                arguments,
-                                output?.text("text"),
-                                output?.optionalText("state")
-                                    ?: if (id == pendingAssistant) "streaming" else "unavailable",
-                                output?.get("truncated")?.jsonPrimitive?.booleanOrNull == true,
-                                toolCallId = part.text("id"),
-                                outputMessageId = output?.text("id"),
-                                argumentsTruncated = parsedToolArguments(arguments) == null,
-                                details =
-                                    output
-                                        ?.takeIf { part.text("name") == "edit" }
-                                        ?.let(::toolDetails),
-                            )
-                        )
-                    }
-                }
-            }
-            if (usage != null) {
-                val lastBubble = (bubbleStart until size).lastOrNull { this[it] is ConversationItem.Bubble }
-                for (i in bubbleStart until size) {
-                    val entry = this[i]
-                    if (i != lastBubble && entry is ConversationItem.Bubble && entry.usage != null)
-                        this[i] = entry.copy(usage = null)
-                }
-            }
         }
     }
+    if (usage != null || interrupted) {
+        val lastBubble = indices.lastOrNull { this[it] is ConversationItem.Bubble }
+        for (i in indices) {
+            val entry = this[i]
+            if (entry is ConversationItem.Bubble)
+                this[i] = entry.copy(usage = entry.usage.takeIf { i == lastBubble }, interrupted = interrupted && i == lastBubble)
+        }
+    }
+}
+
+/** Prompt text as the host and the phone compare it: line endings and surrounding whitespace aside. */
+internal fun promptKey(text: String): String = text.replace("\r\n", "\n").replace('\r', '\n').trim()
+
+/**
+ * The ID of the host's copy of [pending] in [messages], or null while the timeline lacks it. Only
+ * messages after [PendingSend.afterMessageId] count; a baseline the timeline no longer holds
+ * leaves every message a candidate.
+ */
+internal fun pendingSendCopyId(pending: PendingSend, messages: List<JsonObject>): String? {
+    val baseline = pending.afterMessageId?.let { id -> messages.indexOfFirst { it.optionalText("id") == id } }
+    val sentSince = messages.drop(if (baseline == null || baseline < 0) 0 else baseline + 1)
+    val wanted = promptKey(pending.text)
+    return sentSince.firstOrNull { it.text("role") == "user" && promptKey(userMessageBody(it)) == wanted }?.optionalText("id")
+}
+
+/**
+ * The pending prompt the chat shows at its tail: none once the host's copy is in the timeline,
+ * whether or not the host acknowledged the send yet, so the prompt never shows twice.
+ */
+internal fun shownPendingSend(pending: PendingSend?, messages: List<JsonObject>): PendingSend? =
+    pending?.takeIf { pendingSendCopyId(it, messages) == null }
+
+/**
+ * Carries the chat list's key of a pending prompt's bubble over to the host's copy of that prompt
+ * when the copy replaces it. The list then sees one row whose content changes, rather than one row
+ * leaving and another arriving: with item animations those two rows overlap while one fades out
+ * and the other fades in, which reads as the prompt shown twice.
+ */
+internal class PendingBubbleKeys {
+    /** Host message item ID to the key of the pending bubble it replaced. */
+    private val adopted = HashMap<String, String>()
+    private var pending: PendingSend? = null
+    private var knownIds: Set<String> = emptySet()
+
+    /**
+     * Call with each new list of [items], the [shown] pending prompt at its tail (if any) and the
+     * timeline's [messages].
+     */
+    fun update(items: List<ConversationItem>, shown: PendingSend?, messages: List<JsonObject>) {
+        val previous = pending
+        val before = knownIds
+        pending = shown
+        knownIds = items.mapTo(HashSet()) { it.id }
+        // A key in use by a pending bubble again is never also a host row's.
+        shown?.let { current -> adopted.values.removeAll { it == pendingSendItem(current).id } }
+        if (shown != null || previous == null) return
+        val copy = pendingSendCopyId(previous, messages) ?: return
+        // The first row of the host's copy takes the key, whatever its text: one prompt may show as
+        // several rows (one per text part) or as attachments alone.
+        items.firstOrNull { it.sourceId == copy && it.id !in before && it.id !in adopted }
+            ?.let { adopted[it.id] = pendingSendItem(previous).id }
+    }
+
+    fun keyOf(item: ConversationItem): String = adopted[item.id] ?: item.id
+
+    /** The item ID behind a list [key], for a key read back from the list's layout. */
+    fun idOf(key: String): String = adopted.entries.firstOrNull { it.value == key }?.key ?: key
 }

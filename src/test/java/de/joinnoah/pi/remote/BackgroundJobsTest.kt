@@ -276,7 +276,15 @@ class BackgroundJobsTest {
             selection = RemoteSelection("route", "project", "s"),
             session = Wire.objectOf("id" to "s", "origin" to "tui"),
         )
-        val controller = BackgroundJobsController(scope, source, { state }, { block -> state = block(state) })
+        var recoveryStarting = false
+        val controller =
+            BackgroundJobsController(
+                scope,
+                source,
+                { state },
+                { block -> state = block(state) },
+                recoveryStarting = { recoveryStarting },
+            )
         val view get() = state.jobs?.view
     }
 
@@ -628,6 +636,28 @@ class BackgroundJobsTest {
     }
 
     @Test
+    fun returningToTheForegroundLeavesTheListToAStartingRecovery() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        val listed = harness.source.lists.size
+
+        // The recovery's activation lists the jobs again; a second list would be wasted.
+        harness.controller.setForeground(false)
+        harness.recoveryStarting = true
+        harness.controller.setForeground(true)
+        runCurrent()
+        assertEquals(listed, harness.source.lists.size)
+
+        harness.controller.setForeground(false)
+        harness.recoveryStarting = false
+        harness.controller.setForeground(true)
+        runCurrent()
+        assertEquals(listed + 1, harness.source.lists.size)
+    }
+
+    @Test
     fun renewalTicksDoNotToggleLoadingSoTheRefreshButtonStaysEnabled() = runTest {
         val harness = Harness(backgroundScope)
         harness.state = harness.state.copy(capabilities = harness.state.capabilities + BACKGROUND_JOBS_LIST_LEASE_CAPABILITY)
@@ -669,5 +699,26 @@ class BackgroundJobsTest {
         harness.controller.onEvent(JobEvent.Changed("s", listOf(running(1))))
         assertEquals(listOf("job"), harness.state.jobs?.jobs?.map { it.id })
         assertEquals(before, harness.source.lists.size)
+    }
+
+    @Test
+    fun askingAboutAJobQuotesTheEndOfItsOutput() {
+        val lines = (1..50).map { JobOutputLine.Text("line $it") }
+        val prompt = checkNotNull(jobOutputPrompt("Output:", lines))
+        assertEquals("Output:\n\n```\n" + (11..50).joinToString("\n") { "line $it" } + "\n```", prompt)
+        // Skipped output ends the quote, and blank lines at either end go.
+        assertEquals(
+            "Output:\n\n```\ntail\n```",
+            jobOutputPrompt("Output:", listOf(JobOutputLine.Text("head"), JobOutputLine.Skipped(10), JobOutputLine.Text(""), JobOutputLine.Text("tail"), JobOutputLine.Text(" "))),
+        )
+        // Backticks in the output get a longer fence.
+        assertEquals("Output:\n\n````\n```\n````", jobOutputPrompt("Output:", listOf(JobOutputLine.Text("```"))))
+        // Nothing to quote: no prompt.
+        assertNull(jobOutputPrompt("Output:", emptyList()))
+        assertNull(jobOutputPrompt("Output:", listOf(JobOutputLine.Skipped(3), JobOutputLine.Text(""))))
+        // The quote stays within what the composer takes.
+        val long = List(10) { JobOutputLine.Text("x".repeat(MAX_FILE_QUOTE_BYTES / 4)) }
+        val cut = checkNotNull(jobOutputPrompt("Output:", long))
+        assertTrue(cut.encodeToByteArray().size < MAX_FILE_QUOTE_BYTES + 100)
     }
 }

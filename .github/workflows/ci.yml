@@ -1,64 +1,320 @@
 name: Android CI
 
+# The jobs below run in parallel. release.yml and wear-bundle.yml only publish when a push run of
+# this whole workflow succeeded for the main commit, so every check stays in this file.
 on:
   pull_request:
     branches: [main]
+    # closed only cancels the pull request's running checks (see concurrency); no job runs for it.
+    types: [opened, synchronize, reopened, closed]
   push:
     branches: [main]
 
 permissions:
   contents: read
 
+# One run per pull request and one for main: a new push replaces the older run, and closing or
+# merging a pull request stops its checks. The release gates only accept a successful push run of
+# the main commit they publish, which is always the newest, so an older main run is not needed.
+concurrency:
+  group: android-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# The setup steps are written once as YAML anchors in the first job and reused by the others.
 jobs:
-  android:
-    name: PocketPi checks
+  build:
+    if: github.event.action != 'closed'
+    name: Unit tests and debug builds
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-java@v4
+      - &setup-java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "25"
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Set up Android command-line tools 23.0
-        uses: android-actions/setup-android@v3
+      - &setup-gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - &setup-android
+        name: Set up Android command-line tools 23.0
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           cmdline-tools-version: "16111833"
           packages: ""
-      - name: Verify Android command-line tools 23.0
+      - &verify-android-tools
+        name: Verify Android command-line tools 23.0
         run: |
           tools_dir="$ANDROID_HOME/cmdline-tools/16111833"
           test -x "$tools_dir/bin/sdkmanager" || { echo "FATAL - Android command-line tools executable did not install"; exit 1; }
           test -f "$tools_dir/source.properties" || { echo "FATAL - Android command-line tools package metadata is missing"; exit 1; }
           grep -Fxq 'Pkg.Revision=23.0' "$tools_dir/source.properties" || { echo "FATAL - expected Android command-line tools package 23.0"; exit 1; }
-      - name: Install SDK platform 37
+      - &install-sdk
+        name: Install SDK platform 37
         run: |
           "$ANDROID_HOME/cmdline-tools/16111833/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;37.0.0"
           test -d "$ANDROID_HOME/platforms/android-37.0" || { echo "FATAL - platforms;android-37.0 did not install"; exit 1; }
           test -d "$ANDROID_HOME/build-tools/37.0.0" || { echo "FATAL - build-tools;37.0.0 did not install"; exit 1; }
       - name: English and German resource parity
         run: python3 scripts/i18n-check.py .
-      - name: Unit tests and debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug
-      - name: Android Lint
-        run: ./gradlew lintDebug
-      - name: Enable emulator acceleration
-        run: |
-          test -e /dev/kvm
-          sudo chmod 666 /dev/kvm
-      - name: Navigation and restoration instrumentation tests
-        run: ./gradlew pixel2Api36DebugAndroidTest
-      - name: Upload Android verification reports
+      - name: Unit tests and debug APKs
+        run: ./gradlew testDebugUnitTest assembleDebug :wear:testDebugUnitTest :wear:assembleDebug :wear:assembleDebugAndroidTest
+      - name: Upload unit test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: pocketpi-verification
+          name: pocketpi-unit-tests
           path: |
             build/reports/
             build/test-results/
+            wear/build/reports/
+            wear/build/test-results/
+          if-no-files-found: ignore
+
+  lint:
+    if: github.event.action != 'closed'
+    name: Android Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - *checkout
+      - *setup-java
+      - *setup-gradle
+      - *setup-android
+      - *verify-android-tools
+      - *install-sdk
+      - name: Android Lint
+        run: ./gradlew lintDebug :wear:lintDebug
+      - name: Upload lint reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pocketpi-lint
+          path: |
+            build/reports/
+            wear/build/reports/
+          if-no-files-found: ignore
+
+  benchmark:
+    if: github.event.action != 'closed'
+    name: Benchmark isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - *checkout
+      - *setup-java
+      - *setup-gradle
+      - *setup-android
+      - *verify-android-tools
+      - *install-sdk
+      - name: Compile benchmark APKs and verify isolation
+        run: |
+          ./gradlew :assembleDebug :assembleBenchmark :benchmarks:assembleBenchmark
+          ./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest' --tests '*FakeRelayTransportTest'
+          python3 scripts/check-benchmark-isolation.py \
+            build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml \
+            build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml \
+            build/outputs/apk/debug/pocketpi-debug.apk \
+            build/outputs/apk/benchmark/pocketpi-benchmark.apk
+      # The benchmark build runs R8 without obfuscation; this is the obfuscating pass release.yml
+      # runs, so a release-only R8 failure shows here and not first when a release starts. It needs
+      # no secrets: the signing and Firebase checks belong to the release workflow.
+      - name: Release R8 pass
+        run: >-
+          ./gradlew :minifyReleaseWithR8
+          -x validateUploadKey -x validateReleasePushConfiguration
+          -PPI_REMOTE_FIREBASE_API_KEY=ci-placeholder
+          -PPI_REMOTE_FIREBASE_APP_ID=ci-placeholder
+          -PPI_REMOTE_FIREBASE_PROJECT_ID=ci-placeholder
+          -PPI_REMOTE_FIREBASE_GCM_SENDER_ID=ci-placeholder
+      - name: Upload benchmark reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pocketpi-benchmark
+          path: |
+            build/reports/
+            build/test-results/
+          if-no-files-found: ignore
+
+  emulator:
+    if: github.event.action != 'closed'
+    name: Emulator tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The Gradle managed device; the tablet job below reuses these steps with its own.
+      GMD_DEVICE: pixel2Api36
+    steps:
+      - *checkout
+      - *setup-java
+      - *setup-gradle
+      - *setup-android
+      - *verify-android-tools
+      - *install-sdk
+      - &enable-kvm
+        name: Enable emulator acceleration
+        run: |
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+      # The managed device setup installs the emulator only while it also downloads the system
+      # image. Once the image comes from the cache, the setup fails without an emulator, so both
+      # jobs install it here. The cache key below then names the real emulator revision.
+      - &install-emulator
+        name: Install the Android emulator
+        run: |
+          "$ANDROID_HOME/cmdline-tools/16111833/bin/sdkmanager" --install emulator
+          test -f "$ANDROID_HOME/emulator/source.properties" || { echo "FATAL - emulator did not install"; exit 1; }
+      - &locate-avd
+        id: avd
+        name: Locate the managed device cache
+        run: |
+          agp="$(sed -n 's/^agp = "\(.*\)"$/\1/p' gradle/libs.versions.toml)"
+          test -n "$agp" || { echo "FATAL - agp version is missing from gradle/libs.versions.toml"; exit 1; }
+          echo "agp=$agp" >> "$GITHUB_OUTPUT"
+          # A new emulator release may not load the cached boot snapshot, so the emulator
+          # revision is part of the key.
+          props="$ANDROID_HOME/emulator/source.properties"
+          emulator="$(sed -n 's/^Pkg\.Revision=//p' "$props" | tr -d '[:space:]')"
+          test -n "$emulator" || { echo "FATAL - Pkg.Revision is missing from $props"; exit 1; }
+          echo "emulator=$emulator" >> "$GITHUB_OUTPUT"
+          echo "images=$ANDROID_HOME/system-images/android-36" >> "$GITHUB_OUTPUT"
+      # Gradle managed devices keep their AVD and boot snapshot under ~/.android/gradle/avd.
+      # Restoring them with the system image skips the image download and the cold boot. The
+      # plugin checks the snapshot before use and re-creates one the current emulator cannot load.
+      # Both devices use the same system image (API 36, aosp), so the image is one entry the two
+      # emulator jobs share, and each device adds only its own AVD and snapshot. Two full copies
+      # could push each other out of the repository's 10 GB cache on every push to main.
+      # Every run restores the entries, but only push runs on main save them: pull request runs
+      # would each save their own copy under the pull request's ref.
+      - &restore-image
+        id: image-cache
+        name: Restore the managed device system image
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.avd.outputs.images }}
+          key: gmd-image-android-36-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}
+      - &restore-avd
+        id: gmd-cache
+        name: Restore the managed device AVD and snapshot
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.android/gradle/avd
+          key: gmd-${{ env.GMD_DEVICE }}-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}-emulator-${{ steps.avd.outputs.emulator }}
+      # Build both APKs before the emulator starts. Otherwise the managed device boots while
+      # Kotlin compiles on the same few cores, and a starved System UI can stop responding.
+      - &build-test-apks
+        name: Build the app and test APKs
+        run: ./gradlew assembleDebug assembleDebugAndroidTest
+      - name: Navigation and restoration instrumentation tests
+        run: >-
+          ./gradlew pixel2Api36DebugAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.hideErrorDialogs=true
+      # Both emulator jobs may miss the image entry in the same run; the second save then only
+      # warns that the key is taken.
+      - &save-image
+        name: Save the managed device system image
+        if: github.event_name == 'push' && steps.image-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.avd.outputs.images }}
+          key: ${{ steps.image-cache.outputs.cache-primary-key }}
+      - &save-avd
+        name: Save the managed device AVD and snapshot
+        if: github.event_name == 'push' && steps.gmd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.android/gradle/avd
+          key: ${{ steps.gmd-cache.outputs.cache-primary-key }}
+      - name: Upload instrumentation reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pocketpi-emulator
+          path: |
+            build/reports/
+            build/outputs/androidTest-results/
+          if-no-files-found: ignore
+
+  minified:
+    if: github.event.action != 'closed'
+    name: Minified smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The phone job's device: the benchmarks module defines the same one, so this job shares
+      # its cached system image, AVD and boot snapshot.
+      GMD_DEVICE: pixel2Api36
+    steps:
+      - *checkout
+      - *setup-java
+      - *setup-gradle
+      - *setup-android
+      - *verify-android-tools
+      - *install-sdk
+      - *enable-kvm
+      - *install-emulator
+      - *locate-avd
+      - *restore-image
+      - *restore-avd
+      - name: Build the minified benchmark app and its tests
+        run: ./gradlew :assembleBenchmark :benchmarks:assembleBenchmark
+      # A keep rule R8 needs but lacks shows only at runtime: MinifiedSmokeTest drives the shrunk
+      # benchmark APK on the fake relay (docs/runbooks/macrobenchmarks.md).
+      - name: Smoke tests of the R8-shrunk app
+        run: >-
+          ./gradlew :benchmarks:pixel2Api36BenchmarkAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.MinifiedSmokeTest
+      - name: Upload smoke test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pocketpi-minified
+          path: |
+            benchmarks/build/reports/
+            benchmarks/build/outputs/androidTest-results/
+            benchmarks/build/outputs/managed_device_android_test_additional_output/
+          if-no-files-found: ignore
+
+  tablet:
+    if: github.event.action != 'closed'
+    name: Tablet emulator tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GMD_DEVICE: pixelTabletApi36
+    steps:
+      - *checkout
+      - *setup-java
+      - *setup-gradle
+      - *setup-android
+      - *verify-android-tools
+      - *install-sdk
+      - *enable-kvm
+      - *install-emulator
+      - *locate-avd
+      - *restore-image
+      - *restore-avd
+      - *build-test-apks
+      # Only the @LargeScreen tests: the phone job already runs everything, and each test here
+      # costs a second emulator's time.
+      - name: Large-screen instrumentation tests
+        run: >-
+          ./gradlew pixelTabletApi36DebugAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen
+          -Pandroid.testInstrumentationRunnerArguments.hideErrorDialogs=true
+      - *save-image
+      - *save-avd
+      - name: Upload instrumentation reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pocketpi-tablet
+          path: |
+            build/reports/
             build/outputs/androidTest-results/
           if-no-files-found: ignore

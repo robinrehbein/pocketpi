@@ -1,6 +1,6 @@
 /.gradle/
 /.kotlin/
-/build/
+**/build/
 /local.properties
 /.idea/
 /.release/
@@ -8,3 +8,4 @@
 /.externalNativeBuild/
 /.cxx/
 /artifacts/
+/.superpowers/

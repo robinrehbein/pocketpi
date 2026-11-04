@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The header of a code block in a chat message when its fence names no language (MarkdownText.kt). -->
+    <string name="remote_code_block">Code</string>
+    <!-- The handle in a code block's header that drags the block out as text (MarkdownText.kt). -->
+    <string name="remote_drag_code">Drag code</string>
+</resources>

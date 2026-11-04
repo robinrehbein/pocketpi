@@ -24,12 +24,29 @@ data class StoredDraft(
     val followUps: List<PendingFollowUp> = emptyList(),
     /** Pending review comments of the changes view; an optional key in the stored JSON. */
     val reviewComments: List<ReviewComment> = emptyList(),
+    /**
+     * What kind of send the journal holds: "prompt", "command", "follow_up" or "steer". Only a
+     * plain prompt may reuse the mutation ID of an unresolved journal; null is a journal stored
+     * before this was recorded.
+     */
+    val submittedDelivery: String? = null,
+    val gitCommit: GitCommitDraft? = null,
+    val gitPush: GitPushIntent? = null,
+    val gitPullRequest: GitPullRequestIntent? = null,
+    val gitPullRequestDraft: GitPullRequestDraft? = null,
+    /** Per-field provenance for the current prompt journal; absent in older files. */
+    val promptTextState: String? = null,
+    val promptQuoteState: String? = null,
+    val promptAttachmentsState: String? = null,
 )
 
 interface DraftStorage {
     fun load(): Map<DraftKey, StoredDraft>
 
     fun save(drafts: Map<DraftKey, StoredDraft>)
+
+    /** True once after a [load] found the stored drafts unreadable and reset them to none. */
+    fun takeReset(): Boolean = false
 }
 
 class DraftStore(
@@ -40,6 +57,8 @@ class DraftStore(
     private val file = EncryptedFileStore(context, name, alias)
 
     override fun load(): Map<DraftKey, StoredDraft> = file.read()?.let(::parseStoredDrafts).orEmpty()
+
+    override fun takeReset() = file.takeReset()
 
     override fun save(drafts: Map<DraftKey, StoredDraft>) {
         require(drafts.values.all { it.text.toByteArray().size <= 128 * 1024 && it.followUps.size <= 64 })
@@ -65,6 +84,14 @@ class DraftStore(
                             "reviewComments" to
                                 value.reviewComments.takeIf { it.isNotEmpty() }
                                     ?.let { comments -> JsonArray(comments.map { it.json() }) },
+                            "submittedDelivery" to value.submittedDelivery,
+                            "promptTextState" to value.promptTextState,
+                            "promptQuoteState" to value.promptQuoteState,
+                            "promptAttachmentsState" to value.promptAttachmentsState,
+                            "gitCommit" to value.gitCommit?.json(),
+                            "gitPush" to value.gitPush?.json(),
+                            "gitPullRequest" to value.gitPullRequest?.json(),
+                            "gitPullRequestDraft" to value.gitPullRequestDraft?.json(),
                         )
                     }
                 )
@@ -118,5 +145,18 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                     .orEmpty()
                     .also { require(it.size <= 64 && it.map(PendingFollowUp::requestId).distinct().size == it.size) },
                 storedReviewComments(value["reviewComments"]),
+                submittedDelivery =
+                    value.optionalText("submittedDelivery")?.also {
+                        require(it in setOf("prompt", "command", "follow_up", "steer"))
+                    },
+                gitCommit = (value["gitCommit"] as? JsonObject)?.let(::parseGitCommitDraft),
+                gitPush = (value["gitPush"] as? JsonObject)?.let(::parseGitPushIntent),
+                gitPullRequest = (value["gitPullRequest"] as? JsonObject)?.let(::parseGitPullRequestIntent),
+                gitPullRequestDraft = (value["gitPullRequestDraft"] as? JsonObject)?.let(::parseGitPullRequestDraft),
+                promptTextState = value.optionalText("promptTextState").promptState(),
+                promptQuoteState = value.optionalText("promptQuoteState").promptState(),
+                promptAttachmentsState = value.optionalText("promptAttachmentsState").promptState(),
             )
     }
+
+private fun String?.promptState(): String? = takeIf { it in setOf("cleared", "restored", "edited") }

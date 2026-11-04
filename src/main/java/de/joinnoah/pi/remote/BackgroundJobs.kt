@@ -1,7 +1,11 @@
 package de.joinnoah.pi.remote
 
-import androidx.activity.compose.BackHandler
+import android.text.format.Formatter
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,12 +13,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -69,7 +80,7 @@ enum class JobStatus(val wire: String) {
     TIMEOUT("timeout"),
 }
 
-/** One background shell started by pi's `bash_bg`, as `session.jobs.*` reports it. */
+/** One background shell started by pi's `bash` with `run_in_background` (`bash_bg` in older sessions), as `session.jobs.*` reports it. */
 data class BackgroundJob(
     val id: String,
     val command: String,
@@ -520,6 +531,8 @@ internal class BackgroundJobsController(
     private val current: () -> RemoteState,
     private val update: ((RemoteState) -> RemoteState) -> Unit,
     private val renewMillis: Long = JOB_LEASE_RENEW_MILLIS,
+    /** Whether a recovery is about to activate the selection again, whose reads list the jobs. */
+    private val recoveryStarting: () -> Boolean = { false },
 ) {
     private var listJob: Job? = null
     private var listVersion = 0L
@@ -552,9 +565,9 @@ internal class BackgroundJobsController(
         }
 
     private fun failure(e: Exception): JobsFailure =
-        when ((e as? RemoteRequestException)?.code) {
-            "unsupported" -> JobsFailure.UNSUPPORTED
-            "offline" -> JobsFailure.OFFLINE
+        when {
+            e.isUnsupported -> JobsFailure.UNSUPPORTED
+            e.hostCode == "offline" -> JobsFailure.OFFLINE
             else -> if (!current().connected) JobsFailure.OFFLINE else JobsFailure.FAILED
         }
 
@@ -636,18 +649,21 @@ internal class BackgroundJobsController(
 
     /**
      * The app left or returned to the foreground; a backgrounded app holds no list lease. Returning
-     * lists again right away, the same as a reconnect, instead of waiting out the renewal interval.
+     * lists again right away, the same as a reconnect, instead of waiting out the renewal interval,
+     * unless a recovery is starting: its activation lists them, and a second list would be wasted.
      */
     fun setForeground(value: Boolean) {
         if (foreground == value) return
         foreground = value
-        if (!foreground) stopLease() else refresh()
+        if (!foreground) stopLease() else if (!recoveryStarting()) refresh()
     }
 
     /**
      * Refreshes the list now and at most once per [JOBS_AUTO_REFRESH_MILLIS] after that: job
      * events reach only a device that holds a watch lease, so status changes and finished
-     * `bash_bg` or `bash_kill` calls are the list's other hints.
+     * `bash_bg` (older hosts; newer ones start jobs with `bash` and `run_in_background` and report
+     * them through the lease) or `TaskStop` (`bash_kill`) calls are the list's other hints. `TaskStop` also covers
+     * subagent stops, so it can refresh when no job changed.
      */
     fun refreshSoon() {
         if (autoRefresh?.isActive == true) {
@@ -834,23 +850,51 @@ private fun jobStatusLabel(job: BackgroundJob): String =
         JobStatus.TIMEOUT -> stringResource(R.string.remote_jobs_status_timeout)
     }
 
-/** A chip for [SessionControls]: shown only when the host and session have background jobs. */
+/** The selected session's running jobs open the shared insight sheet. */
 @Composable
-internal fun BackgroundJobsChip(jobs: JobsState, colors: ChipColors, onOpen: () -> Unit) {
+internal fun BackgroundJobsChip(jobs: JobsState, expanded: Boolean, onClick: () -> Unit) {
+    if (!jobsChipShown(jobs, expanded)) return
     val running = jobs.jobs.count { it.status == JobStatus.RUNNING }
-    val label =
-        if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
+    val label = if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
         else stringResource(R.string.remote_jobs_title)
-    AssistChip(
-        onClick = onOpen,
-        shape = androidx.compose.foundation.shape.CircleShape,
-        colors = colors,
-        border = null,
-        leadingIcon = { Icon(Icons.Outlined.Terminal, null, Modifier.size(AssistChipDefaults.IconSize)) },
-        label = { Text(label, maxLines = 1) },
-        modifier = Modifier.testTag("jobsChip"),
-    )
+    FloatingSurface(shape = androidx.compose.foundation.shape.CircleShape) {
+        Row(
+            Modifier.clickable(role = Role.Button, onClick = onClick).testTag("jobsChip")
+                .minimumInteractiveComponentSize().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Terminal, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
 }
+
+@Composable
+internal fun JobsInsightSheet(jobs: JobsState, actions: JobsActions, onDismiss: () -> Unit) {
+    InsightSheet(title = stringResource(R.string.remote_jobs_title), onDismiss = onDismiss) {
+        Column(Modifier.fillMaxWidth().testTag("jobsInsightSheet")) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                IconButton(onClick = actions.onRefresh, enabled = !jobs.loading, modifier = Modifier.testTag("jobsRefresh")) {
+                    Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
+                }
+                actions.onOpenList?.let { open ->
+                    val label = stringResource(R.string.remote_jobs_open_all)
+                    ShortcutTooltip(label, Shortcut.JOBS) {
+                        IconButton(onClick = { onDismiss(); open() }, modifier = Modifier.testTag("jobsOpenAll")) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, label)
+                        }
+                    }
+                }
+            }
+            JobListContent(jobs, { id -> onDismiss(); actions.onOpenJob(id) }, Modifier.fillMaxWidth().heightIn(max = 480.dp))
+        }
+    }
+}
+
+/** The jobs chip shows while a job runs; an open overview stays until closed, even once the last job ends. */
+internal fun jobsChipShown(jobs: JobsState?, expanded: Boolean): Boolean =
+    jobs != null && (expanded || jobs.jobs.any { it.status == JobStatus.RUNNING })
 
 internal class JobsActions(
     val onRefresh: () -> Unit,
@@ -858,35 +902,76 @@ internal class JobsActions(
     val onCloseJob: () -> Unit,
     val onClose: () -> Unit,
     val onStop: (String) -> Unit,
+    /** Opens the full list from the insight sheet; null hides the action. */
+    val onOpenList: (() -> Unit)? = null,
+    /**
+     * Puts a prompt quoting the job's output into the composer, never sending it; false when the
+     * draft could not take it. Null hides the action.
+     */
+    val onAsk: ((String) -> Boolean)? = null,
 )
 
-@Composable
-private fun JobsTopBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        IconButton(onClick = onBack, Modifier.testTag("jobsBack")) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
-        }
-        Text(
-            title,
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        actions()
+/** Most lines of a job's output "Ask pi about this output" quotes, from its end. */
+internal const val JOB_ASK_LINES = 40
+
+/**
+ * The composer text that shows pi the end of a job's output: [intro], then the last [maxLines]
+ * text lines in a fence, as many as fit [MAX_FILE_QUOTE_BYTES]. Skipped output ends the quote,
+ * since the lines before it are not contiguous with the rest. Null without any text to quote.
+ */
+internal fun jobOutputPrompt(intro: String, lines: List<JobOutputLine>, maxLines: Int = JOB_ASK_LINES): String? {
+    val quoted = ArrayDeque<String>()
+    var bytes = 0
+    for (line in lines.asReversed()) {
+        val text = (line as? JobOutputLine.Text)?.text ?: break
+        val size = text.encodeToByteArray().size + 1
+        if (quoted.size >= maxLines || bytes + size > MAX_FILE_QUOTE_BYTES) break
+        quoted.addFirst(text)
+        bytes += size
     }
+    while (quoted.isNotEmpty() && quoted.first().isBlank()) quoted.removeFirst()
+    while (quoted.isNotEmpty() && quoted.last().isBlank()) quoted.removeLast()
+    if (quoted.isEmpty()) return null
+    val text = quoted.joinToString("\n")
+    val fence = codeFence(text)
+    return "$intro\n\n$fence\n$text\n$fence"
+}
+
+/**
+ * The jobs overlay's header, in the same pill style as the other panes. A [nested] page (a job's
+ * detail) has Back to the list beside its Close; the list has Close alone.
+ */
+@Composable
+private fun JobsTopBar(
+    title: String,
+    nested: Boolean,
+    onBack: () -> Unit,
+    onClose: () -> Unit,
+    actions: List<PaneAction> = emptyList(),
+) {
+    PaneHeader(
+        title = title,
+        subtitle = null,
+        nested = nested,
+        busy = false,
+        tag = "jobs",
+        backLabel = stringResource(R.string.remote_back),
+        closeLabel = stringResource(R.string.remote_page_close),
+        reloadLabel = stringResource(R.string.remote_refresh),
+        onBack = onBack,
+        onClose = onClose,
+        onReload = null,
+        actions = actions,
+    )
 }
 
 /** The background jobs of the selected session, or the open job over them. */
 @Composable
 internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifier: Modifier = Modifier) {
     val view = state.view
-    BackHandler { if (view != null) actions.onCloseJob() else actions.onClose() }
-    Surface(modifier.fillMaxSize().testTag("jobsScreen")) {
+    PaneBackHandler { if (view != null) actions.onCloseJob() else actions.onClose() }
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("jobsScreen"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             if (view == null) JobList(state, actions) else key(view.jobId) { JobDetail(view, actions) }
         }
@@ -895,49 +980,148 @@ internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifi
 
 @Composable
 private fun JobList(state: JobsState, actions: JobsActions) {
-    JobsTopBar(stringResource(R.string.remote_jobs_title), actions.onClose) {
-        IconButton(onClick = actions.onRefresh, enabled = !state.loading, modifier = Modifier.testTag("jobsRefresh")) {
-            Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
-        }
+    // The list scrolls under the floating header, whose pills blur it, as in the other panes.
+    // Starts at the header's usual height, so the list does not jump once it is measured.
+    var headerHeight by remember { mutableStateOf(64.dp) }
+    val density = LocalDensity.current
+    Box(Modifier.fillMaxSize()) {
+    // Composed first, so Tab reaches Close and Refresh before the rows; zIndex keeps it drawn on top.
+    Box(Modifier.align(Alignment.TopCenter).zIndex(1f).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
+    JobsTopBar(
+        title = stringResource(R.string.remote_jobs_title),
+        nested = false,
+        onBack = actions.onClose,
+        onClose = actions.onClose,
+        actions =
+            listOf(
+                PaneAction(
+                    label = stringResource(R.string.remote_refresh),
+                    icon = Icons.Default.Refresh,
+                    tag = "jobsRefresh",
+                    enabled = !state.loading,
+                    onClick = actions.onRefresh,
+                )
+            ),
+    )
     }
-    HorizontalDivider()
+    JobListContent(
+        state,
+        actions.onOpenJob,
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = headerHeight, bottom = 16.dp),
+    )
+    }
+}
+
+@Composable
+private fun JobListContent(
+    state: JobsState,
+    onOpenJob: (String) -> Unit,
+    modifier: Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+) {
     when {
         state.jobs.isEmpty() && state.loading && !state.loaded ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            Box(modifier.padding(contentPadding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         state.jobs.isEmpty() ->
             JobsMessage(
-                stringResource(if (state.failure != null) R.string.remote_jobs_failed else R.string.remote_jobs_empty)
+                stringResource(if (state.failure != null) R.string.remote_jobs_failed else R.string.remote_jobs_empty),
+                modifier.padding(contentPadding),
             )
-        else ->
-            LazyColumn(Modifier.fillMaxSize().testTag("jobsList")) {
+        else -> {
+            // Running jobs first, then the finished ones; each group reads as one card of rows.
+            val sorted = state.jobs.sortedByDescending { it.startedAt }
+            val running = sorted.filter { it.status == JobStatus.RUNNING }
+            val finished = sorted.filter { it.status != JobStatus.RUNNING }
+            LazyColumn(
+                modifier.testTag("jobsList").glassSource(),
+                contentPadding = PaddingValues(
+                    start = 16.dp, end = 16.dp,
+                    top = contentPadding.calculateTopPadding(), bottom = contentPadding.calculateBottomPadding(),
+                ),
+            ) {
                 if (state.failure != null)
                     item { JobsMessage(stringResource(R.string.remote_jobs_failed), Modifier) }
-                itemsIndexed(state.jobs.sortedByDescending { it.startedAt }, key = { _, job -> job.id }) { _, job ->
-                    ListItem(
-                        headlineContent = {
-                            Text(
-                                job.command,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        supportingContent = {
-                            Text(jobStatusLabel(job), color = jobStatusColor(job))
-                        },
-                        leadingContent = {
-                            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                                if (job.status == JobStatus.RUNNING)
-                                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                                else Icon(Icons.Outlined.Terminal, null)
-                            }
-                        },
-                        modifier =
-                            Modifier.clickable(role = Role.Button) { actions.onOpenJob(job.id) }.testTag("job-${job.id}"),
+                listOf(R.string.remote_jobs_group_running to running, R.string.remote_jobs_group_finished to finished)
+                    .forEach { (heading, jobs) ->
+                        if (jobs.isEmpty()) return@forEach
+                        item(key = "heading-$heading") {
+                            SectionHeading(stringResource(heading), Modifier.padding(top = 8.dp, bottom = 6.dp), count = jobs.size)
+                        }
+                        itemsIndexed(jobs, key = { _, job -> job.id }) { index, job ->
+                            JobRow(job, first = index == 0, last = index == jobs.lastIndex) { onOpenJob(job.id) }
+                        }
+                    }
+            }
+        }
+    }
+}
+
+/** One job as a row of its group's card: glyph, command, folder and status. */
+@Composable
+private fun JobRow(job: BackgroundJob, first: Boolean, last: Boolean, onOpen: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val shape = groupedRowShape(first, last)
+    Column(Modifier.fillMaxWidth().padding(bottom = if (last) 8.dp else 0.dp)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(shape)
+                .background(colors.surfaceContainerLow)
+                .clickable(role = Role.Button, onClick = onOpen)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .testTag("job-${job.id}"),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            JobGlyph(job, 40.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    job.command,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        jobStatusLabel(job),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = jobStatusColor(job),
+                        maxLines = 1,
                     )
-                    HorizontalDivider()
+                    Text(
+                        listOfNotNull(
+                            job.cwd.trimEnd('/').substringAfterLast('/').takeIf { it.isNotEmpty() },
+                            Formatter.formatShortFileSize(context, job.outputBytes).takeIf { job.outputBytes > 0 },
+                        ).joinToString(" · "),
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
+        }
+        if (!last) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.surfaceContainerLow)) {
+            HorizontalDivider(Modifier.padding(start = 66.dp, end = 14.dp), color = colors.outlineVariant.copy(alpha = .4f))
+        }
+    }
+}
+
+/** A job's glyph in a glass avatar: a spinner while it runs, a check or a terminal after. */
+@Composable
+private fun JobGlyph(job: BackgroundJob, size: androidx.compose.ui.unit.Dp) {
+    GlassAvatar(size = size) {
+        when {
+            job.status == JobStatus.RUNNING ->
+                CircularProgressIndicator(Modifier.size(size * .45f), strokeWidth = 2.dp, color = jobStatusColor(job))
+            job.status == JobStatus.EXITED && job.exitCode == 0 ->
+                Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+            else -> Icon(Icons.Outlined.Terminal, null, tint = jobStatusColor(job))
+        }
     }
 }
 
@@ -966,36 +1150,101 @@ private fun JobsMessage(text: String, modifier: Modifier = Modifier.fillMaxSize(
 private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
     val job = view.job
     var confirmStop by remember { mutableStateOf(false) }
-    JobsTopBar(job?.command ?: stringResource(R.string.remote_jobs_title), actions.onCloseJob) {
-        if (job?.status == JobStatus.RUNNING && !view.vanished)
-            TextButton(
-                onClick = { confirmStop = true },
-                enabled = !view.stopping,
-                modifier = Modifier.testTag("jobStop"),
-            ) {
-                Text(stringResource(if (view.stopping) R.string.remote_jobs_stopping else R.string.remote_jobs_stop))
-            }
-    }
-    HorizontalDivider()
-    if (job != null)
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Text(jobStatusLabel(job), style = MaterialTheme.typography.bodyMedium, color = jobStatusColor(job))
-            Text(
-                job.cwd,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (job.truncated)
-                Text(
-                    stringResource(R.string.remote_jobs_truncated),
-                    Modifier.testTag("jobTruncated"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    val askIntro = stringResource(R.string.remote_jobs_ask_prompt, job?.command.orEmpty())
+    val askPrompt = remember(view.lines, askIntro) { jobOutputPrompt(askIntro, view.lines) }
+    var askFailed by remember { mutableStateOf(false) }
+    val actionsList = buildList {
+        val ask = actions.onAsk
+        if (ask != null && job != null && askPrompt != null)
+            add(
+                PaneAction(
+                    label = stringResource(R.string.remote_jobs_ask),
+                    icon = Icons.AutoMirrored.Outlined.Chat,
+                    tag = "jobAsk",
+                    onClick = { askFailed = !ask(askPrompt) },
                 )
+            )
+    }
+    JobsTopBar(
+        title = job?.command ?: stringResource(R.string.remote_jobs_title),
+        nested = true,
+        onBack = actions.onCloseJob,
+        onClose = actions.onClose,
+        actions = actionsList,
+    )
+    if (job != null)
+        FloatingSurface(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("jobOverview"),
+            shape = RoundedCornerShape(24.dp),
+            blur = false,
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    JobGlyph(job, 40.dp)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            jobStatusLabel(job),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = jobStatusColor(job),
+                        )
+                        Text(
+                            job.cwd,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // The command the header's title cuts: two lines, all of it on a tap, so the card
+                // leaves the output its room on a short screen.
+                var commandOpen by androidx.compose.runtime.saveable.rememberSaveable(job.id) { mutableStateOf(false) }
+                Surface(
+                    onClick = { commandOpen = !commandOpen },
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.testTag("jobCommand"),
+                ) {
+                    Text(
+                        job.command,
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = if (commandOpen) 12 else 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (job.truncated)
+                    Text(
+                        stringResource(R.string.remote_jobs_truncated),
+                        Modifier.testTag("jobTruncated"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                // Stopping stays one tap away: a header action would sit in the overflow menu on a phone.
+                if (job.status == JobStatus.RUNNING && !view.vanished)
+                    FilledTonalButton(
+                        onClick = { confirmStop = true },
+                        enabled = !view.stopping,
+                        modifier = Modifier.testTag("jobStop"),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
+                    ) {
+                        Text(stringResource(if (view.stopping) R.string.remote_jobs_stopping else R.string.remote_jobs_stop))
+                    }
+            }
         }
+    if (askFailed)
+        Text(
+            stringResource(R.string.remote_files_prefill_failed),
+            Modifier.padding(horizontal = 16.dp).testTag("jobAskFailed"),
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     if (view.stopFailed)
         Text(
             stringResource(R.string.remote_jobs_stop_failed),
@@ -1003,9 +1252,14 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodyMedium,
         )
-    HorizontalDivider()
     val lines = view.lines
-    Box(Modifier.weight(1f).fillMaxWidth()) {
+    // The output reads as one rounded terminal block below the overview.
+    Box(
+        Modifier.weight(1f).fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp)
+            .clip(RoundedCornerShape(PAGE_CARD_CORNER))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
         when {
             view.vanished -> JobsMessage(stringResource(R.string.remote_jobs_vanished))
             !view.loaded && view.failure != null ->
@@ -1050,8 +1304,9 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
         )
 }
 
+/** Live output lines that follow the tail; [modifier] sizes the list, the whole pane by default. */
 @Composable
-private fun JobOutput(lines: List<JobOutputLine>, firstLine: Long) {
+internal fun JobOutput(lines: List<JobOutputLine>, firstLine: Long, modifier: Modifier = Modifier.fillMaxSize()) {
     // One item per line, and per JOB_LINE_CHUNK_CHARS of a long line; keys are absolute line indexes.
     val items = remember(lines, firstLine) {
         buildList {
@@ -1092,7 +1347,7 @@ private fun JobOutput(lines: List<JobOutputLine>, firstLine: Long) {
         if (follow && items.isNotEmpty()) listState.scrollToItem(items.lastIndex, Int.MAX_VALUE / 2)
     }
     LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 12.dp).testTag("jobOutput"),
+        modifier.padding(horizontal = 12.dp).testTag("jobOutput").glassSource(),
         state = listState,
         contentPadding = PaddingValues(vertical = 8.dp),
     ) {

@@ -1,7 +1,15 @@
 <resources>
     <!-- Readable titles for common tool cards in the chat history. -->
+    <string name="remote_tool_advisor">Ask the advisor</string>
+    <string name="remote_tool_search">Search files</string>
+    <string name="remote_tool_find">Find files</string>
+    <string name="remote_tool_list">List folder</string>
+    <string name="remote_tool_web_search">Search the web</string>
+    <string name="remote_tool_web_fetch">Open web page</string>
     <string name="remote_tool_read">Read file</string>
     <string name="remote_tool_edit">Edit file</string>
     <string name="remote_tool_write">Write file</string>
     <string name="remote_tool_bash">Run command</string>
+    <string name="remote_tool_bash_background">Background shell</string>
+    <string name="remote_chat_activity_working">Pi is working</string>
 </resources>

@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
@@ -54,8 +53,13 @@ class ChatPanelsUiTest {
                     )
             }
         }
-        val description = resources.getQuantityString(R.plurals.remote_panel_files_touched, 3, 3)
-        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().assertTextContains("3", substring = true)
+        val description =
+            listOf(
+                    resources.getQuantityString(R.plurals.remote_panel_files_changed_description, 2, 2),
+                    resources.getQuantityString(R.plurals.remote_panel_files_read_description, 1, 1),
+                )
+                .joinToString(", ")
+        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().assertTextContains("2", substring = true)
         compose.onNodeWithContentDescription(description).assertExists()
         compose.onNodeWithTag("touchedFilesSummary").performClick()
         compose.waitUntil(5_000) {
@@ -95,10 +99,15 @@ class ChatPanelsUiTest {
         compose.onAllNodesWithContentDescription(abort).assertCountEquals(1)
         compose.onNodeWithContentDescription(abort).performClick()
         assertEquals(listOf(live), aborted)
-        compose.onNodeWithText("scout").performClick()
-        assertEquals(listOf(live), openedEntries)
+        // Entries without a child session cannot be opened.
         compose.onNodeWithText("planner").performClick()
+        assertTrue(openedEntries.isEmpty())
+        // The redesigned popover has a labeled action and closes when navigating.
+        val details = resources.getString(R.string.remote_subagent_open_details)
+        compose.onAllNodesWithText(details).assertCountEquals(1)
+        compose.onNodeWithText(details).performClick()
         assertEquals(listOf(live), openedEntries)
+        compose.onNodeWithTag("subagentPopover").assertDoesNotExist()
     }
 
     @Test
@@ -121,31 +130,12 @@ class ChatPanelsUiTest {
     }
 
     @Test
-    fun timelineRailJumpsToNearestMarker() {
+    fun chatScrollbarJumpsToANearbyTickIgnoresFarTapsAndScrollsOnDrag() {
         val markers =
             listOf(
-                TimelineMarker("first", TimelineMarkerKind.EDIT, 0f),
-                TimelineMarker("middle", TimelineMarkerKind.ERROR, 0.5f),
-                TimelineMarker("last", TimelineMarkerKind.QUESTION, 1f),
-            )
-        val jumps = mutableListOf<String>()
-        compose.setContent {
-            MaterialTheme { TimelineRail(markers, onJump = { jumps += it }, modifier = Modifier.height(400.dp)) }
-        }
-        val rail = compose.onNodeWithTag("timelineRail").assertIsDisplayed()
-        rail.performTouchInput { click(Offset(centerX, height * 0.55f)) }
-        rail.performTouchInput { click(Offset(centerX, height - 1f)) }
-        rail.performTouchInput { click(Offset(centerX, 1f)) }
-        compose.waitForIdle()
-        assertEquals(listOf("middle", "last", "first"), jumps)
-    }
-
-    @Test
-    fun timelineRailLetsDragsScrollTheListAndIgnoresFarTaps() {
-        val markers =
-            listOf(
-                TimelineMarker("first", TimelineMarkerKind.EDIT, 0f),
-                TimelineMarker("second", TimelineMarkerKind.PLAN, 0.1f),
+                TimelineMarker("first", TimelineMarkerKind.USER, 0),
+                TimelineMarker("middle", TimelineMarkerKind.ERROR, 100),
+                TimelineMarker("last", TimelineMarkerKind.QUESTION, 199),
             )
         val jumps = mutableListOf<String>()
         lateinit var list: LazyListState
@@ -156,28 +146,48 @@ class ChatPanelsUiTest {
                     LazyColumn(Modifier.fillMaxSize(), state = list) {
                         items(200) { Text("row $it", Modifier.height(40.dp)) }
                     }
-                    TimelineRail(
+                    ChatScrollbar(
+                        list,
                         markers,
+                        listIndex = { it.index },
                         onJump = { jumps += it },
-                        modifier = Modifier.align(Alignment.TopEnd).fillMaxHeight(),
-                        scrollState = list,
+                        modifier = Modifier.align(Alignment.TopEnd),
                     )
                 }
             }
         }
-        val rail = compose.onNodeWithTag("timelineRail").assertIsDisplayed()
-        rail.performTouchInput { swipeUp() }
+        val bar = compose.onNodeWithTag("chatScrollbar").assertIsDisplayed()
+        bar.performTouchInput { click(Offset(centerX, height * 100.5f / 200)) }
+        bar.performTouchInput { click(Offset(centerX, height * 0.8f)) }
+        compose.waitForIdle()
+        assertEquals(listOf("middle"), jumps)
+        bar.performTouchInput { swipeDown() }
         compose.waitForIdle()
         assertTrue(list.firstVisibleItemIndex > 0)
-        rail.performTouchInput { click(Offset(centerX, height * 0.8f)) }
-        compose.waitForIdle()
-        assertTrue(jumps.isEmpty())
     }
 
     @Test
-    fun timelineRailIsHiddenWithoutMarkers() {
-        compose.setContent { MaterialTheme { TimelineRail(emptyList(), onJump = {}) } }
-        compose.onNodeWithTag("timelineRail").assertDoesNotExist()
+    fun compactionBannerShowsTheDottedCompactionGlyph() {
+        val now = System.currentTimeMillis()
+        compose.setContent {
+            MaterialTheme {
+                androidx.compose.foundation.layout.Column {
+                    CompactionBanner(SessionCompaction("manual", now - 1_000), now)
+                    CompactionBanner(SessionCompaction("overflow", now - 1_000), now, floating = false)
+                }
+            }
+        }
+        // Floating and inline banners share the glyph, the label and the reason.
+        compose.onAllNodesWithTag("compactionBanner").assertCountEquals(2)
+        compose.onAllNodesWithTag("compactionGlyph", useUnmergedTree = true).assertCountEquals(2)
+        compose.onAllNodesWithText(resources.getString(R.string.remote_panel_compacting)).assertCountEquals(2)
+        compose.onNodeWithText(resources.getString(R.string.remote_panel_compaction_manual)).assertIsDisplayed()
+        compose.onNodeWithText(resources.getString(R.string.remote_panel_compaction_overflow)).assertIsDisplayed()
+        // No Material progress indicator (it would expose progress semantics); the glyph is decorative.
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo), useUnmergedTree = true)
+            .assertCountEquals(0)
+        compose.onAllNodes(hasTestTag("compactionGlyph") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription), useUnmergedTree = true)
+            .assertCountEquals(0)
     }
 
     @Test

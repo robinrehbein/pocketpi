@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Code in Files and Changes: selecting and copying lines, zoom and the drag of picked lines
+         (CodeGutter.kt). The keyboard labels also name the Ctrl+/ shortcut list. -->
+    <string name="remote_code_select_all">Alle Zeilen auswählen</string>
+    <string name="remote_code_copy_lines">Markierte Zeilen kopieren</string>
+    <string name="remote_code_zoom_in">Code vergrößern</string>
+    <string name="remote_code_zoom_out">Code verkleinern</string>
+    <!-- The clipboard label of copied lines. -->
+    <string name="remote_code_copy_label">Markierte Zeilen</string>
+    <!-- Diff menu: the picked lines with their +, - or space prefixes, for a patch. -->
+    <string name="remote_code_copy_with_prefix">Mit +/- kopieren</string>
+    <!-- The hint of a diff line that a click picks; a second click clears the pick. -->
+    <string name="remote_changes_diff_pick">Diese Zeile auswählen</string>
+</resources>

@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonObject
+
 /** The composer content an edit fork starts with; attachments are not carried over. */
 internal data class ForkDraft(
     val text: String,
@@ -63,3 +65,48 @@ internal class MessageFork(
     val stopFirst: Boolean,
     val onFork: (messageId: String, mode: ForkMode) -> Unit,
 )
+
+/** What a host `fork` result carries beyond the new session; [mode] is its wire mode. */
+internal class ForkResult(
+    val session: JsonObject,
+    val mode: String,
+    val text: String?,
+    val resend: String?,
+)
+
+private val FORK_RESENDS = setOf("accepted", "failed", "uncertain")
+
+/**
+ * Validates a `fork` result for [sourceId] in [projectId]. [modes] are the wire modes the request
+ * may produce: `edit` carries `text`, `retry` carries `resend`, and `at` (a fork from a tree node)
+ * carries nothing more. Throws [IllegalArgumentException] for anything else.
+ */
+internal fun validatedFork(
+    data: JsonObject,
+    sourceId: String,
+    projectId: String,
+    modes: Set<String>,
+): ForkResult {
+    val mode = data.text("mode")
+    Wire.keys(
+        data,
+        setOf(
+            "kind",
+            "session",
+            "sourceSessionId",
+            "mode",
+            *when (mode) {
+                "edit" -> arrayOf("text")
+                "retry" -> arrayOf("resend")
+                else -> emptyArray()
+            },
+        ),
+    )
+    require(data.text("kind") == "fork" && data.text("sourceSessionId") == sourceId)
+    require(mode in modes)
+    val session = data.obj("session")
+    require(session.text("projectId") == projectId)
+    val text = if (mode == "edit") data.text("text").also { require(it.encodeToByteArray().size <= 128 * 1024) } else null
+    val resend = if (mode == "retry") data.text("resend").also { require(it in FORK_RESENDS) } else null
+    return ForkResult(session, mode, text, resend)
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- The wear module compiles the phone sources in ../src/main/java, whose screens use the phone
+         Material 3 theme and never run on the watch. The check stays on for wear/src. -->
+    <issue id="WearMaterialTheme">
+        <ignore path="../src/main/java" />
+    </issue>
+</lint>

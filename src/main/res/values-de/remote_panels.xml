@@ -1,15 +1,23 @@
 <resources>
-    <plurals name="remote_panel_files_touched">
-        <item quantity="one">%d Datei bearbeitet oder gelesen</item>
-        <item quantity="other">%d Dateien bearbeitet oder gelesen</item>
+    <plurals name="remote_panel_files_changed_description">
+        <item quantity="one">%d Datei geändert</item>
+        <item quantity="other">%d Dateien geändert</item>
+    </plurals>
+    <plurals name="remote_panel_files_read_description">
+        <item quantity="one">%d Datei gelesen</item>
+        <item quantity="other">%d Dateien gelesen</item>
     </plurals>
     <plurals name="remote_panel_file_uses">
         <item quantity="one">%d-mal verwendet</item>
         <item quantity="other">%d-mal verwendet</item>
     </plurals>
-    <plurals name="remote_panel_files_count">
-        <item quantity="one">%d Datei</item>
-        <item quantity="other">%d Dateien</item>
+    <plurals name="remote_panel_files_changed">
+        <item quantity="one">%d geändert</item>
+        <item quantity="other">%d geändert</item>
+    </plurals>
+    <plurals name="remote_panel_files_read">
+        <item quantity="one">%d gelesen</item>
+        <item quantity="other">%d gelesen</item>
     </plurals>
     <plurals name="remote_panel_lines_added">
         <item quantity="one">%d Zeile hinzugefügt</item>
@@ -19,37 +27,35 @@
         <item quantity="one">%d Zeile entfernt</item>
         <item quantity="other">%d Zeilen entfernt</item>
     </plurals>
-    <string name="remote_panel_files_title">Dateien in diesem Chat</string>
+    <string name="remote_panel_files_title">Dateien in dieser Sitzung</string>
     <string name="remote_panel_files_changed">Geändert</string>
     <string name="remote_panel_files_read">Gelesen</string>
     <plurals name="remote_panel_subagents_running">
-        <item quantity="one">%d Unteragent läuft</item>
-        <item quantity="other">%d Unteragenten laufen</item>
+        <item quantity="one">%d Subagent läuft</item>
+        <item quantity="other">%d Subagenten laufen</item>
     </plurals>
     <plurals name="remote_panel_subagents_queued">
-        <item quantity="one">%d Unteragent wartet</item>
-        <item quantity="other">%d Unteragenten warten</item>
+        <item quantity="one">%d Subagent wartet</item>
+        <item quantity="other">%d Subagenten warten</item>
     </plurals>
-    <string name="remote_panel_subagents_expand">Unteragenten anzeigen</string>
-    <string name="remote_panel_subagents_collapse">Unteragenten ausblenden</string>
-    <string name="remote_panel_subagent_abort">Unteragent stoppen</string>
-    <string name="remote_panel_timeline">Chat-Zeitleiste</string>
-    <string name="remote_panel_jump_error">Zum letzten Fehler springen</string>
-    <string name="remote_panel_jump_question">Zur letzten Frage springen</string>
-    <string name="remote_panel_jump_edit">Zur letzten Änderung springen</string>
-    <string name="remote_panel_jump_plan">Zum letzten Plan springen</string>
+    <string name="remote_panel_subagents_expand">Subagenten anzeigen</string>
+    <string name="remote_panel_subagents_collapse">Subagenten ausblenden</string>
+    <string name="remote_panel_subagent_abort">Subagent stoppen</string>
     <string name="remote_panel_marker_error">Fehler</string>
     <string name="remote_panel_marker_question">Frage</string>
     <string name="remote_panel_marker_edit">Änderung</string>
     <string name="remote_panel_marker_plan">Plan</string>
-    <string name="remote_panel_timeline_legend">Markierungen in der Zeitleiste</string>
+    <string name="remote_panel_marker_user">Deine Nachricht</string>
+    <string name="remote_chat_history">Verlauf</string>
+    <string name="remote_chat_history_close">Verlauf schließen</string>
+    <string name="remote_chat_history_empty">Deine Nachrichten, Fragen, Änderungen und Fehler erscheinen hier.</string>
     <string name="remote_panel_errors_filter">Fehler (%d)</string>
     <string name="remote_panel_compacting">Kontext wird verdichtet…</string>
     <string name="remote_panel_compaction_manual">Manuell gestartet</string>
     <string name="remote_panel_compaction_threshold">Automatisch, der Kontext ist fast voll</string>
     <string name="remote_panel_compaction_overflow">Erholung von einem Kontextüberlauf</string>
-    <string name="remote_panel_child_picker_title">Unteragent-Chat öffnen</string>
-    <string name="remote_panel_child_picker_hint">Dieser Unteragent ließ sich keinem Chat eindeutig zuordnen. Wähle den richtigen aus.</string>
+    <string name="remote_panel_child_picker_title">Subagent-Sitzung öffnen</string>
+    <string name="remote_panel_child_picker_hint">Dieser Subagent ließ sich keiner Sitzung eindeutig zuordnen. Wähle die richtige aus.</string>
     <string name="remote_panel_usage_title">Summe der Sitzung</string>
     <string name="remote_panel_usage_input">Eingabe-Tokens</string>
     <string name="remote_panel_usage_output">Ausgabe-Tokens</string>

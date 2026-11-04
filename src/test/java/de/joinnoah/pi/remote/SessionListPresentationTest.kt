@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -17,7 +18,7 @@ class SessionListPresentationTest {
 
         assertEquals(
             listOf("waiting", "history", "idle", "running"),
-            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true)
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true, confirmed = true)
                 .map(SessionListItem::id),
         )
     }
@@ -42,7 +43,7 @@ class SessionListPresentationTest {
                 ),
             )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
 
         assertEquals(listOf("parent", "child"), visible.map(SessionListItem::id))
         assertEquals(0, visible[0].depth)
@@ -65,7 +66,7 @@ class SessionListPresentationTest {
         )
         fun visible(collapsedIds: Set<String>) = visibleSessionListItems(
             sessions, connected = true, loading = false, hideOffline = false,
-            collapsedIds = collapsedIds,
+            collapsedIds = collapsedIds, confirmed = true,
         )
 
         assertEquals(listOf("first", "second", "other-child"),
@@ -106,7 +107,7 @@ class SessionListPresentationTest {
                 ),
             )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = true, confirmed = true)
 
         assertEquals(listOf("parent", "child", "grandchild"), visible.map(SessionListItem::id))
         assertEquals(listOf(0, 1, 2), visible.map(SessionListItem::depth))
@@ -146,7 +147,7 @@ class SessionListPresentationTest {
                 ),
             )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
 
         assertEquals(listOf("missing", "first", "second", "self"), visible.map(SessionListItem::id))
         assertEquals(listOf(0, 0, 0, 0), visible.map(SessionListItem::depth))
@@ -170,11 +171,11 @@ class SessionListPresentationTest {
                 )
             assertEquals(
                 SessionAvailability.OFFLINE,
-                sessionListItem(session, connected = false, loading = false).availability,
+                sessionListItem(session, connected = false, loading = false, confirmed = true).availability,
             )
             assertEquals(
                 availability,
-                sessionListItem(session, connected = true, loading = true).availability,
+                sessionListItem(session, connected = true, loading = true, confirmed = true).availability,
             )
         }
     }
@@ -197,7 +198,7 @@ class SessionListPresentationTest {
                         "status" to status,
                     ),
                     true,
-                    false,
+                    false, confirmed = true,
                 )
             assertEquals(availability, item.availability)
             assertTrue(item.continuesAsCopy)
@@ -216,7 +217,7 @@ class SessionListPresentationTest {
                     "updatedAt" to 1234,
                 ),
                 true,
-                false,
+                false, confirmed = true,
             )
         assertEquals("Last message", item.preview)
         assertEquals(1234L, item.updatedAt)
@@ -227,10 +228,33 @@ class SessionListPresentationTest {
             sessionListItem(
                     Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
                     true,
-                    false,
+                    false, confirmed = true,
                 )
                 .daemonOwned
         )
+    }
+
+    @Test
+    fun onlyAMarkedWorkerWithV2ClosesAmongTerminalSessions() {
+        val close = setOf(SESSION_CLOSE_CAPABILITY)
+        val v2 = close + HOST_WORKER_V2_CAPABILITY
+        val worker =
+            sessionListItem(
+                withHostWorker(Wire.objectOf("id" to "w", "title" to "W", "origin" to "worker", "status" to "idle")),
+                connected = true,
+                loading = false, confirmed = true,
+            )
+        assertTrue(canCloseSession(worker, true, false, v2))
+        assertFalse(canCloseSession(worker, true, false, close))
+        assertFalse(canCloseSession(worker, true, false, setOf(HOST_WORKER_V2_CAPABILITY)))
+        assertFalse(canCloseSession(worker.copy(availability = SessionAvailability.OFFLINE), true, false, v2))
+        val terminal =
+            sessionListItem(
+                Wire.objectOf("id" to "t", "title" to "T", "origin" to "tui", "status" to "idle"),
+                connected = true,
+                loading = false, confirmed = true,
+            )
+        assertFalse(canCloseSession(terminal, true, false, v2))
     }
 
     @Test
@@ -239,7 +263,7 @@ class SessionListPresentationTest {
             sessionListItem(
                 Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
                 connected = true,
-                loading = false,
+                loading = false, confirmed = true,
             )
         assertTrue(canCloseSession(rpc, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
         assertFalse(canCloseSession(rpc, false, false, setOf(SESSION_CLOSE_CAPABILITY)))
@@ -249,9 +273,20 @@ class SessionListPresentationTest {
             sessionListItem(
                 Wire.objectOf("id" to "offline", "title" to "Offline", "origin" to "rpc", "status" to "offline"),
                 connected = true,
-                loading = false,
+                loading = false, confirmed = true,
             )
         assertFalse(canCloseSession(offline, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
+    }
+
+    @Test
+    fun closingWaitsForAConfirmedStatus() {
+        val row = Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "running")
+        val confirmed = sessionListItem(row, connected = true, loading = false, confirmed = true)
+        val unconfirmed = sessionListItem(row, connected = true, loading = false, confirmed = false)
+        assertFalse(confirmed.lastKnown)
+        assertTrue(unconfirmed.lastKnown)
+        assertTrue(canCloseSession(confirmed, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
+        assertFalse(canCloseSession(unconfirmed, true, false, setOf(SESSION_CLOSE_CAPABILITY)))
     }
 
     @Test
@@ -266,12 +301,12 @@ class SessionListPresentationTest {
 
         assertEquals(
             listOf("waiting-a", "waiting-b", "idle", "running", "offline"),
-            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
                 .map(SessionListItem::id),
         )
         assertEquals(
             listOf("idle", "waiting-a", "running", "waiting-b", "offline"),
-            visibleSessionListItems(sessions, connected = false, loading = false, hideOffline = false)
+            visibleSessionListItems(sessions, connected = false, loading = false, hideOffline = false, confirmed = true)
                 .map(SessionListItem::id),
         )
     }
@@ -286,7 +321,7 @@ class SessionListPresentationTest {
             Wire.objectOf("id" to "child-a", "title" to "Child A", "origin" to "rpc", "parentSessionId" to "parent", "status" to "waiting"),
         )
 
-        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false)
+        val visible = visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false, confirmed = true)
 
         assertEquals(
             listOf("parent", "child-b", "child-a", "idle", "idle-child"),
@@ -304,10 +339,366 @@ class SessionListPresentationTest {
             Wire.objectOf("id" to "grandchild", "title" to "Grandchild", "origin" to "rpc", "parentSessionId" to "live", "status" to "idle"),
         )
         fun counts(hideOffline: Boolean) =
-            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = hideOffline)
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = hideOffline, confirmed = true)
                 .associate { it.id to it.childCount }
 
         assertEquals(mapOf("parent" to 2, "live" to 1, "grandchild" to 0, "gone" to 0), counts(false))
         assertEquals(mapOf("parent" to 1, "live" to 1, "grandchild" to 0), counts(true))
+    }
+
+    private fun row(id: String, status: String = "idle", updatedAt: Long = 0) =
+        Wire.objectOf("id" to id, "title" to id, "origin" to "rpc", "status" to status, "updatedAt" to updatedAt)
+
+    @Test
+    fun projectSessionsCountAVerifiedListAndNotACachedOne() {
+        val rows = listOf(row("w", "waiting"), row("r1", "running"), row("r2", "running"), row("i"))
+
+        val verified = projectSessions("p", "Project", rows, verified = true)
+        assertEquals(rows, verified.sessions)
+        assertEquals(SessionCounts(waiting = 1, running = 2), verified.counts)
+        assertFalse(verified.truncated)
+
+        val cached = projectSessions("p", "Project", rows, verified = false)
+        assertNull(cached.counts)
+        assertEquals(verified.unverified(), cached)
+    }
+
+    @Test
+    fun projectSessionsKeepWaitingRunningAndRecentRowsOverTheCap() {
+        val idle = List(PROJECT_SESSIONS_CAP + 10) { row("idle$it", updatedAt = it.toLong()) }
+        val rows = idle + row("old-waiting", "waiting", updatedAt = -1) + row("old-running", "running", updatedAt = -2)
+
+        val entry = projectSessions("p", "Project", rows, verified = true)
+        assertEquals(PROJECT_SESSIONS_CAP, entry.sessions.size)
+        assertTrue(entry.truncated)
+        val kept = entry.sessions.map { it.text("id") }
+        assertEquals(listOf("old-waiting", "old-running"), kept.take(2))
+        // The oldest idle rows make room.
+        assertTrue("idle${idle.size - 1}" in kept)
+        assertFalse("idle0" in kept)
+        // The counts cover the whole list, not only the kept rows.
+        assertEquals(SessionCounts(waiting = 1, running = 1), entry.counts)
+    }
+
+    @Test
+    fun patchedProjectSessionsFollowTheirRowsChanges() {
+        val entry = projectSessions("p", "Project", listOf(row("a", "waiting"), row("b")), verified = true)
+        fun status(id: String, value: String): (JsonObject) -> JsonObject =
+            { if (it.text("id") == id) Wire.objectOf("id" to id, "status" to value) else it }
+
+        val running = entry.patched(status("b", "running"))
+        assertEquals(SessionCounts(waiting = 1, running = 1), running.counts)
+        val answered = running.patched(status("a", "idle"))
+        assertEquals(SessionCounts(running = 1), answered.counts)
+        // A row the patch leaves alone keeps the same entry.
+        assertSame(answered, answered.patched { it })
+        // A list without counts stays without them.
+        assertNull(entry.unverified().patched(status("a", "running")).counts)
+    }
+
+    @Test
+    fun projectSessionItemsReadOfflineUntilTheMacConfirmsThem() {
+        val entry = projectSessions("p", "Project", listOf(row("a", "running")), verified = true)
+
+        assertEquals(
+            listOf(SessionAvailability.RUNNING),
+            projectSessionItems(entry, connected = true).map(SessionListItem::availability),
+        )
+        assertEquals(
+            listOf(SessionAvailability.OFFLINE),
+            projectSessionItems(entry.unverified(), connected = true).map(SessionListItem::availability),
+        )
+        assertEquals(
+            listOf(SessionAvailability.OFFLINE),
+            projectSessionItems(entry, connected = false).map(SessionListItem::availability),
+        )
+        // A dropped connection unverifies the entry: its rows read offline, not as a last-known status.
+        assertEquals(
+            listOf(false),
+            projectSessionItems(entry.unverified(), connected = false).map(SessionListItem::lastKnown),
+        )
+    }
+
+    @Test
+    fun staleRowsKeepTheirLastKnownStatusWhileTheMacReconnects() {
+        for ((status, availability) in
+            listOf(
+                "idle" to SessionAvailability.IDLE,
+                "running" to SessionAvailability.RUNNING,
+                "waiting" to SessionAvailability.WAITING,
+                "offline" to SessionAvailability.OFFLINE,
+            )) {
+            val session = Wire.objectOf("id" to "s", "title" to "Title", "origin" to "rpc", "status" to status)
+            assertEquals(
+                availability,
+                sessionListItem(session, connected = false, loading = false, stale = true, confirmed = true).availability,
+            )
+            assertEquals(
+                availability,
+                sessionListItems(listOf(session), connected = false, loading = false, stale = true, confirmed = true)
+                    .single().availability,
+            )
+            // Without a reconnect under way a lost connection still shows every row offline.
+            assertEquals(
+                SessionAvailability.OFFLINE,
+                sessionListItem(session, connected = false, loading = false, stale = false, confirmed = true).availability,
+            )
+        }
+        // A last-known status offers nothing that needs the connection.
+        val stale =
+            sessionListItem(
+                Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
+                connected = false,
+                loading = false,
+                stale = true, confirmed = true,
+            )
+        assertFalse(canCloseSession(stale, false, false, setOf(SESSION_CLOSE_CAPABILITY)))
+    }
+
+    @Test
+    fun hideOfflineAppliesToTheLastKnownStatusWhileStaleAndIsOffWithoutAConnection() {
+        assertTrue(hidesOfflineSessions(setting = true, connected = true, stale = false))
+        assertTrue(hidesOfflineSessions(setting = true, connected = false, stale = true))
+        assertFalse(hidesOfflineSessions(setting = true, connected = false, stale = false))
+        assertFalse(hidesOfflineSessions(setting = false, connected = true, stale = false))
+        assertFalse(hidesOfflineSessions(setting = false, connected = false, stale = true))
+
+        val sessions =
+            listOf(
+                Wire.objectOf("id" to "gone", "title" to "Gone", "origin" to "rpc", "status" to "offline"),
+                Wire.objectOf("id" to "idle", "title" to "Idle", "origin" to "rpc", "status" to "idle"),
+                Wire.objectOf("id" to "running", "title" to "Running", "origin" to "rpc", "status" to "running"),
+            )
+        fun visible(connected: Boolean, stale: Boolean) =
+            visibleSessionListItems(
+                sessions,
+                connected = connected,
+                loading = false,
+                hideOffline = hidesOfflineSessions(true, connected, stale),
+                stale = stale, confirmed = true,
+            ).map { it.id to it.availability }
+
+        // Connected: the real availability decides.
+        assertEquals(
+            listOf("idle" to SessionAvailability.IDLE, "running" to SessionAvailability.RUNNING),
+            visible(connected = true, stale = false),
+        )
+        // Reconnecting: the same rows, with the status they last had.
+        assertEquals(visible(connected = true, stale = false), visible(connected = false, stale = true))
+        // Offline with nothing kept (another Mac, a denied device, a fresh start): every row is
+        // offline, and the filter steps aside rather than hide them all.
+        assertEquals(
+            listOf(
+                "gone" to SessionAvailability.OFFLINE,
+                "idle" to SessionAvailability.OFFLINE,
+                "running" to SessionAvailability.OFFLINE,
+            ),
+            visible(connected = false, stale = false),
+        )
+    }
+
+    @Test
+    fun aLastKnownStatusIsMarkedAlsoOnceTheReconnectHasGivenUp() {
+        val running = Wire.objectOf("id" to "r", "title" to "Running", "origin" to "rpc", "status" to "running")
+        val gone = Wire.objectOf("id" to "g", "title" to "Gone", "origin" to "rpc", "status" to "offline")
+        // After a second transient failure, or once the reconnect stopped, the connection reads
+        // "Offline" while the state stays stale: the rows still carry the last-known status, marked.
+        val item = sessionListItem(running, connected = false, loading = false, stale = true, confirmed = true)
+        assertEquals(SessionAvailability.RUNNING, item.availability)
+        assertTrue(item.lastKnown)
+        assertFalse(sessionListItem(gone, connected = false, loading = false, stale = true, confirmed = true).lastKnown)
+        assertFalse(sessionListItem(running, connected = true, loading = false, stale = false, confirmed = true).lastKnown)
+        assertFalse(sessionListItem(running, connected = false, loading = false, stale = false, confirmed = true).lastKnown)
+        // Sorting and the live filter still go by the last-known status.
+        assertTrue(item.live())
+        assertEquals(
+            listOf("r" to true),
+            visibleSessionListItems(
+                listOf(gone, running),
+                connected = false,
+                loading = false,
+                hideOffline = hidesOfflineSessions(true, connected = false, stale = true),
+                stale = true, confirmed = true,
+            ).map { it.id to it.lastKnown },
+        )
+    }
+
+    @Test
+    fun pinnedSessionsListFirstAndUnreadFollowsTheMarks() {
+        val sessions =
+            listOf(
+                Wire.objectOf("id" to "waiting", "title" to "Waiting", "origin" to "rpc", "status" to "waiting", "updatedAt" to 300L),
+                Wire.objectOf("id" to "plain", "title" to "Plain", "origin" to "rpc", "status" to "idle", "updatedAt" to 200L),
+                Wire.objectOf("id" to "pinned", "title" to "Pinned", "origin" to "rpc", "status" to "idle", "updatedAt" to 100L),
+                Wire.objectOf("id" to "changed", "title" to "Changed", "origin" to "rpc", "status" to "idle", "updatedAt" to 400L),
+                Wire.objectOf("id" to "open", "title" to "Open", "origin" to "rpc", "status" to "idle", "updatedAt" to 500L),
+            )
+        val marks =
+            mapOf(
+                "pinned" to SessionMark(pinned = true, seenUpdatedAt = 100),
+                "changed" to SessionMark(seenUpdatedAt = 350),
+                "open" to SessionMark(seenUpdatedAt = 100),
+            )
+
+        val visible =
+            visibleSessionListItems(
+                sessions,
+                connected = true,
+                loading = false,
+                hideOffline = false,
+                marks = marks,
+                openSessionId = "open", confirmed = true,
+            )
+
+        assertEquals(listOf("pinned", "waiting", "plain", "changed", "open"), visible.map(SessionListItem::id))
+        assertEquals(listOf("changed"), visible.filter { it.unread }.map(SessionListItem::id))
+        assertTrue(visible.single { it.id == "pinned" }.pinned)
+        assertFalse(visible.single { it.id == "waiting" }.pinned)
+    }
+
+    @Test
+    fun aFinishedRunIsUnreadUntilTheChatIsSeen() {
+        val sessions =
+            listOf(Wire.objectOf("id" to "done", "title" to "Done", "origin" to "rpc", "status" to "idle", "updatedAt" to 100L))
+
+        val finished =
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false,
+                marks = mapOf("done" to SessionMark(finishedAt = 90)), confirmed = true)
+        val read =
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false,
+                marks = mapOf("done" to SessionMark(seenAt = 95, seenUpdatedAt = 100)), confirmed = true)
+
+        assertTrue(finished.single().unread)
+        assertFalse(read.single().unread)
+    }
+
+    private fun quickChat(id: String, status: String, verified: Boolean = true) =
+        ProjectChatSummary("p1", "Alpha", Wire.objectOf("id" to id, "title" to id, "status" to status), verified)
+
+    @Test
+    fun quickAccessShowsThreeRunningAndThreeRecentChatsUntilShowAll() {
+        val chats =
+            (1..4).map { quickChat("running$it", "running") } +
+                (1..5).map { quickChat("recent$it", "idle") }
+
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(3, folded.running.size)
+        assertEquals(3, folded.recent.size)
+        assertTrue(folded.runningExpandable)
+        assertTrue(folded.recentExpandable)
+
+        val all = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = true)
+        assertEquals(4, all.running.size)
+        assertEquals(5, all.recent.size)
+    }
+
+    @Test
+    fun eachGroupExpandsOnItsOwn() {
+        val chats = (1..4).map { quickChat("running$it", "running") } + (1..2).map { quickChat("recent$it", "idle") }
+
+        val runningOnly = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = false)
+        assertEquals(4, runningOnly.running.size)
+        assertEquals(2, runningOnly.recent.size)
+        assertTrue(runningOnly.runningExpandable)
+        assertFalse(runningOnly.recentExpandable)
+    }
+
+    @Test
+    fun quickAccessHasNoShowAllWhileEveryGroupFitsThree() {
+        val chats = (1..3).map { quickChat("running$it", "running") } + quickChat("recent", "idle")
+
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertFalse(folded.runningExpandable)
+        assertFalse(folded.recentExpandable)
+    }
+
+    @Test
+    fun waitingChatsAreNeverCutAndNeedTheConnectionAndAVerifiedList() {
+        val chats =
+            (1..5).map { quickChat("waiting$it", "waiting") } +
+                quickChat("unverified", "waiting", verified = false)
+
+        val online = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(5, online.waiting.size)
+        assertEquals(listOf("unverified"), online.recent.map { it.session.text("id") })
+
+        val offline = quickChats(chats, connected = false, showRunningAll = true, showRecentAll = true)
+        assertTrue(offline.waiting.isEmpty())
+        assertEquals(6, offline.recent.size)
+    }
+
+    @Test
+    fun freshWaitingShowsTheNeedsInputDiamondAndFreshRunningTheSpinner() {
+        assertEquals(StatusGlyphKind.NEEDS_INPUT, sessionBadgeGlyph(SessionAvailability.WAITING, lastKnown = false))
+        assertEquals(StatusGlyphKind.SESSION_RUNNING, sessionBadgeGlyph(SessionAvailability.RUNNING, lastKnown = false))
+        assertNull(sessionBadgeGlyph(SessionAvailability.IDLE, lastKnown = false))
+        assertNull(sessionBadgeGlyph(SessionAvailability.OFFLINE, lastKnown = false))
+    }
+
+    @Test
+    fun lastKnownStatusNeverGetsALiveGlyph() {
+        SessionAvailability.entries.forEach { assertNull(it.name, sessionBadgeGlyph(it, lastKnown = true)) }
+    }
+
+    @Test
+    fun rowsOfAConnectionWhoseListHasNotAnsweredYetStayLastKnown() {
+        val tui = Wire.objectOf("id" to "t", "title" to "TUI", "origin" to "tui", "status" to "running")
+        val unconfirmed = sessionListItem(tui, connected = true, loading = false, confirmed = false)
+        assertEquals(SessionAvailability.RUNNING, unconfirmed.availability)
+        assertTrue(unconfirmed.lastKnown)
+        assertFalse(unconfirmed.liveMacTui)
+        assertNull(sessionBadgeGlyph(unconfirmed.availability, unconfirmed.lastKnown))
+
+        val confirmed = sessionListItem(tui, connected = true, loading = false, confirmed = true)
+        assertFalse(confirmed.lastKnown)
+        assertTrue(confirmed.liveMacTui)
+
+        val listed =
+            visibleSessionListItems(listOf(tui), connected = true, loading = false, hideOffline = false, confirmed = false)
+        assertTrue(listed.single().lastKnown)
+    }
+
+    private fun chat(id: String, status: String, parent: String? = null) =
+        ProjectChatSummary(
+            "p", "Project",
+            if (parent == null) Wire.objectOf("id" to id, "status" to status, "updatedAt" to 1)
+            else Wire.objectOf("id" to id, "status" to status, "parentSessionId" to parent, "updatedAt" to 1),
+            verified = true,
+        )
+
+    @Test
+    fun aBusySubagentShowsAsItsMainSession() {
+        val shown = mainSessionChats(
+            listOf(
+                chat("main", "idle"),
+                chat("sub", "running", parent = "main"),
+                chat("nested", "waiting", parent = "sub"),
+                chat("other", "idle"),
+                chat("doneSub", "idle", parent = "other"),
+            ),
+        )
+        assertEquals(listOf("main", "other"), shown.map { it.session.text("id") })
+        // The main session takes on the busiest activity below it; an idle subagent lends none.
+        assertEquals("waiting", shown.first().session.text("status"))
+        assertEquals("idle", shown.last().session.text("status"))
+    }
+
+    @Test
+    fun aSubagentWithoutItsMainSessionListedStays() {
+        val shown = mainSessionChats(listOf(chat("orphan", "running", parent = "gone"), chat("a", "running", parent = "b"), chat("b", "running", parent = "a")))
+        assertEquals(listOf("orphan", "a", "b"), shown.map { it.session.text("id") })
+        assertEquals("running", mainSessionChats(listOf(chat("main", "running"), chat("sub", "running", parent = "main"))).single().session.text("status"))
+    }
+
+    @Test
+    fun theFeaturedChatsBringTheMainSessionOfABusySubagent() {
+        // Twelve newer idle chats would push the old main session out of the twelve featured ones.
+        val newer = (1..12).map { ProjectChatSummary("p", "Project", Wire.objectOf("id" to "n$it", "status" to "idle", "updatedAt" to 100 + it), verified = true) }
+        val featured = sortedProjectChats(newer + chat("main", "idle") + chat("sub", "running", parent = "main"))
+        assertEquals(13, featured.size)
+        assertTrue(featured.any { it.session.text("id") == "main" })
+        // The stored rows keep their own status; only the page lends the subagent's.
+        assertEquals("idle", featured.first { it.session.text("id") == "main" }.session.text("status"))
+        assertEquals("running", mainSessionChats(featured).first { it.session.text("id") == "main" }.session.text("status"))
     }
 }

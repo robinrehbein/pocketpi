@@ -1,0 +1,697 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 9.1.1" type="baseline" client="gradle" dependencies="true" name="AGP (9.1.1)" variant="all" version="9.1.1">
+
+    <issue
+        id="ExifInterface"
+        message="Avoid using `android.media.ExifInterface`; use `androidx.exifinterface.media.ExifInterface` instead"
+        errorLine1="import android.media.ExifInterface"
+        errorLine2="       ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/AttachmentImporter.kt"
+            line="7"
+            column="8"/>
+    </issue>
+
+    <issue
+        id="ExifInterface"
+        message="Avoid using `android.media.ExifInterface`; use `androidx.exifinterface.media.ExifInterface` instead"
+        errorLine1="                    ExifInterface(ByteArrayInputStream(original))"
+        errorLine2="                    ^">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/AttachmentImporter.kt"
+            line="187"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 30): `android.Manifest.permission#POST_NOTIFICATIONS`"
+        errorLine1="                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)"
+        errorLine2="                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteNavigation.kt"
+            line="613"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="RequiresFeature"
+        message="`getInstance` should only be called if the feature `PROXY_OVERRIDE` is present; to check call `androidx.webkit.WebViewFeature#isFeatureSupported`"
+        errorLine1="        ProxyController.getInstance().setProxyOverride(config, executor, onApplied)"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactNetworkLock.kt"
+            line="45"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `localeConfig` is only used in API level 33 and higher (current min is 30)"
+        errorLine1="        android:localeConfig=&quot;@xml/locales_config&quot; android:supportsRtl=&quot;true&quot; android:usesCleartextTraffic=&quot;false&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="12"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellWidth` is only used in API level 31 and higher (current min is 30)"
+        errorLine1="    android:targetCellWidth=&quot;3&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/xml/pocketpi_widget_info.xml"
+            line="10"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellHeight` is only used in API level 31 and higher (current min is 30)"
+        errorLine1="    android:targetCellHeight=&quot;2&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/xml/pocketpi_widget_info.xml"
+            line="11"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="MissingOnRenderProcessGone"
+        message="WebViewClient should implement `onRenderProcessGone` to handle render process crashes or out-of-memory errors. Otherwise, the app will crash when the render process is shut down."
+        errorLine1=") : WebViewClient() {"
+        errorLine2="    ~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactSandbox.kt"
+            line="279"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Optional Modifier parameter should have a default value of `Modifier`"
+        errorLine1="private fun JobsMessage(text: String, modifier: Modifier = Modifier.fillMaxSize()) {"
+        errorLine2="                                      ~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/BackgroundJobs.kt"
+            line="974"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="private fun Notice(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant, modifier: Modifier = Modifier) {"
+        errorLine2="                                                                                            ~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ToolDetailScreen.kt"
+            line="520"
+            column="93"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier,"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/VoiceInput.kt"
+            line="151"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="MutableCollectionMutableState"
+        message="Creating a MutableState object with a mutable collection type"
+        errorLine1="    var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf&lt;String>()) }"
+        errorLine2="                                                       ~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteScreens.kt"
+            line="185"
+            column="56"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;active&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_design_filter_active_count&quot;>%1$d active filter&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/remote_design.xml"
+            line="9"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;percent&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_tool_detail_loading_progress_percent&quot;>Loading full output: %1$d percent&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/remote_tool_detail.xml"
+            line="41"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;consultations&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_advisor_remaining&quot;>%1$d of %2$d consultations left&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="34"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;tokens&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_context_window&quot;>Context window: %1$,d tokens&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="45"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;tokens&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_context_used&quot;>Used: about %1$,d tokens (%2$d%%)&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="46"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;tokens&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_context_remaining&quot;>Remaining: about %1$,d tokens&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="47"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;tokens&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;wear_tokens_used&quot;>%1$d tokens used&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="435"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;output&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;remote_result_count&quot;>%1$d output entries&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="587"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 30"
+        errorLine1="        if (Build.VERSION.SDK_INT >= 29) view.webViewRenderProcessClient = ArtifactRenderProcessClient()"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactSandbox.kt"
+            line="350"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 29"
+        errorLine1="@androidx.annotation.RequiresApi(29)"
+        errorLine2="~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactSandbox.kt"
+            line="375"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is never &lt; 30"
+        errorLine1="            if (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.P) {"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/MainActivity.kt"
+            line="132"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="FrequentlyChangingValue"
+        message="Reading a value annotated with @FrequentlyChangingValue inside composition"
+        errorLine1="    val viewportHeight = listState.layoutInfo.viewportSize.height"
+        errorLine2="                                   ~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteScreens.kt"
+            line="360"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var composerFocusRequest by remember { mutableStateOf(0) }"
+        errorLine2="                                           ~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteScreens.kt"
+            line="490"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var announcedMatches by remember { mutableStateOf(matches) }"
+        errorLine2="                                       ~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ToolDetailScreen.kt"
+            line="894"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var announcedCurrent by remember { mutableStateOf(current) }"
+        errorLine2="                                       ~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ToolDetailScreen.kt"
+            line="895"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.export_file_paths` appears to be unused"
+        errorLine1="&lt;paths>"
+        errorLine2="^">
+        <location
+            file="../src/main/res/xml/export_file_paths.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.pocketpi_widget_info` appears to be unused"
+        errorLine1="&lt;appwidget-provider xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../src/main/res/xml/pocketpi_widget_info.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_widget_name` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_widget_name&quot;>PocketPi sessions&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/remote_widget.xml"
+            line="3"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_widget_description` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_widget_description&quot;>Sessions that are waiting for you or running&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/remote_widget.xml"
+            line="4"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_advisor_current` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_advisor_current&quot;>%1$s · thinking %2$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="36"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_connect` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_connect&quot;>Connect&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="72"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_assistant` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_assistant&quot;>pi&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="184"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_thinking_status_option` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_thinking_status_option&quot;>Status only&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="244"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_thinking_text_option` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_thinking_text_option&quot;>Streamed thinking text&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="245"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_command_remove_quote` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_command_remove_quote&quot;>Remove the quote before running a command.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="268"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.remote_child_stop` appears to be unused"
+        errorLine1="    &lt;string name=&quot;remote_child_stop&quot;>Stop subagent&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/res/values/strings.xml"
+            line="314"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="WearRecents"
+        message="Set `taskAffinity` for Wear activities to make them appear correctly in recents"
+        errorLine1="        &lt;activity android:name=&quot;.WearActivity&quot; android:exported=&quot;true&quot;>"
+        errorLine2="        ^">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="15"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="WearRecents"
+        message="Avoid using `FLAG_ACTIVITY_NEW_TASK` and `FLAG_ACTIVITY_CLEAR_TOP`"
+        errorLine1="        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteNotifications.kt"
+            line="571"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="WearRecents"
+        message="Avoid using `FLAG_ACTIVITY_NEW_TASK` and `FLAG_ACTIVITY_CLEAR_TOP`"
+        errorLine1="        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteNotifications.kt"
+            line="605"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="WearRecents"
+        message="Avoid using `FLAG_ACTIVITY_NEW_TASK` and `FLAG_ACTIVITY_CLEAR_TOP`"
+        errorLine1="            context.startActivity(exportShareIntent(Uri.parse(uri), exportChooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))"
+        errorLine2="                                                                                                        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteScreens.kt"
+            line="611"
+            column="105"/>
+    </issue>
+
+    <issue
+        id="WearRecents"
+        message="Avoid using `FLAG_ACTIVITY_NEW_TASK` and `FLAG_ACTIVITY_CLEAR_TOP`"
+        errorLine1="                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)"
+        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteScreens.kt"
+            line="1470"
+            column="70"/>
+    </issue>
+
+    <issue
+        id="WearRecents"
+        message="Avoid using `FLAG_ACTIVITY_NEW_TASK` and `FLAG_ACTIVITY_CLEAR_TOP`"
+        errorLine1="        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/de/joinnoah/pi/remote/WearNotifications.kt"
+            line="35"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX function `createBitmap` instead?"
+        errorLine1="        val full = Bitmap.createBitmap(logicalWidth, logicalHeight, Bitmap.Config.ARGB_8888)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactThumbnail.kt"
+            line="94"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Bitmap.scale` instead?"
+        errorLine1="        val scaled = Bitmap.createScaledBitmap(full, width, height, true)"
+        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactThumbnail.kt"
+            line="99"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Bitmap.scale` instead?"
+        errorLine1="                    Bitmap.createScaledBitmap("
+        errorLine2="                    ^">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/AttachmentImporter.kt"
+            line="234"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX function `createBitmap` instead?"
+        errorLine1="        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)"
+        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ProjectImageDecoding.kt"
+            line="124"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="    val uri = Uri.parse(url)"
+        errorLine2="              ~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ProviderAuthScreens.kt"
+            line="103"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="                    importer.import(android.net.Uri.parse(uri), photo)"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteApplication.kt"
+            line="63"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="            context.startActivity(exportShareIntent(Uri.parse(uri), exportChooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))"
+        errorLine2="                                                    ~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/RemoteScreens.kt"
+            line="611"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Bitmap.scale` instead?"
+        errorLine1="    return Bitmap.createScaledBitmap("
+        errorLine2="           ^">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SentImageAttachments.kt"
+            line="45"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putString(&quot;theme&quot;, theme).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="81"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences"
+        errorLine2="        ^">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="86"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putBoolean(&quot;notification_prompt_shown&quot;, true).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="95"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putString(&quot;thinking_display&quot;, display).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="101"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putBoolean(&quot;hide_offline_sessions&quot;, hide).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="106"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putString(&quot;swipe_end_to_start&quot;, action.name).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="111"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putString(&quot;swipe_start_to_end&quot;, action.name).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="116"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit().putBoolean(&quot;enter_sends&quot;, enabled).apply()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="121"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        errorLine1="        preferences.edit()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/SettingsRepository.kt"
+            line="133"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ClickableViewAccessibility"
+        message="Custom view ``WebView`` has `setOnTouchListener` called on it but does not override `performClick`"
+        errorLine1="                                it.setOnTouchListener { _, _ -> true }"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactThumbnail.kt"
+            line="217"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="ClickableViewAccessibility"
+        message="`onTouch` lambda should call `View#performClick` when a click is detected"
+        errorLine1="                                it.setOnTouchListener { _, _ -> true }"
+        errorLine2="                                                      ~~~~~~~~~~~~~~~~">
+        <location
+            file="../src/main/java/de/joinnoah/pi/remote/ArtifactThumbnail.kt"
+            line="217"
+            column="55"/>
+    </issue>
+
+</issues>

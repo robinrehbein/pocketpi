@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlin.random.Random
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -352,6 +353,49 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun toolSummaryLabelsBackgroundBash() {
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, "npm run dev"),
+            toolSummary("bash", """{"command":"npm run dev\nmore","run_in_background":true}"""),
+        )
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, "npm run dev"),
+            toolSummary("bash", """{"run_in_background":true,"command":"npm run dev","timeout":5}"""),
+        )
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, null),
+            toolSummary("bash", """{"run_in_background":true}"""),
+        )
+    }
+
+    @Test
+    fun toolSummaryKeepsForegroundBashWithoutATrueBackgroundFlag() {
+        val plain = ToolSummary(R.string.remote_tool_bash, "ls")
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":false}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls"}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":"true"}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":1}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":null}"""))
+    }
+
+    @Test
+    fun toolSummaryKeepsTheBashLabelWhenArgumentsAreTruncatedOrAbsent() {
+        val plain = ToolSummary(R.string.remote_tool_bash, null)
+        assertEquals(plain, toolSummary("bash", """{"command":"npm run dev","run_in_back"""))
+        assertEquals(plain, toolSummary("bash", null))
+        assertEquals(plain, toolSummary("bash", ""))
+    }
+
+    @Test
+    fun toolSummaryLabelsLegacyBashBgAsBackgroundShell() {
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, "npm run dev"),
+            toolSummary("bash_bg", """{"command":"npm run dev\n"}"""),
+        )
+        assertEquals(ToolSummary(R.string.remote_tool_bash_background, null), toolSummary("bash_bg", null))
+    }
+
+    @Test
     fun toolSummaryAcceptsFilePathForEdit() {
         assertEquals(
             ToolSummary(R.string.remote_tool_edit, "README.md"),
@@ -362,9 +406,25 @@ class ConversationPresentationTest {
     @Test
     fun toolSummaryUsesTheRawNameForUnknownTools() {
         val none = ToolSummary(null, null)
-        assertEquals(none, toolSummary("grep", """{"pattern":"x","path":"src"}"""))
         assertEquals(none, toolSummary("submit_plan", """{"plan":"# Plan"}"""))
         assertEquals(none, toolSummary(null, """{"path":"src"}"""))
+    }
+
+    @Test
+    fun toolSummaryNamesTheAdvisorSearchAndWebToolsWithWhatTheyWorkOn() {
+        assertEquals(
+            ToolSummary(R.string.remote_tool_advisor, "Is the plan safe?"),
+            toolSummary("advisor", """{"question":"Is the plan safe?\nMore context"}"""),
+        )
+        assertEquals(ToolSummary(R.string.remote_tool_advisor, null), toolSummary("consult_advisor", "{}"))
+        assertEquals(ToolSummary(R.string.remote_tool_search, "x"), toolSummary("grep", """{"pattern":"x","path":"src"}"""))
+        assertEquals(ToolSummary(R.string.remote_tool_find, "*.kt"), toolSummary("find", """{"pattern":"*.kt"}"""))
+        assertEquals(ToolSummary(R.string.remote_tool_list, "src"), toolSummary("ls", """{"path":"src"}"""))
+        assertEquals(ToolSummary(R.string.remote_tool_web_search, "compose"), toolSummary("web_search", """{"query":"compose"}"""))
+        assertEquals(
+            ToolSummary(R.string.remote_tool_web_fetch, "https://example.com"),
+            toolSummary("web_fetch", """{"url":"https://example.com"}"""),
+        )
     }
 
     @Test
@@ -391,19 +451,41 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun aUserBashMessageIsAShellCommandCardNamedByItsCommand() {
+        val entries =
+            Wire.json.parseToJsonElement(javaClass.getResource("/session-bash-v1.json")!!.readText())
+                .jsonObject.array("wireValid").associate { it.text("name") to it.obj("payload") }
+        val complete = entries.getValue("user-bash-message").obj("message")
+        val failed = entries.getValue("user-bash-message-error").obj("message")
+        val activity = conversationItems(listOf(complete)).single() as ConversationItem.Activity
+        assertEquals("user_bash", activity.name)
+        assertEquals(ToolSummary(R.string.remote_shell_command, "git status"), activity.summary)
+        assertEquals("complete", activity.state)
+        assertEquals(OutputFormat.SOURCE, outputFormat(activity.name, activity.arguments, activity.output.orEmpty()))
+        assertTrue(mayChangeFiles(complete))
+        val error = conversationItems(listOf(failed)).single() as ConversationItem.Activity
+        assertEquals("error", error.state)
+        assertTrue(error.truncated)
+        assertTrue(isErrorItem(error))
+        // A text without the command line keeps the label alone.
+        assertEquals(ToolSummary(R.string.remote_shell_command, null), toolSummary("user_bash", null, "output"))
+        assertEquals(ToolSummary(R.string.remote_shell_command, null), toolSummary("user_bash", null, null))
+    }
+
+    @Test
     fun thinkingIsVisibleOnlyWhenItRendersSomething() {
         val done = ConversationItem.Thinking("t", "s", "Reasoning", streaming = false)
         val empty = done.copy(text = "")
         val live = empty.copy(streaming = true)
-        assertTrue(conversationItemVisible(done, "text", thinkingActive = false))
-        assertFalse(conversationItemVisible(empty, "text", thinkingActive = false))
-        assertFalse(conversationItemVisible(done, "status", thinkingActive = false))
-        assertFalse(conversationItemVisible(done, "status", thinkingActive = true))
-        assertTrue(conversationItemVisible(live, "status", thinkingActive = true))
-        assertTrue(conversationItemVisible(live, "text", thinkingActive = true))
-        assertFalse(conversationItemVisible(live, "status", thinkingActive = false))
+        assertTrue(conversationItemVisible(done, ThinkingDisplay.TEXT, thinkingActive = false))
+        assertFalse(conversationItemVisible(empty, ThinkingDisplay.TEXT, thinkingActive = false))
+        assertFalse(conversationItemVisible(done, ThinkingDisplay.STATUS, thinkingActive = false))
+        assertFalse(conversationItemVisible(done, ThinkingDisplay.STATUS, thinkingActive = true))
+        assertTrue(conversationItemVisible(live, ThinkingDisplay.STATUS, thinkingActive = true))
+        assertTrue(conversationItemVisible(live, ThinkingDisplay.TEXT, thinkingActive = true))
+        assertFalse(conversationItemVisible(live, ThinkingDisplay.STATUS, thinkingActive = false))
         val bubble = ConversationItem.Bubble("b", "b", "user", null, "Hi", null, false, null)
-        assertTrue(conversationItemVisible(bubble, "status", thinkingActive = false))
+        assertTrue(conversationItemVisible(bubble, ThinkingDisplay.STATUS, thinkingActive = false))
     }
 
     private val insights: Map<String, JsonObject> by lazy {
@@ -552,6 +634,39 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun interruptedPartialIsVisibleButOnlyGenuineFailuresAreFilteredAsErrors() {
+        val parts = JsonArray(listOf(
+            Wire.objectOf("type" to "text", "text" to "First"),
+            Wire.objectOf("type" to "text", "text" to "Second"),
+        ))
+        val interrupted = message("interrupted", "assistant", "First Second", "state" to "error",
+            "terminalOutcome" to "interrupted", "parts" to parts)
+        val legacy = message("legacy", "assistant", "legacy failure", "state" to "error")
+        val failed = message("failed", "assistant", "provider failure", "state" to "error")
+        val tool = message("tool", "tool", "exit 1", "toolName" to "bash", "state" to "error")
+        val items = conversationItems(listOf(interrupted, legacy, failed, tool))
+        assertEquals(listOf("First", "Second"), items.filterIsInstance<ConversationItem.Bubble>()
+            .filter { it.sourceId == "interrupted" }.map { it.text })
+        assertEquals(listOf(false, true), items.filterIsInstance<ConversationItem.Bubble>()
+            .filter { it.sourceId == "interrupted" }.map { it.interrupted })
+        assertEquals(setOf("legacy", "failed", "tool"), onlyErrors(items).map { it.sourceId }.toSet())
+        assertTrue(conversationItems(listOf(message("empty", "assistant", "", "state" to "error",
+            "terminalOutcome" to "interrupted"))).none(::isErrorItem))
+    }
+
+    @Test
+    fun interruptionRequiresTheExactAssistantErrorOutcome() {
+        for ((role, state, outcome) in listOf(
+            Triple("assistant", "error", "unknown"),
+            Triple("tool", "error", "interrupted"),
+        )) {
+            val item = conversationItems(listOf(message("m", role, "failure", "state" to state,
+                "terminalOutcome" to outcome, "toolName" to "bash"))).single()
+            assertTrue(isErrorItem(item))
+        }
+    }
+
+    @Test
     fun editDetailsReachThePairedActivity() {
         val result = fixtureMessage("message-edit-details")
         val call = Wire.objectOf("type" to "toolCall", "id" to "toolu_edit_01", "name" to "edit",
@@ -583,5 +698,361 @@ class ConversationPresentationTest {
         val cut = conversationItems(listOf(withDetails(JsonObject(details + ("truncated" to JsonPrimitive(true))))))
             .single() as ConversationItem.Activity
         assertTrue(cut.details!!.truncated)
+    }
+}
+
+class ConversationPresenterTest {
+    private var hostRevision = 0L
+
+    private fun timeline(vararg messages: JsonObject): Timeline =
+        Timeline("session").apply {
+            hostRevision = 1
+            snapshot(
+                Wire.objectOf(
+                    "sessionId" to "session",
+                    "revision" to 1,
+                    "status" to "running",
+                    "messages" to JsonArray(messages.toList()),
+                    "pendingQuestions" to JsonArray(emptyList()),
+                )
+            )
+        }
+
+    private fun Timeline.upsert(message: JsonObject) {
+        assertFalse(
+            event(
+                Wire.objectOf(
+                    "sessionId" to "session",
+                    "revision" to ++hostRevision,
+                    "kind" to "message.upsert",
+                    "message" to message,
+                )
+            )
+        )
+    }
+
+    private fun text(id: String, role: String, text: String, state: String = "complete") =
+        Wire.objectOf("id" to id, "role" to role, "text" to text, "state" to state)
+
+    private fun call(id: String, name: String, path: String) =
+        Wire.objectOf("type" to "toolCall", "id" to id, "name" to name, "arguments" to """{"path":"$path","edits":[{"oldText":"a","newText":"b"}]}""")
+
+    private fun assistant(id: String, state: String, vararg parts: JsonObject) =
+        Wire.objectOf("id" to id, "role" to "assistant", "text" to "", "state" to state, "parts" to JsonArray(parts.toList()))
+
+    private fun output(id: String, callId: String, name: String, state: String = "complete") =
+        Wire.objectOf("id" to id, "role" to "tool", "text" to "done", "toolCallId" to callId, "toolName" to name, "state" to state)
+
+    @Test
+    fun interruptionSurvivesLiveUpsertAndSnapshotWithoutAnErrorCount() {
+        val partial = Wire.objectOf("id" to "a", "role" to "assistant", "text" to "Partial", "state" to "error",
+            "terminalOutcome" to "interrupted")
+        val live = timeline(text("a", "assistant", "Partial", "streaming"))
+        val presenter = ConversationPresenter()
+        presenter.present(live.messages, sessionActive = true)
+        live.upsert(partial)
+        val updated = presenter.present(live.messages, sessionActive = false)
+        val restored = ConversationPresenter().present(timeline(partial).messages, sessionActive = false)
+        assertEquals(updated.items, restored.items)
+        assertEquals("Partial", (updated.items.single() as ConversationItem.Bubble).text)
+        assertEquals(0, updated.errorCount)
+        assertEquals(0, restored.errorCount)
+    }
+
+    @Test
+    fun aStreamedDeltaRebuildsOnlyTheMessageItChanged() {
+        val history = buildList {
+            for (turn in 0 until 30) {
+                add(text("u$turn", "user", "question $turn"))
+                add(assistant("a$turn", "complete", call("c$turn", "edit", "f$turn.kt"),
+                    Wire.objectOf("type" to "text", "text" to "answer $turn")))
+                add(output("o$turn", "c$turn", "edit", if (turn % 7 == 0) "error" else "complete"))
+            }
+            add(text("u-last", "user", "and now?"))
+        }
+        val timeline = timeline(*history.toTypedArray())
+        val presenter = ConversationPresenter()
+        var presentation = presenter.present(timeline.messages, sessionActive = true)
+        assertEquals(conversationItems(timeline.messages, true), presentation.items)
+        val built = presenter.built
+        assertEquals(history.size, built)
+
+        var reply = ""
+        for (delta in 1..20) {
+            reply += "word "
+            val before = presentation
+            timeline.upsert(assistant("streaming", "streaming", Wire.objectOf("type" to "text", "text" to reply)))
+            presentation = presenter.present(timeline.messages, sessionActive = true)
+            assertEquals(conversationItems(timeline.messages, true), presentation.items)
+            // The first delta also adds the message; each one builds only the streaming message.
+            assertEquals(built + delta, presenter.built)
+            val kept = before.items.filterNot { it.sourceId == "streaming" }
+            kept.forEachIndexed { index, item -> assertSame(item, presentation.items[index]) }
+            if (delta > 1) {
+                assertSame(before.touchedFiles, presentation.touchedFiles)
+                assertSame(before.forkableBubbleIds, presentation.forkableBubbleIds)
+                assertSame(before.subagents, presentation.subagents)
+            }
+        }
+        assertEquals(5, presentation.errorCount)
+        // Presenting the same messages again changes nothing at all.
+        assertSame(presentation, presenter.present(timeline.messages, sessionActive = true))
+        assertSame(presentation, presenter.present(timeline.messages.toList(), sessionActive = true))
+    }
+
+    @Test
+    fun anOutputArrivingRebuildsTheCallThatShowsIt() {
+        val timeline = timeline(text("u", "user", "go"), assistant("a", "streaming", call("c", "edit", "x.kt")))
+        val presenter = ConversationPresenter()
+        val running = presenter.present(timeline.messages, sessionActive = true)
+        assertEquals("streaming", (running.items[1] as ConversationItem.Activity).state)
+        timeline.upsert(output("o", "c", "edit", "error"))
+        val failed = presenter.present(timeline.messages, sessionActive = true)
+        assertSame(running.items[0], failed.items[0])
+        assertEquals("error", (failed.items[1] as ConversationItem.Activity).state)
+        assertEquals(conversationItems(timeline.messages, true), failed.items)
+        assertEquals(1, failed.errorCount)
+        assertTrue(failed.touchedFiles.changed.isEmpty())
+    }
+
+    @Test
+    fun timelineMarkersMatchAFullRecomputeAfterTheFirstChange() {
+        val presenter = ConversationPresenter()
+        val user = ConversationItem.Bubble("u", "u", "user", null, "hi", null, false, null)
+        val failing = ConversationItem.Activity("e", "e", "bash", "{}", null, "error", false)
+        val plain = ConversationItem.Bubble("p", "p", "assistant", null, "ok", null, false, null)
+        val first = listOf(user, plain, failing)
+        assertEquals(timelineMarkers(first), presenter.timelineMarkers(first))
+        val same = presenter.timelineMarkers(first.toList())
+        assertSame(same, presenter.timelineMarkers(first))
+        val inserted = listOf(user, failing, plain, failing.copy(id = "e2"))
+        assertEquals(timelineMarkers(inserted), presenter.timelineMarkers(inserted))
+        assertEquals(emptyList<TimelineMarker>(), presenter.timelineMarkers(emptyList()))
+        assertEquals(timelineMarkers(first), presenter.timelineMarkers(first))
+    }
+
+    // ---- Property test: incremental presentation equals a full recompute ----------------------
+
+    private val paths = listOf("a.kt", "b.kt", "c.kt")
+    private val toolNames = listOf("edit", "read", "write", "bash", "Agent", "questionnaire", "submit_plan")
+    private val states = listOf("complete", "streaming", "error")
+
+    private fun <T> Random.pick(values: List<T>) = values[nextInt(values.size)]
+
+    private fun progress(random: Random) =
+        Wire.objectOf(
+            "mode" to "parallel",
+            "agents" to JsonArray(
+                List(1 + random.nextInt(2)) { index ->
+                    Wire.objectOf(
+                        "agent" to "agent$index",
+                        "state" to random.pick(listOf("running", "succeeded", "failed")),
+                        "task" to "task ${random.nextInt(3)}",
+                        "sessionId" to if (random.nextBoolean()) "child-${random.nextInt(3)}" else null,
+                    )
+                }
+            ),
+        )
+
+    /** A message for [id], whose role is fixed by the ID like on a real host. */
+    private fun randomMessage(random: Random, id: Int, version: Int, messageId: String = "m$id"): JsonObject {
+        return when (id % 3) {
+            0 -> text(messageId, "user", "question $version")
+            1 -> {
+                val parts = buildList {
+                    repeat(random.nextInt(4)) {
+                        add(
+                            when (random.nextInt(3)) {
+                                0 -> Wire.objectOf("type" to "text", "text" to "reply $version")
+                                1 -> Wire.objectOf("type" to "thinking", "text" to "thought $version")
+                                else -> call("c${random.nextInt(6)}", random.pick(toolNames), random.pick(paths))
+                            }
+                        )
+                    }
+                }.distinctBy { if (it.text("type") == "toolCall") it.text("id") else it }
+                val usage = Wire.objectOf("input" to 1, "output" to 2, "cacheRead" to 0, "cacheWrite" to 0, "totalTokens" to 3)
+                Wire.objectOf(
+                    "id" to messageId, "role" to "assistant", "text" to "", "state" to random.pick(states),
+                    "parts" to JsonArray(parts), "usage" to if (random.nextBoolean()) usage else null,
+                )
+            }
+            else -> {
+                val name = random.pick(toolNames)
+                Wire.objectOf(
+                    "id" to messageId, "role" to "tool", "text" to "output $version",
+                    "toolCallId" to if (random.nextInt(4) > 0) "c${random.nextInt(6)}" else null,
+                    "toolName" to name, "state" to random.pick(states),
+                    "subagentProgress" to if (name == "Agent" && random.nextBoolean()) progress(random) else null,
+                )
+            }
+        }
+    }
+
+    private val childSets = listOf(
+        emptyList(),
+        listOf(SessionListItem("child-1", "task 1", "session", 0, false, SessionAvailability.RUNNING, null, null, false, false, false)),
+    )
+
+    @Test
+    fun incrementalPresentationMatchesAFullRecomputeOverRandomEvents() {
+        for (seed in 0 until 150) {
+            val random = Random(seed)
+            val timeline = timeline()
+            val presenter = ConversationPresenter()
+            var active = false
+            var previous: ConversationPresentation? = null
+            var version = 0
+            var snapshotRevision = hostRevision
+            var fresh = 0
+            fun resync(page: List<JsonObject>) {
+                snapshotRevision = ++hostRevision
+                timeline.snapshot(
+                    Wire.objectOf(
+                        "sessionId" to "session", "revision" to snapshotRevision, "status" to "running",
+                        "messages" to JsonArray(page), "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                )
+            }
+            fun copy(message: JsonObject) = Json.parseToJsonElement(message.toString()).jsonObject
+            repeat(40) { step ->
+                val action = random.nextInt(13)
+                var replacedUser: String? = null
+                when {
+                    action < 7 -> {
+                        val id = random.nextInt(12)
+                        val existing = timeline.messageIndex("m$id") >= 0
+                        if (existing && id % 3 == 0) replacedUser = "m$id"
+                        timeline.upsert(randomMessage(random, id, ++version))
+                    }
+                    action < 9 -> active = !active
+                    // A resync decodes fresh instances of the same messages.
+                    action < 10 -> resync(timeline.messages.map(::copy))
+                    action < 11 -> {
+                        // An older page puts fresh messages before the others and shifts every index.
+                        val older = List(1 + random.nextInt(3)) {
+                            val id = random.nextInt(12)
+                            randomMessage(random, id, ++version, messageId = "o${fresh++}-$id")
+                        }
+                        timeline.snapshot(
+                            Wire.objectOf(
+                                "sessionId" to "session", "revision" to snapshotRevision,
+                                "messages" to JsonArray(older), "nextCursor" to null,
+                            ),
+                            older = true,
+                        )
+                    }
+                    else -> {
+                        // A shorter resync that does not overlap: messages leave, and which one is
+                        // last or the pending reply changes.
+                        val kept = timeline.messages.filter { random.nextInt(3) > 0 }.map(::copy)
+                        val id = random.nextInt(12)
+                        resync(listOf(randomMessage(random, id, ++version, messageId = "r${fresh++}-$id")) + kept)
+                    }
+                }
+                val builtBefore = presenter.built
+                val presentation = presenter.present(timeline.messages, active)
+                val expected = conversationItems(timeline.messages, active)
+                val where = "seed $seed step $step"
+                assertEquals(where, expected, presentation.items)
+                assertEquals(where, touchedFiles(expected), presentation.touchedFiles)
+                assertEquals(where, expected.count(::isErrorItem), presentation.errorCount)
+                assertEquals(where, forkableBubbleIds(expected), presentation.forkableBubbleIds)
+                assertEquals(where, expected.filterIsInstance<ConversationItem.Subagent>(), presentation.subagents)
+                val children = childSets[random.nextInt(childSets.size)]
+                assertEquals(
+                    where,
+                    subagentStrip(expected, children, "session"),
+                    presenter.subagentStrip(presentation, children, "session"),
+                )
+                val shown =
+                    if (random.nextInt(4) == 0) onlyErrors(presentation.items)
+                    else presentation.items.filter {
+                        conversationItemVisible(it, random.pick(listOf(ThinkingDisplay.TEXT, ThinkingDisplay.STATUS)), random.nextBoolean())
+                    }
+                assertEquals(where, timelineMarkers(shown), presenter.timelineMarkers(shown))
+                if (replacedUser != null && previous != null) {
+                    // Replacing a plain user message changes nothing the others read from it.
+                    assertEquals(where, builtBefore + 1, presenter.built)
+                    val before = checkNotNull(previous).items.filter { it.sourceId != replacedUser }
+                    val after = presentation.items.filter { it.sourceId != replacedUser }
+                    assertEquals(where, before.size, after.size)
+                    before.indices.forEach { assertSame(where, before[it], after[it]) }
+                }
+                previous = presentation
+            }
+        }
+    }
+
+    @Test
+    fun pendingSendIsATailBubbleWithItsStateAndTheBodyTheTimelineWillShow() {
+        val pending = PendingSend(
+            "m1", "Hello pi", MessageQuote("a", "assistant", "Quoted", null), emptyList(), PendingSendState.SENDING,
+        )
+        val bubble = pendingSendItem(pending)
+        assertEquals("pending-m1", bubble.id)
+        assertEquals("user", bubble.role)
+        assertEquals("Hello pi", bubble.text)
+        assertEquals(pending.quote, bubble.quote)
+        assertEquals(PendingSendState.SENDING, bubble.pendingState)
+        val attachmentsOnly = pendingSendItem(
+            pending.copy(text = "", attachments = listOf(LocalAttachment("x", "photo.jpg", "image", "image/jpeg", 1L, "h"))),
+        )
+        assertEquals("photo.jpg", attachmentsOnly.text)
+
+        val sent = Wire.objectOf(
+            "id" to "u1", "role" to "user", "text" to QuoteCodec.encode("Hello pi", pending.quote),
+            "state" to "complete",
+        )
+        assertEquals("Hello pi", userMessageBody(sent))
+        val parts = Wire.objectOf(
+            "id" to "u2", "role" to "user", "state" to "complete",
+            "parts" to JsonArray(listOf(Wire.objectOf("type" to "text", "text" to "One"), Wire.objectOf("type" to "text", "text" to "Two"))),
+        )
+        assertEquals("One\nTwo", userMessageBody(parts))
+    }
+
+    @Test fun hostCopyOfAPendingPromptKeepsThePendingBubblesListKey() {
+        val keys = PendingBubbleKeys()
+        val earlier = Wire.objectOf("id" to "a0", "role" to "assistant", "text" to "Hi", "state" to "complete")
+        val pending = PendingSend("m1", "Hello pi", null, emptyList(), PendingSendState.SENDING, afterMessageId = "a0")
+        val before = ConversationPresenter().present(listOf(earlier), false).items
+        assertEquals(pending, shownPendingSend(pending, listOf(earlier)))
+        keys.update(before + pendingSendItem(pending), pending, listOf(earlier))
+
+        // The copy arrives before the acknowledgement: the pending bubble goes at once.
+        val copy = Wire.objectOf("id" to "u1", "role" to "user", "text" to "Hello pi\n", "state" to "complete")
+        val messages = listOf(earlier, copy)
+        assertNull(shownPendingSend(pending, messages))
+        val after = ConversationPresenter().present(messages, false).items
+        keys.update(after, null, messages)
+        val hostBubble = after.last()
+        assertEquals("pending-m1", keys.keyOf(hostBubble))
+        assertEquals(hostBubble.id, keys.idOf("pending-m1"))
+        assertEquals(before.first().id, keys.keyOf(after.first()))
+        assertEquals(after.size, after.map(keys::keyOf).toSet().size)
+    }
+
+    @Test fun aMultiPartCopyGivesItsFirstRowThePendingKey() {
+        val keys = PendingBubbleKeys()
+        val pending = PendingSend("m1", "One\nTwo", null, emptyList(), PendingSendState.CONFIRMED)
+        keys.update(listOf(pendingSendItem(pending)), pending, emptyList())
+        val copy = Wire.objectOf(
+            "id" to "u2", "role" to "user", "text" to "One\nTwo", "state" to "complete",
+            "parts" to JsonArray(listOf(Wire.objectOf("type" to "text", "text" to "One"), Wire.objectOf("type" to "text", "text" to "Two"))),
+        )
+        val after = ConversationPresenter().present(listOf(copy), false).items
+        keys.update(after, null, listOf(copy))
+        assertEquals("pending-m1", keys.keyOf(after.first { it.sourceId == "u2" }))
+        assertEquals(after.size, after.map(keys::keyOf).toSet().size)
+    }
+
+    @Test fun aDifferentNewPromptDoesNotTakeThePendingBubblesKey() {
+        val keys = PendingBubbleKeys()
+        val pending = PendingSend("m1", "Hello pi", null, emptyList(), PendingSendState.CONFIRMED)
+        keys.update(listOf(pendingSendItem(pending)), pending, emptyList())
+        val other = Wire.objectOf("id" to "u9", "role" to "user", "text" to "Something else", "state" to "complete")
+        val after = ConversationPresenter().present(listOf(other), false).items
+        keys.update(after, null, listOf(other))
+        assertEquals(after.single().id, keys.keyOf(after.single()))
     }
 }

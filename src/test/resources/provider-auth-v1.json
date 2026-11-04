@@ -1,0 +1,1492 @@
+{
+  "version": 1,
+  "note": "provider.auth.v1 wire examples. The app must see provider.auth.v1 in the projects.list capabilities route before sending any provider.auth.* command. Values that look like keys are placeholders.",
+  "valid": [
+    {
+      "name": "list-command",
+      "payload": {
+        "type": "provider.auth.list",
+        "requestId": "req-1"
+      }
+    },
+    {
+      "name": "start-command-oauth",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-2",
+        "providerId": "anthropic",
+        "method": "oauth"
+      }
+    },
+    {
+      "name": "start-command-api-key-replace",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-3",
+        "providerId": "openrouter",
+        "method": "api_key",
+        "replace": true
+      }
+    },
+    {
+      "name": "answer-command",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-4",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "value": "sk-example-not-a-real-key"
+      }
+    },
+    {
+      "name": "answer-command-empty",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-5",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "value": ""
+      }
+    },
+    {
+      "name": "cancel-command",
+      "payload": {
+        "type": "provider.auth.login.cancel",
+        "requestId": "req-6",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ"
+      }
+    },
+    {
+      "name": "status-command",
+      "payload": {
+        "type": "provider.auth.login.status",
+        "requestId": "req-7",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ"
+      }
+    },
+    {
+      "name": "logout-command",
+      "payload": {
+        "type": "provider.auth.logout",
+        "requestId": "req-8",
+        "providerId": "anthropic"
+      }
+    },
+    {
+      "name": "list-result",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": true,
+                "source": "stored",
+                "type": "oauth"
+              }
+            },
+            {
+              "id": "openrouter",
+              "name": "OpenRouter",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": false
+              }
+            },
+            {
+              "id": "amazon-bedrock",
+              "name": "Amazon Bedrock",
+              "methods": [],
+              "status": {
+                "configured": true,
+                "source": "config"
+              }
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-active-login",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "oauth"
+              ],
+              "status": {
+                "configured": false
+              }
+            }
+          ],
+          "login": {
+            "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+            "providerId": "anthropic",
+            "state": "awaiting_input",
+            "own": true
+          },
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "login-result",
+      "payload": {
+        "type": "result",
+        "requestId": "req-2",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "method": "oauth",
+          "expiresAt": 1790000900000
+        }
+      }
+    },
+    {
+      "name": "state-awaiting-input",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "awaiting_input",
+          "prompt": {
+            "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+            "prompt": {
+              "type": "manual_code",
+              "message": "Paste the redirect URL or code",
+              "placeholder": "http://localhost:53692/callback?code=..."
+            },
+            "expiresAt": 1790000300000
+          },
+          "lastEvent": {
+            "kind": "auth_url",
+            "url": "https://claude.ai/oauth/authorize?client_id=example",
+            "instructions": "Sign in, then paste the address the browser ends up at."
+          }
+        }
+      }
+    },
+    {
+      "name": "state-running-device-code",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "github-copilot",
+          "state": "running",
+          "lastEvent": {
+            "kind": "device_code",
+            "userCode": "ABCD-1234",
+            "verificationUri": "https://github.com/login/device",
+            "intervalSeconds": 5,
+            "expiresInSeconds": 900
+          }
+        }
+      }
+    },
+    {
+      "name": "state-succeeded",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "succeeded",
+          "modelSync": "stale"
+        }
+      }
+    },
+    {
+      "name": "state-failed",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "failed",
+          "error": "invalid_code"
+        }
+      }
+    },
+    {
+      "name": "logout-result",
+      "payload": {
+        "type": "result",
+        "requestId": "req-8",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.logout",
+          "providerId": "anthropic",
+          "modelSync": "stale"
+        }
+      }
+    },
+    {
+      "name": "accepted-result",
+      "payload": {
+        "type": "result",
+        "requestId": "req-4",
+        "ok": true,
+        "data": {
+          "kind": "accepted"
+        }
+      }
+    },
+    {
+      "name": "event-auth-url",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://claude.ai/oauth/authorize?client_id=example",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-device-code",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "device_code",
+          "userCode": "ABCD-1234",
+          "verificationUri": "https://github.com/login/device"
+        }
+      }
+    },
+    {
+      "name": "event-info-links",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "info",
+          "message": "Create a key in the console.",
+          "links": [
+            {
+              "url": "https://console.example.com/keys",
+              "label": "Console"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "event-progress",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "progress",
+          "message": "Waiting for the browser"
+        }
+      }
+    },
+    {
+      "name": "prompt-secret",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "secret",
+          "message": "Enter OpenRouter API key"
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-select",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "select",
+          "message": "Choose a region",
+          "options": [
+            {
+              "id": "us",
+              "label": "United States",
+              "description": "api.example.com"
+            },
+            {
+              "id": "eu",
+              "label": "Europe"
+            }
+          ]
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-text",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "text",
+          "message": "Enter the account ID",
+          "placeholder": "acct_123"
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-closed",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt.closed",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "reason": "superseded"
+      }
+    },
+    {
+      "name": "finished-succeeded",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "succeeded",
+        "modelSync": "ok"
+      }
+    },
+    {
+      "name": "finished-failed",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "failed",
+        "error": "store_failed"
+      }
+    },
+    {
+      "name": "finished-timeout",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "timeout",
+        "error": "timeout"
+      }
+    },
+    {
+      "name": "error-login-in-progress",
+      "payload": {
+        "type": "result",
+        "requestId": "req-2",
+        "ok": false,
+        "error": {
+          "code": "login_in_progress",
+          "message": "Another provider login is running"
+        }
+      }
+    },
+    {
+      "name": "error-rate-limited",
+      "payload": {
+        "type": "result",
+        "requestId": "req-2",
+        "ok": false,
+        "error": {
+          "code": "rate_limited",
+          "message": "Too many provider logins; try again later"
+        }
+      }
+    },
+    {
+      "name": "projects-provider-auth-capability",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v1:1",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "provider.auth.v1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-canonical-query-fragment",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://auth.example.com/x?a=1&b=%20c#frag",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "start-unknown-method",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-2",
+        "providerId": "anthropic",
+        "method": "password"
+      }
+    },
+    {
+      "name": "start-replace-false",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-3",
+        "providerId": "openrouter",
+        "method": "api_key",
+        "replace": false
+      }
+    },
+    {
+      "name": "start-extra-key",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-2",
+        "providerId": "anthropic",
+        "method": "oauth",
+        "key": "x"
+      }
+    },
+    {
+      "name": "start-provider-with-space",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-2",
+        "providerId": "a b",
+        "method": "oauth"
+      }
+    },
+    {
+      "name": "start-empty-provider",
+      "payload": {
+        "type": "provider.auth.login.start",
+        "requestId": "req-2",
+        "providerId": "",
+        "method": "oauth"
+      }
+    },
+    {
+      "name": "list-command-extra-key",
+      "payload": {
+        "type": "provider.auth.list",
+        "requestId": "req-1",
+        "providerId": "anthropic"
+      }
+    },
+    {
+      "name": "answer-missing-value",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-4",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng"
+      }
+    },
+    {
+      "name": "answer-value-too-large",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-4",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "answer-value-not-string",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-4",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "value": 42
+      }
+    },
+    {
+      "name": "answer-short-login-id",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-4",
+        "loginId": "abc",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "value": "sk-example-not-a-real-key"
+      }
+    },
+    {
+      "name": "answer-extra-key",
+      "payload": {
+        "type": "provider.auth.login.answer",
+        "requestId": "req-4",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "value": "sk-example-not-a-real-key",
+        "secret": true
+      }
+    },
+    {
+      "name": "cancel-short-login-id",
+      "payload": {
+        "type": "provider.auth.login.cancel",
+        "requestId": "req-6",
+        "loginId": "abc"
+      }
+    },
+    {
+      "name": "status-extra-key",
+      "payload": {
+        "type": "provider.auth.login.status",
+        "requestId": "req-7",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng"
+      }
+    },
+    {
+      "name": "logout-extra-key",
+      "payload": {
+        "type": "provider.auth.logout",
+        "requestId": "req-8",
+        "providerId": "anthropic",
+        "replace": true
+      }
+    },
+    {
+      "name": "list-result-unknown-method",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "token",
+                "api_key"
+              ],
+              "status": {
+                "configured": true,
+                "source": "stored",
+                "type": "oauth"
+              }
+            },
+            {
+              "id": "openrouter",
+              "name": "OpenRouter",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": false
+              }
+            },
+            {
+              "id": "amazon-bedrock",
+              "name": "Amazon Bedrock",
+              "methods": [],
+              "status": {
+                "configured": true,
+                "source": "environment"
+              }
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-duplicate-method",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "oauth",
+                "oauth"
+              ],
+              "status": {
+                "configured": true,
+                "source": "stored",
+                "type": "oauth"
+              }
+            },
+            {
+              "id": "openrouter",
+              "name": "OpenRouter",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": false
+              }
+            },
+            {
+              "id": "amazon-bedrock",
+              "name": "Amazon Bedrock",
+              "methods": [],
+              "status": {
+                "configured": true,
+                "source": "environment"
+              }
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-source-when-unconfigured",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": true,
+                "source": "stored",
+                "type": "oauth"
+              }
+            },
+            {
+              "id": "openrouter",
+              "name": "OpenRouter",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": false,
+                "source": "stored"
+              }
+            },
+            {
+              "id": "amazon-bedrock",
+              "name": "Amazon Bedrock",
+              "methods": [],
+              "status": {
+                "configured": true,
+                "source": "environment"
+              }
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-secret-field",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": true,
+                "source": "stored",
+                "type": "oauth",
+                "key": "sk-secret"
+              }
+            },
+            {
+              "id": "openrouter",
+              "name": "OpenRouter",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": false
+              }
+            },
+            {
+              "id": "amazon-bedrock",
+              "name": "Amazon Bedrock",
+              "methods": [],
+              "status": {
+                "configured": true,
+                "source": "environment"
+              }
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-unknown-source",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.list",
+          "providers": [
+            {
+              "id": "anthropic",
+              "name": "Anthropic",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": true,
+                "source": "keychain",
+                "type": "oauth"
+              }
+            },
+            {
+              "id": "openrouter",
+              "name": "OpenRouter",
+              "methods": [
+                "oauth",
+                "api_key"
+              ],
+              "status": {
+                "configured": false
+              }
+            },
+            {
+              "id": "amazon-bedrock",
+              "name": "Amazon Bedrock",
+              "methods": [],
+              "status": {
+                "configured": true,
+                "source": "environment"
+              }
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "login-result-unknown-method",
+      "payload": {
+        "type": "result",
+        "requestId": "req-2",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "method": "other",
+          "expiresAt": 1790000900000
+        }
+      }
+    },
+    {
+      "name": "state-prompt-when-running",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "running",
+          "prompt": {
+            "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+            "prompt": {
+              "type": "manual_code",
+              "message": "Paste the redirect URL or code",
+              "placeholder": "http://localhost:53692/callback?code=..."
+            },
+            "expiresAt": 1790000300000
+          },
+          "lastEvent": {
+            "kind": "auth_url",
+            "url": "https://claude.ai/oauth/authorize?client_id=example",
+            "instructions": "Sign in, then paste the address the browser ends up at."
+          }
+        }
+      }
+    },
+    {
+      "name": "state-error-when-succeeded",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "succeeded",
+          "modelSync": "stale",
+          "error": "failed"
+        }
+      }
+    },
+    {
+      "name": "state-model-sync-when-failed",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "failed",
+          "error": "invalid_code",
+          "modelSync": "ok"
+        }
+      }
+    },
+    {
+      "name": "state-unknown-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "failed",
+          "error": "pi says no: /home/user/.pi/agent/auth.json"
+        }
+      }
+    },
+    {
+      "name": "state-http-url",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.login.state",
+          "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+          "providerId": "anthropic",
+          "state": "awaiting_input",
+          "prompt": {
+            "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+            "prompt": {
+              "type": "manual_code",
+              "message": "Paste the redirect URL or code",
+              "placeholder": "http://localhost:53692/callback?code=..."
+            },
+            "expiresAt": 1790000300000
+          },
+          "lastEvent": {
+            "kind": "auth_url",
+            "url": "http://claude.ai/oauth/authorize",
+            "instructions": "Sign in, then paste the address the browser ends up at."
+          }
+        }
+      }
+    },
+    {
+      "name": "logout-result-missing-model-sync",
+      "payload": {
+        "type": "result",
+        "requestId": "req-8",
+        "ok": true,
+        "data": {
+          "kind": "provider.auth.logout",
+          "providerId": "anthropic"
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-javascript",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "javascript:alert(1)",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-http",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "http://claude.ai/oauth/authorize",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-userinfo",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://user:pass@claude.ai/authorize",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-whitespace",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://claude.ai/a b",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-too-long",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://claude.ai/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-instructions-control",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://claude.ai/oauth/authorize?client_id=example",
+          "instructions": "Sign in\u001b[31m now"
+        }
+      }
+    },
+    {
+      "name": "event-user-code-too-long",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "device_code",
+          "userCode": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "verificationUri": "https://github.com/login/device"
+        }
+      }
+    },
+    {
+      "name": "event-device-code-http",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "device_code",
+          "userCode": "ABCD-1234",
+          "verificationUri": "http://github.com/login/device"
+        }
+      }
+    },
+    {
+      "name": "event-info-message-too-long",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "info",
+          "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "links": [
+            {
+              "url": "https://console.example.com/keys",
+              "label": "Console"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "event-info-unknown-key",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "info",
+          "message": "Create a key in the console.",
+          "links": [
+            {
+              "url": "https://console.example.com/keys",
+              "label": "Console"
+            }
+          ],
+          "url": "https://example.com"
+        }
+      }
+    },
+    {
+      "name": "event-unknown-kind",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "token",
+          "message": "Waiting for the browser"
+        }
+      }
+    },
+    {
+      "name": "prompt-select-without-options",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "select",
+          "message": "Choose a region"
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-secret-with-options",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "secret",
+          "message": "Enter OpenRouter API key",
+          "options": [
+            {
+              "id": "a",
+              "label": "A"
+            }
+          ]
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-select-empty-options",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "select",
+          "message": "Choose a region",
+          "options": []
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-select-too-many-options",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "select",
+          "message": "Choose a region",
+          "options": [
+            {
+              "id": "o0",
+              "label": "O"
+            },
+            {
+              "id": "o1",
+              "label": "O"
+            },
+            {
+              "id": "o2",
+              "label": "O"
+            },
+            {
+              "id": "o3",
+              "label": "O"
+            },
+            {
+              "id": "o4",
+              "label": "O"
+            },
+            {
+              "id": "o5",
+              "label": "O"
+            },
+            {
+              "id": "o6",
+              "label": "O"
+            },
+            {
+              "id": "o7",
+              "label": "O"
+            },
+            {
+              "id": "o8",
+              "label": "O"
+            },
+            {
+              "id": "o9",
+              "label": "O"
+            },
+            {
+              "id": "o10",
+              "label": "O"
+            },
+            {
+              "id": "o11",
+              "label": "O"
+            },
+            {
+              "id": "o12",
+              "label": "O"
+            },
+            {
+              "id": "o13",
+              "label": "O"
+            },
+            {
+              "id": "o14",
+              "label": "O"
+            },
+            {
+              "id": "o15",
+              "label": "O"
+            },
+            {
+              "id": "o16",
+              "label": "O"
+            },
+            {
+              "id": "o17",
+              "label": "O"
+            },
+            {
+              "id": "o18",
+              "label": "O"
+            },
+            {
+              "id": "o19",
+              "label": "O"
+            },
+            {
+              "id": "o20",
+              "label": "O"
+            },
+            {
+              "id": "o21",
+              "label": "O"
+            },
+            {
+              "id": "o22",
+              "label": "O"
+            },
+            {
+              "id": "o23",
+              "label": "O"
+            },
+            {
+              "id": "o24",
+              "label": "O"
+            },
+            {
+              "id": "o25",
+              "label": "O"
+            },
+            {
+              "id": "o26",
+              "label": "O"
+            },
+            {
+              "id": "o27",
+              "label": "O"
+            },
+            {
+              "id": "o28",
+              "label": "O"
+            },
+            {
+              "id": "o29",
+              "label": "O"
+            },
+            {
+              "id": "o30",
+              "label": "O"
+            },
+            {
+              "id": "o31",
+              "label": "O"
+            },
+            {
+              "id": "o32",
+              "label": "O"
+            }
+          ]
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-unknown-type",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "password",
+          "message": "Enter the account ID",
+          "placeholder": "acct_123"
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-message-control",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "prompt": {
+          "type": "text",
+          "message": "Enter\nthe id",
+          "placeholder": "acct_123"
+        },
+        "expiresAt": 1790000300000
+      }
+    },
+    {
+      "name": "prompt-closed-unknown-reason",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.prompt.closed",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "promptId": "UHJvbXB0SWQtMDEyMzQ1Ng",
+        "reason": "timeout"
+      }
+    },
+    {
+      "name": "finished-unknown-state",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "running",
+        "modelSync": "ok"
+      }
+    },
+    {
+      "name": "finished-error-when-succeeded",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "succeeded",
+        "modelSync": "ok",
+        "error": "failed"
+      }
+    },
+    {
+      "name": "finished-model-sync-when-failed",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "failed",
+        "error": "store_failed",
+        "modelSync": "ok"
+      }
+    },
+    {
+      "name": "finished-extra-key",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.finished",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "providerId": "anthropic",
+        "state": "succeeded",
+        "modelSync": "ok",
+        "credential": "x"
+      }
+    },
+    {
+      "name": "event-auth-url-uppercase-scheme",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "HTTPS://auth.example.com/x",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-no-slashes",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https:auth.example.com/x",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-triple-slash",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https:///auth.example.com",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-empty-userinfo",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://@auth.example.com/",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-backslash",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://auth.example.com\\\\@x/",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-no-path",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://auth.example.com",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    }
+  ]
+}

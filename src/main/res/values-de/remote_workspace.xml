@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_inspector_tab_changes">Änderungen</string>
+    <string name="remote_inspector_tab_files">Dateien</string>
+    <string name="remote_inspector_tab_jobs">Jobs</string>
+    <string name="remote_inspector_tab_tool">Werkzeug</string>
+    <string name="remote_inspector_tab_history">Verlauf</string>
+    <string name="remote_inspector_tab_artifact">Artefakt</string>
+    <string name="remote_inspector_tab_close">%1$s schließen</string>
+    <string name="remote_inspector_widen">Seitenbereich verbreitern</string>
+    <string name="remote_inspector_narrow">Seitenbereich verschmälern</string>
+    <string name="remote_chat_strip_show">Chat anzeigen</string>
+    <string name="remote_jobs_open_all">Hintergrundjobs öffnen</string>
+    <string name="remote_jobs_ask">pi zu dieser Ausgabe fragen</string>
+    <string name="remote_jobs_ask_prompt">Hier ist das Ende der Ausgabe von `%1$s`:</string>
+</resources>

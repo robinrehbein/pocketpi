@@ -12,6 +12,7 @@ internal const val GIT_CAPABILITY = "session.git.v1"
 private const val MAX_GIT_FILES = 1000
 private const val MAX_GIT_COMMITS = 50
 private val commitId = Regex("[0-9a-f]{40}|[0-9a-f]{64}")
+private val branchName = Regex("[A-Za-z0-9._][A-Za-z0-9._/-]*")
 
 /** What the working tree is compared with. */
 enum class GitBase(val wire: String) {
@@ -51,7 +52,20 @@ data class GitFile(
     val deletions: Int? = null,
     val binary: Boolean = false,
     val omitted: GitOmitted? = null,
+    val submodule: Boolean = false,
 )
+
+/**
+ * The branch [GitBase.DEV] compares against (`origin/dev`, `dev`, the remote's default branch,
+ * `main` or `master`); [ref] is null when the repository has none.
+ */
+data class GitDevBase(val ref: String?)
+
+/** What the [GitBase.DEV] choice is called: the branch without its `origin/`, or `dev` before the host said. */
+internal fun devBaseName(devBase: GitDevBase?): String = devBase?.ref?.removePrefix("origin/") ?: GitBase.DEV.wire
+
+/** The full ref for prompts, so the agent compares with `origin/main` and not a lagging local `main`. */
+internal fun devBaseRef(devBase: GitDevBase?): String = devBase?.ref ?: GitBase.DEV.wire
 
 /** When the session snapshot was taken; [firstContact] means later than the session start. */
 data class GitSince(val firstContact: Boolean, val at: Long)
@@ -66,6 +80,8 @@ data class GitStatus(
     val devRef: String? = null,
     val branch: String? = null,
     val unavailable: GitUnavailable? = null,
+    /** Sent with every base by hosts that know it; null from older hosts. */
+    val devBase: GitDevBase? = null,
 ) {
     val available: Boolean get() = unavailable == null
 }
@@ -150,6 +166,40 @@ internal fun storedReviewComments(value: JsonElement?): List<ReviewComment> =
         ?.take(MAX_REVIEW_COMMENTS)
         .orEmpty()
 
+/**
+ * A subagent of the shown session with changes of its own: while it runs, its worktree against
+ * where it started; once finished, its branch until the session took the changes over.
+ */
+data class SubagentChanges(
+    val sessionId: String,
+    val title: String,
+    val running: Boolean,
+    val status: GitStatus,
+    /**
+     * The child's status is only last known (cached or unconfirmed list), so it is neither
+     * running nor finished as far as the phone can tell. [running] is false then.
+     */
+    val lastKnown: Boolean = false,
+)
+
+/** At most this many subagents are asked for their changes, running ones and the newest first. */
+internal const val MAX_SUBAGENT_GROUPS = 4
+
+/**
+ * The subagents the changes view groups under the session. One that works in the session's own
+ * checkout reports the session's branch (git checks a branch out in one worktree at most): its
+ * changes already show under the session, so it gets no group. One without a branch cannot be told
+ * apart and gets none either, and none show while the session's own branch is unknown.
+ */
+internal fun visibleSubagents(changes: ChangesState): List<SubagentChanges> {
+    // Without the session's own branch nothing tells a separate worktree from the same checkout.
+    val own = changes.status?.branch ?: return emptyList()
+    return changes.subagents.filter { sub ->
+        val branch = sub.status.branch
+        branch != null && branch != own && sub.status.files.isNotEmpty()
+    }
+}
+
 /** Why the changes view shows no data. */
 enum class ChangesFailure {
     UNSUPPORTED,
@@ -181,6 +231,17 @@ data class ChangesState(
     val logLoading: Boolean = false,
     val logFailure: ChangesFailure? = null,
     val comments: List<ReviewComment> = emptyList(),
+    val previews: Map<String, FileTilePreview> = emptyMap(),
+    /** The latest [GitStatus.devBase] of this session, kept while other bases are shown. */
+    val devBase: GitDevBase? = null,
+    /** Subagents with changes; independent of [base]. */
+    val subagents: List<SubagentChanges> = emptyList(),
+    /** The subagent [file] belongs to, or null for the session's own changes. */
+    val fileSession: String? = null,
+    /** When [status] was read, by the loader's clock; shown while offline or [stale]. */
+    val fetchedAt: Long? = null,
+    /** A read in place of the shown [status] failed, so it may no longer be current. */
+    val stale: Boolean = false,
 )
 
 internal fun canViewChanges(state: RemoteState): Boolean =
@@ -214,7 +275,8 @@ private fun gitFile(value: JsonObject): GitFile {
     require(counted == (additions != null || deletions != null))
     require(counted != (binary || omitted != null))
     require(!(binary && omitted != null))
-    return GitFile(path, change, additions, deletions, binary, omitted)
+    val submodule = if (value.containsKey("submodule")) value.flag("submodule").also { require(it) } else false
+    return GitFile(path, change, additions, deletions, binary, omitted, submodule)
 }
 
 /** Validates a `git.status` result against the request that produced it. */
@@ -245,7 +307,27 @@ internal fun parseGitStatus(data: JsonObject, sessionId: String, base: GitBase):
     val branch = data.optionalText("branch")?.also {
         require(it.isNotEmpty() && it.encodeToByteArray().size <= 256)
     }
-    return GitStatus(base, snapshotId, files, data.flag("truncated"), since, baseCommit, devRef, branch)
+    val devBase =
+        data["devBase"]?.let { value ->
+            require(value is JsonObject && value.keys.all { it == "ref" })
+            GitDevBase(
+                value["ref"]?.let { ref ->
+                    require(ref is JsonPrimitive && ref.isString)
+                    ref.content.also { require(branchName.matches(it) && it.encodeToByteArray().size <= 256) }
+                }
+            )
+        }
+    return GitStatus(
+        base,
+        snapshotId,
+        files,
+        data.flag("truncated"),
+        since,
+        baseCommit,
+        devRef,
+        branch,
+        devBase = devBase,
+    )
 }
 
 /** Validates a `git.diff` result against the request that produced it. */

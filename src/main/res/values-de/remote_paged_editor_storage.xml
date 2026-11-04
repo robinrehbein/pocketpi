@@ -1,0 +1,5 @@
+<resources>
+    <string name="remote_paged_editor_storage_pending">Gespeicherten Editorzustand prüfen…</string>
+    <string name="remote_paged_editor_storage_failed">Der gespeicherte Editorzustand konnte nicht gelesen oder aktualisiert werden. Senden ist gesperrt. Lass den Editor geöffnet, um den aktuellen Text zu behalten.</string>
+    <string name="remote_paged_editor_storage_retry">Gespeicherten Stand erneut prüfen</string>
+</resources>

@@ -5,7 +5,8 @@ shared projects and sessions, and chats with them through the pi Remote relay. T
 `de.robinrehbein.pocketpi`; the Kotlin package is still `de.joinnoah.pi.remote`.
 
 The pi host, relay, extensions and wire protocol live in `robinrehbein/noah-monorepo`
-(`packages/pi-remote`). This repository holds only the Android app and copies of the protocol test
+(`packages/pi-atlas/extensions/remote`, formerly `packages/pi-remote`; the relay is
+`packages/pi-remote-relay`). This repository holds only the Android app and copies of the protocol test
 fixtures in `src/test/resources` (the README names their source commit). A change that needs a new
 protocol field or host behaviour lands in noah-monorepo first, under that repository's rules.
 
@@ -18,19 +19,38 @@ This repository does not use noah-monorepo's process: no Plane tickets, risk tie
 or `review-diff.ts`. The process is:
 
 1. One branch and one pull request per change, against `main`.
-2. Run the checks below locally before pushing.
+2. Run `scripts/quick-check.sh` before pushing (see Checks).
 3. Get one independent review of the diff (a reviewer subagent is enough) and fix what it finds.
 4. CI must be green on the PR's head.
 5. Merge after Robin agrees, as a merge commit.
 
 ## Checks
 
+Before pushing, run `scripts/quick-check.sh`. It checks resource parity, then in one Gradle run
+compiles app main, unit tests, androidTest, the benchmark variant, the benchmarks module and wear
+(unit and emulator tests),
+and runs the unit tests related to the changed files: tests named after a changed file or naming
+it or what it declares. A build file, Gradle setting, manifest or app resource change, or more than
+40 related classes, runs the whole suite; wear and benchmark changes add their own tests. It skips
+Gradle when only docs changed. `QUICK_CHECK_LOW_MEMORY=1` fits it on a 15 GB cloud box.
+
+Lint, R8, the full unit suite and the emulator tests run only in CI, which must be green before a
+merge. CI runs the set below plus the emulator tests (`./gradlew pixel2Api36DebugAndroidTest`,
+which need `/dev/kvm`). `scripts/quick-check.sh --full` runs the set locally, and
+`./gradlew lintDebug :wear:lintDebug` reproduces a lint failure.
+
 ```sh
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug
+./gradlew :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:assembleDebugAndroidTest
+./gradlew assembleDebugAndroidTest :assembleBenchmark :benchmarks:assembleBenchmark
 ```
 
-CI also runs the emulator tests (`./gradlew pixel2Api36DebugAndroidTest`), which need `/dev/kvm`.
+The wear module compiles every source file in `src/main/java`, and the androidTest and benchmark
+source sets hold fakes of app interfaces, so a change can pass the app's own build and still break
+one of the others; that is why the quick check compiles them all. Lint reports only findings
+missing from `lint-baseline.xml` and `wear/lint-baseline.xml`; fix new findings instead of
+regenerating a baseline.
 Every user-facing string exists in `src/main/res/values/strings.xml` (English) and
 `src/main/res/values-de/strings.xml` (German).
 
@@ -39,6 +59,8 @@ ones a change needs instead of claiming them.
 
 ## Releases
 
-`.github/workflows/release.yml` publishes to Play testing tracks after a merge to `main`. It stays
-disabled until the setup in `docs/runbooks/play-testing-release.md` is complete. Never target the
-old `de.joinnoah.pocketpi` app or the production track.
+`.github/workflows/release.yml` publishes to Play testing tracks when Robin starts it by hand
+(`workflow_dispatch` on `main`); a merge alone does not publish. It refuses to run unless the Android
+CI push run for the current `main` commit succeeded. Setup and recovery are in
+`docs/runbooks/play-testing-release.md`. Never target the old `de.joinnoah.pocketpi` app or the
+production track.

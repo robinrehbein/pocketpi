@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Direct Share: the dynamic session shortcuts (HomeSurfaces) carry this category, so the share
+    sheet offers them and starts ShareActivity with the chosen shortcut's ID. The types match
+    ShareActivity's intent filters in the manifest. The watch app compiles this file too but has
+    no share sheet.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
+    <share-target android:targetClass="de.joinnoah.pi.remote.ShareActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="application/pdf" />
+        <category android:name="de.joinnoah.pi.remote.category.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

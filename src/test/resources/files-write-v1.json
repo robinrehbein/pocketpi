@@ -1,0 +1,249 @@
+{
+  "version": 1,
+  "note": "session.files.write.v1 wire examples. The app must see session.files.write.v1 in the capabilities.v2 projects.list route before sending session.files.write. The host advertises it only while its file-writes setting is on (the default). baseVersion is the version of the last read or write; a different current version is answered with error code conflict. Paths the parser accepts may still be answered invalid_path by the host (malformed, denied, ignored, symlink, hard link, special or binary file).",
+  "valid": [
+    {
+      "name": "write-command",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": "hello\nworld\n"
+      }
+    },
+    {
+      "name": "write-command-empty-content",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "req-2",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "empty.txt",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": ""
+      }
+    },
+    {
+      "name": "write-command-crlf-no-trailing-newline",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "req-3",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "docs/notes.txt",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": "one\r\ntwo"
+      }
+    },
+    {
+      "name": "write-command-denied-path-parses",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "req-4",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": ".env",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": "SECRET=1\n"
+      }
+    },
+    {
+      "name": "written",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.written",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "TmV3VmVyc2lvblh5ejk4Nw",
+          "size": 12
+        }
+      }
+    },
+    {
+      "name": "written-empty",
+      "payload": {
+        "type": "result",
+        "requestId": "req-2",
+        "ok": true,
+        "data": {
+          "kind": "files.written",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "empty.txt",
+          "version": "TmV3VmVyc2lvblh5ejk4Nw",
+          "size": 0
+        }
+      }
+    },
+    {
+      "name": "write-conflict-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": false,
+        "error": { "code": "conflict", "message": "File changed since it was opened" }
+      }
+    },
+    {
+      "name": "write-invalid-path-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-4",
+        "ok": false,
+        "error": { "code": "invalid_path", "message": "This file cannot be changed" }
+      }
+    },
+    {
+      "name": "projects-files-write-capability",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v2:req-8",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": ["session.files.v1", "session.files.write.v1"]
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "write-command-missing-base-version",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "content": "x"
+      }
+    },
+    {
+      "name": "write-command-bad-base-version",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "baseVersion": "not+base64url",
+        "content": "x"
+      }
+    },
+    {
+      "name": "write-command-empty-path",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": "x"
+      }
+    },
+    {
+      "name": "write-command-missing-content",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "write-command-content-not-string",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": 42
+      }
+    },
+    {
+      "name": "write-command-extra-key",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": "x",
+        "create": true
+      }
+    },
+    {
+      "name": "write-command-nul-path",
+      "payload": {
+        "type": "session.files.write",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a\u0000b",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg",
+        "content": "x"
+      }
+    },
+    {
+      "name": "written-missing-version",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.written",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "size": 12
+        }
+      }
+    },
+    {
+      "name": "written-bad-version",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.written",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "short",
+          "size": 12
+        }
+      }
+    },
+    {
+      "name": "written-negative-size",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.written",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "TmV3VmVyc2lvblh5ejk4Nw",
+          "size": -1
+        }
+      }
+    },
+    {
+      "name": "written-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.written",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "TmV3VmVyc2lvblh5ejk4Nw",
+          "size": 12,
+          "content": "hello\nworld\n"
+        }
+      }
+    }
+  ]
+}

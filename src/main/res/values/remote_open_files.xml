@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A file pi read, edited or named, opened in Files at its lines (tool cards, tool details, touched files). -->
+    <string name="remote_open_files_open">Open in Files</string>
+    <!-- The same place for a file outside the project, which Files cannot show. -->
+    <string name="remote_open_files_copy_outside">Copy path (outside the project)</string>
+    <!-- The menu of a line in Changes. -->
+    <string name="remote_open_files_open_line">Open file at this line</string>
+    <!-- The question field under lines picked in a file; Enter sends the lines and the question to pi. -->
+    <string name="remote_open_files_ask_hint">Ask about these lines</string>
+    <string name="remote_open_files_ask_send">Ask pi</string>
+</resources>

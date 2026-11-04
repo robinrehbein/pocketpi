@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_shell_command">Shell command</string>
+    <string name="remote_shell_command_private">Shell command, not shared with pi</string>
+    <string name="remote_shell_close">Close</string>
+    <string name="remote_shell_exit_code">Exited with code %d</string>
+    <string name="remote_shell_cancelled">Stopped</string>
+    <string name="remote_shell_ended">Ended without an exit code</string>
+    <string name="remote_shell_truncated">Only the end of the output is shown.</string>
+    <string name="remote_shell_no_output">No output</string>
+    <string name="remote_shell_switched_off">Shell commands are turned off on this computer. Turn them on with pi-remote config bash-commands on.</string>
+    <string name="remote_shell_terminal_session">This session cannot run shell commands from the phone.</string>
+    <string name="remote_shell_reload_extension">Reload pi on the computer to run commands here.</string>
+    <string name="remote_shell_update_pi">Update pi on your computer to run shell commands.</string>
+    <string name="remote_shell_unsupported">Your computer cannot run shell commands in this session.</string>
+    <string name="remote_shell_busy">The session is busy. Run the command again when pi is done.</string>
+    <string name="remote_shell_connection">The connection to pi was lost. The command may not have finished.</string>
+    <string name="remote_shell_failed">The shell command could not run.</string>
+    <string name="remote_shell_when_idle">%1$s, send it when pi is done</string>
+    <string name="remote_shell_running">Running</string>
+    <string name="remote_shell_stop">Stop shell command</string>
+    <string name="remote_shell_stop_sent">Stop sent.</string>
+    <string name="remote_shell_draft_not_sent">Not sent: this session cannot run shell commands. To send this as a prompt, start it with a space.</string>
+</resources>

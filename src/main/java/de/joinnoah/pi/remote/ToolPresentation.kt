@@ -6,6 +6,11 @@ import java.math.RoundingMode
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.*
 
 // ---- Edit diffs ---------------------------------------------------------------------------
@@ -195,7 +200,10 @@ private val toolDiffCache =
             size > 64
     }
 
-/** The diff of an edit call: pi's own patch when the host forwarded it, else the arguments. */
+/**
+ * The diff of an edit call: pi's own patch when the host forwarded it, else the arguments. The
+ * cache serves the edit cards on screen; the chat's line counts use a [TouchedLineCache].
+ */
 internal fun toolDiff(item: ConversationItem.Activity): ToolDiff? {
     if (item.name != "edit") return null
     val key = item.arguments to item.details
@@ -237,23 +245,38 @@ internal data class TouchedFiles(val changed: List<TouchedFile>, val read: List<
 
 private class FileUse(var count: Int = 0, var latestIndex: Int = -1, var latestItemId: String = "")
 
-internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles {
+/** The file one tool item reads or changes, as [touchedFiles] counts it. */
+internal class FileTouch(val path: String, val changed: Boolean, val itemId: String)
+
+internal fun fileTouch(item: ConversationItem): FileTouch? {
+    if (item !is ConversationItem.Activity) return null
+    val changed =
+        when (item.name) {
+            "read" -> false
+            // A failed edit or write changed nothing.
+            "edit",
+            "write" -> if (item.state == "error") return null else true
+            else -> return null
+        }
+    val path = toolPath(item) ?: return null
+    return FileTouch(path, changed, item.id)
+}
+
+internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles =
+    groupTouchedFiles { visit -> items.forEachIndexed { index, item -> fileTouch(item)?.let { visit(index, it) } } }
+
+/**
+ * Groups the touches that [each] visits, in item order with each one's index in the item list:
+ * changed files, then files only read, the most recently used first.
+ */
+internal fun groupTouchedFiles(each: (visit: (index: Int, touch: FileTouch) -> Unit) -> Unit): TouchedFiles {
     val changed = LinkedHashMap<String, FileUse>()
     val read = LinkedHashMap<String, FileUse>()
-    for ((index, item) in items.withIndex()) {
-        if (item !is ConversationItem.Activity) continue
-        val target =
-            when (item.name) {
-                "read" -> read
-                "edit",
-                "write" -> changed
-                else -> continue
-            }
-        val path = toolPath(item) ?: continue
-        val use = target.getOrPut(path) { FileUse() }
+    each { index, touch ->
+        val use = (if (touch.changed) changed else read).getOrPut(touch.path) { FileUse() }
         use.count++
         use.latestIndex = index
-        use.latestItemId = item.id
+        use.latestItemId = touch.itemId
     }
     fun sorted(uses: Map<String, FileUse>) =
         uses.entries
@@ -269,18 +292,91 @@ internal data class TouchedLineCounts(val added: Int, val removed: Int)
  * Sums the diffs of the edits that did not fail; null when no edit has a diff. A `write` call
  * carries no old text, so it counts as a touched file but not as lines.
  */
-internal fun touchedLineCounts(items: List<ConversationItem>): TouchedLineCounts? {
+internal fun touchedLineCounts(items: List<ConversationItem>): TouchedLineCounts? =
+    sumTouchedLines(items, { computeToolDiff(it.arguments, it.details, it.argumentsTruncated)?.lineCount() }) {}
+
+private fun ToolDiff.lineCount() = TouchedLineCounts(added, removed)
+
+private inline fun sumTouchedLines(
+    items: List<ConversationItem>,
+    count: (ConversationItem.Activity) -> TouchedLineCounts?,
+    checkpoint: () -> Unit,
+): TouchedLineCounts? {
     var added = 0
     var removed = 0
     var any = false
     for (item in items) {
-        if (item !is ConversationItem.Activity || item.state == "error") continue
-        val diff = toolDiff(item) ?: continue
-        added += diff.added
-        removed += diff.removed
+        checkpoint()
+        if (item !is ConversationItem.Activity || item.state == "error" || item.name != "edit") continue
+        val lines = count(item) ?: continue
+        added += lines.added
+        removed += lines.removed
         any = true
     }
     return if (any) TouchedLineCounts(added, removed) else null
+}
+
+/**
+ * [touchedLineCounts] for one chat, which keeps each edit's line count by item ID. A streamed delta
+ * then diffs only the edits it added or changed, however many the chat holds; the counts of edits
+ * no longer in the chat are dropped on the next pass.
+ */
+internal class TouchedLineCache {
+    private class Entry(
+        val arguments: String?,
+        val details: ToolDetails?,
+        val argumentsTruncated: Boolean,
+        val lines: TouchedLineCounts?,
+    ) {
+        fun matches(item: ConversationItem.Activity) =
+            arguments == item.arguments && details == item.details && argumentsTruncated == item.argumentsTruncated
+    }
+
+    private val mutex = Mutex()
+    private var entries = HashMap<String, Entry>()
+
+    /** Diffs computed since this cache was made; a cache hit computes none. */
+    @Volatile
+    var computed = 0
+        private set
+
+    /** Checks for cancellation before each item and yields after each diff it computes. */
+    suspend fun counts(items: List<ConversationItem>): TouchedLineCounts? = mutex.withLock {
+        val previous = entries
+        val next = HashMap<String, Entry>()
+        val context = currentCoroutineContext()
+        var fresh = false
+        var done = false
+        try {
+            sumTouchedLines(
+                items,
+                { item ->
+                    val entry =
+                        previous[item.id]?.takeIf { it.matches(item) }
+                            ?: Entry(
+                                item.arguments,
+                                item.details,
+                                item.argumentsTruncated,
+                                computeToolDiff(item.arguments, item.details, item.argumentsTruncated)?.lineCount(),
+                            ).also {
+                                computed++
+                                fresh = true
+                            }
+                    next[item.id] = entry
+                    entry.lines
+                },
+            ) {
+                context.ensureActive()
+                if (fresh) {
+                    fresh = false
+                    yield()
+                }
+            }.also { done = true }
+        } finally {
+            // A cancelled pass keeps what it diffed; only a complete one forgets edits that left.
+            entries = if (done) next else previous.apply { putAll(next) }
+        }
+    }
 }
 
 /** Git-style "+12" and "−4" (a real minus sign) for the touched-files summary. */
@@ -294,22 +390,26 @@ internal enum class TouchedFilesTarget {
     SHEET,
 }
 
-/** The host's changes view when it offers one; otherwise the list of files the chat touched. */
-internal fun touchedFilesTarget(changesAvailable: Boolean): TouchedFilesTarget =
-    if (changesAvailable) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
+/**
+ * The host's changes view when it offers one and the chat changed a file; otherwise the list of
+ * files the chat touched, so a chat that only read files never lands on an empty changes view.
+ */
+internal fun touchedFilesTarget(changesAvailable: Boolean, filesChanged: Boolean): TouchedFilesTarget =
+    if (changesAvailable && filesChanged) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
 
 // ---- Timeline and errors ------------------------------------------------------------------
 
 internal enum class TimelineMarkerKind {
+    /** One of the user's own messages. */
+    USER,
     ERROR,
     QUESTION,
     EDIT,
     PLAN,
 }
 
-internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val position: Float)
-
-private const val MAX_TIMELINE_MARKERS = 200
+/** A marked item; [index] is its position in the item list the markers were built from. */
+internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val index: Int)
 
 internal fun isErrorItem(item: ConversationItem): Boolean =
     when (item) {
@@ -321,22 +421,126 @@ internal fun isErrorItem(item: ConversationItem): Boolean =
 
 internal fun onlyErrors(items: List<ConversationItem>): List<ConversationItem> = items.filter(::isErrorItem)
 
-/** Markers over the visible list, positioned 0..1 by index; only the most recent 200 are kept. */
-internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> {
-    val last = items.lastIndex
-    val markers = items.mapIndexedNotNull { index, item ->
-        val kind =
-            when {
-                isErrorItem(item) -> TimelineMarkerKind.ERROR
-                item !is ConversationItem.Activity -> null
-                item.name == "questionnaire" -> TimelineMarkerKind.QUESTION
-                item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
-                item.name == "submit_plan" -> TimelineMarkerKind.PLAN
-                else -> null
-            } ?: return@mapIndexedNotNull null
-        TimelineMarker(item.id, kind, if (last <= 0) 0f else index.toFloat() / last)
+/** pi's question tool: `AskUserQuestion` now, `questionnaire` in older saved sessions. */
+internal fun isQuestionTool(name: String?): Boolean = name == "AskUserQuestion" || name == "questionnaire"
+
+/** pi's plan tool: `ExitPlanMode` now, `submit_plan` in older saved sessions. */
+internal fun isPlanTool(name: String?): Boolean = name == "ExitPlanMode" || name == "submit_plan"
+
+/**
+ * A tool call that starts or ends a background job on a host without the jobs lease: `bash_bg`,
+ * `TaskStop`, or `bash_kill` in older sessions. Newer hosts start jobs with `bash` and
+ * `run_in_background` and report every change through `session.jobs.changed`, so `bash` is no hint.
+ */
+internal fun isJobChangingTool(name: String?): Boolean =
+    name == "bash_bg" || name == "TaskStop" || name == "bash_kill"
+
+/** What a marker or a history entry calls [item], or null when it is not worth finding again. */
+internal fun timelineMarkerKind(item: ConversationItem): TimelineMarkerKind? =
+    when {
+        isErrorItem(item) -> TimelineMarkerKind.ERROR
+        item is ConversationItem.Bubble -> if (item.role == "user") TimelineMarkerKind.USER else null
+        item !is ConversationItem.Activity -> null
+        isQuestionTool(item.name) -> TimelineMarkerKind.QUESTION
+        item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
+        isPlanTool(item.name) -> TimelineMarkerKind.PLAN
+        else -> null
     }
-    return markers.takeLast(MAX_TIMELINE_MARKERS)
+
+/** Markers over the visible list, by index. The scrollbar thins them to what its track can show. */
+internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> =
+    items.mapIndexedNotNull { index, item ->
+        timelineMarkerKind(item)?.let { TimelineMarker(item.id, it, index) }
+    }
+
+// ---- Chat history -------------------------------------------------------------------------
+
+/** One row of the chat history: a marked item with a one-line text, when it has one. */
+internal data class ChatHistoryEntry(
+    val itemId: String,
+    val kind: TimelineMarkerKind,
+    val text: String?,
+    val timestamp: Long? = null,
+)
+
+/** Longer texts are cut; a history row shows one line anyway. */
+private const val HISTORY_TEXT_CHARS = 160
+
+private val WHITESPACE = Regex("\\s+")
+
+/** [text] on one line: whitespace runs collapse to one space, blank text is null. */
+internal fun historyLine(text: String?): String? =
+    // Cut first: a long message is not worth collapsing in full for one line.
+    text?.trim()?.take(HISTORY_TEXT_CHARS * 2)?.replace(WHITESPACE, " ")?.take(HISTORY_TEXT_CHARS)?.trim()
+        ?.takeIf(String::isNotEmpty)
+
+/**
+ * Every marked item in conversation order, with no cap: the history is a lazy list. Unlike the
+ * scrollbar's markers it carries text, so the user finds a place by what was said there.
+ */
+internal fun chatHistory(items: List<ConversationItem>): List<ChatHistoryEntry> =
+    items.mapNotNull { item ->
+        val kind = timelineMarkerKind(item) ?: return@mapNotNull null
+        ChatHistoryEntry(
+            item.id,
+            kind,
+            historyText(item, kind),
+            (item as? ConversationItem.Bubble)?.timestamp,
+        )
+    }
+
+/**
+ * The history entry to show first: the last one at or before [currentId] in [order], the item at
+ * the top of the chat's viewport; 0 when there is none.
+ */
+internal fun historyAnchor(history: List<ChatHistoryEntry>, order: List<String>, currentId: String?): Int {
+    val current = currentId?.let(order::indexOf)?.takeIf { it >= 0 } ?: return 0
+    val positions = order.withIndex().associate { it.value to it.index }
+    return history.indexOfLast { (positions[it.itemId] ?: Int.MAX_VALUE) <= current }.coerceAtLeast(0)
+}
+
+private fun historyText(item: ConversationItem, kind: TimelineMarkerKind): String? =
+    when (item) {
+        is ConversationItem.Bubble -> historyLine(item.text)
+        is ConversationItem.Subagent ->
+            historyLine(item.agents.filter { it.state == "failed" }.joinToString(", ") { it.name })
+        is ConversationItem.Thinking -> null
+        is ConversationItem.Activity ->
+            when (kind) {
+                TimelineMarkerKind.QUESTION -> historyLine(questionnaireTitle(item.arguments))
+                TimelineMarkerKind.PLAN -> historyLine(planTitle(item.arguments))
+                TimelineMarkerKind.EDIT -> historyLine(item.summary.detail?.let(::fileName))
+                TimelineMarkerKind.ERROR -> {
+                    val firstOutput = item.output?.lineSequence()?.firstOrNull { it.isNotBlank() }
+                    // A failed query (a search pattern, URL or question) says more through its error.
+                    val reason =
+                        if (item.name in QUERY_TOOLS) firstOutput ?: item.summary.detail else item.summary.detail ?: firstOutput
+                    historyLine(listOfNotNull(item.name, reason).joinToString(": "))
+                }
+                TimelineMarkerKind.USER -> null
+            }
+    }
+
+private val QUERY_TOOLS = setOf("grep", "find", "web_search", "web_fetch", "fetch", "advisor", "consult_advisor")
+
+private fun fileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
+
+private fun JsonObject.firstText(vararg keys: String): String? =
+    keys.firstNotNullOfOrNull { key ->
+        (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
+    }
+
+/** The first question's prompt of a questionnaire call, or its title. */
+private fun questionnaireTitle(arguments: String?): String? {
+    val args = arguments?.let(::parsedToolArguments) ?: return null
+    val first = (args["questions"] as? JsonArray)?.firstOrNull() as? JsonObject
+    return first?.firstText("prompt", "question", "label") ?: args.firstText("title", "prompt", "question")
+}
+
+/** The first non-blank line of a submitted plan, without its heading marks. */
+private fun planTitle(arguments: String?): String? {
+    val plan = arguments?.let(::parsedToolArguments)?.firstText("plan") ?: return null
+    return plan.lineSequence().map { it.trim().trimStart('#').trim() }.firstOrNull(String::isNotEmpty)
 }
 
 // ---- Subagent children --------------------------------------------------------------------
@@ -350,13 +554,25 @@ internal sealed interface ChildResolution {
 }
 
 /** Session rows that parse; a malformed row is dropped instead of failing the whole list. */
-internal fun sessionListItems(sessions: List<JsonObject>, connected: Boolean, loading: Boolean): List<SessionListItem> =
-    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading) }.getOrNull() }
+internal fun sessionListItems(
+    sessions: List<JsonObject>,
+    connected: Boolean,
+    loading: Boolean,
+    stale: Boolean = false,
+    /** [RemoteState.sessionsFresh]; see [sessionListItem]. */
+    confirmed: Boolean,
+): List<SessionListItem> =
+    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading, stale, confirmed) }.getOrNull() }
 
-private fun SessionListItem.live(): Boolean =
+internal fun SessionListItem.live(): Boolean =
     availability == SessionAvailability.RUNNING || availability == SessionAvailability.WAITING
 
 private fun AgentProgress.active(): Boolean = state == "running" || state == "queued"
+
+/** Live per a fresh report: a last-known RUNNING or WAITING is not current, so not abortable. */
+private fun SessionListItem.liveNow(): Boolean = live() && !lastKnown
+
+private val TERMINAL_AGENT_STATES = setOf("succeeded", "failed", "cancelled", "ended")
 
 private const val MAX_CHILD_CANDIDATES = 8
 
@@ -380,7 +596,7 @@ internal fun resolveSubagentChild(
                 var score = 0
                 if (task != null && child.title.contains(task, ignoreCase = true)) score += 2
                 if (child.title.contains(agent.name, ignoreCase = true)) score += 1
-                if (child.live() && agent.active()) score += 1
+                if (child.liveNow() && agent.active()) score += 1
                 child to score
             }
             .sortedWith(
@@ -401,6 +617,13 @@ internal data class SubagentStripEntry(
     val abortable: Boolean,
     /** Tappable only when the session list knows [sessionId]; otherwise opening it would fail. */
     val openable: Boolean = sessionId != null,
+    /**
+     * [state] is the child's last-known status from before the connection dropped, not a current
+     * one. Progress records without a matching child session carry no freshness of their own, so
+     * their active (running, queued, waiting) states are always last known: nothing proves the
+     * Mac still reports them. Their terminal states stay as recorded.
+     */
+    val lastKnown: Boolean = false,
 )
 
 internal data class SubagentStrip(
@@ -411,11 +634,12 @@ internal data class SubagentStrip(
 )
 
 private const val STRIP_RECENT_SUBAGENTS = 3
-private const val MAX_STRIP_ENTRIES = 16
 
 /**
- * The running subagents of a session: its live child sessions (abortable), enriched with the
- * latest progress, plus running or queued progress agents that have no live child yet.
+ * The subagents of a session, including finished children and terminal progress. Live child
+ * sessions remain authoritative for running/abortable state; an idle child without terminal
+ * progress is simply ended, not assumed successful. Only recent active progress contributes
+ * unresolved running agents, so historical progress cannot resurrect a stale running entry.
  */
 internal fun subagentStrip(
     items: List<ConversationItem>,
@@ -423,45 +647,72 @@ internal fun subagentStrip(
     parentSessionId: String,
 ): SubagentStrip {
     val knownIds = sessions.mapTo(HashSet()) { it.id }
-    val runningChildren = sessions.filter { it.parentSessionId == parentSessionId && it.live() }
-    val runningChildIds = runningChildren.mapTo(HashSet()) { it.id }
+    val children = sessions.filter { it.parentSessionId == parentSessionId }
+    val childIds = children.mapTo(HashSet()) { it.id }
     val subagents = items.filterIsInstance<ConversationItem.Subagent>()
     val latestBySession = HashMap<String, AgentProgress>()
     for (item in subagents) for (agent in item.agents) agent.sessionId?.let { latestBySession[it] = agent }
 
     data class Recent(val agent: AgentProgress, val match: String?)
     val recent =
-        subagents.takeLast(STRIP_RECENT_SUBAGENTS).flatMap { item ->
+        subagents.flatMapIndexed { itemIndex, item ->
             item.agents.mapIndexedNotNull { index, agent ->
-                if (!agent.active()) return@mapIndexedNotNull null
+                if (agent.active() && itemIndex < subagents.size - STRIP_RECENT_SUBAGENTS)
+                    return@mapIndexedNotNull null
+                if (agent.sessionId != null) {
+                    if (latestBySession[agent.sessionId] != agent) return@mapIndexedNotNull null
+                    // A known session under a different parent must never leak into this overview.
+                    if (agent.sessionId in knownIds && agent.sessionId !in childIds) return@mapIndexedNotNull null
+                }
                 val match =
-                    if (agent.sessionId != null) agent.sessionId.takeIf { it in knownIds }
+                    if (agent.sessionId != null) agent.sessionId.takeIf { it in childIds }
                     else
-                        (resolveSubagentChild(item, index, parentSessionId, sessions) as? ChildResolution.Exact)
+                        (resolveSubagentChild(item, index, parentSessionId, children) as? ChildResolution.Exact)
                             ?.sessionId
                 Recent(agent, match)
             }
         }
-    val heuristic = HashMap<String, AgentProgress>()
-    recent.forEach { if (it.agent.sessionId == null && it.match != null) heuristic.putIfAbsent(it.match, it.agent) }
+    val heuristic = HashMap<String, Recent>()
+    recent.asReversed().forEach {
+        if (it.agent.sessionId == null && it.match != null) heuristic.putIfAbsent(it.match, it)
+    }
 
     val entries = buildList {
-        for (child in runningChildren) {
-            val agent = latestBySession[child.id] ?: heuristic[child.id]
+        for (child in children) {
+            val agent = latestBySession[child.id] ?: heuristic[child.id]?.agent
             add(
                 SubagentStripEntry(
                     sessionId = child.id,
                     agent = agent?.name,
                     title = child.title,
-                    state = agent?.state?.takeIf { it == "queued" } ?: "running",
+                    state =
+                        when {
+                            // A child waiting for input is not running, whatever its progress says.
+                            child.availability == SessionAvailability.WAITING -> "waiting"
+                            // A last-known RUNNING keeps the session's status; old progress must
+                            // not refine it into something the Mac never confirmed.
+                            child.lastKnown && child.availability == SessionAvailability.RUNNING -> "running"
+                            child.live() -> agent?.state?.takeIf { it == "queued" } ?: "running"
+                            // Offline: only a terminal outcome is still true; running, queued or
+                            // waiting progress is not current, so the child just reads offline.
+                            child.availability == SessionAvailability.OFFLINE ->
+                                agent?.state?.takeIf { it in TERMINAL_AGENT_STATES } ?: "offline"
+                            else -> agent?.state?.takeUnless { agent.active() } ?: "ended"
+                        },
                     activity = if (agent != null) agent.activity ?: agent.preview else child.preview,
-                    abortable = true,
+                    abortable = child.liveNow(),
+                    lastKnown = child.lastKnown,
                 )
             )
         }
         val seen = HashSet<String>()
-        for ((agent, match) in recent) {
-            if (match != null && match in runningChildIds) continue
+        for (record in recent.asReversed()) {
+            val (agent, match) = record
+            // Matched active progress is represented by the child's authoritative state. Retain
+            // distinct id-less terminal tasks, consuming only the record used to enrich the child.
+            if (match != null && match in childIds &&
+                (agent.active() || agent.sessionId != null ||
+                    (latestBySession[match] == null && heuristic[match] === record))) continue
             if (agent.sessionId != null && !seen.add(agent.sessionId)) continue
             add(
                 SubagentStripEntry(
@@ -472,16 +723,27 @@ internal fun subagentStrip(
                     activity = agent.activity ?: agent.preview,
                     abortable = false,
                     openable = agent.sessionId != null && agent.sessionId in knownIds,
+                    // No session vouches for this record, so an active state is never current.
+                    lastKnown = agent.active() || agent.state == "waiting",
                 )
             )
         }
     }
-    val ordered = entries.sortedBy { if (it.state == "queued") 1 else 0 }.take(MAX_STRIP_ENTRIES)
+    val ordered = entries.sortedBy {
+        when (it.state) {
+            "waiting" -> 0
+            "running" -> 1
+            "queued" -> 2
+            else -> 3
+        }
+    }
     return SubagentStrip(
         entries = ordered,
-        running = ordered.count { it.state == "running" },
+        running = ordered.count { it.state == "running" && !it.lastKnown },
         missingSessionIds = recent.mapNotNullTo(HashSet()) { r -> r.agent.sessionId?.takeIf { it !in knownIds } },
-        unmatchedRunning = recent.count { it.agent.state == "running" && it.match == null },
+        unmatchedRunning = recent.count {
+            it.agent.state == "running" && it.match == null && it.agent.sessionId !in childIds
+        },
     )
 }
 

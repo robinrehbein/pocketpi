@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Das eine Set Statuswörter, das alle Oberflächen nutzen (Befunde D10/D27): jetzt die Aktivitätsübersicht, die anderen folgen später. Schlüssel bleiben, Werte dürfen sich ändern. -->
+    <string name="remote_status_needs_you">Braucht dich</string>
+    <string name="remote_status_working">Arbeitet</string>
+    <string name="remote_status_ready">Bereit</string>
+    <string name="remote_status_finished_since_last_look">Seit deinem letzten Blick fertig</string>
+</resources>

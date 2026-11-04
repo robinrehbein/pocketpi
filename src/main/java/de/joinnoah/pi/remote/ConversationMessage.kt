@@ -7,18 +7,24 @@ import android.text.format.Formatter
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,11 +40,14 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -46,9 +55,12 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import java.text.NumberFormat
@@ -60,21 +72,74 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-private class BubbleShape(private val outgoing: Boolean) : Shape {
+/**
+ * The bubble's corner radius and the length of its tail, which sits on the side of the sender. A
+ * documented exception to the shape scale (MaterialTheme.shapes): a body with a tail on one side is
+ * not a rounded rectangle, so its corner radius stays here.
+ */
+private val BUBBLE_RADIUS = 20.dp
+private val BUBBLE_TAIL = 8.dp
+
+/**
+ * Whether [text] has content that wants the wide chat column: a code block, a table or an image.
+ * Each of them needs one of these characters, so a text without any (most prose, and every update
+ * of a streamed prose message) is answered without parsing it.
+ */
+internal fun hasWideContent(text: String): Boolean {
+    if ("```" !in text && "~~~" !in text && '|' !in text && "![" !in text) return false
+    return markdownSegments(text).any { segment ->
+        segment.code || markdownBlocks(segment.text).any { it is MarkdownBlock.Table || it is MarkdownBlock.Image }
+    }
+}
+
+/**
+ * The widest a chat item grows. Prose stays in the reading column; code, tables, images, tool and
+ * diff cards may take the wide one.
+ */
+internal fun conversationItemWidth(item: ConversationItem): Dp =
+    when (item) {
+        is ConversationItem.Bubble -> if (hasWideContent(item.text)) WIDE_READING_WIDTH else PROSE_READING_WIDTH
+        is ConversationItem.Thinking -> if (hasWideContent(item.text)) WIDE_READING_WIDTH else PROSE_READING_WIDTH
+        is ConversationItem.Activity -> WIDE_READING_WIDTH
+        is ConversationItem.Subagent -> PROSE_READING_WIDTH
+    }
+
+/**
+ * Keep chat motion consistent with other lists, including moving rows when a tool is expanded.
+ * Disabling placement motion did not resolve the persistent overlap reported on the device.
+ */
+internal fun Modifier.conversationItemMotion(item: LazyItemScope): Modifier = itemMotion(item)
+
+/**
+ * One chat item in its reading column, at most [conversationItemWidth] wide and anchored to the
+ * prose column's edge on its sender's side (see [readingColumn]).
+ */
+@Composable
+internal fun ConversationItemColumn(item: ConversationItem, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val outgoing = item is ConversationItem.Bubble && item.role == "user"
+    Box(modifier.readingColumn(remember(item) { conversationItemWidth(item) }, outgoing)) { content() }
+}
+
+/**
+ * A bubble with its tail at the bottom corner of the side it comes from: the end edge for an
+ * [outgoing] message, the start edge otherwise, so the tail follows a right-to-left layout.
+ */
+internal class BubbleShape(private val outgoing: Boolean) : Shape {
     override fun createOutline(
         size: Size,
         layoutDirection: LayoutDirection,
         density: Density,
     ): Outline {
-        val tail = with(density) { 8.dp.toPx() }
-        val radius = with(density) { 20.dp.toPx() }
+        val tail = with(density) { BUBBLE_TAIL.toPx() }
+        val radius = with(density) { BUBBLE_RADIUS.toPx() }
+        val tailRight = outgoing == (layoutDirection == LayoutDirection.Ltr)
         val body =
             Path().apply {
                 addRoundRect(
                     RoundRect(
-                        if (outgoing) 0f else tail,
+                        if (tailRight) 0f else tail,
                         0f,
-                        if (outgoing) size.width - tail else size.width,
+                        if (tailRight) size.width - tail else size.width,
                         size.height,
                         CornerRadius(radius),
                     )
@@ -82,7 +147,7 @@ private class BubbleShape(private val outgoing: Boolean) : Shape {
             }
         val tip =
             Path().apply {
-                if (outgoing) {
+                if (tailRight) {
                     moveTo(size.width - tail * 2, size.height - tail * 2)
                     lineTo(size.width, size.height)
                     lineTo(size.width - tail * 3, size.height - tail / 2)
@@ -95,21 +160,32 @@ private class BubbleShape(private val outgoing: Boolean) : Shape {
             }
         return Outline.Generic(Path.combine(PathOperation.Union, body, tip))
     }
+
+    override fun equals(other: Any?) = other is BubbleShape && other.outgoing == outgoing
+
+    override fun hashCode() = outgoing.hashCode()
 }
 
+/**
+ * A swipe toward the start edge, past 64dp, quotes the message: leftward, or rightward in a
+ * right-to-left layout.
+ */
 private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier = composed {
     if (!enabled) this
     else {
+        // The screen x sign of the start direction: the swipe and its offset follow the layout.
+        val towardStart = if (LocalLayoutDirection.current == LayoutDirection.Rtl) 1f else -1f
         var dragOffset by remember { mutableFloatStateOf(0f) }
         var dragging by remember { mutableStateOf(false) }
         val haptics = LocalHapticFeedback.current
+        val latestOnQuote by rememberUpdatedState(onQuote)
         val offsetX by
             animateFloatAsState(
                 targetValue = dragOffset,
                 animationSpec = if (dragging) snap() else spring(),
                 label = "quote-swipe-offset",
             )
-        this.graphicsLayer { translationX = offsetX }.pointerInput(onQuote) {
+        this.graphicsLayer { translationX = offsetX * towardStart }.pointerInput(towardStart) {
             val threshold = 64.dp.toPx()
             val verticalTolerance = 24.dp.toPx()
             awaitEachGesture {
@@ -117,7 +193,6 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 var quote = false
                 var armed = false
                 try {
-                    dragging = true
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Final)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -131,8 +206,14 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                             break
                         val delta = change.position - down.position
                         if (abs(delta.y) > verticalTolerance) break
-                        dragOffset = delta.x.coerceIn(-threshold, 0f)
-                        val pastThreshold = delta.x <= -threshold && abs(delta.x) > abs(delta.y) * 3
+                        // How far the finger moved toward the start edge; negative toward the end.
+                        val travel = delta.x * towardStart
+                        // A tap must not recompose the parent and restart child click detectors.
+                        // Start the visual swipe only after horizontal touch slop is crossed.
+                        if (!dragging && travel > viewConfiguration.touchSlop && abs(delta.x) > abs(delta.y))
+                            dragging = true
+                        if (dragging) dragOffset = travel.coerceIn(0f, threshold)
+                        val pastThreshold = travel >= threshold && abs(delta.x) > abs(delta.y) * 3
                         if (pastThreshold && !armed) {
                             armed = true
                             haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
@@ -145,7 +226,7 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 } finally {
                     dragging = false
                     dragOffset = 0f
-                    if (quote) onQuote()
+                    if (quote) latestOnQuote()
                 }
             }
         }
@@ -155,9 +236,10 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
 /**
  * A brief 2dp outline in the primary color that fades out, for the target of a jump. It starts on
  * the transition to [highlighted] true; with animations off it holds for the same time instead.
- * Clearing [highlighted] early removes the outline at once.
+ * Clearing [highlighted] early removes the outline at once. With a [shape] (a bubble's, tail
+ * included) the outline follows it; without one it is a rounded rectangle around the item.
  */
-private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
+private fun Modifier.jumpHighlight(highlighted: Boolean, shape: Shape? = null): Modifier = composed {
     val alpha = remember { Animatable(0f) }
     LaunchedEffect(highlighted) {
         if (highlighted) {
@@ -177,13 +259,20 @@ private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
     drawWithContent {
         drawContent()
         val a = alpha.value
-        if (a > 0f) {
+        if (a > 0f && shape != null) {
+            drawOutline(
+                shape.createOutline(size, layoutDirection, this),
+                color = color.copy(alpha = a),
+                style = Stroke(2.dp.toPx()),
+            )
+        } else if (a > 0f) {
             val stroke = 2.dp.toPx()
             drawRoundRect(
                 color = color.copy(alpha = a),
                 topLeft = Offset(stroke / 2, stroke / 2),
                 size = Size(size.width - stroke, size.height - stroke),
-                cornerRadius = CornerRadius(12.dp.toPx()),
+                // The bubble's own radius, so the outline follows its corners.
+                cornerRadius = CornerRadius(BUBBLE_RADIUS.toPx()),
                 style = Stroke(stroke),
             )
         }
@@ -193,167 +282,350 @@ private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
 @Composable
 internal fun ConversationMessage(
     item: ConversationItem,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
     onOpenTool: ((ConversationItem.Activity) -> Unit)? = null,
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)? = null,
     onAskToFix: ((messageId: String) -> Unit)? = null,
+    /** Asks pi to fix what a message says; set while the chat takes a prompt. */
+    onAskToFixMessage: ((messageId: String) -> Unit)? = null,
     highlighted: Boolean = false,
     /** Set only for the first bubble of a user message when the chat can be rewound. */
     fork: MessageFork? = null,
+    /** Without a source, sent images show as plain text like any other attachment. */
+    images: SentImageSource? = null,
+    /** Without a source, an image the agent mentions shows as its description. */
+    projectImages: ProjectImageSource? = null,
+    /** Set only for the newest assistant bubble, like pi's `/copy`; others copy through accessibility. */
+    copyButton: Boolean = false,
+    /** The keyboard asked for this bubble's rewind menu; [onForkMenuRequestHandled] takes the request. */
+    forkMenuRequested: Boolean = false,
+    onForkMenuRequestHandled: () -> Unit = {},
+    /** Takes back the prompt that waits for the connection; the queued bubble offers it when set. */
+    onCancelQueued: (() -> Unit)? = null,
+    hideThinkingStatus: Boolean = false,
 ) {
-    Box(Modifier.jumpHighlight(highlighted)) {
+    // A bubble draws the outline along its own shape; other items get it around their box.
+    Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
         ConversationMessageContent(
             item,
+            highlighted,
             thinkingDisplay,
             thinkingActive,
             onQuote,
             onOpenTool,
             onOpenAgent,
             onAskToFix,
+            onAskToFixMessage,
             fork,
+            images,
+            projectImages,
+            copyButton,
+            forkMenuRequested,
+            onForkMenuRequestHandled,
+            onCancelQueued,
+            hideThinkingStatus,
         )
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationMessageContent(
     item: ConversationItem,
-    thinkingDisplay: String,
+    highlighted: Boolean,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
     onOpenTool: ((ConversationItem.Activity) -> Unit)?,
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)?,
     onAskToFix: ((messageId: String) -> Unit)?,
+    onAskToFixMessage: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
+    images: SentImageSource?,
+    projectImages: ProjectImageSource?,
+    copyButton: Boolean,
+    forkMenuRequested: Boolean,
+    onForkMenuRequestHandled: () -> Unit,
+    onCancelQueued: (() -> Unit)?,
+    hideThinkingStatus: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
+    val copyLabel = stringResource(R.string.remote_copy_message)
+    val copyAny = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy))
+    val copyMarkdownLabel = stringResource(R.string.remote_menu_copy_markdown)
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
-            val canQuote = item.text.isNotBlank()
+            // The pending prompt is not in the timeline yet, so there is no message to quote.
+            val canQuote = item.text.isNotBlank() && item.pendingState == null
             val forkShown = fork != null && outgoing
+            // Only a finished assistant text can be copied; a streaming one is still changing.
+            val canCopy = item.role == "assistant" && !item.streaming && !item.error && item.text.isNotBlank()
+            val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val width = if (item.text.contains("```")) maxWidth else maxWidth * 0.88f
-                Column(
+            // While text is selected in the bubble, a right-click opens the selection's own menu
+            // instead of the bubble's. A click without a drag selects nothing.
+            val selection = rememberSelectionState()
+            val linkTargets = remember { LinkTargets() }
+            val linkMenu = rememberLinkMenu()
+            val hover = remember { MutableInteractionSource() }
+            val menuCopyable = !item.streaming && item.text.isNotBlank()
+            // Every Copy copies what the bubble shows; "Copy as Markdown" is the one raw route.
+            val copyMarkdownOffered = remember(item.text) { markdownPlainText(item.text) != item.text }
+            val messageMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = { position ->
+                val url = position?.let(linkTargets::urlAt)
+                when {
+                    selection.selectedTexts.any { it.isNotEmpty() } -> emptyList()
+                    url != null -> linkMenu(url)
+                    else ->
+                        messageMenuActions(
+                            item.role,
+                            item.text,
+                            item.streaming,
+                            forkShown,
+                            onAskToFixMessage != null,
+                            canQuote = canQuote,
+                        )
+                            .map { action ->
+                                MenuItem(
+                                    action.label,
+                                    "message_${action.name.lowercase()}",
+                                    enabled = action != MessageMenuAction.EDIT_RETRY || fork?.ready == true,
+                                ) {
+                                    when (action) {
+                                        MessageMenuAction.QUOTE -> onQuote(item.sourceId)
+                                        MessageMenuAction.COPY -> copyAny(markdownPlainText(item.text))
+                                        MessageMenuAction.COPY_MARKDOWN -> copyAny(item.text)
+                                        MessageMenuAction.FORK -> forkMenu = true
+                                        MessageMenuAction.ASK_TO_FIX -> onAskToFixMessage?.invoke(item.sourceId)
+                                        MessageMenuAction.EDIT_RETRY -> forkConfirming = ForkMode.EDIT
+                                    }
+                                }
+                            }
+                }
+            }
+            val hoverActions =
+                buildList {
+                    if (menuCopyable)
+                        add(HoverAction(Icons.Outlined.ContentCopy, R.string.remote_menu_copy, "copy") {
+                            copyAny(markdownPlainText(item.text))
+                        })
+                    if (canQuote)
+                        add(HoverAction(Icons.Default.FormatQuote, R.string.remote_quote, "quote") { onQuote(item.sourceId) })
+                    if (forkShown)
+                        add(HoverAction(Icons.Filled.Replay, R.string.remote_fork_action, "fork") { forkMenu = true })
+                }
+            if (forkMenuRequested)
+                LaunchedEffect(Unit) {
+                    if (forkShown) forkMenu = true
+                    onForkMenuRequestHandled()
+                }
+            // The whole line of the message counts as hovering it, so the pointer can reach the
+            // part of the action row that reaches past a short bubble.
+            BoxWithConstraints(Modifier.fillMaxWidth().hoverActions(hover)) {
+                val wide = remember(item.text) { hasWideContent(item.text) }
+                val width = if (wide) maxWidth else maxWidth * 0.88f
+                Box(
                     Modifier.align(if (outgoing) Alignment.CenterEnd else Alignment.CenterStart)
                         .widthIn(max = width)
+                        .testTag("messageBubble-${item.id}")
+                        .contextMenu(items = messageMenu)
                 ) {
-                    if (!outgoing)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                item.author ?: stringResource(R.string.remote_model_unknown),
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        if (forkShown)
-                            ForkControl(
-                                item.sourceId,
-                                item.text,
-                                fork,
-                                forkMenu,
-                                { forkMenu = it },
-                                forkConfirming,
-                                { forkConfirming = it },
-                            )
-                        Surface(
-                            modifier = Modifier.weight(1f, fill = false)
-                                .quoteSwipe(canQuote) { onQuote(item.sourceId) }
-                                .semantics {
-                                    customActions = buildList {
-                                        if (canQuote)
-                                            add(
-                                                CustomAccessibilityAction(quoteLabel) {
-                                                    onQuote(item.sourceId)
-                                                    true
-                                                }
-                                            )
-                                        if (forkShown)
-                                            add(
-                                                CustomAccessibilityAction(forkLabel) {
-                                                    forkMenu = true
-                                                    true
-                                                }
-                                            )
-                                    }
-                                },
-                            shape = remember(outgoing) { BubbleShape(outgoing) },
-                            color =
-                                if (outgoing) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surfaceContainer,
-                        ) {
-                            Column(
-                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                    // A short outgoing bubble keeps to the end edge with its status line under it,
+                    // as in chat apps, however wide that line is.
+                    Column(horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
+                        if (!outgoing)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                    item.quote?.let { QuotePreview(it) }
-                                    for (attachment in item.attachments) {
-                                        Column(Modifier.padding(vertical = 4.dp)) {
-                                            Text(
-                                                attachment.name,
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                            Text(
-                                                Formatter.formatShortFileSize(
-                                                    LocalContext.current,
-                                                    attachment.size,
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
-                                            Text(
-                                                stringResource(
-                                                    if (
-                                                        attachment.expiresAt <=
-                                                            System.currentTimeMillis()
-                                                    )
-                                                        R.string.remote_attachment_expired
-                                                    else R.string.remote_attachment_expires,
-                                                    java.text.DateFormat.getDateTimeInstance(
-                                                            java.text.DateFormat.SHORT,
-                                                            java.text.DateFormat.SHORT,
-                                                        )
-                                                        .format(java.util.Date(attachment.expiresAt)),
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
+                                Text(
+                                    item.author ?: stringResource(R.string.remote_model_unknown),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            if (forkShown)
+                                ForkControl(
+                                    item.sourceId,
+                                    item.text,
+                                    fork,
+                                    forkMenu,
+                                    { forkMenu = it },
+                                    forkConfirming,
+                                    { forkConfirming = it },
+                                )
+                            val bubbleShape = remember(outgoing) { BubbleShape(outgoing) }
+                            Surface(
+                                modifier = Modifier.weight(1f, fill = false)
+                                    .quoteSwipe(canQuote) { onQuote(item.sourceId) }
+                                    .jumpHighlight(highlighted, bubbleShape)
+                                    .semantics {
+                                        customActions = buildList {
+                                            if (canQuote)
+                                                add(
+                                                    CustomAccessibilityAction(quoteLabel) {
+                                                        onQuote(item.sourceId)
+                                                        true
+                                                    }
+                                                )
+                                            if (canCopy)
+                                                add(
+                                                    CustomAccessibilityAction(copyLabel) {
+                                                        copyToClipboard(markdownPlainText(item.text))
+                                                        true
+                                                    }
+                                                )
+                                            if (canCopy && copyMarkdownOffered)
+                                                add(
+                                                    CustomAccessibilityAction(copyMarkdownLabel) {
+                                                        copyAny(item.text)
+                                                        true
+                                                    }
+                                                )
+                                            if (forkShown)
+                                                add(
+                                                    CustomAccessibilityAction(forkLabel) {
+                                                        forkMenu = true
+                                                        true
+                                                    }
+                                                )
                                         }
-                                    }
-                                    if (item.text.isNotEmpty())
-                                        SelectionContainer { MarkdownText(item.text) }
-                                    if (item.truncated)
-                                        Text(
-                                            stringResource(R.string.remote_truncated),
-                                            style = MaterialTheme.typography.labelSmall,
-                                        )
-                                    item.timestamp?.let { MessageTimestamp(it) }
+                                    },
+                                shape = bubbleShape,
+                                color =
+                                    if (outgoing) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceContainer,
+                            ) {
+                                // The tail takes BUBBLE_TAIL off its side, so the text keeps 16dp from the body on both sides.
+                                Column(
+                                    // Start and end sides, as BubbleShape puts its tail on the end edge of an outgoing
+                                    // bubble and the start edge of an incoming one in either layout direction.
+                                    Modifier.padding(
+                                        start = if (outgoing) 16.dp else 16.dp + BUBBLE_TAIL,
+                                        end = if (outgoing) 16.dp + BUBBLE_TAIL else 16.dp,
+                                        top = 12.dp,
+                                        bottom = 12.dp,
+                                    ),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                        item.quote?.let { QuotePreview(it) }
+                                        // Runs of images go through the preview, other attachments stay in place.
+                                        for (run in attachmentRuns(item.attachments, images != null)) {
+                                            if (images != null && run.first().kind == "image")
+                                                SentImageAttachments(run, images)
+                                            else for (attachment in run) {
+                                                Column(Modifier.padding(vertical = 4.dp)) {
+                                                    Text(
+                                                        attachment.name,
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                    )
+                                                    Text(
+                                                        Formatter.formatShortFileSize(
+                                                            LocalContext.current,
+                                                            attachment.size,
+                                                        ),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                    Text(
+                                                        stringResource(
+                                                            if (
+                                                                attachment.expiresAt <=
+                                                                    System.currentTimeMillis()
+                                                            )
+                                                                R.string.remote_attachment_expired
+                                                            else R.string.remote_attachment_expires,
+                                                            java.text.DateFormat.getDateTimeInstance(
+                                                                    java.text.DateFormat.SHORT,
+                                                                    java.text.DateFormat.SHORT,
+                                                                )
+                                                                .format(java.util.Date(attachment.expiresAt)),
+                                                        ),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if (item.text.isNotEmpty())
+                                            // Only the assistant's text may name files to load; a user's text never does.
+                                            CompositionLocalProvider(
+                                                LocalProjectImageSource provides projectImages.takeIf { !outgoing },
+                                                LocalLinkTargets provides linkTargets,
+                                                LocalFileOpener provides LocalFileOpener.current.takeIf { !outgoing },
+                                                // Links on the outgoing container keep 4.5:1 contrast with its text colour.
+                                                LocalMarkdownLinkColor provides
+                                                    if (outgoing) MaterialTheme.colorScheme.onPrimaryContainer else null,
+                                            ) {
+                                                SelectionContainer(selection) {
+                                                    MarkdownText(item.text)
+                                                }
+                                            }
+                                        if (item.truncated)
+                                            Text(
+                                                stringResource(R.string.remote_truncated),
+                                                style = MaterialTheme.typography.labelSmall,
+                                            )
+                                        if (item.interrupted)
+                                            Text(
+                                                stringResource(R.string.remote_message_interrupted),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        if (canCopy && copyButton)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                IconButton(
+                                                    onClick = { copyToClipboard(markdownPlainText(item.text)) },
+                                                    modifier = Modifier.size(32.dp).testTag("copyMessage-${item.id}"),
+                                                ) {
+                                                    Icon(
+                                                        Icons.Outlined.ContentCopy,
+                                                        copyLabel,
+                                                        Modifier.size(16.dp),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                                item.timestamp?.let { MessageTimestamp(it, Modifier.weight(1f)) }
+                                            }
+                                        else item.timestamp?.let { MessageTimestamp(it) }
+                                }
                             }
                         }
+                        item.pendingState?.let { PendingSendLabel(item.id, it, onCancelQueued) }
+                        if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
                     }
-                    if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
+                    // Over the bubble's top corner, so showing it never moves the chat.
+                    HoverActionOverlay(hover, hoverActions, growTowardStart = outgoing)
                 }
             }
         }
         is ConversationItem.Subagent -> {
             var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
-            Card(
+            val expandState = expandStateDescription(expanded)
+            // The same quiet card as a tool call: a glass π avatar, then the agents as one group.
+            Surface(
                 Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+                shape = RoundedCornerShape(PAGE_CARD_CORNER),
+                color = MaterialTheme.colorScheme.surfaceContainer,
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
-                        Modifier.fillMaxWidth().clickable { expanded = !expanded }.heightIn(min = 40.dp),
+                        Modifier.fillMaxWidth()
+                            .testTag("subagentHeader")
+                            .clickable(role = Role.Button) { expanded = !expanded }
+                            .semantics { stateDescription = expandState }
+                            .heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        GlassAvatar(size = 36.dp) {
+                            Text("π", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        }
                         Text(
                             stringResource(R.string.remote_subagent_title),
                             style = MaterialTheme.typography.titleSmall,
@@ -370,46 +642,16 @@ private fun ConversationMessageContent(
                         Text(stringResource(R.string.remote_subagent_unavailable), style = MaterialTheme.typography.bodySmall)
                     } else {
                         val openAgentLabel = stringResource(R.string.remote_card_open_subagent)
-                        for ((index, agent) in item.agents.withIndex()) {
-                            val state = when (agent.state) {
-                                "queued" -> R.string.remote_subagent_queued
-                                "running" -> R.string.remote_subagent_running
-                                "succeeded" -> R.string.remote_subagent_succeeded
-                                "failed" -> R.string.remote_subagent_failed
-                                else -> R.string.remote_subagent_cancelled
-                            }
-                            Column(
-                                if (onOpenAgent != null)
-                                    Modifier.fillMaxWidth()
-                                        .testTag("subagentAgent")
-                                        .clickable(onClickLabel = openAgentLabel) { onOpenAgent(item, index) }
-                                        .heightIn(min = 40.dp)
-                                else Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                Text("${agent.name} · ${stringResource(state)}", style = MaterialTheme.typography.labelLarge)
-                                agent.task?.let {
-                                    Text(
-                                        it,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                agent.usage?.let { AgentUsageLine(it) }
-                                agent.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                                if (!expanded || item.output == null)
-                                    agent.preview?.let {
-                                        Text(
-                                            inlineMarkdown(
-                                                subagentPreviewText(it),
-                                                MaterialTheme.colorScheme.primary,
-                                            ),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            maxLines = 3,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            for ((index, agent) in item.agents.withIndex()) {
+                                SubagentAgentRow(
+                                    agent,
+                                    first = index == 0,
+                                    last = index == item.agents.lastIndex,
+                                    showPreview = !expanded || item.output == null,
+                                    openLabel = openAgentLabel,
+                                    onOpen = onOpenAgent?.let { open -> { open(item, index) } },
+                                )
                             }
                         }
                     }
@@ -426,7 +668,7 @@ private fun ConversationMessageContent(
         }
         // Mirrors conversationItemVisible: any other Thinking state renders nothing.
         is ConversationItem.Thinking -> {
-            if (thinkingDisplay == "text" && item.text.isNotEmpty())
+            if (thinkingDisplay == ThinkingDisplay.TEXT && item.text.isNotEmpty())
                 CompositionLocalProvider(
                     LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
                 ) {
@@ -436,11 +678,11 @@ private fun ConversationMessageContent(
                         }
                     }
                 }
-            else if (item.streaming && thinkingActive) ThinkingStatus(true)
+            else if (item.streaming && thinkingActive && !hideThinkingStatus) ThinkingStatus(true)
         }
         is ConversationItem.Activity -> {
             val planMarkdown = remember(item.name, item.arguments) {
-                if (item.name == "submit_plan")
+                if (isPlanTool(item.name))
                     runCatching {
                         Json.parseToJsonElement(item.arguments.orEmpty()).jsonObject["plan"]
                             ?.jsonPrimitive?.content
@@ -448,18 +690,41 @@ private fun ConversationMessageContent(
                 else null
             }
             var expanded by remember(item.id) { mutableStateOf(planMarkdown != null) }
+            var outputPeek by remember(item.id) { mutableStateOf(false) }
+            if (outputPeek) item.output?.let { output ->
+                ToolOutputPeek(output, item.name, item.arguments) { outputPeek = false }
+            }
             // Plan cards keep their inline toggle; other tools open the detail screen when the host
             // screen offers one, and the expand icon toggles the inline preview on its own.
             val openTool = onOpenTool.takeIf { planMarkdown == null }
+            // Beside the chat the tool's own tab shows all of its output instead of the peek dialog.
+            val peekInTab = openTool?.takeIf { LocalInspectorViewers.current != null }?.let { open -> { open(item) } }
             val diff = remember(item.arguments, item.details) { toolDiff(item) }
+            // A read, edit or write opens its file in Files at the lines it worked on.
+            val fileTarget = remember(item.name, item.arguments, item.details) { toolFileTarget(item) }
             val summary = item.summary
-            val activityShape = MaterialTheme.shapes.medium
+            val command = remember(item.name, item.arguments) { toolCommand(item.name, item.arguments) }
+            val toolMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = {
+                toolMenuActions(openTool != null, item.output != null, command != null).map { action ->
+                    MenuItem(action.label, "tool_${action.name.lowercase()}") {
+                        when (action) {
+                            ToolMenuAction.OPEN -> openTool?.invoke(item)
+                            ToolMenuAction.PEEK -> peekInTab?.invoke() ?: run { outputPeek = true }
+                            ToolMenuAction.COPY_COMMAND -> command?.let(copyAny)
+                            ToolMenuAction.COPY_OUTPUT -> item.output?.let(copyAny)
+                        }
+                    }
+                }
+            }
             val activityContainer =
                 if (item.state == "error") MaterialTheme.colorScheme.errorContainer
                 else MaterialTheme.colorScheme.surfaceContainer
-            Card(
+            // A quiet rounded card in the page's family; what floats over the chat is glass, the
+            // cards in it are not.
+            Surface(
                 Modifier.fillMaxWidth()
                     .testTag("toolCard")
+                    .contextMenu(items = toolMenu)
                     .quoteSwipe(!expanded && !item.output.isNullOrBlank()) {
                         onQuote(item.sourceId)
                     }
@@ -473,12 +738,8 @@ private fun ConversationMessageContent(
                                     }
                                 )
                 },
-                shape = activityShape,
-                colors =
-                    CardDefaults.cardColors(
-                        containerColor = activityContainer,
-                    ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                shape = RoundedCornerShape(PAGE_CARD_CORNER),
+                color = activityContainer,
             ) {
                 Box(Modifier.fillMaxWidth()) {
                     Column(
@@ -496,25 +757,45 @@ private fun ConversationMessageContent(
                         }
                     val stateLabel = stringResource(state)
                     val openToolLabel = stringResource(R.string.remote_card_open_tool)
+                    val expandState = expandStateDescription(expanded)
                     Row(
                         Modifier.fillMaxWidth()
                             .testTag("toolCardHeader")
-                            .then(
-                                if (openTool != null)
-                                    Modifier.clickable(onClickLabel = openToolLabel) { openTool(item) }
-                                else Modifier.clickable { expanded = !expanded }
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .combinedClickable(
+                                onClickLabel = if (openTool != null) openToolLabel else null,
+                                role = Role.Button,
+                                onClick = {
+                                    if (openTool != null) openTool(item)
+                                    else expanded = !expanded
+                                },
+                                onLongClickLabel = stringResource(R.string.remote_output_peek),
+                                onLongClick = if (item.output != null) (peekInTab ?: { outputPeek = true }) else null,
                             )
-                            .heightIn(min = 40.dp),
+                            // Where the header itself expands the card, it says whether it is open.
+                            .then(if (openTool == null) Modifier.semantics { stateDescription = expandState } else Modifier)
+                            .heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        // What the tool does at a glance, as the tool detail's overview shows it.
+                        GlassAvatar(size = 36.dp) {
+                            Icon(
+                                toolIcon(item.name),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint =
+                                    if (item.state == "error") MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.primary,
+                            )
+                        }
                         Column(Modifier.weight(1f)) {
                             Text(
                                 if (planMarkdown != null) stringResource(R.string.remote_plan_title)
                                 else summary.labelRes?.let { stringResource(it) }
                                     ?: item.name
                                     ?: stringResource(R.string.remote_tool),
-                                style = MaterialTheme.typography.labelLarge,
+                                style = MaterialTheme.typography.titleSmall,
                             )
                             if (summary.detail != null || diff != null)
                                 Row(
@@ -535,33 +816,29 @@ private fun ConversationMessageContent(
                                     diff?.let { DiffCounts(it) }
                                 }
                         }
-                        when (state) {
-                            R.string.remote_tool_error ->
-                                Icon(
-                                    Icons.Default.Error,
-                                    stateLabel,
-                                    Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            R.string.remote_tool_complete ->
-                                Icon(
-                                    Icons.Default.Check,
-                                    stateLabel,
-                                    Modifier.size(18.dp),
-                                    tint = sessionStatusColor(SessionAvailability.IDLE),
-                                )
-                            R.string.remote_tool_pending ->
-                                CircularProgressIndicator(
-                                    Modifier.size(16.dp).semantics { contentDescription = stateLabel },
-                                    strokeWidth = 2.dp,
-                                )
-                            else ->
-                                Icon(
-                                    Icons.Default.Remove,
-                                    stateLabel,
-                                    Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.outline,
-                                )
+                        fileTarget?.let { OpenInFilesButton(it.path, it.lines) }
+                        if (state == R.string.remote_tool_unavailable) {
+                            Icon(
+                                Icons.Default.Remove,
+                                stateLabel,
+                                Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.outline,
+                            )
+                        } else {
+                            StatusGlyph(
+                                kind = when (state) {
+                                    R.string.remote_tool_error -> StatusGlyphKind.FAILED
+                                    R.string.remote_tool_complete -> StatusGlyphKind.DONE
+                                    else -> StatusGlyphKind.TOOL_RUNNING
+                                },
+                                color = when (state) {
+                                    R.string.remote_tool_error -> MaterialTheme.colorScheme.error
+                                    R.string.remote_tool_complete -> sessionStatusColor(SessionAvailability.IDLE)
+                                    else -> MaterialTheme.colorScheme.primary
+                                },
+                                modifier = Modifier.size(18.dp),
+                                contentDescription = stateLabel,
+                            )
                         }
                         val toggleIcon = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore
                         val toggleLabel =
@@ -572,7 +849,8 @@ private fun ConversationMessageContent(
                         if (openTool != null)
                             IconButton(
                                 onClick = { expanded = !expanded },
-                                modifier = Modifier.size(40.dp).testTag("toolCardToggle"),
+                                modifier = Modifier.size(48.dp).testTag("toolCardToggle")
+                                    .semantics { stateDescription = expandState },
                             ) {
                                 Icon(toggleIcon, toggleLabel)
                             }
@@ -594,15 +872,20 @@ private fun ConversationMessageContent(
                                 stringResource(if (planMarkdown != null) R.string.remote_plan_title else R.string.remote_tool_arguments),
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            if (planMarkdown != null) SelectionContainer { MarkdownText(planMarkdown) }
-                            else ArgumentsText(it)
+                            val fields = remember(it, planMarkdown) { if (planMarkdown == null) argumentFields(it) else null }
+                            when {
+                                planMarkdown != null -> SelectionContainer { MarkdownText(planMarkdown) }
+                                // Named values read as labelled fields; anything else stays as written.
+                                fields != null -> ArgumentFieldsCard(fields, tag = "toolCardFields")
+                                else -> ArgumentsText(it)
+                            }
                         }
                         item.output?.let {
                             Text(
                                 stringResource(R.string.remote_tool_output),
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            SelectionContainer { MarkdownText(it) }
+                            ToolOutputView(it, item.name, item.arguments, onPeek = peekInTab)
                             TextButton(onClick = { onQuote(item.sourceId) }) { Text(quoteLabel) }
                         }
                         if (item.truncated)
@@ -699,11 +982,50 @@ private fun AgentUsageLine(usage: AgentUsage) {
 private fun spelledCount(value: Long, locale: Locale): String =
     NumberFormat.getIntegerInstance(locale).format(value.coerceAtLeast(0))
 
-internal fun subagentPreviewText(preview: String): String =
-    preview.replace(Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$"), "$1…")
+/** A Markdown link cut off by the preview's length limit, at the very end of the text. */
+private val TRUNCATED_LINK = Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$")
+
+internal fun subagentPreviewText(preview: String): String = preview.replace(TRUNCATED_LINK, "$1…")
+
+/**
+ * Under a pending prompt: "Queued, sends when connected" with a cancel action while it waits for the
+ * connection, "Sending…" while it is on its way, "Not confirmed" once it may not have left.
+ */
+@Composable
+private fun PendingSendLabel(id: String, state: PendingSendState, onCancelQueued: (() -> Unit)?) {
+    if (state == PendingSendState.CONFIRMED) return
+    val failed = state == PendingSendState.NOT_CONFIRMED
+    val queued = state == PendingSendState.QUEUED
+    // Only as wide as its text, so it never stretches the message and pushes the bubble away.
+    Row(
+        Modifier.padding(start = 8.dp, end = 8.dp + BUBBLE_TAIL, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Text(
+            stringResource(
+                when {
+                    failed -> R.string.remote_prompt_not_confirmed
+                    queued -> R.string.remote_prompt_queued
+                    else -> R.string.remote_prompt_sending
+                }
+            ),
+            Modifier.testTag("pendingSendLabel-$id"),
+            style = MaterialTheme.typography.labelSmall,
+            color =
+                if (failed) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+        if (queued && onCancelQueued != null)
+            TextButton(onClick = onCancelQueued, modifier = Modifier.testTag("cancelQueued-$id")) {
+                Text(stringResource(R.string.remote_cancel), style = MaterialTheme.typography.labelSmall)
+            }
+    }
+}
 
 @Composable
-private fun MessageTimestamp(timestamp: Long) {
+private fun MessageTimestamp(timestamp: Long, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val date = Date(timestamp)
     val time = DateFormat.getTimeFormat(context).format(date)
@@ -712,7 +1034,7 @@ private fun MessageTimestamp(timestamp: Long) {
         else "${DateFormat.getDateFormat(context).format(date)} $time"
     Text(
         label,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = androidx.compose.ui.text.style.TextAlign.End,
@@ -762,5 +1084,71 @@ private fun ThinkingStatus(active: Boolean) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** What TalkBack says about a row that shows or hides more below it. */
+@Composable
+private fun expandStateDescription(expanded: Boolean): String =
+    stringResource(if (expanded) R.string.remote_chat_a11y_expanded else R.string.remote_chat_a11y_collapsed)
+
+/** One agent of a subagent card: its state glyph, name and state, task, usage, activity and preview. */
+@Composable
+private fun SubagentAgentRow(
+    agent: AgentProgress,
+    first: Boolean,
+    last: Boolean,
+    showPreview: Boolean,
+    openLabel: String,
+    onOpen: (() -> Unit)?,
+) {
+    val state = when (agent.state) {
+        "queued" -> R.string.remote_subagent_queued
+        "running" -> R.string.remote_subagent_running
+        "succeeded" -> R.string.remote_subagent_succeeded
+        "failed" -> R.string.remote_subagent_failed
+        else -> R.string.remote_subagent_cancelled
+    }
+    // One row per agent; together they read as one card.
+    Surface(
+        shape = groupedRowShape(first, last, corner = 16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Row(
+            (if (onOpen != null)
+                Modifier.fillMaxWidth()
+                    .testTag("subagentAgent")
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClickLabel = openLabel, role = Role.Button, onClick = onOpen)
+                    .heightIn(min = 48.dp)
+            else Modifier.fillMaxWidth())
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // The card carries no freshness of its own, so its state may be last known: never animate.
+            val glyph = subagentStateGlyph(agent.state)
+            val color = subagentStateColor(agent.state)
+            Box(Modifier.padding(top = 2.dp)) {
+                if (glyph != null) StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp), animate = false)
+                else StatusDot(color)
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("${agent.name} · ${stringResource(state)}", style = MaterialTheme.typography.labelLarge)
+                agent.task?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                agent.usage?.let { AgentUsageLine(it) }
+                agent.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                if (showPreview)
+                    agent.preview?.let {
+                        Text(
+                            inlineMarkdown(subagentPreviewText(it), MaterialTheme.colorScheme.primary),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+            }
+        }
     }
 }

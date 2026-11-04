@@ -1,0 +1,4 @@
+<resources>
+    <string name="remote_checking_connection">Verbindung wird geprüft…</string>
+    <string name="remote_waiting_for_network">Warte auf Netzwerk…</string>
+</resources>

@@ -72,12 +72,20 @@ internal class QuestionUpgrader(
     private val state: UpgradeState,
     private val backgroundAnswers: Boolean,
     private val now: () -> Long,
+    /**
+     * Waits for the connection a push woke, at most the given millis, before the fetch's own
+     * budget starts: the wait must not take from the fallback's handshake.
+     */
+    private val awaitWake: suspend (routeId: String, maxMillis: Long) -> Unit = { _, _ -> },
     private val fetch: suspend (PairedHost, String) -> List<JsonObject>,
 ) {
     suspend fun run(host: PairedHost, payload: PushPayload, wanted: () -> Boolean): UpgradeResult {
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         if (state.latestEvent(tag) != payload.eventId) return UpgradeResult.Superseded
         val timeout = fetchTimeoutMillis(state.unreachableAt(payload.routeId), now())
+        // After an unreachable host the whole fetch is short, so is the wait.
+        awaitWake(payload.routeId, minOf(PUSH_WAKE_WAIT_MILLIS, timeout / 2))
+        if (state.latestEvent(tag) != payload.eventId) return UpgradeResult.Superseded
         var failed = false
         val pending =
             withTimeoutOrNull(timeout) {
@@ -85,10 +93,12 @@ internal class QuestionUpgrader(
                     fetch(host, payload.sessionId)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: RemoteCommandException) {
+                } catch (swallowed: RemoteCommandException) {
+                    Diagnostics.caught("question.run", swallowed)
                     // The host answered, so it is reachable; the session is gone or offline.
                     emptyList()
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("question.run.2", swallowed)
                     failed = true
                     null
                 }
@@ -112,8 +122,9 @@ internal class PreferenceUpgradeState(
     /** The routes currently paired, used to prune events of routes no longer paired. */
     private val pairedRoutes: () -> Set<String> = {
         try {
-            PairingStore(context).load().map { it.routeId }.toSet()
-        } catch (_: Exception) {
+            context.stores.pairings.load().map { it.routeId }.toSet()
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("question.pairedRoutes", swallowed)
             emptySet()
         }
     },
@@ -190,10 +201,13 @@ internal object QuestionUpgrades {
     private const val KEY_SESSION = "sessionId"
     private const val KEY_EVENT = "eventId"
 
-    private fun routeTag(routeId: String) = "route:$routeId"
+    internal fun routeTag(routeId: String) = "route:$routeId"
 
     /** Records the newest event of a session; a completion cancels a pending upgrade. */
     fun onEvent(context: Context, payload: PushPayload) {
+        // The question's notice takes the completion's place, so naming the completion is moot.
+        if (payload.event == PushEvent.QUESTION)
+            CompletionUpgrades.cancelCompletion(context, payload.routeId, payload.sessionId)
         if (recordPushEvent(PreferenceUpgradeState(context), payload)) {
             WorkManager.getInstance(context)
                 .cancelUniqueWork(RemoteNotifications.tag(payload.routeId, payload.sessionId))
@@ -241,37 +255,48 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
         val app = context as? RemoteApplication ?: return Result.success()
         val paired = {
             try {
-                PairingStore(context).load().find { it.routeId == payload.routeId }
-            } catch (_: Exception) {
+                app.stores.pairings.load().find { it.routeId == payload.routeId }
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("question.doWork", swallowed)
                 null
             }
         }
         val host = paired() ?: return Result.success()
+        RemoteNotifications.rememberHost(host)
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         val upgrader =
             QuestionUpgrader(
                 PreferenceUpgradeState(context),
                 backgroundAnswers = Build.VERSION.SDK_INT >= 31,
                 now = System::currentTimeMillis,
+                awaitWake = { routeId, maxMillis -> app.repository.awaitPushWake(routeId, maxMillis) },
             ) { pairedHost, sessionId ->
-                BackgroundRemoteClient().use(pairedHost) { it.pendingQuestions(sessionId) }
+                usingPushConnection(app.repository, pairedHost, wait = false) { it.pendingQuestions(sessionId) }
             }
+        val wanted = {
+            app.settings.state.value.pushEnabled &&
+                app.isPaired(payload.routeId) &&
+                paired() != null &&
+                RemoteNotifications.canPost(context) &&
+                RemoteNotifications.isActive(context, tag) &&
+                !app.isShowing(payload.routeId, payload.sessionId)
+        }
         val result =
             try {
-                upgrader.run(host, payload) {
-                    app.settings.state.value.pushEnabled &&
-                        app.isPaired(payload.routeId) &&
-                        paired() != null &&
-                        RemoteNotifications.canPost(context) &&
-                        RemoteNotifications.isActive(context, tag) &&
-                        !app.isShowing(payload.routeId, payload.sessionId)
-                }
+                upgrader.run(host, payload, wanted)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("question.doWork.2", swallowed)
                 UpgradeResult.Unreachable
             }
-        if (result is UpgradeResult.Post) {
+        // Checked again right before posting, so a notification dismissed or replaced while the
+        // result was being built is not overwritten.
+        if (
+            result is UpgradeResult.Post &&
+                wanted() &&
+                PreferenceUpgradeState(context).latestEvent(tag) == payload.eventId
+        ) {
             RemoteNotifications.postQuestion(context, payload, result.content, alert = false)
         }
         // The generic notification already offers Open, so a failed upgrade is not retried.

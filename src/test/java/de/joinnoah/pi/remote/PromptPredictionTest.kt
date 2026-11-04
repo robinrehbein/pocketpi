@@ -42,7 +42,8 @@ class PromptPredictionTest {
 
     private fun test(failed: Boolean = false) = tool("bash", """{"command":"npm test"}""", failed)
 
-    private fun reply() = Wire.objectOf("id" to "m${next++}", "role" to "assistant", "text" to "Done.", "state" to "complete")
+    private fun reply(text: String = "Done.", state: String = "complete") =
+        Wire.objectOf("id" to "m${next++}", "role" to "assistant", "text" to text, "state" to state)
 
     private fun rule(rule: PredictionRule) = PromptPrediction.Rule(rule)
 
@@ -129,6 +130,116 @@ class PromptPredictionTest {
     }
 
     @Test
+    fun aBackgroundedTestCommandIsNotATestRun() {
+        val started = tool("bash", """{"command":"npm test","run_in_background":true}""", failed = true)
+        assertEquals(rule(PredictionRule.FIX_ERROR), predictPrompt(listOf(user()) + started, "idle", false))
+        val foreground = tool("bash", """{"command":"npm test","run_in_background":false}""", failed = true)
+        assertEquals(rule(PredictionRule.FIX_TESTS), predictPrompt(listOf(user()) + foreground, "idle", false))
+    }
+
+    @Test
+    fun aTurnTheHostStoppedDuringSuggestsContinuing() {
+        val stopped = reply("The host stopped while running a turn. Nothing was resent.", state = "error")
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user()) + edit() + stopped, "idle", false))
+        // It also wins over a tool that failed before the stop.
+        val afterFailure = listOf(user()) + tool("bash", """{"command":"ls"}""", failed = true) + stopped
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(afterFailure, "idle", false))
+        // An error before the latest prompt was already answered.
+        assertNull(predictPrompt(listOf(user(), stopped, user("Never mind"), reply()), "idle", false))
+    }
+
+    @Test
+    fun anEmptyErrorReplyIsNotContinued() {
+        // The user's Stop and a provider error both arrive like this; continuing would undo a Stop.
+        assertNull(predictPrompt(listOf(user(), reply("", state = "error")), "idle", false))
+    }
+
+    @Test
+    fun interruptedPartialSuggestsContinueButEmptyInterruptionDoesNot() {
+        fun interrupted(text: String) = Wire.objectOf("id" to "interrupted", "role" to "assistant",
+            "text" to text, "state" to "error", "terminalOutcome" to "interrupted")
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user(), interrupted("Partial")), "idle", false))
+        assertNull(predictPrompt(listOf(user(), interrupted("")), "idle", false))
+        val multipart = Wire.objectOf("id" to "parts", "role" to "assistant", "text" to "", "state" to "error",
+            "terminalOutcome" to "interrupted", "parts" to JsonArray(listOf(
+                Wire.objectOf("type" to "text", "text" to "Partial in parts"),
+            )))
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user(), multipart), "idle", false))
+    }
+
+    @Test
+    fun aReplyOfferingANextStepSuggestsAcceptingIt() {
+        for (text in listOf(
+            "All tests pass. Shall I commit this?",
+            "Done.\n\nWould you like me to open a PR?",
+            "Ich habe die Validierung angepasst. Soll ich die Tests auch erweitern?",
+            "**Möchtest du, dass ich das auch im Wear-Modul ändere?**",
+            "Soll ich z. B. die Tests erweitern?",
+            "Should I add a helper, e.g. a parser?",
+            "Möchtest du dass ich das umbenenne?",
+        )) assertEquals(text, rule(PredictionRule.ACCEPT_OFFER), predictPrompt(listOf(user(), reply(text)), "idle", false))
+    }
+
+    @Test
+    fun openOrEitherOrQuestionsAreNotOffers() {
+        for (text in listOf(
+            "Which of the two approaches do you prefer?",
+            "Soll ich A nehmen oder B?",
+            "Shall I commit this? I also updated the README.",
+            "What should the default be?",
+        )) assertNull(text, predictPrompt(listOf(user(), reply(text)), "idle", false))
+    }
+
+    @Test
+    fun anOfferAfterAFailureWinsButALaterFailureDoesNot() {
+        val offered = listOf(user()) + test(failed = true) + reply("Two tests fail. Should I fix them?")
+        assertEquals(rule(PredictionRule.ACCEPT_OFFER), predictPrompt(offered, "idle", false))
+        val failedAfter = listOf(user(), reply("Shall I run it?")) + tool("bash", """{"command":"ls"}""", failed = true)
+        assertEquals(rule(PredictionRule.FIX_ERROR), predictPrompt(failedAfter, "idle", false))
+    }
+
+    @Test
+    fun anOfferWinsOverRunningTests() {
+        val messages = listOf(user()) + edit() + reply("Shall I run the tests now?")
+        assertEquals(rule(PredictionRule.ACCEPT_OFFER), predictPrompt(messages, "idle", false))
+    }
+
+    @Test
+    fun anOfferIsOnlyOpenWhileItIsTheLastReply() {
+        // pi kept working after asking, so the question is no longer the turn's last word.
+        val messages = listOf(user(), reply("Shall I commit this?")) + tool("read")
+        assertNull(predictPrompt(messages, "idle", false))
+    }
+
+    @Test
+    fun aPushedChangeIsNotSuggestedAsAPr() {
+        val pushed = listOf(user()) + edit() + edit() + edit() + test() + tool("bash", """{"command":"git push -u origin fix"}""") + reply()
+        assertNull(predictPrompt(pushed, "idle", false))
+        val opened = listOf(user()) + edit() + edit() + edit() + test() + tool("bash", """{"command":"gh pr create --draft"}""") + reply()
+        assertNull(predictPrompt(opened, "idle", false))
+        // Commands that mention tests are still pushes.
+        val titled = listOf(user()) + edit() + edit() + edit() + test() + tool("bash", """{"command":"gh pr create --title \"Add validation tests\""}""") + reply()
+        assertNull(predictPrompt(titled, "idle", false))
+        val combined = listOf(user()) + edit() + edit() + edit() + tool("bash", """{"command":"npm test && git push"}""") + reply()
+        assertNull(predictPrompt(combined, "idle", false))
+    }
+
+    @Test
+    fun conversationLanguageFollowsTheRecentPrompts() {
+        assertEquals("de", conversationLanguage(listOf(user("Kannst du die Tests fixen?"), reply())))
+        assertEquals("de", conversationLanguage(listOf(user("Prüf das bitte"))))
+        assertEquals("de", conversationLanguage(listOf(user("Pass die Farbe in der App an"))))
+        assertEquals("en", conversationLanguage(listOf(user("Can you fix the tests?"), reply())))
+        assertNull(conversationLanguage(listOf(user("/compact"), user("ok"))))
+        assertNull(conversationLanguage(emptyList()))
+        // The last three prompts count, so one English command does not flip a German chat.
+        val mixed = listOf(user("Mach das bitte auch für die Wear-App"), user("Und dann noch die Tests"), user("run it"))
+        assertEquals("de", conversationLanguage(mixed))
+        // Slash commands don't use up the window.
+        assertEquals("de", conversationLanguage(listOf(user("Mach das bitte"), user("/compact"), user("/reload"), user("/tree"))))
+    }
+
+    @Test
     fun frequentPromptIsTheFallbackButNotARepeatOfTheLastOne() {
         val messages = listOf(user("Summarize"), reply())
         assertEquals(
@@ -170,6 +281,16 @@ class PromptPredictionTest {
     }
 
     @Test
+    fun historyNeverStoresAPromptThatWouldComeBackAsAShellDraft() {
+        // " !ls" went to pi as a prompt, but trimmed it is "!ls", which the composer runs as a shell command.
+        assertNull(normalizePrompt(" !ls"))
+        assertNull(normalizePrompt("\n!! git status"))
+        val history = PromptHistory().record("k", " !ls -la", 1).record("k", " !ls -la", 2)
+        assertEquals(PromptHistory(), history)
+        assertEquals(emptyList<String>(), history.frequent("k"))
+    }
+
+    @Test
     fun historyIsCapped() {
         var history = PromptHistory()
         repeat(MAX_PROMPTS_PER_PROJECT + 10) { history = history.record("k", "Prompt number $it", it.toLong()) }
@@ -205,5 +326,22 @@ class PromptPredictionTest {
     fun historyRoundTripsThroughJson() {
         val history = PromptHistory().record("r/p", "Run it", 1).record("r/p", "Run it", 2).approvePlan("r/s", 9)
         assertEquals(history, promptHistory(Wire.parse(history.json().toString())))
+    }
+
+    @Test
+    fun hostSuggestionShowsOnlyWhileIdleWithNoQuestionOrSendInFlight() {
+        val idle = RemoteState(status = "idle", suggestion = "Run the tests again")
+        assertEquals("Run the tests again", hostSuggestion(idle))
+        assertNull(hostSuggestion(idle.copy(suggestion = null)))
+        assertNull(hostSuggestion(idle.copy(status = "running")))
+        assertNull(hostSuggestion(idle.copy(sending = true)))
+        val pending = PendingSend("m1", "Run the tests again", null, emptyList(), PendingSendState.SENDING)
+        assertNull(hostSuggestion(idle.copy(pendingSend = pending)))
+        assertNull(hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.QUEUED))))
+        assertNull(hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.CONFIRMED))))
+        assertEquals(
+            "Run the tests again",
+            hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.NOT_CONFIRMED))),
+        )
     }
 }

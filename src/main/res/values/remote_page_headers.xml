@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page header shared by the list pages, the folder browser and the providers (PageHeader.kt). -->
+    <string name="remote_page_close">Close</string>
+    <!-- The footer of the model and advisor pickers (SessionControls.kt, AdvisorPickerSheet.kt). -->
+    <string name="remote_page_manage_providers">Manage providers</string>
+</resources>

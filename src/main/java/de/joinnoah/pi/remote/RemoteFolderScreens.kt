@@ -8,14 +8,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.*
@@ -25,13 +27,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,7 +54,7 @@ internal fun OpenFolderButton(enabled: Boolean, onClick: () -> Unit) {
             modifier = Modifier.size(56.dp),
         ) {
             Icon(
-                Icons.Default.CreateNewFolder,
+                Icons.Default.FolderOpen,
                 contentDescription = stringResource(R.string.remote_folders_open_folder),
                 tint = MaterialTheme.colorScheme.onPrimary,
             )
@@ -81,6 +84,9 @@ internal fun FolderBrowserScreen(
         available = available,
         connection = state.connection,
         onBack = navigator::back,
+        onClose = { navigator.closeFolders(key.routeId) },
+        onRefresh = model::reload,
+        onSettings = navigator::settings,
         onJump = { navigator.browseFolder(key.routeId, it) },
         onEnter = model::enter,
         onRetry = model::reload,
@@ -126,6 +132,10 @@ internal fun FolderBrowserContent(
     onDismissClone: () -> Unit,
     onDismissNotice: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Leaves the browser in one step, whatever folder it shows. */
+    onClose: () -> Unit = onBack,
+    onRefresh: () -> Unit = {},
+    onSettings: () -> Unit = {},
 ) {
     var creating by rememberSaveable { mutableStateOf(false) }
     var cloning by rememberSaveable { mutableStateOf(false) }
@@ -136,25 +146,31 @@ internal fun FolderBrowserContent(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Column(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FloatingSurface(modifier = Modifier.testTag("navigationPill"), shape = CircleShape) {
-                        IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
+            Column(Modifier.fillMaxWidth().statusBarsPadding()) {
+                PageHeader(
+                    title = stringResource(R.string.remote_folders_title),
+                    titleInPill = true,
+                    onBack = onBack,
+                    onClose = onClose,
+                    actions = {
+                        IconButton(
+                            onClick = onRefresh,
+                            enabled = available && !folders.loading,
+                            modifier = Modifier.size(48.dp).testTag("folderRefresh"),
+                        ) {
+                            Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
                         }
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Text(
-                        stringResource(R.string.remote_folders_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.semantics { heading() },
-                    )
-                }
+                        IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Settings, stringResource(R.string.remote_settings))
+                        }
+                    },
+                    connection = connectionStatusLine(connected, connection, hostChosen = true),
+                )
                 FolderBreadcrumb(
                     root = folders.root,
                     path = folders.path,
                     onJump = onJump,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                 )
             }
         },
@@ -163,26 +179,12 @@ internal fun FolderBrowserContent(
                 Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { creating = true },
-                        enabled = actionable && folders.loaded,
-                        modifier = Modifier.weight(1f).testTag("folderNewAction"),
-                    ) {
-                        Icon(Icons.Default.CreateNewFolder, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.remote_folders_new_folder), maxLines = 1)
-                    }
-                    OutlinedButton(
-                        onClick = { cloning = true },
-                        enabled = actionable && folders.loaded && !cloneRunning,
-                        modifier = Modifier.weight(1f).testTag("folderCloneAction"),
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.remote_folders_clone), maxLines = 1)
-                    }
-                }
+                FolderSecondaryActions(
+                    enabled = actionable && folders.loaded,
+                    cloneEnabled = actionable && folders.loaded && !cloneRunning,
+                    onNew = { creating = true },
+                    onClone = { cloning = true },
+                )
                 Button(
                     onClick = { onOpen(folders.path) },
                     enabled = actionable && !atRoot,
@@ -207,8 +209,18 @@ internal fun FolderBrowserContent(
             }
         },
     ) { insets ->
+        // The folder list alone scrolls under the floating header; a notice, a clone or a state
+        // message above it keeps the page below the header.
+        val headerTop = insets.floatingHeaderOverlap()
+        val listUnderHeader =
+            connected && available && folders.notice == null && folders.clone == null &&
+                folders.error == null && folders.loaded && folders.entries.isNotEmpty()
         Column(
-            Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
+            Modifier.fillMaxSize()
+                .padding(insets.underFloatingHeader())
+                .consumeWindowInsets(insets)
+                .padding(top = if (listUnderHeader) 0.dp else headerTop)
+                .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             folders.notice?.let { notice ->
@@ -224,12 +236,13 @@ internal fun FolderBrowserContent(
                 )
             }
             when {
-                !connected ->
-                    FolderMessage(stringResource(connection), Modifier.testTag("folderOffline"))
+                // The connection chip above says why there is no listing.
+                !connected -> Unit
                 !available ->
-                    FolderMessage(
+                    PaneNotice(
                         stringResource(R.string.remote_folders_unavailable),
                         Modifier.testTag("folderUnavailable"),
+                        FolderNoticePadding,
                     )
                 else ->
                     RemoteFolderList(
@@ -238,6 +251,7 @@ internal fun FolderBrowserContent(
                         onEnter = onEnter,
                         onRetry = onRetry,
                         modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(top = if (listUnderHeader) headerTop else 0.dp, bottom = 24.dp),
                     )
             }
         }
@@ -269,15 +283,38 @@ internal fun FolderBrowserContent(
     }
 }
 
+internal fun stackFolderActions(widthDp: Float, fontScale: Float): Boolean = widthDp < 360f * fontScale.coerceAtLeast(1f)
+
 @Composable
-private fun FolderMessage(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        modifier = modifier.padding(top = 16.dp),
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun FolderSecondaryActions(enabled: Boolean, cloneEnabled: Boolean, onNew: () -> Unit, onClone: () -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val stacked = stackFolderActions(maxWidth.value, LocalDensity.current.fontScale)
+        @Composable fun NewAction(modifier: Modifier) {
+            OutlinedButton(onClick = onNew, enabled = enabled, modifier = modifier.testTag("folderNewAction")) {
+                Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.remote_folders_new_folder))
+            }
+        }
+        @Composable fun CloneAction(modifier: Modifier) {
+            OutlinedButton(onClick = onClone, enabled = cloneEnabled, modifier = modifier.testTag("folderCloneAction")) {
+                Icon(Icons.Default.Download, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.remote_folders_clone))
+            }
+        }
+        if (stacked) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            NewAction(Modifier.fillMaxWidth())
+            CloneAction(Modifier.fillMaxWidth())
+        } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NewAction(Modifier.weight(1f))
+            CloneAction(Modifier.weight(1f))
+        }
+    }
 }
+
+/** The page already insets its content at the sides, so a notice there only keeps clear of the top. */
+private val FolderNoticePadding = PaddingValues(top = 16.dp)
 
 /** Tap-to-jump path from the root label down to the shown folder. */
 @Composable
@@ -294,14 +331,16 @@ internal fun FolderBreadcrumb(
             segments.mapIndexed { index, name -> name to segments.take(index + 1).joinToString("/") }
     val scroll = rememberScrollState()
     LaunchedEffect(path) { scroll.animateScrollTo(scroll.maxValue) }
+    // The folder list scrolls under it, so it floats on glass like the header pills above it.
+    FloatingSurface(modifier.fillMaxWidth(), shape = CircleShape) {
     Row(
-        modifier.fillMaxWidth().horizontalScroll(scroll).testTag("folderBreadcrumb"),
+        Modifier.fillMaxWidth().horizontalScroll(scroll).padding(horizontal = 8.dp).testTag("folderBreadcrumb"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         crumbs.forEachIndexed { index, (label, target) ->
             if (index > 0)
                 Icon(
-                    Icons.Default.ChevronRight,
+                    Icons.AutoMirrored.Filled.NavigateNext,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
@@ -319,12 +358,15 @@ internal fun FolderBreadcrumb(
                 Text(
                     label,
                     maxLines = 1,
+                    // Not primary for the links: on the translucent glass it would fall below 4.5:1.
                     color =
                         if (current) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.primary,
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (current) FontWeight.SemiBold else null,
                 )
             }
         }
+    }
     }
 }
 
@@ -341,17 +383,13 @@ internal fun RemoteFolderList(
     val error = folders.error
     when {
         error != null ->
-            Column(
-                modifier.fillMaxWidth().padding(top = 16.dp).testTag("folderError"),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    stringResource(error),
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                )
-                OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.remote_folders_retry)) }
-            }
+            PaneFailureNotice(
+                stringResource(error),
+                stringResource(R.string.remote_folders_retry),
+                onRetry,
+                modifier.testTag("folderError"),
+                contentPadding = FolderNoticePadding,
+            )
         !folders.loaded -> {
             val loadingLabel = stringResource(R.string.remote_folders_loading)
             Box(modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.TopCenter) {
@@ -361,9 +399,9 @@ internal fun RemoteFolderList(
             }
         }
         folders.entries.isEmpty() ->
-            FolderMessage(stringResource(R.string.remote_folders_empty), modifier.testTag("folderEmpty"))
+            PaneNotice(stringResource(R.string.remote_folders_empty), modifier.testTag("folderEmpty"), FolderNoticePadding)
         else ->
-            LazyColumn(modifier.fillMaxWidth().testTag("folderList"), contentPadding = contentPadding) {
+            LazyColumn(modifier.fillMaxWidth().testTag("folderList").glassSource(), contentPadding = contentPadding) {
                 items(folders.entries, key = { it.name }) { entry ->
                     FolderRow(entry, enabled) { onEnter(entry.name) }
                 }
@@ -423,7 +461,7 @@ private fun FolderRow(entry: FolderEntry, enabled: Boolean, onClick: () -> Unit)
                 modifier = Modifier.padding(start = 8.dp).size(20.dp).testTag("folderPiConfig:${entry.name}"),
             )
         Spacer(Modifier.weight(0.001f))
-        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(Icons.AutoMirrored.Filled.NavigateNext, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -436,7 +474,7 @@ private fun FolderBadge(label: String) {
         maxLines = 1,
         modifier =
             Modifier.padding(start = 8.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(MaterialTheme.shapes.extraSmall)
                 .background(MaterialTheme.colorScheme.secondaryContainer)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
     )
@@ -444,13 +482,10 @@ private fun FolderBadge(label: String) {
 
 @Composable
 private fun FolderNotice(text: String, onDismiss: () -> Unit) {
-    Card(
+    GlassCard(
         modifier = Modifier.fillMaxWidth().testTag("folderNotice"),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
+        tint = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {
         Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -475,7 +510,7 @@ internal fun CloneProgressCard(
     onDismiss: () -> Unit,
 ) {
     val where = folderDisplayPath(root, clone.path)
-    OutlinedCard(Modifier.fillMaxWidth().testTag("cloneProgress")) {
+    GlassCard(Modifier.fillMaxWidth().testTag("cloneProgress")) {
         Column(
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -543,15 +578,18 @@ internal fun CloneProgressCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NewFolderDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     val problem = folderNameProblem(name)
     val message = problem?.let(::folderNameProblemMessage)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.remote_folders_new_folder)) },
-        text = {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetHeader(stringResource(R.string.remote_folders_new_folder), padding = PaddingValues(start = 8.dp))
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -559,22 +597,19 @@ private fun NewFolderDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
                 isError = message != null,
                 supportingText = message?.let { { Text(stringResource(it)) } },
                 singleLine = true,
-                modifier = Modifier.testTag("newFolderName"),
+                modifier = Modifier.fillMaxWidth().testTag("newFolderName"),
             )
-        },
-        confirmButton = {
-            TextButton(
+            SheetPrimaryButton(
                 onClick = { onCreate(name) },
                 enabled = problem == null,
                 modifier = Modifier.testTag("newFolderCreate"),
-            ) {
-                Text(stringResource(R.string.remote_folders_create))
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) } },
-    )
+            ) { Text(stringResource(R.string.remote_folders_create)) }
+            SheetSecondaryButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) }
+        }
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Unit) {
     var url by rememberSaveable { mutableStateOf("") }
@@ -589,10 +624,12 @@ private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Uni
             name.isEmpty() -> R.string.remote_folders_clone_name_needed
             else -> folderNameProblemMessage(nameProblem)
         }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.remote_folders_clone_title)) },
-        text = {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetHeader(stringResource(R.string.remote_folders_clone_title), padding = PaddingValues(start = 8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = url,
@@ -609,7 +646,7 @@ private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Uni
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.testTag("cloneUrl"),
+                    modifier = Modifier.fillMaxWidth().testTag("cloneUrl"),
                 )
                 OutlinedTextField(
                     value = name,
@@ -619,21 +656,17 @@ private fun CloneDialog(onDismiss: () -> Unit, onClone: (String, String?) -> Uni
                     isError = nameMessage != null,
                     supportingText = nameMessage?.let { { Text(stringResource(it)) } },
                     singleLine = true,
-                    modifier = Modifier.testTag("cloneName"),
+                    modifier = Modifier.fillMaxWidth().testTag("cloneName"),
                 )
             }
-        },
-        confirmButton = {
-            TextButton(
+            SheetPrimaryButton(
                 onClick = { onClone(url, name.ifEmpty { null }) },
                 enabled = urlValid && nameProblem == null,
                 modifier = Modifier.testTag("cloneStart"),
-            ) {
-                Text(stringResource(R.string.remote_folders_clone_start))
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) } },
-    )
+            ) { Text(stringResource(R.string.remote_folders_clone_start)) }
+            SheetSecondaryButton(onClick = onDismiss) { Text(stringResource(R.string.remote_cancel)) }
+        }
+    }
 }
 
 @Composable
@@ -653,7 +686,7 @@ private fun TrustDialog(
                 if (prompt.piConfig)
                     Row(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(MaterialTheme.shapes.small)
                             .background(MaterialTheme.colorScheme.errorContainer)
                             .padding(12.dp)
                             .testTag("trustPiConfigWarning"),

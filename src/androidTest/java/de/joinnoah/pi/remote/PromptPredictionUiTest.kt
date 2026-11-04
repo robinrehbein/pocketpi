@@ -5,18 +5,22 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertTextContains
-import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.performTouchInput
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonArray
@@ -32,11 +36,15 @@ class PromptPredictionUiTest {
     private val suggestion get() = context.getString(R.string.remote_prediction_run_tests)
 
     @Test
-    fun emptyComposerShowsTheSuggestionAndDoubleTapAcceptsIt() {
+    fun emptyComposerShowsTheSuggestionAsThePlaceholderAndOneTapAcceptsIt() {
         val harness = show()
-        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextContains(suggestion)
-        compose.onNodeWithTag("composerField").performTouchInput { doubleClick() }
+        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextEquals(suggestion)
+        compose.onNodeWithTag("promptSuggestion")
+            .assertContentDescriptionEquals(context.getString(R.string.remote_suggestion_use, suggestion))
+        compose.onNodeWithTag("promptSuggestion").performClick()
         compose.waitForIdle()
+        // An accepted suggestion reaches the repository after the composer's pause.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         assertEquals(suggestion, harness.state.draft)
         compose.onNode(hasSetTextAction()).assertTextContains(suggestion)
         val selection = compose.onNode(hasSetTextAction()).fetchSemanticsNode()
@@ -45,13 +53,14 @@ class PromptPredictionUiTest {
     }
 
     @Test
-    fun accessibilityActionAcceptsTheSuggestion() {
+    fun tabStillAcceptsTheSuggestion() {
         val harness = show()
-        val actions = compose.onNodeWithTag("composerField").fetchSemanticsNode()
-            .config[SemanticsActions.CustomActions]
-        assertEquals(context.getString(R.string.remote_prediction_use), actions.single().label)
-        compose.runOnIdle { actions.single().action() }
+        // Key events go to the focused node only; a user presses Tab while typing in the field.
+        compose.onNodeWithTag("composerField").performSemanticsAction(SemanticsActions.RequestFocus)
         compose.waitForIdle()
+        compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Tab) }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         assertEquals(suggestion, harness.state.draft)
     }
 
@@ -59,17 +68,18 @@ class PromptPredictionUiTest {
     fun typingHidesTheSuggestionAndSendingRecordsThePrompt() {
         val harness = show()
         compose.onNode(hasSetTextAction()).performTextInput("Deploy it")
-        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("promptSuggestion").assertDoesNotExist()
         compose.onNodeWithContentDescription(context.getString(R.string.remote_send)).performClick()
         assertEquals(listOf("r/p" to "Deploy it"), harness.source.recorded)
     }
 
     @Test
-    fun turningPredictionsOffRestoresThePlainPlaceholder() {
+    fun turningPredictionsOffRemovesTheSuggestionAndKeepsThePlainLabel() {
         val harness = show()
         compose.runOnIdle { harness.source.enabled.value = false }
+        compose.onNodeWithTag("promptSuggestion").assertDoesNotExist()
         compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true)
-            .assertTextContains(context.getString(R.string.remote_prompt))
+            .assertTextEquals(context.getString(R.string.remote_prompt))
     }
 
     private fun show(): Harness {
@@ -113,6 +123,7 @@ class PromptPredictionUiTest {
                         onStop = {},
                         onRemoveQuote = {},
                         voicePermissionGrantedOverride = false,
+                        hardwareKeyboard = true,
                     )
                 }
             }

@@ -1,0 +1,4 @@
+<resources>
+    <string name="remote_changes_updated_at">Stand: %1$s</string>
+    <string name="remote_changes_stale_at">Neuere Änderungen konnten nicht geladen werden. Stand: %1$s</string>
+</resources>

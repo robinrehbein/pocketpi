@@ -1,20 +1,28 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <string name="remote_notification_channel">Sessions</string>
-    <string name="remote_notification_channel_help">When pi finishes or needs an answer</string>
-    <string name="remote_notification_approve">Approve</string>
+    <string name="remote_notification_channel_questions">Questions</string>
+    <string name="remote_notification_channel_questions_help">When pi needs an answer</string>
+    <string name="remote_notification_channel_updates">Updates</string>
+    <string name="remote_notification_channel_updates_help">When a session, subagent or background job finishes</string>
+    <string name="remote_notification_complete_named">%1$s finished</string>
+    <string name="remote_notification_run_failed">pi stopped with an error</string>
+    <string name="remote_notification_run_failed_named">%1$s stopped with an error</string>
+    <string name="remote_notification_failure_agent_error">The model or pi reported an error. Open the session to see it and continue.</string>
+    <string name="remote_notification_failure_worker_exited">The connection to pi ended during the run. Open the session to continue.</string>
+    <string name="remote_notification_failure_unknown">The run ended without an answer. Open the session to see why.</string>
     <string name="remote_notification_answer">Answer</string>
     <string name="remote_notification_open_action">Open</string>
     <string name="remote_notification_reply">Reply</string>
     <string name="remote_notification_reply_hint">Your answer</string>
     <string name="remote_notification_plan">pi wants to start with a plan</string>
     <string name="remote_notification_questionnaire">pi has a few questions</string>
-    <string name="remote_notification_local_required">Needs an answer on the Mac</string>
+    <string name="remote_notification_local_required">Needs an answer on the computer</string>
     <string name="remote_notification_sending">Sending answer…</string>
     <string name="remote_notification_sent">Answer sent</string>
     <string name="remote_notification_already_answered">This question was already answered or closed.</string>
     <string name="remote_notification_failed">Couldn\'t send the answer. Open the session to try again.</string>
     <string name="remote_notification_empty_reply">The answer was empty and was not sent.</string>
     <string name="remote_notification_sync_channel">Background checks</string>
-    <string name="remote_notification_checking">Reading the question from your Mac…</string>
+    <string name="remote_notification_checking">Reading the question from your computer…</string>
+    <string name="remote_notification_checking_session">Checking the session on your computer…</string>
 </resources>

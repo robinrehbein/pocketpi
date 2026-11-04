@@ -10,6 +10,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.assert
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -195,6 +201,25 @@ class FolderBrowserUiTest {
         state.value = loaded("Code")
         compose.onNodeWithTag("folderEmpty").assertIsDisplayed()
         state.value = loaded("Code").copy(error = R.string.remote_folders_error_browse_busy)
+        compose.onNodeWithText("Try again").performClick()
+        assertEquals(listOf("retry"), jumps)
+    }
+
+    @Test
+    fun aFailedListingUsesTheSharedFailureNotice() {
+        compose.setContent {
+            MaterialTheme {
+                RemoteFolderList(
+                    loaded("Code").copy(error = R.string.remote_folders_error_browse_busy),
+                    enabled = true,
+                    onEnter = {},
+                    onRetry = { jumps += "retry" },
+                )
+            }
+        }
+        compose.onNode(hasAnyAncestor(hasTestTag("folderError")) and SemanticsMatcher.keyIsDefined(SemanticsProperties.LiveRegion))
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
         compose.onNodeWithText("Try again").performClick()
         assertEquals(listOf("retry"), jumps)
     }

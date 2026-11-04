@@ -1,64 +1,100 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
-import android.text.format.Formatter
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.WrapText
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -66,9 +102,11 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -76,93 +114,271 @@ import kotlinx.coroutines.withContext
 /** What [FilesPane] can ask for; the chat screen wires these to its view model. */
 internal class FilesActions(
     val onClose: () -> Unit,
+    val onSearch: (String) -> Unit = {},
+    val onOpenSearchHit: (FileSearchHit) -> Unit = {},
     val onOpenDir: (String) -> Unit,
     /** Opens a file of the shown folder, or returns to the folder for null. */
     val onOpenFile: (String?) -> Unit,
     val onLoadMore: () -> Unit,
     val onReload: () -> Unit,
+    val onRequestPreview: (String) -> Unit,
+    val onShowPeek: (String, FileEntryType) -> Unit,
+    val onDismissPeek: () -> Unit,
     val onSelectLines: (LineSelection?) -> Unit,
     /** Puts a quote into the composer. Nothing is sent. False when it did not fit. */
     val onSend: (String) -> Boolean,
+    /**
+     * Sends a question about picked lines to pi at once, or puts it into the composer where that
+     * cannot be done now ([ChatViewModel.askNow]). False when it went nowhere.
+     */
+    val onAsk: (String) -> Boolean = onSend,
+    val onStartEditing: () -> Unit = {},
+    val onEditorText: (String) -> Unit = {},
+    val onSaveEditor: () -> Unit = {},
+    val onRestoreEditorDraft: () -> Unit = {},
+    val onDiscardEditorDraft: () -> Unit = {},
+    val onDiscardEditor: () -> Unit = {},
+    val onReloadAfterConflict: () -> Unit = {},
+    /**
+     * The edit as a diff prompt, given an intro; send its text with [onSend]. Null when unchanged.
+     * Called off the main thread.
+     */
+    val onEditorPrompt: (intro: String?) -> EditorPrompt? = { null },
+    /** Discards the edit and runs what waited for it ([FileEditor.leaveRequest]). */
+    val onConfirmLeave: () -> Unit = {},
+    val onCancelLeave: () -> Unit = {},
+    /** Asks for a new file's name in the given folder. */
+    val onPrepareCreate: (String) -> Unit = {},
+    val onPrepareRename: (String) -> Unit = {},
+    val onPrepareDelete: (String) -> Unit = {},
+    /** Confirms the open create, rename or delete prompt with a name, or null for delete. */
+    val onConfirmMutation: (String?) -> Unit = {},
+    val onCancelMutation: () -> Unit = {},
+    val onDismissMutationOutcome: () -> Unit = {},
+    /** Acknowledges an unknown outcome; nothing is retried. */
+    val onAcknowledgeMutation: (String) -> Unit = {},
+    /** Asks the host again about a pending operation; nothing is resent. */
+    val onCheckMutation: (String) -> Unit = {},
+    val onRequestMutationReset: () -> Unit = {},
+    val onConfirmMutationReset: () -> Unit = {},
+    val onCancelMutationReset: () -> Unit = {},
+    /** A kept draft of a missing file: create the file and edit it, or discard the draft. */
+    val onOpenOrphanDraft: (String) -> Unit = {},
+    /** Asks to confirm discarding a kept draft; confirming re-reads the file first. */
+    val onDiscardOrphanDraft: (String) -> Unit = {},
+    val onConfirmDiscardOrphanDraft: () -> Unit = {},
+    val onCancelDiscardOrphanDraft: () -> Unit = {},
 )
 
 /**
  * The session folder, read-only: a folder listing, or one file with line numbers. Like
  * [ChangesPane] it fills whatever container it is given, the phone overlay or the tablet
- * inspector. Back closes the file, then climbs one folder, then closes the pane.
+ * inspector. Back closes the file, then climbs one folder, then closes the pane. With [canEdit]
+ * ([canEditFile]) the open file offers Edit; an open [FilesState.editor] shows [CodeEditor] in
+ * place of the file and handles Back itself.
  */
 @Composable
-internal fun FilesPane(state: FilesState, actions: FilesActions, modifier: Modifier = Modifier) {
+internal fun FilesPane(
+    state: FilesState,
+    actions: FilesActions,
+    modifier: Modifier = Modifier,
+    projectName: String? = null,
+    canEdit: Boolean = false,
+    canSearch: Boolean = state.searchEnabled,
+    /** Create, rename and delete of this session; null where the client offers none. */
+    mutations: FileMutationsState? = null,
+    mutationAccess: FileMutationAccess = FileMutationAccess(),
+) {
     val back = {
         when {
+            state.peek != null -> actions.onDismissPeek()
             state.file != null -> actions.onOpenFile(null)
             state.path.isNotEmpty() -> actions.onOpenDir(parentPath(state.path))
             else -> actions.onClose()
         }
     }
-    BackHandler(onBack = back)
+    PaneBackHandler(onBack = back)
     // A failed prefill belongs to the file or folder it happened in.
     var prefillFailed by remember { mutableStateOf(false) }
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
-    Surface(modifier.fillMaxSize().testTag("filesPane")) {
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            FilesTopBar(state, actions, back)
-            HorizontalDivider()
-            if (prefillFailed)
-                Text(
-                    stringResource(R.string.remote_files_prefill_failed),
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesPrefillFailed"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                val file = state.file
-                // Every folder and file starts with fresh scroll state.
-                if (file == null) key(state.path) { FolderList(state, actions) }
-                else key(file.path) { FileView(file, actions, send) }
+    val ask: (String) -> Boolean = { prompt -> actions.onAsk(prompt).also { prefillFailed = !it } }
+    val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
+    val codeWrap = rememberCodeWrap()
+    var headerHeight by remember { mutableStateOf(64.dp) }
+    var searchOpen by remember(state.sessionId) { mutableStateOf(false) }
+    var searchQuery by remember(state.sessionId) { mutableStateOf("") }
+    if (searchOpen && canSearch) {
+        AlertDialog(
+            onDismissRequest = { searchOpen = false },
+            title = { Text(stringResource(R.string.remote_files_search_title)) },
+            text = {
+                Column {
+                    OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it; actions.onSearch("") }, singleLine = true,
+                        label = { Text(stringResource(R.string.remote_files_search_query)) }, modifier = Modifier.fillMaxWidth().testTag("filesSearchQuery"))
+                    when {
+                        state.search.loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                        state.search.failure != null -> Text(stringResource(R.string.remote_files_search_failed))
+                        state.search.result != null -> {
+                            val result = state.search.result
+                            if (result.truncated) Text(stringResource(R.string.remote_files_search_incomplete))
+                            if (result.matches.isEmpty()) Text(stringResource(R.string.remote_files_search_empty))
+                            LazyColumn(Modifier.heightIn(max = 360.dp).testTag("filesSearchResults")) {
+                                items(result.matches) { hit ->
+                                    Column(Modifier.fillMaxWidth().clickable { searchOpen = false; actions.onOpenSearchHit(hit) }.padding(vertical = 8.dp)) {
+                                        Text("${hit.path}:${hit.line}:${hit.column}", style = MaterialTheme.typography.labelMedium)
+                                        Text(hit.snippet, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { actions.onSearch(searchQuery) }, enabled = validSearchQuery(searchQuery), modifier = Modifier.testTag("filesSearchSubmit")) { Text(stringResource(R.string.remote_files_search_title)) } },
+            dismissButton = { TextButton(onClick = { searchOpen = false }) { Text(stringResource(R.string.remote_files_search_close)) } },
+        )
+    }
+    mutations?.dialog?.let { FileMutationPrompt(it, actions, mutations.journalFull, mutations.orphanDrafts) }
+    if (mutations?.resetConfirming == true) FileMutationResetPrompt(mutations, actions)
+    mutations?.orphanDiscard?.let { FileOrphanDiscardPrompt(it, mutations.orphanDiscarding, actions) }
+    // The page background, as the other pages have, rather than a white sheet.
+    Surface(modifier.fillMaxSize().testTag("filesPane"), color = MaterialTheme.colorScheme.background) {
+        val editor = state.editor
+        if (editor != null) {
+            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                key(editor.path) { CodeEditor(editor, actions, onProjectSearch = if (canSearch) ({ searchOpen = true }) else null) }
+            }
+            return@Surface
+        }
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            Column(Modifier.fillMaxSize()) {
+                if (prefillFailed)
+                    Text(
+                        stringResource(R.string.remote_files_prefill_failed),
+                        Modifier.fillMaxWidth().padding(top = headerHeight).padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesPrefillFailed"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                val notices = mutations != null &&
+                    (mutations.outcome != null || mutations.recovery.isNotEmpty() || mutations.storageFailed || mutations.journalUnreadable || mutations.journalFull || mutations.orphanDrafts.isNotEmpty())
+                if (mutations != null && notices)
+                    FileMutationNotices(mutations, actions, Modifier.padding(top = if (prefillFailed) 0.dp else headerHeight))
+                // Backspace, or Left at the edge, goes up a folder or back from a file.
+                val parent = back.takeIf { state.peek == null && (state.file != null || state.path.isNotEmpty()) }
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
+                    val inset = if (prefillFailed || notices) 0.dp else headerHeight
+                    val file = state.file
+                    val onEdit = actions.onStartEditing.takeIf { canEdit }
+                    when {
+                        file == null -> key(state.path) { FolderList(state, actions, inset, send, mutationAccess) }
+                        // A wide pane keeps the folder's entries beside the open file.
+                        maxWidth >= FILE_LIST_BESIDE_MIN_WIDTH ->
+                            Row(Modifier.fillMaxSize()) {
+                                FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight(), mutationAccess)
+                                VerticalDivider()
+                                Box(Modifier.weight(1f).fillMaxHeight()) {
+                                    key(file.path) { FileView(file, actions, send, ask, inset, onEdit, codeWrap.wrap) }
+                                }
+                            }
+                        else -> key(file.path) { FileView(file, actions, send, ask, inset, onEdit, codeWrap.wrap) }
+                    }
+                }
+            }
+            Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
+                FilesTopBar(state, actions, back, projectName, codeWrap, canSearch, mutationAccess) { searchOpen = true }
             }
         }
     }
 }
 
 @Composable
-private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit) {
+private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?, codeWrap: CodeWrapState, canSearch: Boolean, mutationAccess: FileMutationAccess, onSearch: () -> Unit) {
     val nested = state.file != null || state.path.isNotEmpty()
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (nested)
-            IconButton(onClick = back, Modifier.testTag("filesBack")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_files_back))
-            }
-        else
-            IconButton(onClick = actions.onClose, Modifier.testTag("filesClose")) {
-                Icon(Icons.Default.Close, stringResource(R.string.remote_files_close))
-            }
-        val title = state.file?.path ?: state.path.ifEmpty { null }
-        Text(
-            title ?: stringResource(R.string.remote_files_title),
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = if (title != null) FontFamily.Monospace else null,
-            maxLines = 1,
-            overflow = TextOverflow.StartEllipsis,
+    val wrapLabel = stringResource(R.string.remote_review_wrap_lines)
+    val file = state.file
+    // Rename and delete act on the open file, once it is read; create on the shown folder.
+    val shownFile = file?.takeIf { !it.loading && it.failure == null && it.version != null }
+    val mutationActions =
+        listOfNotNull(
+            PaneAction(stringResource(R.string.remote_files_create), Icons.Default.Add, "filesCreate") { actions.onPrepareCreate(state.path) }
+                .takeIf { mutationAccess.create && file == null && state.listing?.unavailable == null && state.failure == null },
+            shownFile?.takeIf { mutationAccess.rename }?.let {
+                PaneAction(stringResource(R.string.remote_files_rename), Icons.Default.DriveFileRenameOutline, "filesRename") { actions.onPrepareRename(it.path) }
+            },
+            shownFile?.takeIf { mutationAccess.delete }?.let {
+                PaneAction(stringResource(R.string.remote_files_delete), Icons.Default.Delete, "filesDelete") { actions.onPrepareDelete(it.path) }
+            },
         )
-        val busy = state.file?.loading ?: state.loading
-        IconButton(onClick = actions.onReload, enabled = !busy, modifier = Modifier.testTag("filesReload")) {
-            Icon(Icons.Default.Refresh, stringResource(R.string.remote_files_reload))
-        }
-        if (nested)
-            IconButton(onClick = actions.onClose, Modifier.testTag("filesClose")) {
-                Icon(Icons.Default.Close, stringResource(R.string.remote_files_close))
+    PaneHeader(
+        title = stringResource(R.string.remote_files_title),
+        subtitle = (state.file?.path ?: state.path).takeIf(String::isNotEmpty) ?: projectName?.takeIf(String::isNotBlank),
+        nested = nested,
+        busy = state.file?.loading ?: state.loading,
+        tag = "files",
+        backLabel = stringResource(R.string.remote_files_back),
+        closeLabel = stringResource(R.string.remote_files_close),
+        reloadLabel = stringResource(R.string.remote_files_reload),
+        onBack = back,
+        onClose = actions.onClose,
+        onReload = actions.onReload,
+        actions =
+            (if (canSearch) listOf(PaneAction(stringResource(R.string.remote_files_search_title), Icons.Default.Search, "filesSearch", onClick = onSearch)) else emptyList()) +
+                (if (state.file == null) emptyList() else listOf(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "filesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))) +
+                mutationActions,
+    )
+}
+
+/**
+ * The shown folder's entries beside an open file, as rows: a folder opens itself, a file opens
+ * in place of the one shown. Up and Down open the file above or below.
+ */
+@Composable
+private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeight: Dp, modifier: Modifier, mutationAccess: FileMutationAccess = FileMutationAccess()) {
+    val entries = state.listing?.entries.orEmpty()
+    val label = stringResource(R.string.remote_files_title)
+    LazyColumn(
+        modifier.semantics { contentDescription = label }.testTag("filesSideList").glassSource(),
+        contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
+    ) {
+        itemsIndexed(entries, key = { _, entry -> entry.name }) { _, entry ->
+            val path = childPath(state.path, entry.name)
+            val folder = entry.type == FileEntryType.DIR
+            val selected = !folder && path == state.file?.path
+            Row(
+                Modifier.fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
+                    .openOnArrowRelease(if (entry.type == FileEntryType.FILE && !selected) ({ actions.onOpenFile(path) }) else null)
+                    .focusRing(MaterialTheme.shapes.small)
+                    .selectable(selected) {
+                        when (entry.type) {
+                            FileEntryType.DIR -> actions.onOpenDir(path)
+                            FileEntryType.FILE -> actions.onOpenFile(path)
+                            else -> Unit
+                        }
+                    }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .testTag("filesSideEntry:${entry.name}"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (folder) entry.name + "/" else entry.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                val rowActions = if (entry.type == FileEntryType.FILE) fileMutationItems(path, actions, mutationAccess) else emptyList()
+                if (rowActions.isNotEmpty()) FileRowActions(entry.name, rowActions)
             }
+        }
     }
 }
 
-private fun failureText(failure: FilesFailure): Int =
+internal fun filesFailureText(failure: FilesFailure): Int =
     when (failure) {
         FilesFailure.UNSUPPORTED -> R.string.remote_files_failure_unsupported
         FilesFailure.OFFLINE -> R.string.remote_files_failure_offline
@@ -170,30 +386,20 @@ private fun failureText(failure: FilesFailure): Int =
         FilesFailure.INVALID_PATH -> R.string.remote_files_failure_invalid_path
         FilesFailure.FORBIDDEN -> R.string.remote_files_failure_forbidden
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
+        FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
+        FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
+        FilesFailure.STORAGE -> R.string.remote_files_editor_storage_failure
         FilesFailure.FAILED -> R.string.remote_files_failure_failed
     }
 
 @Composable
-private fun FilesNotice(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
 private fun FilesFailureNotice(failure: FilesFailure, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(16.dp).testTag("filesFailure")) {
-        Text(
-            stringResource(failureText(failure)),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-        )
-        if (failure != FilesFailure.UNSUPPORTED && failure != FilesFailure.INVALID_PATH)
-            TextButton(onClick = onRetry) { Text(stringResource(R.string.remote_files_retry)) }
-    }
+    PaneFailureNotice(
+        stringResource(filesFailureText(failure)),
+        stringResource(R.string.remote_files_retry),
+        onRetry.takeIf { failure != FilesFailure.UNSUPPORTED && failure != FilesFailure.INVALID_PATH },
+        Modifier.testTag("filesFailure"),
+    )
 }
 
 @Composable
@@ -219,44 +425,116 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 }
 
 @Composable
-private fun FolderList(state: FilesState, actions: FilesActions) {
-    LazyColumn(Modifier.fillMaxSize().testTag("filesList")) {
-        item(key = "crumbs") { Breadcrumbs(state.path, actions.onOpenDir) }
-        val listing = state.listing
-        val failure = state.failure
-        when {
-            failure != null -> item(key = "failure") { FilesFailureNotice(failure, actions.onReload) }
-            state.loading || listing == null -> item(key = "loading") { FilesLoading() }
-            listing.unavailable != null ->
-                item(key = "unavailable") {
-                    FilesNotice(
-                        stringResource(
-                            when (listing.unavailable) {
-                                FilesUnavailable.GIT_UNAVAILABLE -> R.string.remote_files_git_unavailable
-                                FilesUnavailable.NOT_A_REPOSITORY -> R.string.remote_files_not_a_repository
-                            }
-                        ),
-                        Modifier.testTag("filesUnavailable"),
-                    )
-                }
-            else -> {
-                if (listing.entries.isEmpty() && listing.nextAfter == null)
-                    item(key = "empty") { FilesNotice(stringResource(R.string.remote_files_empty)) }
-                items(listing.entries, key = { "entry:" + it.name }) { entry ->
-                    EntryRow(entry) {
-                        val path = childPath(state.path, entry.name)
-                        when (entry.type) {
-                            FileEntryType.DIR -> actions.onOpenDir(path)
-                            FileEntryType.FILE -> actions.onOpenFile(path)
-                            FileEntryType.SYMLINK, FileEntryType.SUBMODULE -> Unit
-                        }
+private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit, mutationAccess: FileMutationAccess = FileMutationAccess()) {
+    val resources = LocalResources.current
+    val gridState = rememberLazyGridState()
+    var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
+    LaunchedEffect(state.path, state.listing, state.file) {
+        if (peekAnchor != null) {
+            peekAnchor = null
+            if (state.peek != null) actions.onDismissPeek()
+        }
+    }
+    LaunchedEffect(gridState.isScrollInProgress) {
+        if (gridState.isScrollInProgress && state.peek != null) {
+            peekAnchor = null
+            actions.onDismissPeek()
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val columns = fileGridColumns(maxWidth)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            modifier = Modifier.fillMaxSize().testTag("filesList").glassSource(),
+            state = gridState,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight + 8.dp, bottom = 8.dp),
+        ) {
+            item(key = "crumbs", span = { GridItemSpan(maxLineSpan) }) { Breadcrumbs(state.path, actions.onOpenDir) }
+            val listing = state.listing
+            val failure = state.failure
+            when {
+                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FilesFailureNotice(failure, actions.onReload) }
+                state.loading || listing == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { FilesLoading() }
+                listing.unavailable != null ->
+                    item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
+                        PaneNotice(
+                            stringResource(
+                                when (listing.unavailable) {
+                                    FilesUnavailable.GIT_UNAVAILABLE -> R.string.remote_files_git_unavailable
+                                    FilesUnavailable.NOT_A_REPOSITORY -> R.string.remote_files_not_a_repository
+                                }
+                            ),
+                            Modifier.testTag("filesUnavailable"),
+                        )
                     }
+                else -> {
+                    if (listing.entries.isEmpty() && listing.nextAfter == null)
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_files_empty)) }
+                    val folders = listing.entries.filter { it.type == FileEntryType.DIR }
+                    val files = listing.entries.filter { it.type != FileEntryType.DIR }
+                    if (folders.isNotEmpty())
+                        item(key = "foldersHeading", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(stringResource(R.string.remote_files_folders), style = MaterialTheme.typography.titleSmall)
+                        }
+                    items(folders.size, key = { "entry:" + folders[it].name }) { index ->
+                        val entry = folders[index]
+                        val path = childPath(state.path, entry.name)
+                        FileEntryTile(entry, null, { actions.onOpenDir(path) }, {}, { anchor ->
+                            peekAnchor = anchor
+                            actions.onShowPeek(path, entry.type)
+                        }, tag = "filesEntry:${entry.name}", path = path)
+                    }
+                    if (files.isNotEmpty())
+                        item(key = "filesHeading", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(stringResource(R.string.remote_files_title), style = MaterialTheme.typography.titleSmall)
+                        }
+                    items(files.size, key = { "entry:" + files[it].name }) { index ->
+                        val entry = files[index]
+                        val path = childPath(state.path, entry.name)
+                        FileEntryTile(
+                            entry = entry,
+                            preview = state.previews[path],
+                            onOpen = { if (entry.type == FileEntryType.FILE) actions.onOpenFile(path) },
+                            onRequestPreview = { actions.onRequestPreview(path) },
+                            onPeek = { anchor ->
+                                peekAnchor = anchor
+                                actions.onShowPeek(path, entry.type)
+                            },
+                            tag = "filesEntry:${entry.name}",
+                            path = path,
+                            onSend =
+                                if (entry.type == FileEntryType.FILE) {
+                                    { send(resources.getString(R.string.remote_files_reference_file, path)) }
+                                } else null,
+                            actions = if (entry.type == FileEntryType.FILE) fileMutationItems(path, actions, mutationAccess) else emptyList(),
+                        )
+                    }
+                    if (listing.nextAfter != null)
+                        item(key = "more", span = { GridItemSpan(maxLineSpan) }) {
+                            when {
+                                state.moreFailure != null -> FilesFailureNotice(state.moreFailure, actions.onLoadMore)
+                                state.moreLoading -> FilesLoading()
+                                else -> TextButton(onClick = actions.onLoadMore, Modifier.testTag("filesLoadMore")) {
+                                    Text(stringResource(R.string.remote_files_load_more))
+                                }
+                            }
+                        }
+                    if (listing.truncated)
+                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) {
+                            PaneNotice(stringResource(R.string.remote_files_truncated))
+                        }
                 }
-                if (listing.nextAfter != null) loadMore(state.moreLoading, state.moreFailure, actions.onLoadMore)
-                if (listing.truncated)
-                    item(key = "truncated") { FilesNotice(stringResource(R.string.remote_files_truncated)) }
             }
         }
+        val anchor = peekAnchor
+        val peek = state.peek
+        if (anchor != null && peek != null)
+            FilePeekPopup(peek, state.previews[peek.path], anchor) {
+                peekAnchor = null
+                actions.onDismissPeek()
+            }
     }
 }
 
@@ -285,60 +563,7 @@ private fun Breadcrumbs(path: String, onOpenDir: (String) -> Unit) {
 }
 
 @Composable
-private fun EntryRow(entry: FileEntry, onOpen: () -> Unit) {
-    val context = LocalContext.current
-    val openable = entry.type == FileEntryType.DIR || entry.type == FileEntryType.FILE
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val detail =
-        when (entry.type) {
-            FileEntryType.FILE -> entry.size?.let { Formatter.formatShortFileSize(context, it) }
-            FileEntryType.SYMLINK -> stringResource(R.string.remote_files_symlink)
-            FileEntryType.SUBMODULE -> stringResource(R.string.remote_files_submodule)
-            FileEntryType.DIR -> null
-        }
-    Row(
-        Modifier.fillMaxWidth()
-            .then(if (openable) Modifier.clickable(onClick = onOpen) else Modifier)
-            .heightIn(min = 48.dp)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("filesEntry:${entry.name}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Icon(
-            when (entry.type) {
-                FileEntryType.DIR -> Icons.Default.Folder
-                FileEntryType.FILE -> Icons.Default.Description
-                FileEntryType.SYMLINK -> Icons.Default.Link
-                FileEntryType.SUBMODULE -> Icons.Default.AccountTree
-            },
-            stringResource(
-                when (entry.type) {
-                    FileEntryType.DIR -> R.string.remote_files_kind_dir
-                    FileEntryType.FILE -> R.string.remote_files_kind_file
-                    FileEntryType.SYMLINK -> R.string.remote_files_kind_symlink
-                    FileEntryType.SUBMODULE -> R.string.remote_files_kind_submodule
-                }
-            ),
-            Modifier.size(24.dp),
-            tint = if (entry.type == FileEntryType.DIR) MaterialTheme.colorScheme.primary else muted,
-        )
-        Column(Modifier.weight(1f)) {
-            Text(
-                entry.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (openable) LocalContentColor.current else muted,
-                maxLines = 1,
-                overflow = TextOverflow.MiddleEllipsis,
-            )
-            if (detail != null)
-                Text(detail, style = MaterialTheme.typography.labelMedium, color = muted, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun syntaxColors(): SyntaxColors {
+internal fun syntaxColors(): SyntaxColors {
     val scheme = MaterialTheme.colorScheme
     return remember(scheme) {
         SyntaxColors(
@@ -353,11 +578,25 @@ private fun syntaxColors(): SyntaxColors {
 }
 
 @Composable
-private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Unit) {
+private fun FileView(
+    file: OpenFile,
+    actions: FilesActions,
+    send: (String) -> Unit,
+    ask: (String) -> Boolean,
+    headerHeight: Dp,
+    onEdit: (() -> Unit)? = null,
+    wrap: Boolean = false,
+) {
     val context = LocalContext.current
     val lines = remember(file.content) { fileLines(file.content) }
     val language = remember(file.path) { languageFor(file.path) }
     val colors = syntaxColors()
+    val zoom = CodeZoom.scale(CodeZoom.FILES)
+    val copyLines = rememberCopyToClipboard(stringResource(R.string.remote_code_copy_label))
+    val focus = remember { FocusRequester() }
+    var paneFocused by remember { mutableStateOf(false) }
+    // Where a drag over the number cells began; the drag reads it, not a selection composition may lag behind.
+    var dragFrom by remember { mutableIntStateOf(1) }
     val plain = remember(lines) { lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) } }
     // One highlighter per version of the file: a later page only styles the lines it adds. While
     // it works, the lines styled before stay styled and only the new ones show plain.
@@ -373,22 +612,71 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
             ?.takeIf { (owner, styled) -> owner === highlighter && styled.size <= lines.size }
             ?.let { (_, styled) -> if (styled.size == lines.size) styled else styled + plain.subList(styled.size, plain.size) }
             ?: plain
-    val style = monoTextStyle()
+    val style = monoTextStyle(zoom)
     val contentWidth = rememberCodeContentWidth(lines, style)
-    val charWidth = rememberMonoCharWidth(style)
-    val numberWidth = charWidth * lines.size.coerceAtLeast(1).toString().length
+    val numberWidth = rememberLineNumberWidth(lines.size, style)
     val scroll = rememberScrollState()
+    val listState = rememberLazyListState()
+    val gutterRows = remember(listState) { GutterRows(listState) }
+    SideEffect {
+        val leading = if (file.reopened) 1 else 0
+        gutterRows.lineOfItem = { item -> (item - leading + 1).takeIf { it in 1..shown.size } }
+    }
     val selection = file.selection?.takeIf { it.last <= lines.size }
+    // A file that opens gives the keyboard its lines, so Ctrl+= and Ctrl+A work before any click.
+    LaunchedEffect(file.path) { if (!paneFocused) runCatching { focus.requestFocus() } }
+    // Ctrl+A picks every line, Ctrl+C copies the picked ones, Ctrl+= and Ctrl+- zoom the text.
+    val onCodeKey: (KeyEvent) -> Boolean = { event ->
+        if (event.type != KeyEventType.KeyDown) false
+        else when (resolveCodeShortcut(event)) {
+            Shortcut.SELECT_ALL_LINES -> allLines(lines.size)?.let { actions.onSelectLines(it); true } ?: false
+            Shortcut.COPY_LINES -> selection?.let { copyLines(selectedFileText(lines, it)); true } ?: false
+            Shortcut.ZOOM_IN -> { CodeZoom.step(CodeZoom.FILES, inward = true); true }
+            Shortcut.ZOOM_OUT -> { CodeZoom.step(CodeZoom.FILES, inward = false); true }
+            else -> false
+        }
+    }
+    val dragLines: suspend () -> DragPayload? = {
+        file.selection?.takeIf { lines.isNotEmpty() && !file.binary }?.let { picked ->
+            val prompt = withContext(Dispatchers.Default) { filePrompt(context, file, lines, picked, language) }
+            DragPayload(codeLinesTransfer(file.path.substringAfterLast('/'), selectedFileText(lines, picked), prompt))
+        }
+    }
+    // Opened at lines from the chat: once they are loaded, they come into view with a little
+    // context above them. A line picked here later never scrolls the view.
+    val reveal = file.revealLine
+    val revealReady = reveal != null && !file.loading && lines.size >= reveal
+    // Once per read: a rotation or a return to the file keeps where the user scrolled on to.
+    var revealed by rememberSaveable(reveal) { mutableStateOf(false) }
+    LaunchedEffect(file.loading) { if (file.loading) revealed = false }
+    LaunchedEffect(reveal, revealReady) {
+        if (reveal == null || !revealReady || revealed) return@LaunchedEffect
+        val leading = if (file.reopened) 1 else 0
+        listState.scrollToItem((leading + reveal - 1 - REVEAL_CONTEXT_LINES).coerceAtLeast(0))
+        revealed = true
+    }
     val selectionState =
         selection?.let {
             if (it.first == it.last) stringResource(R.string.remote_files_selection_line, it.first)
             else stringResource(R.string.remote_files_selection_lines, it.first, it.last)
         }
     Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("filesFile")) {
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth().testTag("filesFile").glassSource()
+                .onPlaced { gutterRows.coordinates = it }
+                .focusRequester(focus)
+                .onFocusChanged { paneFocused = it.hasFocus }
+                .focusable()
+                // After the rows: an in-row text selection copies its own text first.
+                .onKeyEvent(onCodeKey)
+                .takeFocusOnPress(focus, { paneFocused })
+                .codeZoomGestures(CodeZoom.FILES),
+            state = listState,
+            contentPadding = PaddingValues(top = headerHeight),
+        ) {
             if (file.reopened)
                 item(key = "reopened") {
-                    FilesNotice(stringResource(R.string.remote_files_reopened), Modifier.testTag("filesReopened"))
+                    PaneNotice(stringResource(R.string.remote_files_reopened), Modifier.testTag("filesReopened"))
                 }
             val failure = file.failure
             when {
@@ -396,28 +684,46 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
                 file.loading -> item(key = "loading") { FilesLoading() }
                 file.binary ->
                     item(key = "binary") {
-                        FilesNotice(stringResource(R.string.remote_files_binary), Modifier.testTag("filesBinary"))
+                        PaneNotice(stringResource(R.string.remote_files_binary), Modifier.testTag("filesBinary"))
                     }
                 file.tooLarge ->
                     item(key = "tooLarge") {
-                        FilesNotice(stringResource(R.string.remote_files_too_large), Modifier.testTag("filesTooLarge"))
+                        PaneNotice(stringResource(R.string.remote_files_too_large), Modifier.testTag("filesTooLarge"))
                     }
                 lines.isEmpty() && file.nextOffset == null ->
-                    item(key = "empty") { FilesNotice(stringResource(R.string.remote_files_file_empty)) }
+                    item(key = "empty") { PaneNotice(stringResource(R.string.remote_files_file_empty)) }
                 else -> {
                     // Rows stay one text line high to keep code dense; the number cell is at
                     // least 48dp wide, so it stays easy to hit sideways.
                     itemsIndexed(shown, contentType = { _, _ -> "line" }) { index, text ->
                         val number = index + 1
+                        // The number cell picks lines: a tap as before, a Shift-tap or a drag extends the range.
+                        val gutter =
+                            Modifier.codeGutter(
+                                line = number,
+                                rows = gutterRows,
+                                tapLabel = lineTapLabel(context, file.selection.tapAction(number), number),
+                                onTap = { extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    actions.onSelectLines(if (extend) file.selection.extendTo(number) else file.selection.tap(number))
+                                },
+                                onStart = { line, extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    dragFrom = dragAnchor(file.selection, line, extend)
+                                    actions.onSelectLines(dragRange(dragFrom, line))
+                                },
+                                onDrag = { line -> actions.onSelectLines(dragRange(dragFrom, line)) },
+                            )
                         FileLineRow(
                             number,
                             text,
                             selection != null && number in selection.first..selection.last,
                             FileRowStyle(style, numberWidth, contentWidth),
                             scroll,
-                            lineTapLabel(context, file.selection.tapAction(number), number),
+                            gutter,
                             selectionState,
-                        ) { actions.onSelectLines(file.selection.tap(number)) }
+                            wrap,
+                        )
                     }
                     if (file.nextOffset != null) loadMore(file.moreLoading, file.moreFailure, actions.onLoadMore)
                 }
@@ -427,9 +733,15 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
             FileActionBar(
                 selection = selection?.takeIf { lines.isNotEmpty() && !file.binary },
                 canSendLines = lines.isNotEmpty() && !file.binary,
+                dragLines = dragLines,
+                dragKey = listOf(file.path, file.version, file.content.hashCode()),
                 onClearSelection = { actions.onSelectLines(null) },
                 onSendFile = { send(filePrompt(context, file, lines, null, language)) },
                 onSendLines = { selection?.let { send(filePrompt(context, file, lines, it, language)) } },
+                onAsk = { question ->
+                    selection?.let { ask(filePrompt(context, file, lines, it, language) + "\n\n" + question.trim()) } ?: false
+                },
+                onEdit = onEdit,
             )
     }
 }
@@ -450,36 +762,43 @@ private fun FileLineRow(
     selected: Boolean,
     rowStyle: FileRowStyle,
     scroll: ScrollState,
-    tapLabel: String,
+    // What the number cell does with a press, such as picking lines (see [codeGutter]).
+    modifier: Modifier,
     selectionState: String?,
-    onTapNumber: () -> Unit,
+    wrap: Boolean,
 ) {
     val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified
     Row(Modifier.fillMaxWidth().background(background).testTag(if (selected) "filesLineSelected" else "filesLineRow")) {
+        // The number is no text to select: a tap on it picks lines.
         Text(
             number.toString(),
-            Modifier.clickable(onClickLabel = tapLabel, onClick = onTapNumber)
+            Modifier.then(modifier)
                 .semantics {
                     this.selected = selected
                     if (selectionState != null) stateDescription = selectionState
                 }
-                .width(maxOf(rowStyle.numberWidth + 16.dp, 48.dp))
+                .testTag("filesLine:$number")
                 .padding(horizontal = 8.dp)
-                .testTag("filesLine:$number"),
+                .width(maxOf(rowStyle.numberWidth, 32.dp)),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = rowStyle.text,
             textAlign = TextAlign.End,
+            softWrap = false,
             maxLines = 1,
         )
-        Box(Modifier.weight(1f).horizontalScroll(scroll)) {
-            Text(
-                text,
-                Modifier.width(rowStyle.contentWidth).padding(start = 4.dp),
-                style = rowStyle.text,
-                softWrap = false,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-            )
+        // The code is selectable within its own row, so a selection never runs into the next line.
+        // Wrapped, a long line breaks within the pane instead of scrolling sideways.
+        SelectionContainer(Modifier.weight(1f)) {
+            Box(if (wrap) Modifier else Modifier.horizontalScroll(scroll)) {
+                Text(
+                    text,
+                    (if (wrap) Modifier else Modifier.width(rowStyle.contentWidth)).padding(start = 4.dp),
+                    style = rowStyle.text,
+                    softWrap = wrap,
+                    maxLines = if (wrap) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Clip,
+                )
+            }
         }
     }
 }
@@ -491,6 +810,11 @@ private fun FileActionBar(
     onClearSelection: () -> Unit,
     onSendFile: () -> Unit,
     onSendLines: () -> Unit,
+    onAsk: (String) -> Boolean = { false },
+    onEdit: (() -> Unit)? = null,
+    dragLines: (suspend () -> DragPayload?)? = null,
+    // What the dragged text was cut from: another file, version or text must not reuse a prepared drag.
+    dragKey: Any? = null,
 ) {
     HorizontalDivider()
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -499,26 +823,97 @@ private fun FileActionBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     pluralStringResource(R.plurals.remote_files_selected_lines, count, count),
-                    Modifier.weight(1f).testTag("filesSelection"),
+                    Modifier.weight(1f)
+                        .dragOut(key = listOf(selection, dragKey), enabled = dragLines != null, prepare = dragLines ?: { null })
+                        .testTag("filesSelection"),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 TextButton(onClick = onClearSelection, modifier = Modifier.testTag("filesClearSelection")) {
                     Text(stringResource(R.string.remote_files_clear_selection))
                 }
             }
+            // A new range starts a new question.
+            key(selection) { AskAboutLines(onAsk) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onEdit != null)
+                FilledTonalButton(onClick = onEdit, Modifier.testTag("filesEdit")) {
+                    Icon(Icons.Default.Edit, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.remote_files_edit))
+                }
             OutlinedButton(onClick = onSendFile, Modifier.weight(1f).testTag("filesSendFile")) {
                 Text(stringResource(R.string.remote_files_send_file), textAlign = TextAlign.Center)
             }
+            // Asking is the main way on with lines picked; sending them leaves the prompt to write.
             if (canSendLines)
-                Button(
+                OutlinedButton(
                     onClick = onSendLines,
                     enabled = selection != null,
                     modifier = Modifier.weight(1f).testTag("filesSendLines"),
                 ) {
                     Text(stringResource(R.string.remote_files_send_lines), textAlign = TextAlign.Center)
                 }
+        }
+    }
+}
+
+/** Lines kept above a line the chat opened a file at, so it does not stick to the top. */
+private const val REVEAL_CONTEXT_LINES = 3
+
+/**
+ * A question about the picked lines: Enter (or Ctrl+Enter) or the button sends the lines and it
+ * to pi as one prompt. A blank question sends nothing; one [onAsk] could not place stays.
+ */
+@Composable
+private fun AskAboutLines(onAsk: (String) -> Boolean) {
+    var question by rememberSaveable { mutableStateOf("") }
+    val submit = {
+        if (question.isNotBlank() && onAsk(question)) question = ""
+    }
+    val label = stringResource(R.string.remote_open_files_ask_hint)
+    // One compact row, so a phone keeps most of its height for the file.
+    Surface(
+        Modifier.fillMaxWidth().padding(bottom = 4.dp),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f).padding(start = 12.dp), contentAlignment = Alignment.CenterStart) {
+                // The field says it itself; TalkBack reads the hint once.
+                if (question.isEmpty())
+                    Text(
+                        label,
+                        Modifier.clearAndSetSemantics {},
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                BasicTextField(
+                    value = question,
+                    onValueChange = { question = it },
+                    modifier = Modifier.fillMaxWidth()
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && (event.key == Key.Enter || event.key == Key.NumPadEnter) && !event.isShiftPressed) {
+                                submit()
+                                true
+                            } else false
+                        }
+                        // Backspace or Left in an empty field must not leave the file (parentOnLeft).
+                        .onKeyEvent { it.key == Key.Backspace || it.key == Key.DirectionLeft }
+                        .semantics { contentDescription = label }
+                        .testTag("filesAsk"),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                )
+            }
+            // 40dp keeps the row low; Compose still takes touches 48dp around it (minimumTouchTargetSize).
+            IconButton(onClick = submit, enabled = question.isNotBlank(), modifier = Modifier.size(40.dp).testTag("filesAskSend")) {
+                Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.remote_open_files_ask_send), Modifier.size(20.dp))
+            }
         }
     }
 }
@@ -558,3 +953,10 @@ internal fun filePrompt(
         language,
     )
 }
+
+/** Rename and delete of the file at [path], as offered by [access]. */
+internal fun fileMutationItems(path: String, actions: FilesActions, access: FileMutationAccess): List<MenuItem> =
+    listOfNotNull(
+        MenuItem(R.string.remote_files_rename, "rename") { actions.onPrepareRename(path) }.takeIf { access.rename },
+        MenuItem(R.string.remote_files_delete, "delete") { actions.onPrepareDelete(path) }.takeIf { access.delete },
+    )

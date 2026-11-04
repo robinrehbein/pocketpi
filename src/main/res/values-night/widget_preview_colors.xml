@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
+    <color name="pocketpi_widget_preview_surface">#FF1D1E23</color>
+    <color name="pocketpi_widget_preview_on_surface">#FFE2E4EB</color>
+    <color name="pocketpi_widget_preview_on_surface_variant">#FFC3C7D1</color>
+    <color name="pocketpi_widget_preview_primary">#FFABC7FF</color>
+    <!-- WaitingDark -->
+    <color name="pocketpi_widget_preview_waiting">#FFF5B971</color>
+</resources>

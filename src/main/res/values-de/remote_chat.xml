@@ -1,6 +1,14 @@
 <resources>
+    <string name="remote_tool_advisor">Advisor fragen</string>
+    <string name="remote_tool_search">Dateien durchsuchen</string>
+    <string name="remote_tool_find">Dateien finden</string>
+    <string name="remote_tool_list">Ordner auflisten</string>
+    <string name="remote_tool_web_search">Im Web suchen</string>
+    <string name="remote_tool_web_fetch">Webseite öffnen</string>
     <string name="remote_tool_read">Datei lesen</string>
     <string name="remote_tool_edit">Datei bearbeiten</string>
     <string name="remote_tool_write">Datei schreiben</string>
     <string name="remote_tool_bash">Befehl ausführen</string>
+    <string name="remote_tool_bash_background">Hintergrund-Shell</string>
+    <string name="remote_chat_activity_working">Pi arbeitet</string>
 </resources>

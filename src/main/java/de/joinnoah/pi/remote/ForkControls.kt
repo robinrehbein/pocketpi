@@ -2,9 +2,8 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,11 +42,11 @@ internal fun ForkControl(
             ),
     ) {
         Icon(
-            Icons.Filled.Replay,
+            Icons.AutoMirrored.Filled.CallSplit,
             contentDescription = stringResource(R.string.remote_fork_action),
             modifier = Modifier.size(18.dp),
         )
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenuOpen(false) }) {
+        GlassDropdownMenu(expanded = menuOpen, onDismissRequest = { onMenuOpen(false) }) {
             if (fork.stopFirst)
                 DropdownMenuItem(
                     text = {

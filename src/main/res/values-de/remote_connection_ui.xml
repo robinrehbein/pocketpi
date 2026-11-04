@@ -1,0 +1,4 @@
+<resources>
+    <string name="remote_connection_status">Verbindung: %1$s</string>
+    <string name="remote_status_last_known">Zuletzt bekannt: %1$s</string>
+</resources>

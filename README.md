@@ -1,6 +1,8 @@
 # PocketPi for Android
 
-This separate application controls pi sessions on paired Macs through the pi Remote relay. It uses
+This separate application controls pi sessions on paired host computers through the pi Remote relay.
+The goal is to support Macs, independent Linux hosts, and development containers equally; Linux and
+container runtime qualification is still pending. It uses
 application ID `de.robinrehbein.pocketpi` and does not share Noah accounts or data.
 
 ## Build and install
@@ -12,14 +14,36 @@ From the repository root, with JDK 25 and the Android SDK configured:
 adb install build/outputs/apk/debug/pocketpi-debug.apk
 ```
 
+## Wear OS
+
+The `wear` module adds an independent Galaxy Watch Ultra / Wear OS client with its own Mac
+pairing and encrypted connection. It offers watch-native chat, questions, session/model/Advisor
+controls, file and diff readers, review comments, branches, background jobs and folder management.
+The phone can scan the watch's pairing QR code and open matching sessions for photos/documents;
+it never copies its device credentials to the watch.
+
+Build with `./gradlew :wear:assembleDebug :wear:testDebugUnitTest :wear:lintDebug` and install
+`wear/build/outputs/apk/debug/wear-debug.apk` on the watch. See
+[`docs/wear-os.md`](docs/wear-os.md) for setup, small-screen interaction, optional independent push,
+release boundaries and the required Galaxy Watch Ultra device checks. Use `:bundleRelease` for a
+phone-only release; watch release artifacts require their own unused Play version code.
+
 ## Continuous integration
 
-[`Android CI`](.github/workflows/ci.yml) checks the exact head commit of each pull request
-into `main` and each commit pushed to `main`. The workflow uses JDK 25, Android SDK platform
-37 and build tools 37.0.0. It checks English and German resource keys, runs unit tests, builds
-the debug APK, runs Android Lint, and runs the managed API 36 emulator instrumentation tests.
-GitHub-hosted Linux must provide `/dev/kvm` for the emulator step. On failure, the workflow
-uploads available Gradle reports and test results as the `pocketpi-verification` artifact.
+[`Android CI`](.github/workflows/ci.yml) checks the head commit of each pull request into
+`main` and the newest commit pushed to `main`: a newer push cancels the older run, and closing or
+merging a pull request stops its checks. The workflow uses JDK 25, Android SDK platform
+37 and build tools 37.0.0, and runs six parallel jobs: `Unit tests and debug builds` (English
+and German resource keys, phone and watch unit tests and debug APKs), `Android Lint` (phone and
+watch, against the committed lint baselines), `Benchmark isolation` (benchmark APKs and fixture
+isolation), `Minified smoke tests` (smoke tests of the R8-shrunk benchmark app), `Emulator tests` (the managed API 36 phone instrumentation tests, with the AVD and its
+boot snapshot cached) and `Tablet emulator tests` (the tests annotated `@LargeScreen` on a managed
+API 36 Pixel Tablet). Both emulator jobs share one cached API 36 system image, and each caches only
+its own AVD and boot snapshot; push runs on `main` save these entries. After a change to them, check
+the repository's Actions cache usage against GitHub's 10 GB limit. GitHub-hosted Linux must provide
+`/dev/kvm` for both emulator jobs. A failing
+job uploads its Gradle reports and test results as a `pocketpi-*` artifact. Every action is pinned
+to a commit SHA; Dependabot proposes action and Gradle dependency updates weekly.
 
 Run the resource check locally with `python3 scripts/i18n-check.py .`. The checker uses only
 Python's standard library and reports keys missing from either locale. CI builds do not use
@@ -27,29 +51,42 @@ release signing keys, Play credentials or Firebase release configuration.
 
 Start `/remote` in pi on the Mac, scan the QR code and approve the device on the Mac. You can also
 paste the complete pairing code. The code expires after two minutes. Projects must be shared by the
-Mac before they appear in the app. Historical sessions continue as copies through the host.
+Mac before they appear in the app. Historical sessions continue in a fork that pi Remote starts on the Mac.
 
 Swipe left on a project row to reveal the unshare action. Confirming stops sharing only that
 project from the Mac for all paired devices. It leaves the project files and other shared projects
-in place. The action requires a connected host that supports project unsharing.
+in place. The action requires a connected Mac whose pi Remote supports project unsharing.
 
 Pairings are encrypted with an Android Keystore key in the application's no-backup directory. The
 manifest disables cloud backup and device transfer. Removing a pairing deletes its local credentials.
-Use the Mac's device revocation command to invalidate the device key at the host too.
+Use the Mac's device revocation command to invalidate the device key on the Mac too.
 
-## Conversations
+## Sessions
 
-The session list shows each conversation's title, available preview and last update. A green dot
-means the session is ready; a gray dot means it is offline or requires opening a historical copy.
+The session list shows each session's title, available preview and last update. A green dot
+means the session is ready; a gray dot means it is offline or is a historical session that opens as a fork.
 Subagent sessions appear below their parent and keep their own status, preview and controls.
-The floating plus button starts a conversation in the selected shared project.
+The floating plus button starts a session in the selected shared project.
+
+The Tasks pill opens a read-only session task sheet with progress and task statuses. It requires
+host support for `session.tasks.v1` and stays hidden when tasks are unknown or empty. A cached
+list for the same session is marked stale when disconnected until refreshed; it does not persist
+across app restarts.
+
+The Files sheet keeps file jumps and offers View changes when available. The Errors sheet controls
+the error filter, and the Subagents sheet opens child sessions or requests an abort with confirmation.
+On tablets, the existing file and changes inspector panes remain available.
 
 Swipe a message to the left, or tap its quote icon, to reference it in your reply. The
 composer shows the selected excerpt and lets you remove it. Quotes belong to the current session's
 draft and survive app restarts. Sending includes the excerpt in ordinary prompt text, so pi and the
-saved history retain the reference. It does not grant access to another conversation or branch.
+saved history retain the reference. It does not grant access to another session or branch.
 Messages with a timestamp from pi show the device's local date and time. Older messages without a
 valid timestamp show no time.
+
+A draft whose first character is `!` runs as a shell command when the session allows it; `!!` keeps
+the command out of pi's context. To send a prompt that begins with `!` to pi instead, start it with a
+space.
 
 ## Dictation
 
@@ -58,14 +95,14 @@ transcription in the editable draft and never sends it automatically. It prefers
 recognizer when available. A system recognizer may use a network connection, and the composer shows
 that before recording starts.
 
-PocketPi does not store or relay microphone audio. Canceling dictation, leaving the conversation, or
+PocketPi does not store or relay microphone audio. Canceling dictation, leaving the session, or
 putting the app in the background stops recognition. Typing while recognition is active keeps the
 keyboard draft and discards the later transcription. Test the selected recognizer on a physical device
 before relying on it, because Android's recognition services vary by device.
 
 Assistant messages show their recorded model identity when available. Tool calls and results appear
 as expandable activity cards. The **Show thinking** switch in Settings is off by default and shows
-only the thinking status. Turn it on to see thinking text when the host streams it. Hidden or
+only the thinking status. Turn it on to see thinking text when the model provides it. Hidden or
 redacted provider reasoning is not exposed.
 
 Model and thinking controls read the selected session's actual configuration. A change applies only
@@ -75,7 +112,7 @@ credentials stay there. The app waits for the confirmed configuration before sho
 The Advisor pill shows the selected session's Advisor, activity and remaining consultations. Tap it
 to choose an authenticated model and thinking level or turn the Advisor off for that session.
 Context sharing is offered separately. Selecting it opens the Advisor's disclosure and requires
-confirmation before the active conversation can be sent to the second model. The permission stays
+confirmation before the active session can be sent to the second model. The permission stays
 in the Mac runtime and is revoked when the Advisor or session changes.
 
 Type `/` to find the selected session's advertised extension commands, prompt templates and skills.
@@ -84,8 +121,8 @@ not executed remotely. Remove a quote before sending a slash command. A dispatch
 means pi received the command; it does not mean the command finished. Some terminal dialogs still
 require input on the Mac.
 
-These controls require an updated host and remote extension. Restart the host after installing an
-update, and run `/reload` in terminal sessions. Older hosts can still provide basic conversations;
+These controls require an updated pi Remote and remote extension on the Mac. Restart pi Remote after
+installing an update, and run `/reload` in terminal sessions. Older versions still provide basic sessions;
 unsupported controls remain unavailable.
 
 ## Photos and files
@@ -102,12 +139,28 @@ sending slash commands.
 Uploads use the existing encrypted connection in bounded chunks. The Mac stores files in a private
 attachment directory and checks their digest and session ownership before sending the prompt.
 Images become native image input; other files appear as local paths in the prompt so pi can read
-them. The conversation shows attachment metadata, not embedded file contents.
+them. The session shows attachment metadata, not embedded file contents.
 
 Unsubmitted uploads expire after one hour. Submitted files remain on the Mac for seven days. A
-saved conversation retains the reference after expiry, but the temporary file may no longer exist.
+saved session retains the reference after expiry, but the temporary file may no longer exist.
 The phone keeps local copies while an encrypted draft or an uncertain send still references them.
-Disconnecting does not automatically resubmit a prompt.
+Disconnecting does not automatically resubmit a prompt that was already sent.
+
+## Editing project files
+
+The file browser opens text files in an editor when pi Remote on the Mac offers
+`session.files.write.v1`. pi Remote offers it by default; it can be turned off on the Mac. The editor has
+line numbers, syntax colours, find, undo and redo, and Tab or Shift+Tab indenting. With a hardware
+keyboard, Ctrl+S saves, Ctrl+Z and Ctrl+Shift+Z or Ctrl+Y undo and redo, Ctrl+F finds and Esc closes
+find. While the editor has focus, the app's own shortcuts are off. Without a hardware keyboard, a
+row above the keyboard offers Tab, Shift+Tab and common code characters.
+
+Save replaces the file on the Mac only if it has not changed since it was opened; otherwise the app
+offers to reload it or to send the edit to the agent as a diff. Send to agent puts the unified diff
+of the unsaved edit into the composer. Only text files that fit in one read page (192 KiB) can be
+edited. Files the Mac runs by itself, such as `.pi`, `.claude`, `.husky`, `.vscode` or `.mcp.json`,
+stay read-only and are changed through the agent. Leaving the editor with unsaved changes asks
+first; a switch the app did not ask about keeps the edit with its session in memory.
 
 ## Firebase
 
@@ -128,28 +181,53 @@ these values into tracked files or print them in release logs.
 The app initializes Firebase programmatically and does not require `google-services.json`. The relay
 needs the matching server credentials. Enable notifications after pairing. Declining permission does
 not disable remote control. Notifications contain generic completion or question text and opaque
-routing identifiers. The app only opens notification targets associated with a saved host.
+routing identifiers. The app only opens notification targets associated with a saved Mac.
+Notifications are grouped per Mac and show as conversations with pi. From Android 12, a completion
+notification offers Reply on an unlocked phone: the text goes to the Mac over the encrypted channel
+as the session's next prompt, and a reply without an acknowledgement is reported, never resent.
 
 ## Behavior and checks
 
 Drafts and unresolved prompt acknowledgments are encrypted with Android Keystore in the no-backup
 directory, separately from pairing credentials. Writes are serialized, and a prompt is sent only
 after its unresolved acknowledgment marker has been saved. An acknowledgment clears the submitted
-text only if the user has not edited it since sending. Removing a host also removes its drafts.
+text only if the user has not edited it since sending. Removing a Mac also removes its drafts.
 
-A reconnect validates the selected project and session and reads a fresh snapshot. PocketPi checks
+A reconnect validates the selected project and session and updates the chat. PocketPi checks
 again when the app returns to the foreground on a validated network, and after the default network
 changes. It keeps the socket while the app is in the background and stops automatic retries there.
-It never opens or forks a historical session, and never retries prompts or answers automatically.
-After an uncertain prompt result, read the conversation before sending the draft again. In a
-running host-owned RPC session, Queue follow-up submits the draft to pi's follow-up queue; the
-journal distinguishes queued messages from uncertain outcomes. Stop clears the RPC queue before
-aborting, but pi does not return request IDs for removed messages, so PocketPi cannot claim that a
-particular follow-up was discarded. The journal keeps up to 64 entries per session; dismiss an
-uncertain entry after checking the conversation to make room without resending it. Ordinary prompts
+A Mac that keeps a journal of the session's recent events sends only the events the chat missed;
+any other Mac sends a fresh snapshot.
+It never opens or forks a historical session, and never retries a sent prompt or an answer automatically.
+A plain prompt typed while the connection is down (no attachment, `/` command or `!` shell draft; the chat
+loaded from that Mac and last idle; one at a time) waits in the chat as "Queued, sends when connected" and is
+journaled like a send. After the reconnect it goes out once, under the same request ID, only if the chat did
+not move on: its newest message is still the one shown when the prompt was queued and pi is idle. Otherwise,
+and after 15 minutes, it is marked not confirmed and its text returns to the composer to send by hand, ahead of
+anything typed since. The same holds if the send after the reconnect fails. Cancel on the bubble takes it back, as
+does leaving the chat or sending new text while it still waits. A restart leaves the journal entry, which is shown as not
+confirmed.
+After an uncertain prompt result, check the session before sending the draft again. In a
+running host-owned RPC session, the busy row offers two send modes: Steer now sends
+the draft as a steer into the running step, and Send later submits it to pi's follow-up queue. The journal
+distinguishes queued messages from uncertain outcomes. Stop, from the busy row, Esc Esc, Ctrl+. or a
+question's abort, asks first when queued messages would be discarded. Once confirmed, it clears the
+RPC queue before aborting, but pi does not return request IDs for removed messages, so PocketPi
+cannot claim that a particular follow-up was discarded. The journal keeps up to 64 entries per session; dismiss an
+uncertain entry after checking the session to make room without resending it. Ordinary prompts
 and slash commands remain idle-only. Interactive Mac TUI sessions do not accept remote follow-up
 while busy; the information icon next to the chat title explains their local controls. Refresh
-reconnects an offline saved host. The Mac must remain awake with the host service running.
+reconnects an offline saved Mac. The Mac must remain awake with pi Remote running.
+
+With a host that advertises `provider.auth.v1`, the Projects screen has a Providers screen. It lists
+the Mac's pi providers and signs them in (OAuth device code, OAuth link plus a pasted address, API
+key or select prompts) or out; the Mac stores the credential in pi's `auth.json`. One login runs at
+a time and can be left and resumed, and PocketPi rebuilds its state from the host after a restart or
+reconnect. While a key, a pasted address or a device code is on screen, the window is marked secure
+(no screenshots or recents thumbnail) and autofill is off. Typed secrets stay in memory, are cleared
+after sending and never enter drafts, saved state or logs. Sign-out removes only the Mac's stored
+credential; it does not revoke anything at the provider. The channel has no forward secrecy, so a
+key typed on the phone is as exposed as a prompt or a file sent the same way.
 
 The interface follows the system language with English fallback and German resources. Appearance can
 follow the system or use the illustrated light or dark choices. QR recognition runs locally with
@@ -165,22 +243,118 @@ Instrumentation tests run against the production navigation with a fake host con
 back navigation, restored state and notification routing. Separate device tests exercise Android
 Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
-`./gradlew pixel2Api36DebugAndroidTest`.
+`./gradlew pixel2Api36DebugAndroidTest`; for CI's tablet subset, run
+`./gradlew pixelTabletApi36DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen`.
 
-Unit tests consume the six JSON fixtures in `src/test/resources/`. These are byte-for-byte copies
+Unit tests consume the twenty-two JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
-`1550dcc200459913b9b1dc9b16fc3439db341c68`. When the upstream protocol fixtures change,
-copy the changed files into `src/test/resources/`, compare their bytes with the upstream source,
-and run `./gradlew testDebugUnitTest`. The fixtures cover byte-identical
-HKDF, AES-GCM and QR encoding, replay and tampering rejection, session request correlation, history
-pagination, early events, questionnaire defaults and the project file browser's list and read
-results. A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
+`1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
+byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
+merge of pull request #633, and `attachments-v1.json` (sent attachments and reading them back) from
+commit `4783a9fb2a54ed0e22c72ffa029d9cf8b9aac85e`. `device-access-v1.json` (a paused or revoked
+device is denied) comes from commit `3eee84dec207e987b6ab439e0dd6acc2e1c1a6be`, the merge of pull
+request #642. `session-export-v1.json` (exporting a session as an HTML file) is a byte-for-byte
+copy from noah-monorepo commit `748465c46c866a4d9d3c78754bff6e860955fdf8`, the merge of pull
+request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree) is a
+byte-for-byte copy from noah-monorepo commit `97682441742582486db109c1f4b058b4418b8a4c`, which
+adds the host-worker sessions list case (`sessions-host-worker`).
+`files-media-v1.json` (agent images read by path from the session folder, plus `text/html`
+artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
+`a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653.
+`session-reload-v1.json` (reloading extensions, skills, prompts and context files) is a
+byte-for-byte copy from noah-monorepo commit `a6120a90b9ab580dc7684bad01fb494a6c2b2137`, the merge
+of pull request #663. `session-artifacts-v1.json` (the per-session artifact list and
+`session.artifacts.open`, including `text/vnd.mermaid`) is a byte-for-byte copy from noah-monorepo
+commit `de58394641ea248b9acee8b924a4605af6275490`, the merge of pull request #667. `git-v1.json`
+(the changes view, including `devBase` for the branch the `dev` base compares against) is a
+byte-for-byte copy from noah-monorepo commit `5025773464c96d8f5b70117e51e79bbe010bed18`, the squash merge of pull request #692.
+`session-notice-v1.json` (an extension's notify message as a transient session event) is a
+byte-for-byte copy from noah-monorepo commit `be79cf25492de1f8d0c6478a5c4f292cb34d0642`, the merge
+of pull request #691. `files-write-v1.json` (saving an edited file back to the Mac) is a
+byte-for-byte copy from noah-monorepo commit `9cb687aa9d6ad55d605669d59ca9d6bacc23d834`, the merge
+of pull request #721. `session-bash-v1.json` (shell commands run from the phone with `!` and
+`!!`, including a worker created with the `host_worker.v1:` request ID prefix) is a byte-for-byte
+copy from noah-monorepo commit `244ca7bb962843e08ba8319e8322c39eb0740ee7`. `session-suggestion-v1.json` (the Mac's suggested next prompt
+as a session event and an optional snapshot key) is a byte-for-byte copy from noah-monorepo commit
+`1faf283797d9484c02568beff4586d49490a0137`, the merge of pull request #746.
+`escalation-v1.json` (the optional `escalation` field of a `confirm` question that asks whether to
+run a call auto mode blocked) is a byte-for-byte copy from noah-monorepo commit
+`2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. `tickets-v1.json`
+(the Plane ticket view: listing, reading, commenting, moving and starting tickets behind
+`tickets.v1`) is a byte-for-byte copy from noah-monorepo commit
+`97682441742582486db109c1f4b058b4418b8a4c`, the merge of pull request #1122. `session-pr-status-v1.json` (the open pull request of a session's
+branch and its checks, as a session event and an optional snapshot key) is a byte-for-byte copy
+from noah-monorepo commit `06a9baeea79f1dbc6644cbd6c420fb0596174cff`, the merge of pull request
+#1152. When the upstream protocol fixtures change, copy the changed files into
+`src/test/resources/`, compare their bytes with the upstream source, and run
+`./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
+QR encoding, replay and tampering rejection, session request correlation, history pagination, early
+events, questionnaire defaults and the project file browser's list and read results, the provider
+login commands, results and events, the attachment manifest and content reads, the session export
+and its chunked download, the session tree with its navigate and fork commands, the agent image commands and their chunked
+download, the session reload command and its result, the session artifact list and open commands,
+the denied-device message, prompt suggestions, and the ticket commands and results.
+A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
+`stream-v1.json` (the `remote.stream.v1` capability: `session.focus`, `remote.ping` and `pong`,
+`remote.ack`, and the `after` field of session events) and `resume-v1.json` (the `resume.v1:`
+request IDs, the snapshot `epoch`, the `session.events` result and the `epoch` on status and title
+events) are byte-for-byte copies from `packages/pi-atlas/extensions/remote/protocol/fixtures/` from
+noah-monorepo commit `b6ebb559ff51413148b56d7468df39fdf3572a47`, the merge of pull request 1336
+into `dev`.
+
+## Project code search
+
+On an updated host, open Files and choose Search project. Search matches literal text with case
+sensitivity across the permitted project files. Results show the path, line, column and a text
+snippet. Incomplete results are marked when the host reaches a limit or cannot read a candidate.
+Ignored and denied paths remain outside the file browser's access policy.
+
+A result opens the current file at the matching line and enters the editor when the complete file
+can be edited. Otherwise the file stays in the reader. Changing files asks before discarding an
+unsaved edit; cancelling preserves the buffer. Search is also available in the editor header.
+Hosts without `session.files.search.v1` do not show this action. Protocol tests use the shared
+`files-search-v1.json` fixture.
+
+## Native worker terminal
+
+An updated host can offer an interactive terminal for sessions it owns as native PTY workers.
+Use the host CLI in noah-monorepo, `node packages/pi-atlas/extensions/remote/host/cli.ts`.
+Enable `config terminal-control on` on the host, then use
+`terminal grant <deviceId> <projectId>` while the host is running. This grants shell-level authority;
+it remains off by default. Terminal access is separate from the shell-command switch. Revoke it
+with `terminal revoke <deviceId> <projectId>` or turn terminal control off.
+
+The chat's Terminal action opens a phone overlay or a tablet inspector tab. Another writer requires
+an explicit takeover. Closing the terminal releases input ownership and keeps the worker running.
+After a disconnect, open it explicitly again; inputs are never automatically replayed. Externally
+started terminal sessions and RPC sessions do not offer this view.
+
+Hosts advertising `session.terminal.keys.v1` also offer Ctrl, Alt, Shift and F1-F12 controls.
+The character picker accepts a base character and, for shifted symbols, the actual shifted
+character from the keyboard layout. Hardware AltGr remains local text input; the optional Ctrl+Alt
+shortcut toggle enables ambiguous left-side chords. F6 still moves between app panes.
+
+Named keys use mode-aware host encoding when this addon is present; older hosts keep terminal v1.
+Repeated queued navigation keys are grouped, and input shares a paced queue with terminal resizes.
+Control chords preserve the local draft. Sending a draft waits until earlier input is settled;
+an explicitly unsupported chord shows a notice and keeps the attachment open. The shared
+`terminal-keys-v1.json` fixture comes from noah-monorepo `6dc453c5995aa65c03eebd819c4111ad993d1441`.
+The `browser-v1.json` fixture comes from noah-monorepo `2440314b3`;
+`browser-stream-v1.json` remains pinned to `11d5a39c4`.
+The shared `browser-recovery-v1.json` fixture comes from noah-monorepo `c14e10248`.
+
+The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
+integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and
+an API 36 WebView. Samsung and Linux/container qualification remain open. Leaving the chat or
+closing the terminal asks before discarding a draft or queued input. Cancelling keeps the current
+chat; confirmation is bound to the navigation that requested it and cannot be replayed.
 
 ## Appearance
 
 PocketPi uses the official pi mark for its adaptive launcher icon and a monochrome silhouette for
-notifications. The logo attribution is included in `NOTICE` and in the APK assets.
+notifications. The logo attribution is included in `NOTICE` and in the APK assets. Mermaid (MIT) is bundled
+unmodified in `src/main/assets/mermaid/` with its license and notice.
 
 UI typography requests Samsung's installed `sec` font family, then the older
 `sec-roboto-light` family, through Compose's optional local font resolver. It retains the weights
@@ -199,19 +373,21 @@ transfer between the two applications. A previous debug installation under
 ## Play testing releases
 
 Follow the [Play testing runbook](docs/runbooks/play-testing-release.md) for first-release setup,
-verification, and recovery. The new Play app has not yet had a verified dual-track release; complete
-the Play, Firebase, signing, and GitHub environment setup before enabling automatic publishing.
+verification, and recovery. The first Console upload is available on Internal Testing; a dual-track
+release has not yet been verified. Complete the Firebase, signing, and GitHub environment setup
+before the first release dispatch.
 
-When enabled, `.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
-`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`) and the
-configured Closed Alpha track in one Play edit. It stops if either track cannot accept the release.
+When enabled, `.github/workflows/release.yml` runs only when started by hand on `main`, and only
+after a successful `Android CI` push run on that commit. It builds one signed AAB, then submits it to Play Internal Testing (`internal`). When
+`POCKETPI_CLOSED_TRACK` is configured, the same edit also updates that Closed Alpha track. It stops
+if a configured track cannot accept the release.
 It never targets production. Play may still hold an accepted edit for app review; check the Play
 Console before telling testers that the update is available.
 
 Protect the `play-testing` GitHub environment so only `main` can use it. Set its variables
-`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, and `POCKETPI_CLOSED_TRACK`. The last
-value must be the exact custom track identifier returned by the Play Developer API, not a display
-name. Set the Google Cloud workload identity provider's subject mapping to
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_PLAY_SERVICE_ACCOUNT`. To add Closed Alpha, set
+`POCKETPI_CLOSED_TRACK` to `alpha` for the default track, or to the exact custom track identifier
+returned by the Play Developer API. Set the Google Cloud workload identity provider's subject mapping to
 `google.subject=assertion.sub`, then restrict it with GitHub's OIDC claims:
 
 ```text

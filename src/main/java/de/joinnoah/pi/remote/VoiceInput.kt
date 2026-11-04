@@ -16,15 +16,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.ScheduleSend
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,13 +44,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.abs
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import kotlin.math.abs
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -143,13 +154,14 @@ internal fun VoiceInput(
     state: RemoteState,
     binding: VoiceInputBinding,
     onSend: () -> Unit,
-    onStop: () -> Unit,
     busyAction: BusyComposerAction? = null,
     busyActionEnabled: Boolean = false,
     onBusyAction: () -> Unit = {},
-    onBusyActionSwipe: (Boolean) -> Unit = {},
+    canSwitchBusyAction: Boolean = false,
+    onSwitchBusyAction: () -> Unit = {},
     modifier: Modifier = Modifier,
     permissionGrantedOverride: Boolean? = null,
+    interactionSourceOverride: MutableInteractionSource? = null,
 ) {
     val context = LocalContext.current
     val recognitionEngine = binding.engine
@@ -166,79 +178,168 @@ internal fun VoiceInput(
             ?: (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED)
     val voiceState = binding.state
+    // While pi runs, this button never stops it: Stop lives in the composer's busy row.
     val busy = state.status in setOf("running", "waiting")
-    val canStop = state.connected && !state.loading && busy
     val canChooseBusyAction = busy && busyAction != null
     val canSend = canSendDraft(state)
     val listening = voiceState is VoiceInputState.Listening
     val finishing = voiceState is VoiceInputState.Finishing
-    val swipeThreshold = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.toPx() }
-    val latestSwipe by rememberUpdatedState(onBusyActionSwipe)
-    FilledIconButton(
-            onClick = {
-                when {
-                    canChooseBusyAction -> if (busyActionEnabled) onBusyAction()
-                    canStop -> onStop()
-                    listening -> controller.stop()
-                    finishing -> controller.cancel()
-                    canSend -> onSend()
-                    voiceState is VoiceInputState.RequestingPermission -> Unit
-                    else -> {
-                        val start = controller.start(state.selection, state.draft, permissionGranted, localeTag)
-                        if (controller.state is VoiceInputState.RequestingPermission) {
-                            pendingPermission = start
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    val action = when {
+        canChooseBusyAction && busyAction == BusyComposerAction.Steer -> VoiceInputButton.Steer
+        canChooseBusyAction -> VoiceInputButton.FollowUp
+        listening -> VoiceInputButton.Finish
+        finishing -> VoiceInputButton.Cancel
+        busy || state.draft.isNotBlank() || state.attachments.isNotEmpty() -> VoiceInputButton.Send
+        else -> VoiceInputButton.Mic
+    }
+    val enabled = (canChooseBusyAction && busyActionEnabled) || listening || finishing || canSend ||
+        (voiceState !is VoiceInputState.RequestingPermission && state.connected && !state.loading &&
+            state.status == "idle" && !state.sending && !state.importingAttachments &&
+            !state.configurationChanging && state.draft.isBlank() && state.attachments.isEmpty())
+    val activate: () -> Unit = {
+        when {
+            canChooseBusyAction -> if (busyActionEnabled) onBusyAction()
+            listening -> controller.stop()
+            finishing -> controller.cancel()
+            canSend -> onSend()
+            busy -> Unit
+            voiceState is VoiceInputState.RequestingPermission -> Unit
+            else -> {
+                val start = controller.start(state.selection, state.draft, permissionGranted, localeTag)
+                if (controller.state is VoiceInputState.RequestingPermission) {
+                    pendingPermission = start
+                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+        }
+    }
+    // Keep the source stable for the lifetime of a press, including disposal cleanup.
+    val interactionSource = remember { interactionSourceOverride ?: MutableInteractionSource() }
+    val latestActivate by rememberUpdatedState(activate)
+    val latestSwitch by rememberUpdatedState(onSwitchBusyAction)
+    val pressContext = listOf(
+        state.selection, state.status, state.connected, state.loading, state.capabilities,
+        state.unavailableCapabilities, action, enabled, canSwitchBusyAction,
+    )
+    var heldKey by remember { mutableStateOf<Key?>(null) }
+    var heldContext by remember { mutableStateOf<List<Any?>?>(null) }
+    var keyboardPress by remember { mutableStateOf<PressInteraction.Press?>(null) }
+    fun endKeyboardPress(release: Boolean) {
+        val press = keyboardPress ?: return
+        keyboardPress = null
+        interactionSource.tryEmit(if (release) PressInteraction.Release(press) else PressInteraction.Cancel(press))
+    }
+    SideEffect {
+        if (heldContext != null && heldContext != pressContext) {
+            heldContext = null
+            endKeyboardPress(release = false)
+        }
+    }
+    DisposableEffect(interactionSource) {
+        onDispose { endKeyboardPress(release = false) }
+    }
+    // Own touch streams in every mode: a press begun on voice or idle Send must not become a
+    // busy action on release. Observed context changes cancel the detector; the protocol has no
+    // run generation with which to distinguish an unobserved run replacement.
+    val touchModifier = if (enabled) {
+        Modifier.pointerInput(pressContext) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                if (down.isConsumed) return@awaitEachGesture
+                down.consume()
+                val origin = down.position
+                var dragged = false
+                var horizontal = false
+                var valid = true
+                var activePress: PressInteraction.Press? = PressInteraction.Press(origin)
+                activePress?.let { interactionSource.tryEmit(it) }
+                fun endPress(release: Boolean) {
+                    activePress?.let {
+                        interactionSource.tryEmit(if (release) PressInteraction.Release(it) else PressInteraction.Cancel(it))
+                    }
+                    activePress = null
+                }
+                try {
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (change.isConsumed || event.changes.any { it.id != down.id && it.pressed }) valid = false
+                        val delta = change.position - origin
+                        if (!dragged && delta.getDistance() > viewConfiguration.touchSlop) {
+                            // A diagonal crossing cancels the tap too, but only an unambiguous
+                            // horizontal crossing selects another mode. Both decisions are latched.
+                            horizontal = abs(delta.x) > 2f * abs(delta.y)
+                            dragged = true
                         }
+                        if (dragged || !valid) endPress(release = false)
+                        val inside = change.position.x >= 0 && change.position.y >= 0 &&
+                            change.position.x <= size.width && change.position.y <= size.height
+                        val released = !change.pressed
+                        change.consume()
+                        if (released) {
+                            endPress(release = valid && !dragged && inside)
+                            if (valid) {
+                                if (dragged && horizontal && canChooseBusyAction && canSwitchBusyAction) latestSwitch()
+                                else if (!dragged && inside) latestActivate()
+                            }
+                            break
+                        }
+                    } while (true)
+                } finally {
+                    endPress(release = false)
+                }
+            }
+        }
+    } else Modifier
+    FilledIconButton(
+            onClick = activate,
+            interactionSource = interactionSource,
+            modifier = modifier.then(touchModifier)
+                .onFocusChanged {
+                    if (!it.isFocused) {
+                        heldKey = null
+                        heldContext = null
+                        endKeyboardPress(release = false)
                     }
                 }
-            },
-            modifier = modifier.pointerInput(canChooseBusyAction, swipeThreshold) {
-                if (canChooseBusyAction) {
-                    var horizontalDrag = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { horizontalDrag = 0f },
-                        onHorizontalDrag = { change, amount ->
-                            horizontalDrag += amount
-                            change.consume()
-                        },
-                        onDragEnd = {
-                            if (abs(horizontalDrag) >= swipeThreshold)
-                                latestSwipe(horizontalDrag < 0f)
-                        },
-                    )
-                }
-            },
-            enabled = (canChooseBusyAction && busyActionEnabled) ||
-                (!canChooseBusyAction && canStop) || listening || finishing || canSend ||
-                (voiceState !is VoiceInputState.RequestingPermission &&
-                    state.connected &&
-                    !state.loading &&
-                    state.status == "idle" &&
-                    !state.sending &&
-                    !state.importingAttachments &&
-                    !state.configurationChanging &&
-                    state.draft.isBlank() &&
-                    state.attachments.isEmpty()),
+                .onPreviewKeyEvent { event ->
+                    if (event.key !in setOf(Key.Spacebar, Key.Enter, Key.NumPadEnter, Key.DirectionCenter)) {
+                        false
+                    } else {
+                        when (event.type) {
+                            KeyEventType.KeyDown -> if (heldKey == null && event.nativeKeyEvent.repeatCount == 0) {
+                                heldKey = event.key
+                                heldContext = if (enabled) pressContext else null
+                                if (enabled) {
+                                    val press = PressInteraction.Press(Offset.Zero)
+                                    keyboardPress = press
+                                    interactionSource.tryEmit(press)
+                                }
+                            }
+                            KeyEventType.KeyUp -> if (heldKey == event.key) {
+                                val activateHeld = heldContext == pressContext && enabled && !event.nativeKeyEvent.isCanceled
+                                heldKey = null
+                                heldContext = null
+                                endKeyboardPress(release = activateHeld)
+                                if (activateHeld) activate()
+                            }
+                        }
+                        true
+                    }
+                },
+            enabled = enabled,
         ) {
             AnimatedContent(
-                targetState =
-                    when {
-                        canChooseBusyAction && busyAction == BusyComposerAction.Steer -> VoiceInputButton.Steer
-                        canChooseBusyAction -> VoiceInputButton.FollowUp
-                        busy -> VoiceInputButton.Stop
-                        listening -> VoiceInputButton.Finish
-                        finishing -> VoiceInputButton.Cancel
-                        state.draft.isNotBlank() || state.attachments.isNotEmpty() -> VoiceInputButton.Send
-                        else -> VoiceInputButton.Mic
-                    },
+                targetState = action,
                 label = "voice input action",
             ) { action ->
                 when (action) {
-                    VoiceInputButton.Steer -> Icon(Icons.Default.ArrowUpward, stringResource(R.string.remote_steer))
-                    VoiceInputButton.FollowUp -> Icon(Icons.AutoMirrored.Filled.ScheduleSend, stringResource(R.string.remote_follow_up))
-                    VoiceInputButton.Stop -> Icon(Icons.Default.Stop, stringResource(R.string.remote_stop))
+                    VoiceInputButton.Steer -> Icon(Icons.Default.ArrowUpward, stringResource(R.string.remote_send_now))
+                    VoiceInputButton.FollowUp ->
+                        Icon(Icons.AutoMirrored.Filled.ScheduleSend, stringResource(R.string.remote_send_when_done))
+                    // A check, not the Stop of the busy row: finishing keeps the dictated text.
                     VoiceInputButton.Finish ->
-                        Icon(Icons.Default.Stop, stringResource(R.string.remote_voice_finish))
+                        Icon(Icons.Default.Check, stringResource(R.string.remote_voice_finish))
                     VoiceInputButton.Cancel -> Icon(Icons.Default.Close, stringResource(R.string.remote_voice_cancel))
                     VoiceInputButton.Send -> Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.remote_send))
                     VoiceInputButton.Mic -> Icon(Icons.Default.Mic, stringResource(R.string.remote_voice_start))
@@ -250,7 +351,6 @@ internal fun VoiceInput(
 private enum class VoiceInputButton {
     Mic,
     Send,
-    Stop,
     Steer,
     FollowUp,
     Finish,

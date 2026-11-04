@@ -1,19 +1,30 @@
 package de.joinnoah.pi.remote
 
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 
-// One client for all background connections, so each notification doesn't start new thread pools.
-private val backgroundHttp by lazy {
-    OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
+// One client for all background connections, derived from the app's, so each notification
+// starts no thread pools of its own.
+internal val backgroundHttp: OkHttpClient by lazy {
+    baseHttpClient.newBuilder().pingInterval(20, TimeUnit.SECONDS).build()
 }
 
 /** A host rejected a command with this protocol error code (for example `already_resolved`). */
@@ -21,9 +32,24 @@ internal class RemoteCommandException(val code: String) : Exception(code)
 
 internal class RemoteConnectionException : Exception("Connection failed")
 
-internal fun interface RemoteCommands {
+/** Sends one command to a Mac and returns its result data; a host error throws. */
+fun interface RemoteCommands {
     suspend fun request(type: String, vararg fields: Pair<String, Any?>): JsonObject
 }
+
+/**
+ * [RemoteCommands] that can also send under a request ID the caller chose: the mutation ID the host
+ * deduplicates a command on, so the same command sent twice under it runs at most once.
+ */
+interface MutationCommands : RemoteCommands {
+    suspend fun mutate(requestId: String, type: String, vararg fields: Pair<String, Any?>): JsonObject
+}
+
+/**
+ * A mutation refused before anything was sent, for example because the connection dropped in the
+ * meantime. Unlike other failures it proves the mutation never left, so it may go out elsewhere.
+ */
+internal class MutationNotSentException : IllegalStateException("The mutation was not sent")
 
 /**
  * One short-lived, authenticated connection for work outside the UI, such as reading a pending
@@ -36,10 +62,10 @@ internal fun interface RemoteCommands {
 internal class BackgroundRemoteClient(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
     private val transportFactory: (CoroutineScope) -> RemoteTransport = {
-        SecureRemoteTransport(it, backgroundHttp)
+        SecureRemoteTransport(it, backgroundHttp, diagnosticsName = "background")
     },
 ) {
-    suspend fun <T> use(host: PairedHost, block: suspend (RemoteCommands) -> T): T {
+    suspend fun <T> use(host: PairedHost, block: suspend (MutationCommands) -> T): T {
         // The transport is not thread-safe: it and its listener only ever run on [dispatcher].
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val ready = CompletableDeferred<Unit>()
@@ -72,7 +98,8 @@ internal class BackgroundRemoteClient(
                             completion.completeExceptionally(
                                 RemoteCommandException(payload.obj("error").text("code"))
                             )
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("background.message", swallowed)
                         // Events and malformed frames are irrelevant to a one-shot command.
                     }
                 }
@@ -84,21 +111,31 @@ internal class BackgroundRemoteClient(
             withContext(dispatcher) { transport.connect(host) }
             ready.await()
             return block(
-                RemoteCommands { type, fields ->
-                    val completion = CompletableDeferred<JsonObject>()
-                    withContext(dispatcher) {
-                        val id = Wire.random()
-                        pending[id] = completion
-                        try {
-                            transport.send(
-                                Wire.objectOf("type" to type, "requestId" to id, *fields)
-                            )
-                        } catch (_: Exception) {
-                            pending.remove(id)
-                            completion.completeExceptionally(RemoteConnectionException())
+                object : MutationCommands {
+                    override suspend fun request(type: String, vararg fields: Pair<String, Any?>) =
+                        mutate(Wire.random(), type, *fields)
+
+                    override suspend fun mutate(
+                        requestId: String,
+                        type: String,
+                        vararg fields: Pair<String, Any?>,
+                    ): JsonObject {
+                        val completion = CompletableDeferred<JsonObject>()
+                        withContext(dispatcher) {
+                            check(requestId !in pending)
+                            pending[requestId] = completion
+                            try {
+                                transport.send(
+                                    Wire.objectOf("type" to type, "requestId" to requestId, *fields)
+                                )
+                            } catch (swallowed: Exception) {
+                                Diagnostics.caught("background.use", swallowed)
+                                pending.remove(requestId)
+                                completion.completeExceptionally(RemoteConnectionException())
+                            }
                         }
+                        return completion.await()
                     }
-                    completion.await()
                 }
             )
         } finally {
@@ -108,6 +145,39 @@ internal class BackgroundRemoteClient(
     }
 }
 
+/**
+ * Runs the read [block] of a push's upgrade over the app's own connection when the push woke one
+ * (waiting at most [PUSH_WAKE_WAIT_MILLIS] for it) or it was healthy anyway, and over a connection
+ * of its own through [background] otherwise: a cold process, another Mac, or a connection that
+ * went. A host error passes through either way.
+ */
+internal suspend fun <T : Any> usingPushConnection(
+    repository: RemoteRepository?,
+    host: PairedHost,
+    /** False when the caller waited for the wake itself, outside its own time budget. */
+    wait: Boolean = true,
+    block: suspend (MutationCommands) -> T,
+): T =
+    usingPushConnection(
+        host,
+        awaitWake = { if (wait) repository?.awaitPushWake(it) },
+        live = { route, run -> repository?.withHealthyConnection(route, block = run) },
+        background = { pairedHost, run -> BackgroundRemoteClient().use(pairedHost, run) },
+        block = block,
+    )
+
+internal suspend fun <T : Any> usingPushConnection(
+    host: PairedHost,
+    awaitWake: suspend (String) -> Unit,
+    live: suspend (String, suspend (MutationCommands) -> T) -> T?,
+    background: suspend (PairedHost, suspend (MutationCommands) -> T) -> T,
+    block: suspend (MutationCommands) -> T,
+): T {
+    awaitWake(host.routeId)
+    live(host.routeId, block)?.let { return it }
+    return background(host, block)
+}
+
 /** Reads the pending questions of a live session. */
 internal suspend fun RemoteCommands.pendingQuestions(sessionId: String): List<JsonObject> =
     request("session.snapshot", "sessionId" to sessionId).let { data ->
@@ -115,11 +185,131 @@ internal suspend fun RemoteCommands.pendingQuestions(sessionId: String): List<Js
         data.array("pendingQuestions").take(16)
     }
 
+/**
+ * A session's title and project. [projectId] lets a tap on its notification open the chat without
+ * walking the projects again.
+ */
+internal data class SessionName(val title: String?, val project: String?, val projectId: String? = null)
+
+/** What a notification names a session by. Every field is optional: a host may not know it. */
+internal data class SessionLabel(
+    val title: String?,
+    val project: String?,
+    /** The last words of the session's final assistant message, for a completion. */
+    val preview: String?,
+    /** The project the session was found in, kept with its name; never shown. */
+    val projectId: String? = null,
+)
+
+/**
+ * At most this many projects are searched for a session, one `sessions.list` each. This bounds the
+ * walk on a host with very many projects: a session in a later project simply stays unnamed, and
+ * its generic notification stands.
+ */
+private const val MAX_LABEL_PROJECTS = 24
+
+/** At most this many `sessions.list` requests of one walk are in flight at a time. */
+internal const val LABEL_WALK_PARALLELISM = 4
+
+/**
+ * Finds a session's title and project, and for [withPreview] the end of its last answer. The host
+ * lists sessions per project, so this reads the projects' lists, [LABEL_WALK_PARALLELISM] at a time,
+ * until one holds [sessionId]; the reads still waiting then never go out. A missing title is not an
+ * error; a failing connection is.
+ */
+internal suspend fun RemoteCommands.sessionLabel(
+    sessionId: String,
+    withPreview: Boolean,
+    /** A title and project already known, which skips the walk over the projects. */
+    known: SessionName? = null,
+): SessionLabel = coroutineScope {
+    val preview =
+        if (withPreview)
+            async {
+                try {
+                    lastAssistantPreview(snapshotMessages(sessionId))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("background.sessionLabel", swallowed)
+                    null
+                }
+            }
+        else null
+    val found = if (known == null) findSession(sessionId) else null
+    SessionLabel(
+        title = known?.title ?: found?.second?.optionalText("title")?.trim()?.takeIf { it.isNotEmpty() },
+        project = known?.project ?: found?.first?.optionalText("name")?.trim()?.takeIf { it.isNotEmpty() },
+        preview = preview?.await(),
+        projectId = known?.projectId ?: found?.first?.optionalText("id"),
+    )
+}
+
+/** The project holding [sessionId] and its row there, or null when none of the first projects does. */
+private suspend fun RemoteCommands.findSession(sessionId: String): Pair<JsonObject, JsonObject>? = coroutineScope {
+    val projects =
+        request("projects.list").array("items").take(MAX_LABEL_PROJECTS).filter { it.optionalText("id") != null }
+    val permits = Semaphore(LABEL_WALK_PARALLELISM)
+    val hit = CompletableDeferred<Pair<JsonObject, JsonObject>?>()
+    val failure = AtomicReference<Exception?>(null)
+    val reads =
+        projects.map { project ->
+            launch {
+                permits.withPermit {
+                    if (hit.isCompleted) return@withPermit
+                    try {
+                        val row =
+                            request("sessions.list", "projectId" to project.text("id"))
+                                .array("items")
+                                .find { it.optionalText("id") == sessionId }
+                        if (row != null) hit.complete(project to row)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failure.compareAndSet(null, e)
+                    }
+                }
+            }
+        }
+    launch {
+        reads.joinAll()
+        hit.complete(null)
+    }
+    val result = hit.await()
+    coroutineContext.cancelChildren()
+    // Without a hit, a failed read fails the walk, as a failing connection fails the whole lookup.
+    result ?: failure.get()?.let { throw it }
+}
+
+private suspend fun RemoteCommands.snapshotMessages(sessionId: String): List<JsonObject> =
+    request("session.snapshot", "sessionId" to sessionId).let { data ->
+        require(data.text("kind") == "snapshot" && data.text("sessionId") == sessionId)
+        data.array("messages")
+    }
+
+/**
+ * Sends [text] as a new prompt to an idle session under [mutationId], which the host deduplicates
+ * on. The acknowledgement only says the host took the prompt, not that the run went well.
+ */
+internal suspend fun MutationCommands.prompt(sessionId: String, text: String, mutationId: String) {
+    mutate(mutationId, "session.prompt", "sessionId" to sessionId, "text" to text)
+}
+
 internal suspend fun RemoteCommands.answerQuestion(
     sessionId: String,
     questionId: String,
     answer: JsonObject,
 ) {
+    // A fresh snapshot on this connection distinguishes legacy inline approvals from questions
+    // whose complete context must first be delivered and verified in the foreground.
+    if (answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)) {
+        val snapshot = request("session.snapshot", "sessionId" to sessionId)
+        require(snapshot.text("kind") == "snapshot" && snapshot.text("sessionId") == sessionId)
+        val pending = snapshot["pendingQuestions"] as? JsonArray ?: error("Invalid pending questions")
+        require(pending.size <= 64 && pending.all { it is JsonObject })
+        val matches = pending.map { it as JsonObject }.filter { runCatching { it.text("id") == questionId }.getOrDefault(false) }
+        require(matches.size == 1 && validInlineConfirm(matches.single()))
+    }
     request(
         "question.answer",
         "sessionId" to sessionId,
@@ -127,3 +317,29 @@ internal suspend fun RemoteCommands.answerQuestion(
         "answer" to answer,
     )
 }
+
+/** Accept only a complete, bounded legacy confirm; unknown fields fail closed. */
+private fun validInlineConfirm(question: JsonObject): Boolean = runCatching {
+    require(question.keys.containsAll(setOf("id", "kind", "title", "message")))
+    require(question.keys.all { it in setOf("id", "kind", "title", "message", "escalation") })
+    fun bounded(value: String, max: Int, empty: Boolean = false) {
+        val encoder = Charsets.UTF_8.newEncoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        require((empty || value.isNotEmpty()) && encoder.encode(java.nio.CharBuffer.wrap(value)).remaining() <= max)
+    }
+    val id = question.text("id")
+    bounded(id, 256)
+    require(id.none { it <= ' ' || it == '\u007f' })
+    require(question.text("kind") == "confirm")
+    bounded(question.text("title"), 4096)
+    bounded(question.text("message"), 16384, empty = true)
+    if ("escalation" in question) {
+        val escalation = question.obj("escalation")
+        require(escalation.keys.containsAll(setOf("tool", "reason")) && escalation.keys.all { it in setOf("tool", "reason", "child") })
+        bounded(escalation.text("tool"), 256)
+        bounded(escalation.text("reason"), 4096, empty = true)
+        if ("child" in escalation) bounded(escalation.text("child"), 256)
+    }
+    true
+}.getOrDefault(false)

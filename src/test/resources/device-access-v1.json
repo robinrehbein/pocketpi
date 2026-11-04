@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "wireValid": [
+    { "name": "denied-revoked", "payload": { "type": "device.denied", "reason": "revoked" } },
+    { "name": "denied-paused", "payload": { "type": "device.denied", "reason": "paused" } }
+  ],
+  "wireInvalid": [
+    { "name": "unknown-reason", "payload": { "type": "device.denied", "reason": "gone" } },
+    { "name": "missing-reason", "payload": { "type": "device.denied" } },
+    {
+      "name": "extra-field",
+      "payload": { "type": "device.denied", "reason": "paused", "detail": "x" }
+    },
+    { "name": "non-string-reason", "payload": { "type": "device.denied", "reason": 1 } }
+  ]
+}

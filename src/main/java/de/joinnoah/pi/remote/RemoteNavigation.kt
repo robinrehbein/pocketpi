@@ -8,21 +8,41 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isAltPressed
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -38,6 +58,10 @@ import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -56,10 +80,35 @@ sealed interface RemoteNavKey : NavKey {
     @Serializable data object Settings : RemoteNavKey
 
     /**
-     * The folder browser of one host. It sits on top of that host's Projects and keeps the
-     * Projects selection; the browsed path lives in [RemoteState.folders].
+     * The folder browser of one host. It sits on top of that host's open projects, sessions or
+     * chat, which stay beneath it with their selection; the browsed path lives in
+     * [RemoteState.folders].
      */
     @Serializable data class FolderBrowser(val routeId: String) : RemoteNavKey
+
+    /**
+     * The providers of one host (`provider.auth.v1`), on top of that host's open destination like
+     * [FolderBrowser]. Only the route is saved; the login flow lives in [RemoteState.providerAuth]
+     * and is recovered from the host.
+     */
+    @Serializable data class Providers(val routeId: String) : RemoteNavKey
+
+    /**
+     * The tickets of one host (`tickets.v1`), on top of that host's open destination like
+     * [Providers]. Only the route is saved; the tickets live in [RemoteState.tickets].
+     */
+    @Serializable data class Tickets(val routeId: String) : RemoteNavKey
+
+    /** One ticket of a host's shared project, on top of [Tickets]. */
+    @Serializable
+    data class Ticket(val routeId: String, val projectId: String, val ref: String) : RemoteNavKey
+
+    /**
+     * The activity board of one host: its sessions that wait, run or finished since they were last
+     * looked at (see [ActivityBoardScreen]). It opens on top of the open project or chat, which stay
+     * beneath it, so the wide layout can show the board where the session list is.
+     */
+    @Serializable data class Activity(val routeId: String) : RemoteNavKey
 }
 
 internal fun RemoteNavKey.selection(): RemoteSelection =
@@ -68,6 +117,10 @@ internal fun RemoteNavKey.selection(): RemoteSelection =
         RemoteNavKey.Settings -> RemoteSelection()
         is RemoteNavKey.Projects -> RemoteSelection(routeId)
         is RemoteNavKey.FolderBrowser -> RemoteSelection(routeId)
+        is RemoteNavKey.Providers -> RemoteSelection(routeId)
+        is RemoteNavKey.Tickets -> RemoteSelection(routeId)
+        is RemoteNavKey.Ticket -> RemoteSelection(routeId)
+        is RemoteNavKey.Activity -> RemoteSelection(routeId)
         is RemoteNavKey.Sessions -> RemoteSelection(routeId, projectId)
         is RemoteNavKey.Chat -> RemoteSelection(routeId, projectId, sessionId)
     }
@@ -81,38 +134,131 @@ internal fun RemoteSelection.keys(): List<RemoteNavKey> = buildList {
     sessionId?.let { add(RemoteNavKey.Chat(route, project, it)) }
 }
 
+/**
+ * The Mac a cold launch opens: the stored one while it is still paired, else the only paired Mac,
+ * else null, which keeps the hosts list. [hostRoutes] are the paired Macs' route IDs.
+ */
+internal fun coldStartRoute(hostRoutes: List<String>, stored: String?): String? =
+    when {
+        stored != null && stored in hostRoutes -> stored
+        hostRoutes.size == 1 -> hostRoutes.single()
+        else -> null
+    }
+
 internal class RemoteNavigator(
     private val repository: RemoteRepository,
     private val stack: MutableList<NavKey>,
     private val scope: CoroutineScope,
+    /** Remembers the Mac of each page opened, for [coldStart]; null remembers nothing. */
+    private val lastRoute: LastRouteStore? = null,
+    /** Called after a pairing succeeded and its selection was opened. */
+    private val onPaired: () -> Unit = {},
 ) {
     private var request = 0L
     private var activation: Job? = null
+    private var mutation: Job? = null
+
+    /** True while a create or fork request is in flight; further ones are ignored meanwhile. */
+    var mutating by mutableStateOf(false)
+        private set
     private var consumePendingNotification: (() -> Unit)? = null
 
+    /** The visible terminal may hold user input that disappears with its screen. */
+    private val terminalGuards = mutableMapOf<RemoteNavKey.Chat, (() -> Unit, () -> Unit) -> Boolean>()
+
+    fun registerTerminalGuard(key: RemoteNavKey.Chat, guard: (() -> Unit, () -> Unit) -> Boolean) {
+        terminalGuards[key] = guard
+    }
+
+    fun unregisterTerminalGuard(key: RemoteNavKey.Chat, guard: (() -> Unit, () -> Unit) -> Boolean) {
+        if (terminalGuards[key] === guard) terminalGuards.remove(key)
+    }
+
+    private fun leavingTerminal(onDropped: ((Boolean) -> Unit)? = null, action: () -> Unit) {
+        val before = stack.toList()
+        val selection = repository.state.value.selection
+        var consumed = false
+        val guarded = {
+            if (!consumed) {
+                consumed = true
+                if (stack.toList() == before && repository.state.value.selection == selection) action()
+                else onDropped?.invoke(false)
+            }
+        }
+        val selectionKey = selection.keys().lastOrNull() as? RemoteNavKey.Chat
+        val guard = selectionKey?.let { terminalGuards[it] }
+        val cancel = {
+            if (!consumed) {
+                consumed = true
+                onDropped?.invoke(true)
+            }
+        }
+        if (guard?.invoke(guarded, cancel) != true) guarded()
+    }
+
     private fun invalidate(): Long {
+        // Another navigation began before the created chat's screen took it.
+        freshSession = null
+        openingNotification = null
+        forkLatestRequest = null
         consumePendingNotification?.invoke()
         consumePendingNotification = null
+        // A share waiting for its chat goes with the chat it was meant for.
+        shareDelivery?.cancel()
+        shareDelivery = null
         activation?.cancel()
         repository.cancelSelection()
         return ++request
     }
 
-    private fun setStack(target: List<RemoteNavKey>, keepSettings: Boolean) {
+    private fun setStack(
+        target: List<RemoteNavKey>,
+        keepSettings: Boolean,
+        overlays: List<RemoteNavKey> = emptyList(),
+    ) {
         val settings = keepSettings && stack.lastOrNull() == RemoteNavKey.Settings
-        val keys = target + if (settings) listOf(RemoteNavKey.Settings) else emptyList()
+        val keys = target + overlays + if (settings) listOf(RemoteNavKey.Settings) else emptyList()
         // Keep equal entries so their ViewModel stores and saved UI state survive.
         val common = stack.zip(keys).takeWhile { (old, new) -> old == new }.size
         while (stack.size > common) stack.removeAt(stack.lastIndex)
         stack.addAll(keys.drop(common))
     }
 
+    /** The chat on top of the stack, or null when another destination is (Settings included). */
+    val topChat: RemoteNavKey.Chat? get() = stack.lastOrNull() as? RemoteNavKey.Chat
+
+    /**
+     * The chat whose shortcuts and palette actions apply: the one on top, or in the two-pane
+     * layout ([twoPane] not null) the chat that stays in view beside the activity board.
+     */
+    fun chatInView(twoPane: TwoPaneState?): RemoteNavKey.Chat? {
+        topChat?.let { return it }
+        if (twoPane == null || stack.lastOrNull() !is RemoteNavKey.Activity) return null
+        val keys = stack.toList()
+        return columnPanes(keys)?.detail?.let { keys[it] as? RemoteNavKey.Chat }
+    }
+
     private fun topKey(): RemoteNavKey? =
         stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey
 
+    /**
+     * The pages that open on top of the open project, session or chat without being part of its
+     * selection: the activity board, Settings, and the folder browser and providers of a host.
+     */
+    private fun NavKey.isOverlay(): Boolean =
+        this == RemoteNavKey.Settings ||
+            this is RemoteNavKey.Activity ||
+            this is RemoteNavKey.FolderBrowser ||
+            this is RemoteNavKey.Providers ||
+            this is RemoteNavKey.Tickets ||
+            this is RemoteNavKey.Ticket
+
+    /** The destination beneath the overlays, which the selection stays on. */
+    private fun contentKey(): RemoteNavKey? = stack.lastOrNull { !it.isOverlay() } as? RemoteNavKey
+
     /** Chat entries stacked directly beneath the top chat in the same project, oldest first. */
     private fun chatsBeneathTop(): List<RemoteNavKey.Chat> {
-        val entries = stack.filter { it != RemoteNavKey.Settings }
+        val entries = stack.filter { !it.isOverlay() }
         val top = entries.lastOrNull() as? RemoteNavKey.Chat ?: return emptyList()
         return entries
             .dropLast(1)
@@ -135,32 +281,51 @@ internal class RemoteNavigator(
         selection: RemoteSelection,
         keepSettings: Boolean = true,
         keepStackedChats: Boolean = true,
+        keepActivity: Boolean = false,
+        keepFolders: Boolean = false,
     ) {
         val keys = selection.keys()
-        // The folder browser shares the Projects selection, so it survives a restore on top of it.
-        val folders = topKey() as? RemoteNavKey.FolderBrowser
-        if (folders != null && selection == folders.selection()) {
-            setStack(keys + folders, keepSettings)
-            return
-        }
+        val overlays = keptOverlays(selection.routeId, keepActivity, keepFolders)
         val chat = keys.lastOrNull() as? RemoteNavKey.Chat
         // A child chat opened on top of its parent keeps the parent beneath it across
         // restores and reconnects.
         val beneath =
-            if (keepStackedChats && chat != null && topKey() == chat) chatsBeneathTop()
+            if (keepStackedChats && chat != null && contentKey() == chat) chatsBeneathTop()
             else emptyList()
         if (chat == null || beneath.isEmpty()) {
-            setStack(keys, keepSettings)
+            setStack(keys, keepSettings, overlays)
         } else {
-            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings)
+            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings, overlays)
         }
     }
+
+    /**
+     * The overlays above the content that stay on top of the content of [routeId], bottom first.
+     * The activity board ([keepActivity]) and the folder browser and providers ([keepFolders])
+     * stay across a restore and a reconcile while the same host is open, so an OAuth return or a
+     * reconnect does not close them; a navigation to a destination closes them. Settings is
+     * [setStack]'s own.
+     */
+    private fun keptOverlays(routeId: String?, keepActivity: Boolean, keepFolders: Boolean): List<RemoteNavKey> =
+        stack.takeLastWhile { it.isOverlay() }.mapNotNull { overlay ->
+            when (overlay) {
+                is RemoteNavKey.Activity -> overlay.takeIf { keepActivity && it.routeId == routeId }
+                is RemoteNavKey.FolderBrowser,
+                is RemoteNavKey.Providers,
+                is RemoteNavKey.Tickets,
+                is RemoteNavKey.Ticket -> (overlay as RemoteNavKey).takeIf { keepFolders && it.selection().routeId == routeId }
+                else -> null
+            }
+        }
 
     private fun activate(key: RemoteNavKey, mode: ActivationMode) {
         val current = invalidate()
         activation = scope.launch {
             val canonical = repository.activate(key.selection(), mode)
             if (current != request) return@launch
+            // The Mac of a page the user is on is the one a cold launch opens again (see coldStart).
+            if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat)
+                canonical.routeId?.let { lastRoute?.save(it, used = mode == ActivationMode.USER_OPEN) }
             val chat = canonical.keys().lastOrNull() as? RemoteNavKey.Chat
             // The restored chat's own session is gone (offline, or otherwise dropped by the host).
             // Walk the stacked ancestors closest first, actually re-activating each through the
@@ -169,48 +334,208 @@ internal class RemoteNavigator(
             // and land on the first one that is still live. An ancestor that is itself gone is
             // skipped in favor of the next one further out; only when none of them resolve does
             // the whole stack collapse to the sessions list underneath it.
-            if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && topKey() == key) {
+            if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && contentKey() == key) {
                 val ancestors = chatsBeneathTop()
+                val overlays = keptOverlays(key.routeId, keepActivity = true, keepFolders = true)
                 for (index in ancestors.indices.reversed()) {
                     val candidate = ancestors[index]
                     val restored = repository.activate(candidate.selection(), ActivationMode.RESTORE)
                     if (current != request) return@launch
                     if (restored == candidate.selection()) {
-                        setStack(sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)), keepSettings = true)
+                        setStack(
+                            sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)),
+                            keepSettings = true,
+                            overlays = overlays,
+                        )
                         return@launch
                     }
                 }
             }
-            replace(canonical)
+            // A user's open already closed the overlays (see openNow): any on top now was opened
+            // while this activation ran, on the page it activates, and stays.
+            replace(canonical, keepActivity = true, keepFolders = true)
         }
     }
 
     fun reconcile(state: RemoteState) {
+        // A prompt is about the editor of the session it was asked in; another session ends it.
+        editorLeave?.let { held ->
+            if (held.routeId != state.selection.routeId || held.sessionId != state.selection.sessionId) hold(null)
+        }
         if (state.loading || activation?.isActive == true) return
-        val current = stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey ?: return
+        val current = contentKey() ?: return
         val keys = current.selection().keys()
         val validated = state.selection.keys()
         if (validated.size < keys.size && keys.take(validated.size) == validated) {
-            replace(state.selection)
+            replace(state.selection, keepActivity = true, keepFolders = true)
         }
     }
 
     fun restore() {
-        val key =
-            stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey ?: RemoteNavKey.Hosts
-        activate(key, ActivationMode.RESTORE)
+        // The board is an overlay: the content beneath it is what gets restored, and the board
+        // goes back on top of it.
+        activate(contentKey() ?: RemoteNavKey.Hosts, ActivationMode.RESTORE)
+    }
+
+    /**
+     * Starts a cold launch once the paired Macs are read ([RemoteState.hostsLoaded]): the stack
+     * opens the Mac [coldStartRoute] picks on its Projects, above Hosts, so back still reaches the
+     * hosts list. A stored Mac that is no longer paired is forgotten, and only a read list says so.
+     * Returns false while the Macs are not read, so the caller asks again with the next state, and
+     * true once the start is decided, also when the user has navigated away from the hosts list.
+     */
+    fun coldStart(state: RemoteState): Boolean {
+        if (!state.hostsLoaded) return false
+        forgetGoneHosts(state)
+        if (stack.singleOrNull() != RemoteNavKey.Hosts) return true
+        val routes = state.hosts.map { it.routeId }
+        val stored = lastRoute?.load()
+        val route = coldStartRoute(routes, stored) ?: return true
+        replace(RemoteSelection(route))
+        activate(RemoteNavKey.Projects(route), ActivationMode.RESTORE)
+        return true
+    }
+
+    /** Forgets [routeId] as the Mac a cold launch opens, once its pairing is removed. */
+    fun forgetLastRoute(routeId: String) {
+        lastRoute?.forget(routeId)
+    }
+
+    /** The paired Macs the list was last checked against, so each new list is checked once. */
+    private var checkedRoutes: List<String>? = null
+
+    /**
+     * Forgets what is kept for Macs whose pairing is gone (see [LastRouteStore.prune]). Only a read list
+     * says so, so nothing happens until [RemoteState.hostsLoaded] is true.
+     */
+    fun forgetGoneHosts(state: RemoteState) {
+        if (!state.hostsLoaded) return
+        val routes = state.hosts.map { it.routeId }
+        if (routes == checkedRoutes) return
+        checkedRoutes = routes
+        lastRoute?.prune(routes)
+    }
+
+    /** When the Mac was last opened, for its host card; null when it never was. */
+    fun lastUsedAt(routeId: String): Long? = lastRoute?.lastUsedAt(routeId)
+
+    /** Whether "Not now" was pressed on the Mac's notification card. */
+    fun notificationCardDismissed(routeId: String): Boolean = lastRoute?.notificationCardDismissed(routeId) ?: false
+
+    fun dismissNotificationCard(routeId: String) {
+        lastRoute?.dismissNotificationCard(routeId)
     }
 
     fun open(key: RemoteNavKey) {
+        // While a share waits for its session, the chat tapped is that session.
+        if (key is RemoteNavKey.Chat && completeSharePick(ShareTarget.Session(key.routeId, key.projectId, key.sessionId))) return
+        leavingEditor(key.selection()) { openNow(key) }
+    }
+
+    private fun openNow(key: RemoteNavKey) {
         replace(key.selection(), keepSettings = false, keepStackedChats = false)
         activate(key, ActivationMode.USER_OPEN)
+    }
+
+    /**
+     * Opens the chat [key] like [open], and its rewind menu on the latest message once the chat
+     * has loaded: a session row's "Rewind from the latest message".
+     */
+    fun openAndForkLatest(key: RemoteNavKey.Chat) =
+        leavingEditor(key.selection()) {
+            replace(key.selection(), keepSettings = false, keepStackedChats = false)
+            activate(key, ActivationMode.USER_OPEN)
+            forkLatestRequest = key
+        }
+
+    /** The chat [openAndForkLatest] opened, until its screen took it ([takeForkLatest]). */
+    var forkLatestRequest: RemoteNavKey.Chat? by mutableStateOf(null)
+        private set
+
+    /** True once, for the chat whose rewind menu [openAndForkLatest] asked for. */
+    fun takeForkLatest(key: RemoteNavKey.Chat): Boolean {
+        if (forkLatestRequest != key) return false
+        forkLatestRequest = null
+        return true
+    }
+
+    /** Where keyboard focus is relative to the code editor; the editor reports it. */
+    val editorFocus = EditorFocus()
+    val terminalInputFocus = TerminalInputFocus()
+
+    /**
+     * Keyboard focus is in the session's code editor, whose keys then win over the layout's
+     * shortcuts. With focus elsewhere (the composer, the session list) the shortcuts work, and
+     * those that navigate ask before they drop an unsaved edit.
+     */
+    val editing: Boolean
+        get() = editorFocus.focused && repository.state.value.let { state ->
+            state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor != null
+        }
+
+    /**
+     * A navigation held back because it would drop the editor's unsaved edit; the layout asks,
+     * then [leaveEditor] runs it or [stayInEditor] drops it.
+     */
+    var editorLeave: HeldNavigation? by mutableStateOf(null)
+        private set
+
+    /**
+     * Shows [held]'s prompt; a navigation that was waiting and is not [run] was dropped and says
+     * so, [kept] when the user chose to stay in the editor.
+     */
+    private fun hold(held: HeldNavigation?, run: Boolean = false, kept: Boolean = false) {
+        val previous = editorLeave
+        editorLeave = held
+        editorFocus.asking = held != null
+        if (!run && previous !== held) previous?.onDropped?.invoke(kept)
+    }
+
+    /**
+     * Runs [action] now, or holds it for the discard prompt when it moves to another session than
+     * [target] while the editor has unsaved changes. Navigation nobody chose here (a
+     * notification, a restore) does not ask; the repository parks the edit for its session then.
+     */
+    private fun leavingEditor(target: RemoteSelection, onDropped: ((kept: Boolean) -> Unit)? = null, action: () -> Unit) {
+        val state = repository.state.value
+        val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
+        val leaves = target.routeId != state.selection.routeId || target.sessionId != state.selection.sessionId
+        val proceed = {
+            if (editor != null && leaves && editor.changed)
+                hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action, onDropped))
+            else action()
+        }
+        leavingTerminal(onDropped, proceed)
+    }
+
+    /**
+     * Discards the unsaved edit and runs the navigation that waited for it. When the editor the
+     * prompt was about is no longer the one shown, nothing is discarded and the navigation is dropped.
+     */
+    fun leaveEditor() {
+        val held = editorLeave ?: return
+        hold(null, run = true)
+        val state = repository.state.value
+        val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
+        if (state.selection.routeId != held.routeId || state.selection.sessionId != held.sessionId || editor?.path != held.path) {
+            held.onDropped?.invoke(false)
+            return
+        }
+        repository.discardFileEditor()
+        held.action()
+    }
+
+    fun stayInEditor() {
+        hold(null, kept = true)
     }
 
     /**
      * Opens [child] on top of [parent] so back returns to the parent chat. Only the selection
      * survives process death, so a restored child comes back without its parent.
      */
-    fun openChild(parent: RemoteNavKey.Chat, child: RemoteNavKey.Chat) {
+    fun openChild(parent: RemoteNavKey.Chat, child: RemoteNavKey.Chat) = leavingEditor(child.selection()) { openChildNow(parent, child) }
+
+    private fun openChildNow(parent: RemoteNavKey.Chat, child: RemoteNavKey.Chat) {
         if (
             parent.routeId != child.routeId ||
                 parent.projectId != child.projectId ||
@@ -262,20 +587,79 @@ internal class RemoteNavigator(
             repository.browseFolder(top.routeId, parentFolderPath(folders.path))
             return
         }
-        stack.removeAt(stack.lastIndex)
-        activate(stack.last() as RemoteNavKey, ActivationMode.RESTORE)
+        leavingTerminal {
+            stack.removeAt(stack.lastIndex)
+            activate(stack.last() as RemoteNavKey, ActivationMode.RESTORE)
+        }
     }
 
     fun settings() {
-        if (stack.lastOrNull() != RemoteNavKey.Settings) stack.add(RemoteNavKey.Settings)
+        if (stack.lastOrNull() != RemoteNavKey.Settings) leavingTerminal { stack.add(RemoteNavKey.Settings) }
+    }
+
+    /**
+     * Runs a create or fork on the host. A second request while one is in flight is ignored:
+     * invalidate() would cancel the first coroutine after the host may already have created its
+     * session, leaving an orphan. Other navigation still cancels it, which also releases the guard.
+     */
+    private fun mutate(
+        fresh: Boolean = false,
+        opened: ((RemoteSelection) -> Unit)? = null,
+        call: suspend () -> RemoteSelection,
+    ) {
+        if (mutation?.isActive == true) return
+        val current = invalidate()
+        val job = scope.launch {
+            val selection = call()
+            if (current == request) {
+                replace(selection, keepSettings = false)
+                if (fresh) freshSession = selection.keys().lastOrNull() as? RemoteNavKey.Chat
+                opened?.invoke(selection)
+            }
+        }
+        activation = job
+        mutation = job
+        mutating = true
+        job.invokeOnCompletion { if (mutation === job) mutating = false }
     }
 
     fun createSession(routeId: String, projectId: String) {
-        val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.createSession(routeId, projectId)
-            if (current == request) replace(selection, keepSettings = false)
+        if (completeSharePick(ShareTarget.NewSession(routeId, projectId))) return
+        leavingEditor(RemoteSelection(routeId, projectId)) {
+            mutate(fresh = true) { repository.createSession(routeId, projectId) }
         }
+    }
+
+    /**
+     * Starts a session as the new-session sheet describes it (see [finishNewSession]). Without a
+     * model or a prompt it is [createSession]. Like it, the new chat opens at once and takes
+     * [freshSession]'s focus; the model and the prompt follow in the background, only while that chat
+     * stays the selected one.
+     */
+    fun startSession(routeId: String, projectId: String, choice: NewSessionChoice) {
+        if (choice.model == null && choice.prompt.isBlank()) return createSession(routeId, projectId)
+        leavingEditor(RemoteSelection(routeId, projectId)) {
+            mutate(
+                fresh = true,
+                opened = { created ->
+                    scope.launch { finishNewSession(created, choice, RepositorySteps(repository)) }
+                },
+            ) { repository.createSession(routeId, projectId) }
+        }
+    }
+
+    /**
+     * The chat [createSession] just opened, until its screen took it ([takeFreshSession]) to focus
+     * the composer once. Forks and reopened chats never set it.
+     */
+    var freshSession: RemoteNavKey.Chat? by mutableStateOf(null)
+        private set
+
+    /** True once, for the chat [key] a create just opened. */
+    fun takeFreshSession(key: RemoteNavKey.Chat): Boolean {
+        if (freshSession != key) return false
+        freshSession = null
+        return true
     }
 
     /**
@@ -284,20 +668,117 @@ internal class RemoteNavigator(
      */
     fun forkSession(source: RemoteNavKey.Chat, messageId: String, mode: ForkMode) {
         if (topKey() != source) return
-        val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.forkSession(source.selection(), messageId, mode)
-            if (current == request) replace(selection, keepSettings = false)
+        leavingEditor(RemoteSelection(source.routeId, source.projectId)) {
+            mutate { repository.forkSession(source.selection(), messageId, mode) }
         }
     }
 
-    /** Opens the folder browser at the browse root, on top of the host's Projects. */
-    fun openFolders(routeId: String) {
-        if (topKey() != RemoteNavKey.Projects(routeId)) return
+    /**
+     * Forks the chat [source] at the tree node [nodeId]. Like [forkSession], the fork replaces
+     * [source] on the stack.
+     */
+    fun forkSessionAtNode(source: RemoteNavKey.Chat, nodeId: String) {
+        if (topKey() != source) return
+        leavingEditor(RemoteSelection(source.routeId, source.projectId)) {
+            mutate { repository.forkSessionAtNode(source.selection(), nodeId) }
+        }
+    }
+
+    /**
+     * Pushes [page], a folder browser or the providers of [routeId], on top of the open project,
+     * session or chat of that host. Those stay beneath it, so Back returns to them, and their
+     * selection is not touched. False when no destination of [routeId] is open, Settings is on top
+     * or [page] is open already.
+     */
+    private fun pushOverHost(routeId: String, page: RemoteNavKey): Boolean {
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return false
+        val top = topKey() ?: return false
+        if (
+            top is RemoteNavKey.FolderBrowser ||
+                top is RemoteNavKey.Providers ||
+                top is RemoteNavKey.Tickets ||
+                top is RemoteNavKey.Ticket
+        ) return false
+        if (top.selection().routeId != routeId) return false
+        stack.add(page)
+        return true
+    }
+
+    /** Opens the folder browser at the browse root, on top of the host's open destination. */
+    fun openFolders(routeId: String) = leavingTerminal { openFoldersNow(routeId) }
+
+    private fun openFoldersNow(routeId: String) {
+        if (!pushOverHost(routeId, RemoteNavKey.FolderBrowser(routeId))) return
         repository.cancelFolderTrust()
         repository.dismissFolderNotice()
         repository.browseFolder(routeId, "")
-        stack.add(RemoteNavKey.FolderBrowser(routeId))
+    }
+
+    /**
+     * Leaves the folder browser of [routeId] in one step, whatever folder it shows: the page beneath
+     * it comes back, the open chat or project with it.
+     */
+    fun closeFolders(routeId: String) {
+        val index = stack.indexOf(RemoteNavKey.FolderBrowser(routeId))
+        if (index < 0) return
+        repository.cancelFolderTrust()
+        repository.dismissFolderNotice()
+        while (stack.size > index) stack.removeAt(stack.lastIndex)
+        activate(stack.last() as RemoteNavKey, ActivationMode.RESTORE)
+    }
+
+    /** Opens the providers of [routeId] on top of the host's open destination. */
+    fun openProviders(routeId: String) = leavingTerminal { openProvidersNow(routeId) }
+
+    private fun openProvidersNow(routeId: String) {
+        if (!pushOverHost(routeId, RemoteNavKey.Providers(routeId))) return
+        repository.dismissProviderNotice()
+        repository.browseProviders(routeId)
+    }
+
+    /** Opens the tickets of [routeId] on top of the host's open destination. */
+    fun openTickets(routeId: String) = leavingTerminal { openTicketsNow(routeId) }
+
+    private fun openTicketsNow(routeId: String) {
+        if (!canUseTickets(repository.state.value)) return
+        if (!pushOverHost(routeId, RemoteNavKey.Tickets(routeId))) return
+        repository.refreshTickets(false)
+    }
+
+    /**
+     * Opens one ticket on top of whatever host destination of [routeId] is open: the tickets, the
+     * home page (an acceptance row), a project or a chat (its ticket chip). Back returns to what was
+     * beneath. A ticket already on top is replaced, not stacked. Nothing happens without the
+     * capability, for another host or with Settings on top.
+     */
+    fun openTicket(routeId: String, projectId: String, ref: String) = leavingTerminal { openTicketNow(routeId, projectId, ref) }
+
+    private fun openTicketNow(routeId: String, projectId: String, ref: String) {
+        if (!canUseTickets(repository.state.value)) return
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return
+        val top = topKey() ?: return
+        if (top.selection().routeId != routeId) return
+        if (top is RemoteNavKey.FolderBrowser || top is RemoteNavKey.Providers || top is RemoteNavKey.Activity) return
+        if (top is RemoteNavKey.Ticket) stack.removeAt(stack.lastIndex)
+        stack.add(RemoteNavKey.Ticket(routeId, projectId, ref))
+        repository.openTicket(projectId, ref)
+    }
+
+    /**
+     * Opens the activity board of [routeId] on top of the open project, session or chat, which stay
+     * beneath it. Nothing happens for another host or on the Hosts page. A card opens its chat with
+     * [open], which replaces the board. Beside a chat the board takes the list column, so a
+     * collapsed list of [twoPane] comes back to show it.
+     */
+    fun openActivity(routeId: String, twoPane: TwoPaneState? = null) = leavingTerminal { openActivityNow(routeId, twoPane) }
+
+    private fun openActivityNow(routeId: String, twoPane: TwoPaneState?) {
+        // Settings stays on top of whatever is beneath it, like for the other pages.
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return
+        val top = topKey()
+        if (top == RemoteNavKey.Activity(routeId) || top?.selection()?.routeId != routeId) return
+        twoPane?.revealList()
+        stack.add(RemoteNavKey.Activity(routeId))
     }
 
     /** Shows [path] in the open folder browser; the breadcrumb jumps here. */
@@ -323,17 +804,35 @@ internal class RemoteNavigator(
         }
     }
 
-    fun pair(text: String) {
-        val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.pair(text)
-            if (current == request && selection != null) replace(selection, keepSettings = false)
+    /**
+     * Pairs with the Mac of [text]. The wait for the Mac's approval shows on the computers page
+     * (PairingWaitCard), so a pairing started elsewhere, such as an error card's "Pair again" on a
+     * project list or in a chat, opens that page first.
+     */
+    fun pair(text: String) =
+        leavingEditor(RemoteNavKey.Hosts.selection()) {
+            if (stack.lastOrNull() != RemoteNavKey.Hosts)
+                replace(RemoteNavKey.Hosts.selection(), keepSettings = false, keepStackedChats = false)
+            val current = invalidate()
+            activation = scope.launch {
+                val selection = repository.pair(text)
+                if (current == request && selection != null) replace(selection, keepSettings = false)
+                if (selection != null) onPaired()
+            }
         }
-    }
+
+    /**
+     * The session a tapped notification is opening while its project is still unknown here; the
+     * layout shows that it is opening over the previous screen until the Mac said where it is.
+     */
+    var openingNotification: Pair<String, String>? by mutableStateOf(null)
+        private set
 
     /**
      * Opens the session of a tapped notification. With [jobs] it then opens that session's
-     * background jobs, and [jobId]'s output on top when given.
+     * background jobs, and [jobId]'s output on top when given. When the app already knows the
+     * session's project, its chat is on screen at once (cached content, read-only, while it opens);
+     * otherwise [openingNotification] says so until the Mac has been asked.
      */
     fun notification(
         routeId: String,
@@ -341,6 +840,20 @@ internal class RemoteNavigator(
         jobs: Boolean = false,
         jobId: String? = null,
         consumed: () -> Unit = {},
+    ) {
+        if (routeId.isBlank() || routeId.length > 256 || sessionId.isBlank() || sessionId.length > 256) {
+            consumed()
+            return
+        }
+        leavingTerminal({ consumed() }) { notificationNow(routeId, sessionId, jobs, jobId, consumed) }
+    }
+
+    private fun notificationNow(
+        routeId: String,
+        sessionId: String,
+        jobs: Boolean,
+        jobId: String?,
+        consumed: () -> Unit,
     ) {
         if (
             routeId.isBlank() ||
@@ -361,9 +874,22 @@ internal class RemoteNavigator(
         }
         consumePendingNotification = consumeOnce
         val operation = scope.launch {
+            // What was on screen before the chat was pushed early; a failed open returns to it.
+            var before: List<RemoteNavKey>? = null
+            val projectId = repository.notificationProject(routeId, sessionId)
+            if (current != request) return@launch
+            if (projectId != null) {
+                before = stack.filterIsInstance<RemoteNavKey>()
+                replace(RemoteSelection(routeId, projectId, sessionId), keepSettings = false, keepStackedChats = false)
+            } else openingNotification = routeId to sessionId
             val selection = repository.openNotification(routeId, sessionId)
             if (current == request) {
-                if (selection != null) replace(selection, keepSettings = false) else restore()
+                openingNotification = null
+                if (selection != null) replace(selection, keepSettings = false)
+                else {
+                    before?.let { setStack(it, keepSettings = false) }
+                    restore()
+                }
                 // Only once the session itself is open, since the jobs belong to the selection.
                 if (
                     jobs &&
@@ -383,29 +909,301 @@ internal class RemoteNavigator(
     }
 
     /**
-     * Runs a two-pane keyboard shortcut. Only the session list and its chat react; hosts,
-     * projects, folders and settings leave the keys alone.
+     * A share from another app waiting for the user to choose its session ([ShareTarget.Pick]).
+     * The layout shows a banner meanwhile; the next chat opened or session created takes it.
      */
-    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState): Boolean {
-        val top = stack.lastOrNull()
-        val sessions =
-            when (top) {
-                is RemoteNavKey.Chat -> RemoteNavKey.Sessions(top.routeId, top.projectId)
-                is RemoteNavKey.Sessions -> top
-                else -> return false
+    var sharePick: ShareRequest? by mutableStateOf(null)
+        private set
+
+    /** Consumes the waiting [sharePick] in the activity, once it went somewhere or was cancelled. */
+    private var shareDone: (() -> Unit)? = null
+
+    /** Hands a share to its chat once that is open ([deliverShare]); a navigation cancels it. */
+    private var shareDelivery: Job? = null
+
+    /**
+     * Takes a share from another app (ShareActivity) to its target: opens the session, or creates
+     * one, and puts the content into its draft once the chat can take it. [ShareTarget.Pick]
+     * waits for the user's choice in [sharePick]. [consumed] runs once the share no longer needs
+     * the activity to keep it: at once for a session, and when the choice was made or cancelled.
+     */
+    fun share(request: ShareRequest, consumed: () -> Unit = {}) {
+        endShare()
+        if (request.target == ShareTarget.Pick) {
+            sharePick = request
+            shareDone = consumed
+            // A chat on top would hide the sessions to choose from.
+            topChat?.let { open(RemoteNavKey.Sessions(it.routeId, it.projectId)) }
+            return
+        }
+        consumed()
+        deliver(request.content, request.target)
+    }
+
+    /** Drops the share waiting for a choice; the banner's Cancel, or Back where it would leave the app. */
+    fun cancelShare() = endShare()
+
+    /** Back would leave the app; with a share waiting for its session it cancels the share instead. */
+    val backCancelsShare: Boolean
+        get() = sharePick != null && stack.size <= 1
+
+    private fun endShare() {
+        shareDelivery?.cancel()
+        shareDelivery = null
+        sharePick = null
+        shareDone?.also { shareDone = null }?.invoke()
+    }
+
+    private fun completeSharePick(target: ShareTarget): Boolean {
+        val request = sharePick ?: return false
+        sharePick = null
+        shareDone?.also { shareDone = null }?.invoke()
+        deliver(request.content, target)
+        return true
+    }
+
+    /** A share that waited for the editor's discard prompt and was dropped there says so. */
+    private val shareDropped: (Boolean) -> Unit = { kept ->
+        repository.reportError(if (kept) R.string.remote_share_editor_kept else R.string.remote_share_dropped)
+    }
+
+    private fun deliver(content: SharedContent, target: ShareTarget) {
+        when (target) {
+            is ShareTarget.Session ->
+                leavingEditor(RemoteSelection(target.routeId, target.projectId, target.sessionId), shareDropped) {
+                    val project = target.projectId
+                    if (project != null) {
+                        openNow(RemoteNavKey.Chat(target.routeId, project, target.sessionId))
+                        follow(content) { it.routeId == target.routeId && it.projectId == project }
+                    } else shareByLookup(content, target.routeId, target.sessionId)
+                }
+            is ShareTarget.NewSession ->
+                leavingEditor(RemoteSelection(target.routeId, target.projectId), shareDropped) {
+                    if (mutation?.isActive == true) {
+                        repository.reportError(R.string.remote_share_failed)
+                        return@leavingEditor
+                    }
+                    mutate(fresh = true) { repository.createSession(target.routeId, target.projectId) }
+                    follow(content) { it.routeId == target.routeId && it.projectId == target.projectId }
+                }
+            ShareTarget.Pick -> Unit
+        }
+    }
+
+    /**
+     * Only the route and session are known (a Direct Share target): finds the session's project
+     * like [notification] does, then hands [content] to it. A session that is gone says so and
+     * leaves the app where it was.
+     */
+    private fun shareByLookup(content: SharedContent, routeId: String, sessionId: String) {
+        val current = invalidate()
+        activation = scope.launch {
+            val selection =
+                try {
+                    repository.openNotification(routeId, sessionId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    repository.reportError(R.string.remote_share_dropped)
+                    throw e
+                }
+            if (current != request) return@launch
+            if (selection == null) {
+                repository.reportError(R.string.remote_share_failed)
+                restore()
+                return@launch
             }
-        when (shortcut) {
-            KeyboardShortcut.SEARCH -> twoPane.requestSearch()
-            KeyboardShortcut.PREVIOUS_SESSION,
-            KeyboardShortcut.NEXT_SESSION -> {
-                val step = if (shortcut == KeyboardShortcut.NEXT_SESSION) 1 else -1
-                val current = (top as? RemoteNavKey.Chat)?.sessionId
-                adjacentSession(twoPane.visibleSessionIds, current, step)
-                    ?.takeIf { it != current }
-                    ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
+            replace(selection, keepSettings = false)
+            if (selection.routeId != routeId || selection.sessionId != sessionId) {
+                repository.reportError(R.string.remote_share_failed)
+                return@launch
+            }
+            // Its own job, so the open is over for reconcile() while the chat connects.
+            shareDelivery = scope.launch {
+                if (!deliverShare(repository, content, selection)) repository.reportError(R.string.remote_share_failed)
             }
         }
-        return true
+    }
+
+    /** After the navigation just started: hands [content] to the chat it lands on, if that [matches]. */
+    private fun follow(content: SharedContent, matches: (RemoteSelection) -> Boolean) {
+        val opening = activation
+        shareDelivery = scope.launch {
+            try {
+                opening?.join()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Another navigation came first; nothing of the share reached its chat.
+                repository.reportError(R.string.remote_share_dropped)
+                throw e
+            }
+            val chat = repository.state.value.selection.takeIf { it.sessionId != null && matches(it) }
+            if (chat == null || !deliverShare(repository, content, chat)) repository.reportError(R.string.remote_share_failed)
+        }
+    }
+
+    /**
+     * Runs a keyboard shortcut and reports whether it was handled, in either layout. The list and
+     * project shortcuts work on the columns' destinations (a host's projects, a project's sessions
+     * and a chat), the chat's own ones on the chat on top; hosts, folders and settings leave those
+     * keys alone. [twoPane] is null in the phone layout. A [repeat] of a key that toggles, creates
+     * or switches the project is swallowed only where its first press would apply. [unhandled]
+     * is a key the focused element saw and left alone.
+     */
+    fun shortcut(
+        shortcut: Shortcut,
+        twoPane: TwoPaneState?,
+        targets: ShortcutTargets,
+        repeat: Boolean = false,
+        unhandled: Boolean = false,
+    ): Boolean {
+        val top = stack.lastOrNull()
+        when (shortcut) {
+            Shortcut.SETTINGS -> {
+                settings()
+                return true
+            }
+            Shortcut.REFRESH -> {
+                val refresh = (top as? RemoteNavKey)?.let(targets::refresher) ?: return false
+                // Holding the key must not send a refresh per repeat.
+                if (!repeat) refresh()
+                return true
+            }
+            Shortcut.HELP -> {
+                if (!repeat) targets.help = if (chatInView(twoPane) != null) KeyContext.CHAT else KeyContext.GLOBAL
+                return true
+            }
+            Shortcut.ACTIVITY -> {
+                val route = repository.state.value.selection.routeId ?: return false
+                if (!repeat) openActivity(route, twoPane)
+                return true
+            }
+            // Holding the key must not reopen the palette over the one it opened.
+            Shortcut.PALETTE -> {
+                if (!repeat) targets.openPalette(PaletteMode.ALL)
+                return true
+            }
+            Shortcut.NEXT_REGION,
+            Shortcut.PREVIOUS_REGION -> {
+                if (!repeat) targets.regions.cycle(if (shortcut == Shortcut.NEXT_REGION) 1 else -1)
+                return true
+            }
+            // Held, the page keys page on. With focus in a list or the inspector, or a pane over
+            // the chat, they stay there, which scrolls itself. A text field holding text gets
+            // Ctrl+Home and Ctrl+End first, for its cursor; the chat takes them only once the
+            // field left them [unhandled] (Compose's fields on Android do today).
+            Shortcut.PAGE_UP,
+            Shortcut.PAGE_DOWN,
+            Shortcut.CHAT_START,
+            Shortcut.CHAT_END -> {
+                val target = chatInView(twoPane)?.let(targets::chat) ?: return false
+                val region = targets.regions.current
+                if (target.composerCovered || (region != null && region != FocusRegion.CHAT)) return false
+                if (shortcut == Shortcut.CHAT_START || shortcut == Shortcut.CHAT_END) {
+                    if (target.editingText && !unhandled) return false
+                    // Held, Ctrl+Home must not ask for one older page per repeat.
+                    if (repeat) return true
+                }
+                return target.shortcut(shortcut)
+            }
+            Shortcut.FOCUS_COMPOSER,
+            Shortcut.STOP,
+            Shortcut.CHANGES,
+            Shortcut.FILES,
+            Shortcut.JOBS,
+            Shortcut.HISTORY,
+            Shortcut.EXPAND_INSPECTOR,
+            Shortcut.TOGGLE_INSPECTOR,
+            Shortcut.REVIEW,
+            Shortcut.RENAME,
+            Shortcut.FORK -> {
+                val target = chatInView(twoPane)?.let(targets::chat) ?: return false
+                if (repeat) return true
+                if (shortcut != Shortcut.STOP) return target.shortcut(shortcut)
+                target.stopNow()
+                return true
+            }
+            // Esc runs in the key handlers, Alt+Enter in the composer.
+            Shortcut.ESCAPE,
+            Shortcut.OTHER_BUSY_ACTION -> return false
+            else -> Unit
+        }
+        val panes = columnPanes(stack.toList()) ?: return false
+        if (shortcut == Shortcut.PREVIOUS_PROJECT || shortcut == Shortcut.NEXT_PROJECT) {
+            val projects = panes.projects?.let { stack[it] as? RemoteNavKey.Projects } ?: return false
+            // Holding the key must not run through every project.
+            if (repeat) return true
+            val state = repository.state.value
+            if (state.selection.routeId != projects.routeId) return true
+            val current = panes.list?.let { (stack[it] as? RemoteNavKey.Sessions)?.projectId }
+            val step = if (shortcut == Shortcut.NEXT_PROJECT) 1 else -1
+            adjacentId(state.projects.map { it.text("id") }, current, step)
+                ?.takeIf { it != current }
+                ?.let {
+                    twoPane?.revealList()
+                    open(RemoteNavKey.Sessions(projects.routeId, it))
+                }
+            return true
+        }
+        val sessions = panes.list?.let { stack[it] as? RemoteNavKey.Sessions } ?: return false
+        return when (shortcut) {
+            Shortcut.SEARCH -> {
+                if (twoPane != null) twoPane.revealList()
+                // The phone shows one destination: the sessions come to the top for their search.
+                // A request waits for the list, so it is made only once the list is on top, never
+                // for a navigation held for an unsaved edit.
+                else if (top != sessions) {
+                    if (repeat) return true
+                    open(sessions)
+                    if (stack.lastOrNull() != sessions) return true
+                }
+                targets.requestSearch()
+                true
+            }
+            Shortcut.PREVIOUS_SESSION,
+            Shortcut.NEXT_SESSION -> {
+                val step = if (shortcut == Shortcut.NEXT_SESSION) 1 else -1
+                val current = (top as? RemoteNavKey.Chat)?.sessionId
+                adjacentId(listedSessionIds(sessions, targets), current, step)
+                    ?.takeIf { it != current }
+                    ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
+                true
+            }
+            Shortcut.NEW_SESSION -> {
+                if (!canCreateSession(repository.state.value, sessions)) return false
+                // Holding the key must not create a session per repeat.
+                if (repeat) return true
+                createSession(sessions.routeId, sessions.projectId)
+                true
+            }
+            Shortcut.TOGGLE_LIST -> {
+                // The phone has no list beside the chat to toggle.
+                if (top !is RemoteNavKey.Chat || twoPane == null) return false
+                // Holding the key must not flicker the list.
+                if (repeat) return true
+                twoPane.listCollapsed = !twoPane.listCollapsed
+                true
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * The sessions of [sessions] in the list's order and filter. While the list is on screen that
+     * is what it shows; without it (a phone's chat, a collapsed list) the project's current
+     * sessions in list order, without offline ones when the setting hides them.
+     */
+    private fun listedSessionIds(sessions: RemoteNavKey.Sessions, targets: ShortcutTargets): List<String> {
+        if (targets.listedFor == sessions) return targets.listedSessionIds
+        val state = repository.state.value
+        if (state.selection.routeId != sessions.routeId || state.selection.projectId != sessions.projectId) return emptyList()
+        return visibleSessionListItems(
+            state.sessions,
+            state.connected,
+            state.loading,
+            hideOffline = hidesOfflineSessions(targets.hideOfflineSessions, state.connected, state.stale),
+            stale = state.stale,
+            confirmed = state.sessionsFresh,
+            marks = sessionMarksById(targets.sessionMarks, sessions.routeId),
+            openSessionId = state.selection.sessionId,
+        ).map { it.id }
     }
 
     fun disconnect() {
@@ -414,6 +1212,36 @@ internal class RemoteNavigator(
         replace(RemoteSelection(), keepSettings = false)
     }
 }
+
+/**
+ * A navigation waiting for the discard prompt of the editor of [path] in the session [sessionId];
+ * [onDropped] runs when it is dropped instead of run: kept (the user chose Keep), or not (another
+ * session or navigation took its place).
+ */
+internal class HeldNavigation(
+    val routeId: String,
+    val path: String,
+    val sessionId: String?,
+    val action: () -> Unit,
+    val onDropped: ((kept: Boolean) -> Unit)? = null,
+) {
+    val fileName: String get() = path.substringAfterLast('/')
+}
+
+/**
+ * The code editor's side of the layout's keys and prompts: the editor reports whether keyboard
+ * focus is inside it, and learns whether the layout is asking to drop its edit.
+ */
+internal class EditorFocus {
+    /** Focus is on the editor's text, its find field or one of its buttons. */
+    var focused by mutableStateOf(false)
+
+    /** The layout's discard prompt for a held navigation shows ([RemoteNavigator.editorLeave]). */
+    var asking by mutableStateOf(false)
+}
+
+/** The layout's [EditorFocus]; null outside [RemoteNavigation], as in a pane shown on its own. */
+internal val LocalEditorFocus = staticCompositionLocalOf<EditorFocus?> { null }
 
 /** Most chats kept stacked on one back stack (a parent chain ending in the open child). */
 private const val MAX_STACKED_CHATS = 4
@@ -454,14 +1282,82 @@ internal fun RemoteNavigation(
     enablePush: () -> Unit,
     notification: RemoteNotification? = null,
     consumeNotification: (RemoteNotification) -> Unit = {},
+    disablePush: () -> Unit = {},
+    share: PendingShare? = null,
+    consumeShare: (PendingShare) -> Unit = {},
+    /** The home snapshot the palette lists the sessions of the other hosts from. */
+    home: StateFlow<HomeSnapshot> = remember { MutableStateFlow(HomeSnapshot()) },
 ) {
     val pushSettings by settings.state.collectAsStateWithLifecycle()
     val stack = rememberNavBackStack(RemoteNavKey.Hosts)
     val scope = rememberCoroutineScope()
-    val navigator = remember(repository, stack) { RemoteNavigator(repository, stack, scope) }
+    val context = LocalContext.current
+    val currentEnablePush by rememberUpdatedState(enablePush)
+    var askForNotifications by rememberSaveable { mutableStateOf(false) }
+    val lastRoute = remember(context) { LastRouteStore(context) }
+    // A cold launch opens the last Mac; a recreated activity keeps the stack it was saved with.
+    var coldLaunch by rememberSaveable { mutableStateOf(true) }
+    val launchTargeted by rememberUpdatedState(notification != null || share != null)
+    val navigator =
+        remember(repository, stack, lastRoute) {
+            RemoteNavigator(repository, stack, scope, lastRoute) {
+                val granted =
+                    Build.VERSION.SDK_INT < 33 ||
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) == PackageManager.PERMISSION_GRANTED
+                when (
+                    offerNotificationPermission(
+                        Build.VERSION.SDK_INT,
+                        granted,
+                        pushConfigured,
+                        settings,
+                    )
+                ) {
+                    PairingNotificationStep.ASK -> askForNotifications = true
+                    PairingNotificationStep.ENABLE -> currentEnablePush()
+                    PairingNotificationStep.NOTHING -> {}
+                }
+            }
+        }
+    val notificationPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) enablePush()
+        }
+    if (askForNotifications) {
+        AlertDialog(
+            onDismissRequest = { askForNotifications = false },
+            title = { Text(stringResource(R.string.remote_notification_prompt_title)) },
+            text = { Text(stringResource(R.string.remote_notification_prompt_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        askForNotifications = false
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                ) {
+                    Text(stringResource(R.string.remote_notification_prompt_allow))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { askForNotifications = false }) {
+                    Text(stringResource(R.string.remote_notification_prompt_later))
+                }
+            },
+        )
+    }
+    val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {
-        navigator.restore()
-        repository.state.collect { navigator.reconcile(it) }
+        // A tapped notification opens its own session; restoring the previous screen first would
+        // only connect and load what the tap replaces. Its open restores when it fails.
+        if (notification == null) navigator.restore()
+        repository.state.collect { state ->
+            navigator.reconcile(state)
+            navigator.forgetGoneHosts(state)
+            // A launch with a target (notification, widget, shortcut, share) opens that instead.
+            if (coldLaunch && (launchTargeted || navigator.coldStart(state))) coldLaunch = false
+        }
     }
     LaunchedEffect(notification, navigator) {
         notification?.let {
@@ -470,18 +1366,56 @@ internal fun RemoteNavigation(
             }
         }
     }
+    LaunchedEffect(share, navigator) {
+        share?.let { navigator.share(it.request) { consumeShare(it) } }
+    }
+    // NavDisplay takes Back only above the root; there, Back would leave the app with the share.
+    BackHandler(enabled = navigator.backCancelsShare) { navigator.cancelShare() }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
-        val layout = paneLayout(maxWidth)
-        val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
+        val layout = paneLayout(maxWidth, maxHeight)
+        val paneStore = remember(context) { PaneLayoutStore(context.applicationContext) }
+        val codeWrap = remember(paneStore) { CodeWrapState(paneStore) }
+        // A cold start shows the list as the user left it in this bucket from the first frame on.
+        val twoPane =
+            rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState(memos = paneStore.load()).apply { adopt(layout) } }
+        // Set before the panes below read it: the stored widths are shares of the window.
+        twoPane.window = maxWidth
+        // Keyed on the bucket, so resize ticks never get here; each bucket keeps its own widths.
+        LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
+        // Written once a drag or a toggle has settled, not on every step of it.
+        LaunchedEffect(twoPane, paneStore) {
+            var saved = twoPane.memos
+            try {
+                snapshotFlow { twoPane.memos }.collectLatest { memos ->
+                    if (memos == saved) return@collectLatest
+                    delay(PANE_LAYOUT_SAVE_DELAY_MILLIS)
+                    paneStore.save(memos)
+                    saved = memos
+                }
+            } finally {
+                // Leaving before the pause ran out still keeps the last drag.
+                if (twoPane.memos != saved) paneStore.save(twoPane.memos)
+            }
+        }
         val hardwareKeyboard = hardwareKeyboardAttached()
-        val shortcuts = layout.twoPane && hardwareKeyboard
+        // At every window size: a split screen, a pop-up window or a phone with a Bluetooth
+        // keyboard keeps the keys of the wide layout.
+        val shortcuts = hardwareKeyboard
+        val targets = remember { ShortcutTargets() }
+        val hideOfflineSessions = pushSettings.hideOfflineSessions
+        val sessionMarks by sessionMarksState()
+        SideEffect {
+            targets.hideOfflineSessions = hideOfflineSessions
+            targets.sessionMarks = sessionMarks
+        }
+        val activeTwoPane by rememberUpdatedState(twoPane.takeIf { layout.twoPane })
         val collapsed = twoPane.listCollapsed
         val sceneStrategies =
             remember(layout, twoPane, collapsed) {
                 if (layout.twoPane)
                     listOf<SceneStrategy<NavKey>>(
-                        ListDetailSceneStrategy(layout, twoPane, collapsed),
+                        ProjectColumnsSceneStrategy(layout, twoPane, collapsed),
                         SinglePaneSceneStrategy(),
                     )
                 else listOf<SceneStrategy<NavKey>>(SinglePaneSceneStrategy())
@@ -501,48 +1435,119 @@ internal fun RemoteNavigation(
         // where it is, and an open dialog (its own window) keeps every key to itself.
         val view = LocalView.current
         if (shortcuts)
-            DisposableEffect(view, navigator, twoPane) {
+            DisposableEffect(view, navigator, targets) {
                 val listener =
                     ViewCompat.OnUnhandledKeyEventListenerCompat { _, event ->
-                        navigator.shortcut(KeyEvent(event), twoPane)
+                        navigator.key(KeyEvent(event), activeTwoPane, targets, unhandled = true)
                     }
                 ViewCompat.addOnUnhandledKeyEventListener(view, listener)
                 onDispose { ViewCompat.removeOnUnhandledKeyEventListener(view, listener) }
             }
         CompositionLocalProvider(
+            LocalChatViewportPositions provides chatViewports,
             LocalPaneLayout provides layout,
+            LocalCodeWrap provides codeWrap,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
+            LocalEditorFocus provides navigator.editorFocus,
+            LocalTerminalInputFocus provides navigator.terminalInputFocus,
+            LocalShortcutTargets provides targets,
+            LocalFocusRingColor provides MaterialTheme.colorScheme.primary,
         ) {
-            Box(
+            Column(
                 // While something in the layout has focus (the composer, the search field), the
                 // shortcuts run here, before that field sees the keys.
-                if (shortcuts) Modifier.fillMaxSize().onPreviewKeyEvent { navigator.shortcut(it, twoPane) }
-                else Modifier.fillMaxSize()
+                (if (shortcuts)
+                    Modifier.fillMaxSize().onPreviewKeyEvent { navigator.key(it, activeTwoPane, targets, unhandled = false) }
+                else Modifier.fillMaxSize())
+                    // The opening notification covers the screen beneath; TalkBack must not reach it either.
+                    .then(if (navigator.openingNotification != null) Modifier.clearAndSetSemantics {} else Modifier)
             ) {
-                RemoteNavDisplay(
-                    stack,
-                    navigator,
-                    onBack,
-                    sceneStrategies,
-                    repository,
-                    settings,
-                    pushConfigured,
-                    pushSettings.pushEnabled,
-                    enablePush,
+                // The banner takes the status bar; the screens below it no longer pad for it.
+                val pickInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top)
+                if (navigator.sharePick != null) SharePickBanner(navigator::cancelShare)
+                Box(
+                    Modifier.weight(1f).fillMaxWidth()
+                        .then(if (navigator.sharePick != null) Modifier.consumeWindowInsets(pickInsets) else Modifier)
+                ) {
+                    RemoteNavDisplay(
+                        stack,
+                        navigator,
+                        onBack,
+                        sceneStrategies,
+                        repository,
+                        settings,
+                        pushConfigured,
+                        pushSettings.pushEnabled,
+                        enablePush,
+                        disablePush,
+                        pushSettings.notificationsDecided,
+                        { settings.markNotificationPromptShown() },
+                    )
+                }
+            }
+            if (navigator.openingNotification != null) NotificationOpening()
+            targets.help?.let { context ->
+                ShortcutHelpDialog(context) { targets.help = null }
+            }
+            targets.palette?.let { mode ->
+                CommandPaletteHost(mode, repository, navigator, settings, home, targets, sheet = !layout.twoPane)
+            }
+            navigator.editorLeave?.let { held ->
+                EditorDiscardDialog(
+                    fileName = held.fileName,
+                    onDiscard = navigator::leaveEditor,
+                    onKeep = navigator::stayInEditor,
                 )
             }
         }
     }
 }
 
-/** Runs a hardware keyboard shortcut of the two-pane layout; false leaves the key alone. */
-private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Boolean {
+/**
+ * Runs a hardware key in the layout; false leaves it alone. [unhandled] is a key nothing on
+ * screen took: nothing has focus, or the focused element ignored it. In a chat, Esc never gets
+ * past here (Android would turn it into Back), and a printable key nothing took goes into the
+ * composer. With focus in the code editor its keys are its own; an Esc it leaves comes back.
+ */
+internal fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
+    // Beside the activity board the chat keeps its keys, but Esc stays Back and closes the board.
+    val chat = chatInView(twoPane)?.let(targets::chat)
+    val native = event.nativeKeyEvent
+    if (terminalInputFocus.focused) {
+        val region = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
+        if (region != Shortcut.NEXT_REGION && region != Shortcut.PREVIOUS_REGION) return false
+    }
+    if (event.key == Key.Escape) {
+        val escaping = topChat?.let(targets::chat)
+        if (escaping == null || (editing && !unhandled)) return false
+        if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) escaping.escape(native.eventTime)
+        // Up and down alike, so no half of the key becomes Back.
+        return true
+    }
     if (event.type != KeyEventType.KeyDown) return false
-    val shortcut =
-        keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
-            ?: return false
-    return shortcut(shortcut, twoPane)
+    val shortcut = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
+    // The editor keeps its keys, apart from F6 and its alias, which leave it for the next pane.
+    if (editing && shortcut != Shortcut.NEXT_REGION && shortcut != Shortcut.PREVIOUS_REGION) return false
+    if (shortcut != null) return shortcut(shortcut, twoPane, targets, repeat = native.repeatCount > 0, unhandled = unhandled)
+    if (!unhandled || chat == null) return false
+    // In review mode its single-letter keys are review's own and never type into the composer;
+    // a text field with focus takes them before they get here.
+    reviewKey(event)?.let { key -> if (chat.reviewKey(key)) return true }
+    // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
+    // Review mode only strips the chat; any other key there ends it and types into the composer.
+    if (chat.composerCovered && !chat.reviewing()) return false
+    val text =
+        typedText(
+            native.unicodeChar,
+            native.isCtrlPressed,
+            native.isAltPressed,
+            native.isMetaPressed,
+            altGr = altGrOnly(native.metaState),
+        ) ?: return false
+    if (chat.composerCovered && !chat.leaveReviewToType()) return false
+    chat.type(text)
+    return true
 }
 
 @Composable
@@ -556,6 +1561,9 @@ private fun RemoteNavDisplay(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
+    disablePush: () -> Unit,
+    pushDecided: Boolean,
+    onNotificationDenied: () -> Unit,
 ) {
     NavDisplay(
         backStack = stack,
@@ -569,38 +1577,138 @@ private fun RemoteNavDisplay(
         entryProvider =
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
-                    val model = viewModel { HostsViewModel(repository) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { HostsViewModel(repository) }
+                        var recoveryOpen by rememberSaveable { mutableStateOf(false) }
+                        CenteredPage {
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied, onOpenEditorRecovery = { recoveryOpen = true })
+                        }
+                        if (recoveryOpen) EditorRecoveryDialog(repository::loadEditorRecovery) { recoveryOpen = false }
+                    }
                 }
-                entry<RemoteNavKey.Projects> { key ->
-                    val model = viewModel { ProjectsViewModel(repository, key) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ProjectsViewModel(repository, key) }
+                        val column = LocalProjectsColumn.current
+                        if (column == null)
+                            CenteredPage {
+                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                            }
+                        else {
+                            // Keeps the full column's scroll position while the strip stands in for it.
+                            val holder = rememberSaveableStateHolder()
+                            if (column.strip)
+                                holder.SaveableStateProvider("strip") {
+                                    ProjectStrip(key, model, navigator, column.selectedProjectId, column.canExpand)
+                                }
+                            else
+                                holder.SaveableStateProvider("column") {
+                                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                                }
+                        }
+                    }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { SessionsViewModel(repository, key, settings) }
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    }
                 }
-                entry<RemoteNavKey.FolderBrowser> { key ->
-                    val model = viewModel { FolderBrowserViewModel(repository, key) }
-                    FolderBrowserScreen(key, model, navigator)
+                entry<RemoteNavKey.FolderBrowser>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { FolderBrowserViewModel(repository, key) }
+                        CenteredPage { FolderBrowserScreen(key, model, navigator) }
+                    }
+                }
+                entry<RemoteNavKey.Providers>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ProvidersViewModel(repository, key) }
+                        CenteredPage { ProvidersScreen(key, model, navigator) }
+                    }
+                }
+                entry<RemoteNavKey.Tickets>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { TicketsViewModel(repository, key) }
+                        CenteredPage { TicketsScreen(key, model, navigator) }
+                    }
+                }
+                entry<RemoteNavKey.Ticket>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { TicketsViewModel(repository, key) }
+                        CenteredPage { TicketDetailScreen(key, model, navigator) }
+                    }
+                }
+                entry<RemoteNavKey.Activity>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ActivityViewModel(repository, key) }
+                        // A column of the wide layout fills its pane; a phone page keeps the centred width.
+                        if (LocalTwoPane.current == null) CenteredPage { ActivityBoardScreen(key, model, navigator) }
+                        else ActivityBoardScreen(key, model, navigator)
+                    }
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
-                    val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { ChatViewModel(repository, key, settings) }
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                    }
                 }
                 entry<RemoteNavKey.Settings>(
-                    metadata = metadata {
-                        put(NavDisplay.TransitionKey) { settingsTransition() }
-                        put(NavDisplay.PopTransitionKey) { settingsTransition() }
-                        put(NavDisplay.PredictivePopTransitionKey) { settingsTransition() }
-                    },
+                    metadata =
+                        navKeyMetadata(RemoteNavKey.Settings) +
+                            metadata {
+                                put(NavDisplay.TransitionKey) { settingsTransition() }
+                                put(NavDisplay.PopTransitionKey) { settingsTransition() }
+                                put(NavDisplay.PredictivePopTransitionKey) { settingsTransition() }
+                            },
                 ) { key ->
-                    val model = viewModel { SettingsViewModel(repository, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    // Each page blurs only its own lists, also beside or behind another one.
+                    ProvideGlass {
+                        val model = viewModel { SettingsViewModel(repository, settings) }
+                        CenteredPage {
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
+                        }
+                    }
                 }
             },
         transitionSpec = { depthTransition(forward = true) },
         popTransitionSpec = { depthTransition(forward = false) },
         predictivePopTransitionSpec = { depthTransition(forward = false) },
     )
+}
+
+/** The [NewSessionSteps] over the real repository. */
+private class RepositorySteps(private val repository: RemoteRepository) : NewSessionSteps {
+    override fun selected(): RemoteSelection = repository.state.value.selection
+
+    override suspend fun awaitModels(selection: RemoteSelection): Boolean =
+        awaitConfiguredModels(repository.state, selection)
+
+    override suspend fun setModel(model: RemoteModel): Boolean {
+        val selection = selected()
+        val held = repository.state.value.configuration?.model
+        if (held?.provider == model.provider && held.id == model.id) return true
+        repository.setModel(model.provider, model.id)
+        return awaitModelApplied(repository.state, selection, model)
+    }
+
+    override fun draftText(selection: RemoteSelection): String =
+        repository.state.value.takeIf { it.selection == selection }?.draft.orEmpty()
+
+    override fun draft(selection: RemoteSelection, text: String) = repository.draft(selection, text)
+
+    override fun send() = repository.prompt()
+
+    override fun modelNotSet(promptKept: Boolean) =
+        repository.reportError(
+            if (promptKept) R.string.remote_new_session_model_failed_kept else R.string.remote_new_session_model_failed
+        )
 }

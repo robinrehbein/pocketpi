@@ -1,6 +1,10 @@
 package de.joinnoah.pi.remote
 
 import java.util.Locale
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -207,6 +211,7 @@ class ToolPresentationTest {
                 activity("6", "bash", """{"command":"ls"}"""),
                 activity("7", "edit", """{"path":"a.kt","edits":[]}"""),
                 ConversationItem.Bubble("8", "8", "user", null, "hi", null, false, null),
+                activity("9", "edit", """{"path":"d.kt","edits":[]}""", state = "error"),
             )
         val touched = touchedFiles(items)
         assertEquals(listOf(TouchedFile("a.kt", 2, "7"), TouchedFile("c.kt", 1, "4")), touched.changed)
@@ -233,6 +238,61 @@ class ToolPresentationTest {
     }
 
     @Test
+    fun touchedLineCacheDiffsEachEditOnceByItemId() = runTest {
+        // More edits than the old 64-entry cache held.
+        fun edit(index: Int, newText: String = "b$index\nc") =
+            activity("edit-$index", "edit", """{"path":"f$index.kt","edits":[{"oldText":"a$index","newText":"$newText"}]}""")
+        val items = List(100) { edit(it) } + activity("r", "read", """{"path":"f1.kt"}""")
+        val cache = TouchedLineCache()
+        assertEquals(touchedLineCounts(items), cache.counts(items))
+        assertEquals(TouchedLineCounts(added = 200, removed = 100), cache.counts(items))
+        assertEquals(100, cache.computed)
+
+        // A streamed delta changes one edit and adds another: only those two are diffed again.
+        val changed = items.toMutableList().apply {
+            set(50, edit(50, "only"))
+            add(edit(100))
+        }
+        assertEquals(touchedLineCounts(changed), cache.counts(changed))
+        assertEquals(102, cache.computed)
+        assertEquals(touchedLineCounts(changed), cache.counts(changed))
+        assertEquals(102, cache.computed)
+
+        // An edit that left the chat is forgotten, so it is diffed again when it comes back.
+        cache.counts(changed.drop(1))
+        cache.counts(changed)
+        assertEquals(103, cache.computed)
+        assertNull(cache.counts(emptyList()))
+    }
+
+    @Test
+    fun touchedLineCacheStopsWhenCancelledMidLoop() = runTest {
+        val items = List(20) {
+            activity("edit-$it", "edit", """{"path":"f.kt","edits":[{"oldText":"a$it","newText":"b"}]}""")
+        }
+        val cache = TouchedLineCache()
+        // The counting yields after its first diff, and the canceller runs in that gap.
+        val counting = launch { cache.counts(items) }
+        launch { counting.cancel() }
+        advanceUntilIdle()
+        assertTrue(counting.isCancelled)
+        assertEquals(1, cache.computed)
+
+        // An already cancelled caller diffs nothing.
+        val cancelled = launch {
+            cancel()
+            cache.counts(items)
+        }
+        advanceUntilIdle()
+        assertTrue(cancelled.isCancelled)
+        assertEquals(1, cache.computed)
+
+        // The diff the cancelled pass computed is kept.
+        assertEquals(touchedLineCounts(items), cache.counts(items))
+        assertEquals(20, cache.computed)
+    }
+
+    @Test
     fun touchedLineTextsAreGitStyle() {
         assertEquals("+12", addedLinesText(12))
         assertEquals("\u22124", removedLinesText(4))
@@ -241,9 +301,27 @@ class ToolPresentationTest {
     }
 
     @Test
-    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThem() {
-        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true))
-        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false))
+    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThemAndAFileChanged() {
+        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true, filesChanged = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false, filesChanged = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = true, filesChanged = false))
+    }
+
+    @Test
+    fun toolNamesAreRecognisedUnderBothTheClaudeCodeAndTheOlderNames() {
+        for (name in listOf("AskUserQuestion", "questionnaire")) {
+            assertEquals(TimelineMarkerKind.QUESTION, timelineMarkerKind(activity("q", name, "{}")))
+            assertEquals(true, isQuestionTool(name))
+        }
+        for (name in listOf("ExitPlanMode", "submit_plan")) {
+            assertEquals(TimelineMarkerKind.PLAN, timelineMarkerKind(activity("p", name, "{}")))
+            // ConversationMessage auto-expands the plan card through this predicate.
+            assertEquals(true, isPlanTool(name))
+        }
+        for (name in listOf("bash_bg", "TaskStop", "bash_kill")) assertEquals(true, isJobChangingTool(name))
+        for (name in listOf("read", "stop_subagent", null)) assertEquals(false, isJobChangingTool(name))
+        assertEquals(false, isQuestionTool("submit_plan"))
+        assertEquals(false, isPlanTool("questionnaire"))
     }
 
     @Test
@@ -263,22 +341,91 @@ class ToolPresentationTest {
         val markers = timelineMarkers(items)
         assertEquals(
             listOf(
-                TimelineMarker("q", TimelineMarkerKind.QUESTION, 1f / 8),
-                TimelineMarker("e", TimelineMarkerKind.EDIT, 2f / 8),
-                TimelineMarker("w", TimelineMarkerKind.ERROR, 3f / 8),
-                TimelineMarker("p", TimelineMarkerKind.PLAN, 4f / 8),
-                TimelineMarker("s", TimelineMarkerKind.ERROR, 5f / 8),
-                TimelineMarker("b", TimelineMarkerKind.ERROR, 6f / 8),
+                TimelineMarker("u", TimelineMarkerKind.USER, 0),
+                TimelineMarker("q", TimelineMarkerKind.QUESTION, 1),
+                TimelineMarker("e", TimelineMarkerKind.EDIT, 2),
+                TimelineMarker("w", TimelineMarkerKind.ERROR, 3),
+                TimelineMarker("p", TimelineMarkerKind.PLAN, 4),
+                TimelineMarker("s", TimelineMarkerKind.ERROR, 5),
+                TimelineMarker("b", TimelineMarkerKind.ERROR, 6),
             ),
             markers,
         )
         assertEquals(listOf("w", "s", "b"), onlyErrors(items).map { it.id })
-        assertEquals(0f, timelineMarkers(listOf(activity("x", "edit", "{}"))).single().position)
-        val many = (0 until 250).map { activity("m$it", "edit", "{}") }
-        val capped = timelineMarkers(many)
-        assertEquals(200, capped.size)
-        assertEquals("m50", capped.first().itemId)
-        assertEquals(1f, capped.last().position)
+        // A failed user message counts as an error, not as the user's message.
+        val failed = ConversationItem.Bubble("f", "f", "user", null, "hi", null, false, null, error = true)
+        assertEquals(TimelineMarkerKind.ERROR, timelineMarkers(listOf(failed)).single().kind)
+        // No cap: the scrollbar thins ticks along the whole track instead of dropping early ones.
+        val many = timelineMarkers((0 until 250).map { activity("m$it", "edit", "{}") })
+        assertEquals(250, many.size)
+        assertEquals(0, many.first().index)
+        assertEquals(249, many.last().index)
+    }
+
+    @Test
+    fun aFailedQueryToolsHistoryLineShowsItsErrorBeforeItsQuery() {
+        val failedGrep = activity("g", "grep", """{"pattern":"TODO"}""", state = "error").copy(output = "\nrg: src: No such file")
+        val noOutput = activity("f", "web_fetch", """{"url":"https://x.dev"}""", state = "error")
+        assertEquals(
+            listOf("grep: rg: src: No such file", "web_fetch: https://x.dev"),
+            chatHistory(listOf(failedGrep, noOutput)).map { it.text },
+        )
+    }
+
+    @Test
+    fun chatHistoryListsEveryMarkedItemWithOneLineOfText() {
+        val items =
+            listOf(
+                ConversationItem.Bubble("u", "u", "user", null, "  Build the\n  tablet column  ", null, false, 1_000L),
+                ConversationItem.Bubble("a", "a", "assistant", null, "Sure", null, false, 2_000L),
+                activity(
+                    "q",
+                    "questionnaire",
+                    """{"questions":[{"id":"x","prompt":"Inspector at 1100 or 1180 dp?"}]}""",
+                ),
+                activity("e", "edit", """{"path":"src/main/AdaptiveLayout.kt"}"""),
+                activity("p", "submit_plan", """{"plan":"\n## Plan: tablet scene\n\nDetails"}"""),
+                activity("w", "bash", """{"command":"./gradlew test"}""", state = "error"),
+                subagent("s", AgentProgress("explorer", "failed", null, null)),
+                ConversationItem.Bubble("i", "i", "user", null, "", null, false, null),
+                activity("r", "read", "{}"),
+            )
+        assertEquals(
+            listOf(
+                ChatHistoryEntry("u", TimelineMarkerKind.USER, "Build the tablet column", 1_000L),
+                ChatHistoryEntry("q", TimelineMarkerKind.QUESTION, "Inspector at 1100 or 1180 dp?"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, "AdaptiveLayout.kt"),
+                ChatHistoryEntry("p", TimelineMarkerKind.PLAN, "Plan: tablet scene"),
+                ChatHistoryEntry("w", TimelineMarkerKind.ERROR, "bash: ./gradlew test"),
+                ChatHistoryEntry("s", TimelineMarkerKind.ERROR, "explorer"),
+                // A message with only an attachment has no text; the row shows its kind.
+                ChatHistoryEntry("i", TimelineMarkerKind.USER, null),
+            ),
+            chatHistory(items),
+        )
+        // Unlike the scrollbar's markers, the history keeps everything.
+        assertEquals(250, chatHistory((0 until 250).map { activity("m$it", "edit", "{}") }).size)
+        // Malformed arguments leave the text out instead of failing.
+        assertEquals(null, chatHistory(listOf(activity("x", "questionnaire", "not json"))).single().text)
+        assertEquals(160, historyLine("x".repeat(500))?.length)
+        assertEquals(null, historyLine(" \n\t "))
+        assertEquals("a b", historyLine("a" + " ".repeat(100) + "b"))
+    }
+
+    @Test
+    fun historyOpensAtTheEntryForTheTopOfTheViewport() {
+        val history =
+            listOf(
+                ChatHistoryEntry("u1", TimelineMarkerKind.USER, "one"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, null),
+                ChatHistoryEntry("u2", TimelineMarkerKind.USER, "two"),
+            )
+        val order = listOf("u1", "a1", "e", "a2", "u2", "a3")
+        assertEquals(1, historyAnchor(history, order, "a2"))
+        assertEquals(2, historyAnchor(history, order, "u2"))
+        assertEquals(0, historyAnchor(history, order, "u1"))
+        assertEquals(0, historyAnchor(history, order, null))
+        assertEquals(0, historyAnchor(history, order, "gone"))
     }
 
     @Test
@@ -335,14 +482,18 @@ class ToolPresentationTest {
         val strip = subagentStrip(items, sessions, "parent")
         assertEquals(
             listOf(
+                SubagentStripEntry("c2", null, "waiting child", "waiting", "asks", true),
                 SubagentStripEntry("c1", "explorer", "explorer child", "running", "read", true),
-                SubagentStripEntry("c2", null, "waiting child", "running", "asks", true),
-                SubagentStripEntry(null, "reviewer", "Review the diff", "running", "looking", false),
-                SubagentStripEntry("missing-1", "planner", "Plan it", "queued", null, false, openable = false),
+                SubagentStripEntry(null, "reviewer", "Review the diff", "running", "looking", false, lastKnown = true),
+                SubagentStripEntry("missing-1", "planner", "Plan it", "queued", null, false, openable = false, lastKnown = true),
+                SubagentStripEntry("c3", null, "idle child", "ended", null, false),
+                SubagentStripEntry(null, "finished", "finished", "succeeded", null, false),
+                SubagentStripEntry(null, "done", "done", "succeeded", null, false),
             ),
             strip.entries,
         )
-        assertEquals(3, strip.running)
+        // Only c1 is confirmed running; the unmatched reviewer's progress is last known.
+        assertEquals(1, strip.running)
         assertEquals(setOf("missing-1"), strip.missingSessionIds)
         assertEquals(1, strip.unmatchedRunning)
     }
@@ -358,11 +509,211 @@ class ToolPresentationTest {
     }
 
     @Test
+    fun subagentStripRetainsTerminalHistoryAndLatestStateWithoutDuplicates() {
+        val items = listOf(
+            subagent("first", AgentProgress("scout", "running", null, "reading", sessionId = "c1")),
+            subagent("final", AgentProgress("scout", "succeeded", "result", null, sessionId = "c1")),
+            subagent("failed", AgentProgress("reviewer", "failed", "test failure", null, sessionId = "c2")),
+            subagent("cancelled", AgentProgress("planner", "cancelled", null, null, sessionId = "c3")),
+            subagent("recent", AgentProgress("new", "running", null, null, sessionId = "missing")),
+        )
+        val sessions = listOf(
+            session("c1", "Scout", availability = SessionAvailability.IDLE),
+            session("c2", "Reviewer", availability = SessionAvailability.IDLE),
+            session("c3", "Planner", availability = SessionAvailability.IDLE),
+        )
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("running", "succeeded", "failed", "cancelled"), strip.entries.map { it.state })
+        assertEquals(1, strip.entries.count { it.sessionId == "c1" })
+        assertEquals("result", strip.entries.first { it.sessionId == "c1" }.activity)
+        assertTrue(strip.entries.none { it.abortable })
+        assertTrue(strip.entries.filter { it.sessionId != "missing" }.all { it.openable })
+        // The "missing" record has no session behind it, so its running is only last known.
+        assertTrue(strip.entries.first { it.sessionId == "missing" }.lastKnown)
+        assertEquals(0, strip.running)
+    }
+
+    @Test
+    fun subagentStripDoesNotAssumeIdleChildrenSucceededOrResurrectStaleRunningProgress() {
+        val items = listOf(subagent("s", AgentProgress("scout", "running", "reading", null, sessionId = "c1")))
+        val strip = subagentStrip(items, listOf(session("c1", "Scout", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals("ended", strip.entries.single().state)
+        assertFalse(strip.entries.single().abortable)
+        assertEquals(0, strip.running)
+        assertEquals(0, strip.unmatchedRunning)
+    }
+
+    @Test
+    fun subagentStripKeepsAllCompletedEntriesBeyondPreviousLimits() {
+        val items = (1..25).map { index ->
+            subagent("s$index", AgentProgress("scout", "succeeded", "result $index", null, sessionId = "c$index"))
+        }
+        val strip = subagentStrip(items, emptyList(), "parent")
+        assertEquals(25, strip.entries.size)
+        assertEquals((1..25).map { "c$it" }.toSet(), strip.entries.map { it.sessionId }.toSet())
+        assertTrue(strip.entries.all { it.state == "succeeded" && !it.openable && !it.abortable })
+    }
+
+    @Test
+    fun subagentStripUsesCurrentLiveChildrenAndExcludesOtherParents() {
+        val items = listOf(
+            subagent("s", AgentProgress("scout", "succeeded", null, null, sessionId = "c1")),
+            subagent("foreign", AgentProgress("other", "failed", null, null, sessionId = "foreign")),
+        )
+        val sessions = listOf(session("c1", "Scout"), session("foreign", "Other", parent = "elsewhere"))
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("c1"), strip.entries.map { it.sessionId })
+        assertEquals("running", strip.entries.single().state)
+        assertTrue(strip.entries.single().abortable)
+        assertTrue(subagentStrip(items, sessions, "unrelated").entries.isEmpty())
+    }
+
+    @Test
+    fun subagentStripMatchesCompletedProgressToIdleChildByTask() {
+        val items = listOf(subagent("s", AgentProgress("reviewer", "succeeded", "done", null, task = "Review the diff")))
+        val sessions = listOf(session("c", "reviewer: Review the diff", availability = SessionAvailability.IDLE))
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf(SubagentStripEntry("c", "reviewer", "reviewer: Review the diff", "succeeded", "done", false)), strip.entries)
+    }
+
+    @Test
+    fun subagentStripPreservesDistinctIdlessTasksMatchingTheSameChild() {
+        val items = listOf(
+            subagent("first", AgentProgress("reviewer", "failed", "First result", null, task = "Check first task")),
+            subagent("second", AgentProgress("reviewer", "succeeded", "Second result", null, task = "Check second task")),
+        )
+        val strip = subagentStrip(items, listOf(session("c", "reviewer", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals(2, strip.entries.size)
+        assertEquals(setOf("First result", "Second result"), strip.entries.map { it.activity }.toSet())
+        assertEquals(setOf("failed", "succeeded"), strip.entries.map { it.state }.toSet())
+        assertEquals("Second result", strip.entries.single { it.sessionId == "c" }.activity)
+        assertTrue(strip.entries.none { it.abortable })
+    }
+
+    @Test
+    fun subagentStripDoesNotReviveMatchedIdlessRunningProgressAfterCompletion() {
+        val items = listOf(
+            subagent("first", AgentProgress("reviewer", "running", "Reading", null, task = "Review the diff")),
+            subagent("last", AgentProgress("reviewer", "succeeded", "Done", null, task = "Review the diff")),
+        )
+        val strip = subagentStrip(items, listOf(session("c", "reviewer: Review the diff", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals(listOf("succeeded"), strip.entries.map { it.state })
+        assertEquals(0, strip.running)
+        assertEquals(0, strip.unmatchedRunning)
+        assertFalse(strip.entries.single().abortable)
+    }
+
+    @Test
+    fun subagentStripPreservesActiveProgressWhileDisconnectedWithoutAllowingStop() {
+        val items = listOf(subagent("s",
+            AgentProgress("scout", "running", "Reading", null, sessionId = "c1"),
+            AgentProgress("planner", "queued", null, null, sessionId = "c2"),
+        ))
+        val sessions = sessionListItems(listOf(
+            Wire.objectOf("id" to "c1", "title" to "Scout", "status" to "running", "origin" to "rpc", "parentSessionId" to "parent"),
+            Wire.objectOf("id" to "c2", "title" to "Planner", "status" to "waiting", "origin" to "rpc", "parentSessionId" to "parent"),
+        ), connected = false, loading = false, confirmed = true)
+        val strip = subagentStrip(items, sessions, "parent")
+        // Without a kept state the children read offline: their running or queued progress is not current.
+        assertEquals(listOf("offline", "offline"), strip.entries.map { it.state })
+        assertEquals(0, strip.running)
+        assertTrue(strip.entries.none { it.abortable || it.lastKnown })
+    }
+
+    @Test
+    fun subagentStripKeepsOnlyTerminalProgressForOfflineChildren() {
+        val items = listOf(subagent("s",
+            AgentProgress("a", "running", null, null, sessionId = "a"),
+            AgentProgress("b", "queued", null, null, sessionId = "b"),
+            AgentProgress("c", "waiting", null, null, sessionId = "c"),
+            AgentProgress("d", "failed", null, null, sessionId = "d"),
+        ))
+        val sessions = listOf("a", "b", "c", "d").map { session(it, it, availability = SessionAvailability.OFFLINE) }
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(mapOf("a" to "offline", "b" to "offline", "c" to "offline", "d" to "failed"),
+            strip.entries.associate { it.sessionId to it.state })
+        assertEquals(0, strip.running)
+        assertTrue(strip.entries.none { it.abortable })
+    }
+
+    @Test
+    fun subagentStripMarksLastKnownChildrenAndNeverCountsOrAbortsThem() {
+        val items = listOf(subagent("s",
+            AgentProgress("w", "running", null, null, sessionId = "w"),
+            AgentProgress("r", "queued", null, null, sessionId = "r"),
+        ))
+        val sessions = sessionListItems(listOf(
+            Wire.objectOf("id" to "w", "title" to "W", "status" to "waiting", "origin" to "rpc", "parentSessionId" to "parent"),
+            Wire.objectOf("id" to "r", "title" to "R", "status" to "running", "origin" to "rpc", "parentSessionId" to "parent"),
+        ), connected = false, loading = false, stale = true, confirmed = true)
+        val strip = subagentStrip(items, sessions, "parent")
+        // The session's last-known status wins over old progress, but it is marked and inert.
+        assertEquals(mapOf("w" to "waiting", "r" to "running"), strip.entries.associate { it.sessionId to it.state })
+        assertTrue(strip.entries.all { it.lastKnown && !it.abortable })
+        assertEquals(0, strip.running)
+    }
+
+    @Test
+    fun unmatchedActiveProgressIsLastKnownAndNeverCountedRunning() {
+        val items = listOf(
+            subagent("a", AgentProgress("scout", "running", "reading", null, task = "Scout")),
+            subagent("b", AgentProgress("asker", "waiting", null, null, task = "Ask")),
+            subagent("c", AgentProgress("done", "succeeded", null, null, task = "Done")),
+        )
+        val strip = subagentStrip(items, emptyList(), "parent")
+        assertEquals(0, strip.running)
+        val byTitle = strip.entries.associateBy { it.title }
+        assertTrue(byTitle.getValue("Scout").lastKnown)
+        assertEquals("running", byTitle.getValue("Scout").state)
+        assertTrue(byTitle.getValue("Ask").lastKnown)
+        // A terminal outcome is recorded fact, not a live claim; nothing is invented as finished.
+        assertFalse(byTitle.getValue("Done").lastKnown)
+        assertEquals("succeeded", byTitle.getValue("Done").state)
+        assertTrue(strip.entries.none { it.abortable })
+        val counts = subagentChipCounts(strip)
+        assertEquals(0, counts.running)
+        assertEquals(1, counts.cachedRunning)
+        assertEquals(1, counts.cachedWaiting)
+        assertEquals(0, counts.waiting)
+    }
+
+    @Test
+    fun subagentStripCountsFreshRunningBesideFreshWaiting() {
+        val strip = subagentStrip(emptyList(), listOf(
+            session("w", "W", availability = SessionAvailability.WAITING),
+            session("r1", "R1"),
+            session("r2", "R2"),
+        ), "parent")
+        assertEquals(listOf("waiting", "running", "running"), strip.entries.map { it.state })
+        assertEquals(2, strip.running)
+        assertTrue(strip.entries.all { it.abortable && !it.lastKnown })
+    }
+
+    @Test
+    fun resolveSubagentChildGivesNoLiveBonusToALastKnownChild() {
+        val item = subagent("s", AgentProgress("reviewer", "running", null, null))
+        val cached = session("cached", "reviewer: a", updatedAt = 1).copy(lastKnown = true)
+        val idle = session("idle", "reviewer: b", availability = SessionAvailability.IDLE, updatedAt = 2)
+        // Both score only for the name, so neither is picked; a fresh live child would have won.
+        val result = resolveSubagentChild(item, 0, "parent", listOf(cached, idle)) as ChildResolution.Candidates
+        assertEquals(listOf("idle", "cached"), result.sessions.map { it.id })
+        assertEquals(ChildResolution.Exact("fresh"),
+            resolveSubagentChild(item, 0, "parent", listOf(session("fresh", "reviewer: a", updatedAt = 1), idle)))
+    }
+
+    @Test
+    fun subagentStripDoesNotAssumeOfflineChildWithNoProgressHasEnded() {
+        val strip = subagentStrip(emptyList(), listOf(session("c", "Scout", availability = SessionAvailability.OFFLINE)), "parent")
+        assertEquals("offline", strip.entries.single().state)
+        assertFalse(strip.entries.single().abortable)
+    }
+
+    @Test
     fun sessionListItemsDropsMalformedRows() {
         val good = Wire.objectOf("id" to "a", "title" to "A", "status" to "running", "origin" to "rpc")
         val bad = Wire.objectOf("id" to "b", "title" to JsonObject(emptyMap()), "status" to "idle", "origin" to "rpc")
         val missing = Wire.objectOf("id" to "c")
-        val items = sessionListItems(listOf(good, bad, missing), connected = true, loading = false)
+        val items = sessionListItems(listOf(good, bad, missing), connected = true, loading = false, confirmed = true)
         assertEquals(listOf("a"), items.map { it.id })
         assertEquals(SessionAvailability.RUNNING, items.single().availability)
     }
@@ -388,5 +739,14 @@ class ToolPresentationTest {
         assertEquals("$1.25", formatCost(1.2489, en))
         assertEquals("$12,50", formatCost(12.5, de))
         assertEquals("$1.00", formatCost(0.9999, en))
+    }
+
+    @Test
+    fun subagentStripShowsWaitingChildAsWaitingEvenWithRunningProgress() {
+        val items = listOf(subagent("s", AgentProgress("scout", "running", null, null, sessionId = "c")))
+        val strip = subagentStrip(items, listOf(session("c", "Scout", availability = SessionAvailability.WAITING)), "parent")
+        assertEquals(listOf("waiting"), strip.entries.map { it.state })
+        assertEquals(0, strip.running)
+        assertTrue(strip.entries.single().abortable)
     }
 }

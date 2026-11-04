@@ -56,6 +56,7 @@ abstract class ValidateUploadKey : DefaultTask() {
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.android.test) apply false
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -84,6 +85,8 @@ val requiredPushProperties =
     listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")
         .map { "PI_REMOTE_FIREBASE_$it" }
 val missingReleasePushProperties = requiredPushProperties.filter { remoteProperty(it).isBlank() }
+val firebaseBuildFields = requiredPushProperties.associateWith { quoted(remoteProperty(it)) }
+extra["pocketpiFirebaseBuildFields"] = firebaseBuildFields
 val validateReleasePushConfiguration = tasks.register<ValidateReleasePushConfiguration>(
     "validateReleasePushConfiguration"
 ) {
@@ -151,19 +154,68 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks, optimizes and obfuscates the code and drops unused resources. Keep rules
+            // live in proguard-rules.pro; release.yml uploads mapping.txt to Play with the bundle.
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (uploadStorePath.isNotBlank() && uploadStorePassword.isNotBlank() &&
                 uploadKeyAlias.isNotBlank() && uploadKeyPassword.isNotBlank()) {
                 signingConfig = signingConfigs.getByName("pocketpiUpload")
             }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        create("benchmark") {
+            // Configured after release, so it inherits release's R8 setup, minify included.
+            initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+            // Shrunk and optimized like release, but not obfuscated: see benchmark-rules.pro.
+            proguardFile("benchmark-rules.pro")
+            // Isolated app data and no production push registration during measurements.
+            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
+                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
+            }
+        }
+        create("benchmarkProfile") {
+            // Only for BaselineProfileGenerator: the benchmark app without R8. A profile names
+            // classes and methods, and R8 reads src/main/baseline-prof.txt as names from before R8
+            // when it rewrites the profile for release. Recorded on the shrunk benchmark APK, it
+            // would name merged and inlined code instead. Timing keeps using the benchmark build.
+            initWith(getByName("benchmark"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            matchingFallbacks += listOf("benchmark", "release")
+            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
+                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
+            }
+        }
+    }
+    sourceSets {
+        // The profile build is the benchmark build in every other respect: the same fixture
+        // activities, fake relay, manifest additions and fixture assets.
+        getByName("benchmarkProfile") {
+            kotlin.directories.add("src/benchmark/java")
+            res.directories.add("src/benchmark/res")
+            assets.directories.add("src/benchmark/assets")
+            manifest.srcFile("src/benchmark/AndroidManifest.xml")
+        }
     }
     bundle { language { enableSplit = false } }
+    lint {
+        // lint-baseline.xml records the known findings, so lint reports only new ones. Regenerate
+        // it with ./gradlew updateLintBaseline only after reviewing what the new baseline hides.
+        baseline = file("lint-baseline.xml")
+        checkDependencies = true
+    }
     defaultConfig {
         minSdk = 26
         targetSdk = 36
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "de.joinnoah.pi.remote.PocketPiTestRunner"
         applicationId = "de.robinrehbein.pocketpi"
         versionCode = releaseVersionCode ?: 1
         versionName = requestedVersionName ?: "0.3.19"
@@ -171,12 +223,15 @@ android {
             buildConfigField(
                 "String",
                 "PI_REMOTE_FIREBASE_$key",
-                quoted(remoteProperty("PI_REMOTE_FIREBASE_$key")),
+                firebaseBuildFields.getValue("PI_REMOTE_FIREBASE_$key"),
             )
         }
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // All Robolectric test classes share one forked JVM. Gradle's default 512 MB heap ran out
+        // once the suite grew past about 125 classes.
+        unitTests.all { it.maxHeapSize = "2g" }
         managedDevices {
             localDevices {
                 create("pixel2Api36") {
@@ -184,8 +239,20 @@ android {
                     apiLevel = 36
                     systemImageSource = "aosp"
                 }
+                // CI runs only the tests annotated with @LargeScreen on it.
+                create("pixelTabletApi36") {
+                    device = "Pixel Tablet"
+                    apiLevel = 36
+                    systemImageSource = "aosp"
+                }
             }
         }
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("benchmark")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
     }
 }
 
@@ -209,6 +276,7 @@ if (providers.gradleProperty("composeMetrics").isPresent) {
 }
 
 dependencies {
+    implementation(libs.play.services.wearable)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
@@ -225,18 +293,25 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.browser)
+    implementation(libs.androidx.webkit)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
+    // Frosted backdrop of the floating pills (FloatingSurface.kt).
+    implementation(libs.haze)
+    implementation(libs.haze.blur)
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.ui.test.junit4)
+    testImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -247,9 +322,13 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    implementation(libs.androidsvg)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
     implementation(libs.androidx.work.runtime.ktx)
+    // Installs src/main/baseline-prof.txt on sideloaded and benchmark installs (Play does it from
+    // the bundle). App only: wear compiles the same sources, so no source may reference it.
+    implementation(libs.androidx.profileinstaller)
 }

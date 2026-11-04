@@ -1,6 +1,10 @@
 package de.joinnoah.pi.remote
 
 import androidx.navigation3.runtime.NavKey
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -34,6 +38,14 @@ class RemoteFolderRepositoryTest {
         var sessions = listOf(session("session", "project"))
         val failures = mutableMapOf<String, JsonObject>()
         val replies = mutableMapOf<String, (JsonObject) -> JsonObject?>()
+        var beforeGuardedSend: suspend (JsonObject) -> Unit = {}
+
+        override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+            beforeGuardedSend(payload)
+            currentCoroutineContext().ensureActive()
+            beforePossibleWrite()
+            send(payload)
+        }
 
         override fun connect(host: PairedHost) {
             listener.ready(emptySet())
@@ -182,6 +194,59 @@ class RemoteFolderRepositoryTest {
     }
 
     @Test
+    fun aHealthyConnectionCarriesBackgroundWorkUnderTheCallersRequestId() = runTest {
+        val transport = Transport()
+        transport.replies["session.prompt"] = { Wire.objectOf("kind" to "accepted") }
+        val repository = connected(transport)
+        assertEquals("sent", repository.withHealthyConnection("host") { it.prompt("session", "Go on", "mutation-1"); "sent" })
+        val prompt = transport.of("session.prompt").single()
+        assertEquals("mutation-1", prompt.text("requestId"))
+        assertEquals("Go on", prompt.text("text"))
+        // Connected to another Mac: nothing is sent, and the caller opens its own connection.
+        assertNull(repository.withHealthyConnection("other") { error("must not run") })
+        assertEquals(1, transport.of("session.prompt").size)
+    }
+
+    @Test fun pacedHealthyMutationReportsNotSentWhenConnectionChangesBeforeAdmission() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val gate = CompletableDeferred<Unit>()
+        var possibleWrites = 0
+        transport.beforeGuardedSend = { if (it.text("type") == "session.prompt") gate.await() }
+        val result = backgroundScope.async {
+            runCatching { repository.withHealthyConnection("host", onSent = { possibleWrites++ }) { it.prompt("session", "Go on", "mutation-1") } }
+        }
+        runCurrent()
+        assertEquals(0, possibleWrites)
+        assertTrue(transport.of("session.prompt").isEmpty())
+        repository.activate(RemoteSelection("other")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertEquals(0, possibleWrites)
+        assertTrue(transport.of("session.prompt").isEmpty())
+        assertTrue(result.await().exceptionOrNull() is MutationNotSentException)
+    }
+
+    @Test
+    fun aQuietConnectionIsNotHealthyAndAMissingReplyTimesOut() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val error = runCatching { repository.withHealthyConnection("host") { it.prompt("session", "Go on", "m") } }
+            .exceptionOrNull()
+        assertEquals(RemoteRequestException.Kind.TIMEOUT, (error as RemoteRequestException).kind)
+        assertEquals(HEALTHY_REQUEST_TIMEOUT_MILLIS, testScheduler.currentTime)
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(HEALTHY_CONNECTION_MILLIS)
+        assertNull(repository.withHealthyConnection("host") { error("must not run") })
+        assertEquals(1, transport.of("session.prompt").size)
+    }
+
+    @Test
+    fun withoutAConnectionNothingIsHealthy() = runTest {
+        val repository = repository(Transport())
+        assertNull(repository.withHealthyConnection("host") { error("must not run") })
+    }
+
+    @Test
     fun withoutCapabilityNoFolderCommandIsSent() = runTest {
         val transport = Transport()
         transport.advertised = emptyList()
@@ -215,6 +280,31 @@ class RemoteFolderRepositoryTest {
         repository.browseFolder("host", "../etc")
         runCurrent()
         assertEquals(1, transport.of("fs.browse").size)
+    }
+
+    @Test fun pacedConnectionRequestSurvivesSelectionChangeOnSameConnection() = runTest {
+        val transport = Transport()
+        transport.replies["fs.browse"] = { listing(it.text("path")) }
+        val repository = connected(transport)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "fs.browse") gate.await() }
+        repository.browseFolder("host", "Code"); runCurrent()
+        assertTrue(transport.of("fs.browse").isEmpty())
+        repository.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertEquals(1, transport.of("fs.browse").size)
+    }
+
+    @Test fun pacedConnectionRequestNeverWritesAfterConnectionReplacement() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "fs.browse") gate.await() }
+        repository.browseFolder("host", "Code"); runCurrent()
+        assertTrue(transport.of("fs.browse").isEmpty())
+        repository.activate(RemoteSelection("other")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertTrue(transport.of("fs.browse").isEmpty())
     }
 
     @Test
@@ -345,12 +435,13 @@ class RemoteFolderRepositoryTest {
     }
 
     @Test
-    fun malformedHostEventClosesTheChannel() = runTest {
+    fun malformedHostEventIsDroppedAndKeepsTheChannel() = runTest {
         val transport = Transport()
         val repository = connected(transport)
         transport.event("kind" to "clone.progress", "cloneId" to "x", "phase" to "receiving", "percent" to 101)
         runCurrent()
-        assertFalse(repository.state.value.connected)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.folders.clone)
     }
 
     @Test
@@ -813,5 +904,27 @@ class RemoteFolderRepositoryTest {
         assertNull(relativePathSegments("/abs"))
         assertEquals("a", parentFolderPath("a/b"))
         assertEquals("", parentFolderPath("a"))
+    }
+
+    @Test
+    fun browsingFoldersAndProvidersWorksWithAChatSelected() = runTest {
+        val transport = Transport()
+        transport.advertised = listOf(PROJECT_OPEN_CAPABILITY, PROVIDER_AUTH_CAPABILITY)
+        transport.replies["fs.browse"] = { listing(it.text("path"), entry("app")) }
+        opened(transport)
+        val repository = connected(transport)
+        // The folder browser and the providers open over the chat, so the chat stays the selection.
+        repository.activate(RemoteSelection("host", "opened", "fresh"))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "opened", "fresh"), repository.state.value.selection)
+        repository.browseFolder("host", "Code")
+        runCurrent()
+        assertEquals(listOf("Code"), transport.of("fs.browse").map { it.text("path") })
+        assertEquals("Code", repository.state.value.folders.path)
+        repository.browseProviders("host")
+        runCurrent()
+        assertEquals("host", repository.state.value.providerAuth.routeId)
+        assertEquals(1, transport.of("provider.auth.list").size)
+        assertEquals(RemoteSelection("host", "opened", "fresh"), repository.state.value.selection)
     }
 }

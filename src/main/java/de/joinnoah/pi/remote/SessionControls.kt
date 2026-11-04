@@ -2,6 +2,8 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -9,9 +11,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Psychology
@@ -20,24 +24,84 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+/** Below this height, with the keyboard up, the chat's header and composer shrink. */
+internal val COMPACT_CHROME_HEIGHT = 520.dp
+
+/**
+ * Whether the chat's header and composer compact: always on a phone (the phone
+ * layout, [phone]), and on any window while the keyboard is up and [height] is under
+ * [COMPACT_CHROME_HEIGHT]. A wider window with no keyboard, such as a Book Cover, keeps the full chrome.
+ */
+internal fun compactChrome(phone: Boolean, imeVisible: Boolean, height: Dp): Boolean =
+    phone || (imeVisible && height < COMPACT_CHROME_HEIGHT)
+
 @Composable
 private fun LoadingControlPill(width: Dp) {
-    Surface(
+    FloatingSurface(
         modifier = Modifier.width(width).height(32.dp),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {}
+        blur = false,
+    ) {
+        Box(Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+internal fun ComposerControlPill(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    leadingIcon: @Composable () -> Unit,
+    label: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        .copy(alpha = if (enabled) 1f else 0.38f)
+    Box(
+        modifier = modifier.heightIn(min = 48.dp)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        FloatingSurface(shape = CircleShape, blur = false, contentColor = contentColor) {
+            CompositionLocalProvider(LocalContentColor provides contentColor) {
+                ProvideTextStyle(MaterialTheme.typography.labelLarge) {
+                    Row(
+                        // Keep the state layer inside the glass shape, not the larger touch target.
+                        modifier = Modifier.defaultMinSize(minHeight = 32.dp)
+                            .indication(interactionSource, ripple(bounded = false))
+                            .padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        leadingIcon()
+                        Box { label() }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,22 +110,46 @@ internal fun SessionControls(
     state: RemoteState,
     refreshConfiguration: () -> Unit,
     refreshContextUsage: () -> Unit,
+    compactContext: () -> Unit,
     refreshAdvisor: () -> Unit,
     setAdvisor: (String?, String?, String?) -> Unit,
     setModel: (String, String) -> Unit,
     setThinking: (String) -> Unit,
     refreshCommands: () -> Unit,
     selectCommand: (RemoteCommand) -> Unit,
-    refreshJobs: () -> Unit = {},
-    openJobs: (() -> Unit)? = null,
+    /** The [LocalCommand]s that can run now; they lead the slash suggestions and shadow host commands. */
+    localCommands: List<LocalCommand> = emptyList(),
+    selectLocalCommand: (LocalCommand) -> Unit = {},
+    /** A reload is running; `/reload` then shows that instead of offering to start another. */
+    reloading: Boolean = false,
+    /** A typed `/model` asks for the model picker; [onModelPickerRequestHandled] acknowledges it. */
+    modelPickerRequested: Boolean = false,
+    onModelPickerRequestHandled: () -> Unit = {},
+    /** The command palette asks for the thinking level or the advisor; the same handshake. */
+    controlRequest: SessionControl? = null,
+    onControlRequestHandled: () -> Unit = {},
+    changeSettings: (Boolean?, String?, String?) -> Unit = { _, _, _ -> },
+    /** The header action or a typed `/settings` asks for the settings sheet; same handshake as the model picker. */
+    settingsSheetRequested: Boolean = false,
+    onSettingsSheetRequestHandled: () -> Unit = {},
+    /** False while Esc closed the slash suggestions; the next edit brings them back. */
+    slashSuggestions: Boolean = true,
+    /** Opens the host's providers from the model and advisor pickers; shown when the host manages them. */
+    onManageProviders: (() -> Unit)? = null,
+    leadingControl: @Composable () -> Unit = {},
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
+    val manageProviders = onManageProviders?.takeIf { canManageProviders(state) }
     val pickerScope = rememberCoroutineScope()
     val closePicker = {
         pickerScope.launch { pickerSheet.hide() }.invokeOnCompletion { picker = null }
     }
     var showContext by remember { mutableStateOf(false) }
+    var showSettings by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // The flag must not outlive the sheet's visibility, or it reopens unprompted later.
+    val settingsVisible = state.connected && sessionSettingsAvailable(state)
+    LaunchedEffect(settingsVisible) { if (!settingsVisible) showSettings = false }
     var showAdvisor by remember { mutableStateOf(false) }
     var advisorChoice by remember(state.selection.sessionId) { mutableStateOf<AdvisorChoice?>(null) }
     var advisorLevel by remember(state.selection.sessionId) { mutableStateOf("high") }
@@ -100,13 +188,40 @@ internal fun SessionControls(
             !state.configurationLoading &&
             !state.configurationChanging
     val slash = commandName(state.draft)
-    val configurationChipColors =
-        AssistChipDefaults.assistChipColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-        )
+    LaunchedEffect(modelPickerRequested) {
+        if (modelPickerRequested) {
+            if (available) {
+                picker = "model"
+                refreshConfiguration()
+            }
+            onModelPickerRequestHandled()
+        }
+    }
+    LaunchedEffect(controlRequest) {
+        when (controlRequest) {
+            SessionControl.THINKING ->
+                if (thinking != null && state.connected) {
+                    picker = "thinking"
+                    refreshConfiguration()
+                }
+            SessionControl.ADVISOR ->
+                if (state.connected && advisorControlAvailable(state)) {
+                    showAdvisor = true
+                    refreshAdvisor()
+                }
+            else -> Unit
+        }
+        if (controlRequest != null) onControlRequestHandled()
+    }
+    LaunchedEffect(settingsSheetRequested) {
+        if (settingsSheetRequested) {
+            if (sessionSettingsAvailable(state)) {
+                showSettings = true
+                refreshConfiguration()
+            }
+            onSettingsSheetRequestHandled()
+        }
+    }
     LaunchedEffect(slash != null, state.selection) { if (slash != null) refreshCommands() }
     LaunchedEffect(
         state.selection,
@@ -118,15 +233,6 @@ internal fun SessionControls(
     ) {
         if (state.connected && state.selection.sessionId != null) refreshContextUsage()
     }
-    val jobsAvailable = canUseBackgroundJobs(state)
-    val jobsLeasable = canLeaseJobsList(state)
-    // Job events need a watch lease, so the chip's list is read on open, after reconnecting, and
-    // again the moment the host advertises the list-lease capability mid-connection (capabilities
-    // are merged in additively as later projects.list replies arrive).
-    LaunchedEffect(state.selection.sessionId, state.connected, jobsAvailable, jobsLeasable) {
-        if (state.connected && jobsAvailable && openJobs != null) refreshJobs()
-    }
-    val visibleJobs = visibleJobs(state)
     val usage = state.contextUsage?.takeIf { context ->
         context.sessionId == state.selection.sessionId &&
             (confirmed?.model == null || context.modelProvider == null ||
@@ -142,11 +248,19 @@ internal fun SessionControls(
         (state.loading && (available || state.capabilities.isEmpty())) ||
             (available && confirmed == null && state.configurationLoading)
     val loadingContext = state.loading || (usage == null && state.contextLoading)
-    val advisorAvailable = ADVISOR_CAPABILITY in state.capabilities &&
-        ADVISOR_CAPABILITY !in state.unavailableCapabilities
+    val advisorAvailable = advisorControlAvailable(state)
+    // A subagent consults the main chat's advisor; the chip says so instead of "unavailable".
+    val childAdvisor = isChildSession(state) && state.connected && ADVISOR_CAPABILITY in state.capabilities
+    val advisorUnavailableReason = when {
+        childAdvisor -> stringResource(R.string.remote_advisor_from_parent_explanation)
+        !state.connected -> stringResource(R.string.remote_advisor_disconnected)
+        ADVISOR_CAPABILITY !in state.capabilities -> stringResource(R.string.remote_advisor_host_unsupported)
+        !advisorAvailable -> stringResource(R.string.remote_advisor_extension_required)
+        else -> null
+    }
     val loadingAdvisor =
         (state.loading && (advisorAvailable || state.capabilities.isEmpty())) ||
-            (advisorAvailable && sessionAdvisor == null && state.advisorLoading)
+            (sessionAdvisor == null && state.advisorLoading)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
@@ -154,19 +268,17 @@ internal fun SessionControls(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            leadingControl()
             if (loadingConfiguration) {
                 LoadingControlPill(160.dp)
                 LoadingControlPill(96.dp)
             } else if (available) {
-                AssistChip(
+                ComposerControlPill(
                     onClick = {
                         picker = "model"
                         refreshConfiguration()
                     },
                     enabled = state.connected && !state.configurationChanging,
-                    shape = CircleShape,
-                    colors = configurationChipColors,
-                    border = null,
                     leadingIcon = {
                         ConfigurationChipIcon(Icons.Outlined.AutoAwesome, state.configurationChanging)
                     },
@@ -183,15 +295,12 @@ internal fun SessionControls(
                     val thinkingLabel = thinkingLevelLabel(thinking.thinkingLevel)
                     val thinkingContentDescription =
                         stringResource(R.string.remote_thinking_level, thinkingLabel)
-                    AssistChip(
+                    ComposerControlPill(
                         onClick = {
                             picker = "thinking"
                             refreshConfiguration()
                         },
                         enabled = state.connected && !state.configurationChanging,
-                        shape = CircleShape,
-                        colors = configurationChipColors,
-                        border = null,
                         modifier =
                             Modifier.semantics { contentDescription = thinkingContentDescription },
                         leadingIcon = {
@@ -203,17 +312,12 @@ internal fun SessionControls(
                     )
                 }
             }
-            if (visibleJobs != null && openJobs != null)
-                BackgroundJobsChip(visibleJobs, configurationChipColors, openJobs)
             if (loadingContext) LoadingControlPill(80.dp)
-            else AssistChip(
+            else ComposerControlPill(
                 onClick = {
                     showContext = true
                     refreshContextUsage()
                 },
-                shape = CircleShape,
-                colors = configurationChipColors,
-                border = null,
                 modifier = Modifier.semantics { contentDescription = contextDescription },
                 leadingIcon = {
                     Box(Modifier.size(AssistChipDefaults.IconSize), contentAlignment = Alignment.Center) {
@@ -230,8 +334,8 @@ internal fun SessionControls(
                 },
             )
             if (loadingAdvisor) LoadingControlPill(140.dp)
-            else if (advisorAvailable) {
-                AssistChip(
+            else {
+                ComposerControlPill(
                     onClick = {
                         advisorChoice = sessionAdvisor?.choices?.firstOrNull { choice ->
                             sessionAdvisor.model == "${choice.provider}/${choice.id}"
@@ -243,26 +347,27 @@ internal fun SessionControls(
                         } ?: "high"
                         advisorDraftDirty = false
                         showAdvisor = true
-                        refreshAdvisor()
+                        if (!childAdvisor) refreshAdvisor()
                     },
-                    enabled = state.connected,
-                    shape = CircleShape,
-                    colors = configurationChipColors,
-                    border = null,
+                    // Keep the entry actionable even when unsupported: the sheet explains why.
+                    enabled = true,
                     leadingIcon = {
                         Icon(Icons.Outlined.SupportAgent, contentDescription = null,
                             modifier = Modifier.size(AssistChipDefaults.IconSize))
                     },
                     label = {
                         Text(
-                            if (sessionAdvisor == null) stringResource(R.string.remote_advisor_title)
+                            if (childAdvisor) stringResource(R.string.remote_advisor_from_parent)
+                            else if (!state.connected || !advisorAvailable) stringResource(R.string.remote_advisor_unavailable_label)
+                            else if (sessionAdvisor == null) stringResource(R.string.remote_advisor_title)
+                            else if (!sessionAdvisor.enabled) stringResource(R.string.remote_advisor_off)
                             else if (sessionAdvisor.pending) stringResource(R.string.remote_advisor_busy)
                             else if (sessionAdvisor.error != null) stringResource(R.string.remote_advisor_error)
                             else sessionAdvisor.model?.substringAfterLast('/') ?: stringResource(R.string.remote_advisor_off),
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     },
-                    modifier = Modifier.widthIn(max = 200.dp),
+                    modifier = Modifier.widthIn(max = 200.dp).testTag("advisorControl"),
                 )
             }
         }
@@ -281,16 +386,92 @@ internal fun SessionControls(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (
-            slash != null &&
-                COMMANDS_CAPABILITY in state.capabilities &&
-                COMMANDS_CAPABILITY !in state.unavailableCapabilities
-        ) {
-            val suggestions = state.commands.filter { it.name.startsWith(slash, ignoreCase = true) }
-            if (state.commandsLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
-            else if (suggestions.isNotEmpty())
-                LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {
-                    items(suggestions, key = { it.name }) { command ->
+        val hostCommands =
+            COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities
+        val slashCommands = slash != null && (hostCommands || localCommands.isNotEmpty())
+        val (localSuggestions, hostSuggestions) =
+            if (slashCommands)
+                mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), checkNotNull(slash))
+            else emptyList<LocalCommand>() to emptyList<RemoteCommand>()
+        val slashLoading = hostCommands && state.commandsLoading && localSuggestions.isEmpty()
+        // What Esc closes first: suggestions only count while something of them shows.
+        val slashShown =
+            slashCommands && (slashLoading || localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
+        val keyTarget = LocalChatKeyTarget.current
+        // While the host's list loads only a progress bar shows: no highlight that Enter could run.
+        val names = remember(localSuggestions, hostSuggestions, slashLoading) {
+            if (slashLoading) emptyList()
+            else localSuggestions.map { it.commandName } + hostSuggestions.map { it.name }
+        }
+        if (keyTarget != null) {
+            SideEffect {
+                keyTarget.slashShown = slashShown
+                // A new list highlights the command typed in full, or else its first one.
+                if (keyTarget.slashNames != names) {
+                    keyTarget.slashNames = names
+                    keyTarget.slashHighlight = names.indexOfFirst { it.equals(slash, ignoreCase = true) }.coerceAtLeast(0)
+                }
+                keyTarget.runSlash = { index ->
+                    localSuggestions.getOrNull(index)?.let(selectLocalCommand)
+                        ?: hostSuggestions.getOrNull(index - localSuggestions.size)?.let(selectCommand)
+                }
+            }
+            DisposableEffect(keyTarget) {
+                onDispose {
+                    keyTarget.slashShown = false
+                    keyTarget.slashNames = emptyList()
+                }
+            }
+        }
+        // Up and Down move this highlight from a hardware keyboard; touch never shows it.
+        val highlight = keyTarget?.slashHighlight?.takeIf { LocalHardwareKeyboard.current }
+        if (slashSuggestions && slashCommands) {
+            if (slashLoading)
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
+            else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty()) {
+                val suggestionList = rememberLazyListState()
+                LaunchedEffect(highlight, names) {
+                    val index = highlight ?: return@LaunchedEffect
+                    val info = suggestionList.layoutInfo
+                    val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+                    if (item == null || item.offset < info.viewportStartOffset ||
+                        item.offset + item.size > info.viewportEndOffset)
+                        suggestionList.animateScrollToItem(index)
+                }
+                LazyColumn(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)
+                        // Rounds the highlighted row's corners to match the composer.
+                        .clip(MaterialTheme.shapes.medium)
+                        .testTag("slashSuggestions"),
+                    state = suggestionList,
+                ) {
+                    itemsIndexed(localSuggestions, key = { _, command -> "local:" + command.commandName }) { index, command ->
+                        // Tappable for its hint, but dimmed: it does not run from here.
+                        val hint = command == LocalCommand.ARTIFACTS && artifactsNeedNewerHost(state)
+                        val dimmed = hint ||
+                            command == LocalCommand.RELOAD &&
+                                (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
+                        // The dimming says it to the eye; TalkBack hears it as the row's state.
+                        val unavailable = stringResource(R.string.remote_slash_command_unavailable)
+                        ListItem(
+                            headlineContent = { Text("/" + command.commandName) },
+                            supportingContent = {
+                                Text(
+                                    stringResource(localCommandDescription(command, state, reloading)),
+                                    maxLines = if (command == LocalCommand.RELOAD || hint) 2 else 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            colors = suggestionColors(index == highlight),
+                            modifier = Modifier.alpha(if (dimmed) 0.6f else 1f)
+                                .then(if (dimmed) Modifier.semantics { stateDescription = unavailable } else Modifier)
+                                .suggestionHighlight(index == highlight)
+                                .focusRing(MaterialTheme.shapes.small)
+                                .clickable { selectLocalCommand(command) },
+                        )
+                    }
+                    itemsIndexed(hostSuggestions, key = { _, command -> command.name }) { hostIndex, command ->
+                        val index = localSuggestions.size + hostIndex
                         ListItem(
                             headlineContent = { Text("/" + command.name) },
                             supportingContent = {
@@ -298,11 +479,13 @@ internal fun SessionControls(
                                     Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             },
-                            modifier = Modifier.clickable { selectCommand(command) },
+                            colors = suggestionColors(index == highlight),
+                            modifier = Modifier.suggestionHighlight(index == highlight).focusRing(MaterialTheme.shapes.small).clickable { selectCommand(command) },
                         )
                     }
                 }
-            if (state.commandsTruncated)
+            }
+            if (hostCommands && state.commandsTruncated)
                 Text(
                     stringResource(R.string.remote_catalog_truncated),
                     modifier = Modifier.padding(horizontal = 8.dp),
@@ -310,20 +493,54 @@ internal fun SessionControls(
                 )
         }
     }
-    if (showContext) ModalBottomSheet(onDismissRequest = { showContext = false }) {
+    val sessionTitle = state.session?.optionalText("title")?.takeIf(String::isNotBlank)
+    val projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank)
+    val confirmedModel = confirmed?.model
+    val sessionInfo =
+        remember(sessionTitle, projectName, confirmedModel, thinking?.thinkingLevel, usage?.modelProvider, usage?.modelId, state.selection.sessionId) {
+            SessionInfo(
+                name = sessionTitle,
+                model = confirmedModel?.let { "${it.name} (${it.provider}/${it.id})" }
+                    ?: usage?.modelId?.let { id -> usage.modelProvider?.let { "$it/$id" } ?: id },
+                thinkingLevel = thinking?.thinkingLevel,
+                project = projectName,
+                sessionId = state.selection.sessionId,
+            )
+        }
+    if (showContext) GlassSheet(onDismissRequest = { showContext = false }) {
         ContextSheetBody(
             usage = usage,
+            info = sessionInfo,
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
+            showCompact = compactAvailable(state),
+            canCompact = canCompact(state, System.currentTimeMillis()),
+            compacting = state.compactionRequesting ||
+                compactionVisible(state.compaction, System.currentTimeMillis()),
+            onCompact = compactContext,
         )
     }
+    val sessionSettings = confirmed?.settings
+    if (showSettings && sessionSettings != null && settingsVisible)
+        GlassSheet(onDismissRequest = { showSettings = false }) {
+            SessionSettingsSheetBody(
+                settings = sessionSettings,
+                enabled = canChange,
+                busy = state.configurationLoading || state.configurationChanging,
+                working = state.connected && state.status in setOf("running", "waiting"),
+                onChange = changeSettings,
+            )
+        }
     if (showAdvisor) AdvisorPickerSheet(
-        advisor = sessionAdvisor,
+        onManageProviders = manageProviders?.takeIf { !childAdvisor }?.let { manage -> { showAdvisor = false; manage() } },
+        advisor = sessionAdvisor.takeIf { advisorUnavailableReason == null },
+        unavailableReason = advisorUnavailableReason,
+        onRetry = if (state.connected && ADVISOR_CAPABILITY in state.capabilities && !childAdvisor) refreshAdvisor else null,
         selectedChoice = advisorChoice,
         selectedLevel = advisorLevel,
-        loading = state.advisorLoading || state.advisorChanging,
-        canSelect = canChange && !state.advisorChanging && !state.advisorLoading,
+        loading = !childAdvisor && (state.advisorLoading || state.advisorChanging),
+        canSelect = canChange && advisorAvailable && !state.advisorChanging && !state.advisorLoading,
         onSelectChoice = { choice ->
             advisorChoice = choice
             advisorLevel = if ("high" in choice.levels) "high" else choice.levels.first()
@@ -343,7 +560,7 @@ internal fun SessionControls(
         onDismiss = { showAdvisor = false },
     )
     if (picker != null && available)
-        ModalBottomSheet(onDismissRequest = { picker = null }, sheetState = pickerSheet) {
+        GlassSheet(onDismissRequest = { picker = null }, sheetState = pickerSheet) {
             val busy = !canChange && state.connected && state.status in setOf("running", "waiting")
             val selectModel = { provider: String, id: String ->
                 setModel(provider, id)
@@ -353,23 +570,18 @@ internal fun SessionControls(
                 setThinking(level)
                 closePicker()
             }
-            Text(
+            SheetHeader(
                 stringResource(
                     if (picker == "model") R.string.remote_choose_model
                     else R.string.remote_choose_thinking
-                ),
-                Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                style = MaterialTheme.typography.titleLarge,
+                )
             )
             if (busy)
                 Row(
                     Modifier.fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceContainerHigh,
-                            RoundedCornerShape(12.dp),
-                        )
-                        .padding(12.dp),
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, SHEET_OPTION_SHAPE)
+                        .padding(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -379,88 +591,305 @@ internal fun SessionControls(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        stringResource(R.string.remote_busy),
+                        stringResource(
+                            if (picker == "model") R.string.remote_model_busy_note
+                            else R.string.remote_thinking_busy_note
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             if (state.configurationLoading || state.configurationChanging)
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).navigationBarsPadding()) {
-                if (picker == "model") {
-                    items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
-                        model ->
-                        val chosen =
-                            confirmed?.model?.let {
-                                it.provider == model.provider && it.id == model.id
-                            } == true
-                        PickerRow(
-                            chosen = chosen,
-                            enabled = canChange,
-                            onSelect = { selectModel(model.provider, model.id) },
-                        ) {
-                            Column {
-                                Text(model.name)
-                                Text(
-                                    model.provider + " · " + model.id,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+            // The navigation bar pads the list and the providers row under it together.
+            Column(Modifier.navigationBarsPadding()) {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    if (picker == "model") {
+                        items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
+                            model ->
+                            val chosen =
+                                confirmed?.model?.let {
+                                    it.provider == model.provider && it.id == model.id
+                                } == true
+                            PickerRow(
+                                chosen = chosen,
+                                enabled = canChange,
+                                onSelect = { selectModel(model.provider, model.id) },
+                            ) {
+                                Column {
+                                    Text(model.name)
+                                    Text(
+                                        model.provider + " · " + model.id,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             }
                         }
-                    }
-                    if (confirmed?.modelsTruncated == true)
-                        item {
-                            Text(
-                                stringResource(R.string.remote_catalog_truncated),
-                                Modifier.padding(24.dp),
-                            )
+                        if (confirmed?.modelsTruncated == true)
+                            item {
+                                Text(
+                                    stringResource(R.string.remote_catalog_truncated),
+                                    Modifier.padding(24.dp),
+                                )
+                            }
+                    } else
+                        items(confirmed?.thinkingLevels ?: emptyList()) { level ->
+                            PickerRow(
+                                chosen = confirmed?.thinkingLevel == level,
+                                enabled = canChange,
+                                onSelect = { selectThinking(level) },
+                            ) {
+                                Text(thinkingLevelLabel(level))
+                            }
                         }
-                } else
-                    items(confirmed?.thinkingLevels ?: emptyList()) { level ->
-                        PickerRow(
-                            chosen = confirmed?.thinkingLevel == level,
-                            enabled = canChange,
-                            onSelect = { selectThinking(level) },
-                        ) {
-                            Text(thinkingLevelLabel(level))
-                        }
-                    }
+                }
+                // A model the host lacks is signed in to on the providers page; the thinking picker has none.
+                if (picker == "model")
+                    manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
             }
         }
 }
 
+/** What the app already knows about the open session; shown at the top of the session sheet. */
+internal data class SessionInfo(
+    val name: String?,
+    val model: String?,
+    val thinkingLevel: String?,
+    val project: String?,
+    val sessionId: String?,
+)
+
 /**
- * The context usage sheet's content. Scrollable and height-bounded, so a large font scale or a
+ * The session sheet's content: [info] on top, then the context usage. Scrollable and height-bounded, so a large font scale or a
  * long usage breakdown never clips against the sheet's edge instead of scrolling.
  */
 @Composable
-internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean) {
+internal fun ContextSheetBody(
+    usage: SessionContextUsage?,
+    unavailable: Boolean,
+    info: SessionInfo? = null,
+    showCompact: Boolean = false,
+    canCompact: Boolean = false,
+    compacting: Boolean = false,
+    onCompact: () -> Unit = {},
+) {
     Column(
         Modifier.fillMaxWidth()
             .heightIn(max = 480.dp)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 16.dp)
             .navigationBarsPadding()
             .testTag("contextSheet"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleLarge)
-        if (unavailable || usage == null) {
-            Text(stringResource(R.string.remote_context_unavailable))
-        } else {
-            Text(stringResource(R.string.remote_context_window, usage.contextWindow))
-            if (usage.usedTokens != null && usage.percent != null) {
-                Text(stringResource(R.string.remote_context_used, usage.usedTokens, usage.percent.toInt()))
-                Text(stringResource(R.string.remote_context_remaining, (usage.contextWindow - usage.usedTokens).coerceAtLeast(0)))
-            } else Text(stringResource(R.string.remote_context_unknown))
-            usage.totals?.let { UsageSummary(it) }
+        SheetHeader(stringResource(R.string.remote_session_info_title), padding = PaddingValues(start = 8.dp))
+        if (info != null) SheetSection { Box(Modifier.padding(16.dp)) { SessionInfoSection(info) } }
+        SheetSection {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleMedium)
+                if (unavailable || usage == null) {
+                    Text(stringResource(R.string.remote_context_unavailable))
+                } else {
+                    Text(stringResource(R.string.remote_context_window, usage.contextWindow))
+                    if (usage.usedTokens != null && usage.percent != null) {
+                        LinearProgressIndicator(
+                            progress = { (usage.percent / 100.0).toFloat().coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+                        )
+                        Text(stringResource(R.string.remote_context_used, usage.usedTokens, usage.percent.toInt()))
+                        Text(stringResource(R.string.remote_context_remaining, (usage.contextWindow - usage.usedTokens).coerceAtLeast(0)))
+                    } else Text(stringResource(R.string.remote_context_unknown))
+                }
+            }
         }
+        if (!unavailable) usage?.totals?.let { totals ->
+            SheetSection { Box(Modifier.padding(16.dp)) { UsageSummary(totals) } }
+        }
+        if (showCompact)
+            SheetPrimaryButton(
+                onClick = onCompact,
+                enabled = canCompact,
+                modifier = Modifier.testTag("compactContextButton"),
+            ) {
+                Text(stringResource(if (compacting) R.string.remote_context_compacting else R.string.remote_context_compact))
+            }
         Text(
             stringResource(R.string.remote_context_estimate),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun SessionInfoSection(info: SessionInfo) {
+    val copyLabel = stringResource(R.string.remote_session_info_copy_id)
+    val copyToClipboard = rememberCopyToClipboard(copyLabel)
+    Column(Modifier.testTag("sessionInfo"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        InfoRow(
+            R.string.remote_session_info_name,
+            info.name ?: stringResource(R.string.remote_session_info_no_name),
+            "sessionInfoName",
+        )
+        info.model?.let { InfoRow(R.string.remote_session_info_model, it, "sessionInfoModel") }
+        info.thinkingLevel?.let {
+            InfoRow(R.string.remote_session_info_thinking, thinkingLevelLabel(it), "sessionInfoThinking")
+        }
+        info.project?.let { InfoRow(R.string.remote_session_info_project, it, "sessionInfoProject") }
+        info.sessionId?.let { id ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.remote_session_info_id),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        id,
+                        modifier = Modifier.testTag("sessionInfoId"),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                IconButton(
+                    onClick = { copyToClipboard(id) },
+                    modifier = Modifier.testTag("copySessionId"),
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, copyLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoRow(label: Int, value: String, tag: String) {
+    Column {
+        Text(
+            stringResource(label),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, modifier = Modifier.testTag(tag), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/**
+ * The session settings sheet's content. Changes apply as soon as a control is used; the host
+ * answers with the refreshed settings, which [settings] then shows.
+ */
+@Composable
+internal fun SessionSettingsSheetBody(
+    settings: SessionSettings,
+    enabled: Boolean,
+    busy: Boolean,
+    working: Boolean,
+    onChange: (autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .heightIn(max = 560.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+            .navigationBarsPadding()
+            .testTag("sessionSettingsSheet"),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        // Under the title: what this sheet changes is read before any control is used.
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SheetHeader(stringResource(R.string.remote_session_settings_title), padding = PaddingValues(start = 8.dp))
+            Text(
+                stringResource(R.string.remote_session_settings_scope),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("sessionSettingsScope"),
+            )
+        }
+        if (working || (!enabled && !busy))
+            Text(
+                stringResource(
+                    if (working) R.string.remote_session_settings_busy else R.string.remote_session_settings_disabled
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        SheetSection {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.remote_session_settings_auto_compact), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.remote_session_settings_auto_compact_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = settings.autoCompaction,
+                onCheckedChange = { onChange(it, null, null) },
+                enabled = enabled,
+                modifier = Modifier.testTag("settingsAutoCompaction"),
+            )
+        }
+        }
+        QueueModeChoice(
+            title = R.string.remote_session_settings_steering,
+            hint = R.string.remote_session_settings_steering_hint,
+            tag = "settingsSteering",
+            selected = settings.steeringMode,
+            enabled = enabled,
+            onSelect = { onChange(null, it, null) },
+        )
+        QueueModeChoice(
+            title = R.string.remote_session_settings_follow_up,
+            hint = R.string.remote_session_settings_follow_up_hint,
+            tag = "settingsFollowUp",
+            selected = settings.followUpMode,
+            enabled = enabled,
+            onSelect = { onChange(null, null, it) },
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun QueueModeChoice(
+    title: Int,
+    hint: Int,
+    tag: String,
+    selected: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val options =
+        listOf(
+            QUEUE_MODE_ONE_AT_A_TIME to R.string.remote_session_settings_one_at_a_time,
+            QUEUE_MODE_ALL to R.string.remote_session_settings_all_at_once,
+        )
+    SheetSection {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            options.forEachIndexed { index, (mode, text) ->
+                SegmentedButton(
+                    selected = selected == mode,
+                    onClick = { if (selected != mode) onSelect(mode) },
+                    enabled = enabled,
+                    shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                    modifier = Modifier.testTag("$tag-$mode"),
+                    icon = {},
+                ) {
+                    Text(stringResource(text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
     }
 }
 
@@ -482,20 +911,14 @@ private fun PickerRow(
     content: @Composable () -> Unit,
 ) {
     val contentColor =
-        if (chosen) MaterialTheme.colorScheme.onPrimaryContainer
+        if (chosen) MaterialTheme.colorScheme.onSecondaryContainer
         else MaterialTheme.colorScheme.onSurface
+    // Every choice is a pill on the sheet; the chosen one is tinted, as in the other sheets.
     Row(
         Modifier.fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .then(
-                if (chosen)
-                    Modifier.background(
-                        MaterialTheme.colorScheme.primaryContainer,
-                        RoundedCornerShape(12.dp),
-                    )
-                else Modifier
-            )
+            .padding(horizontal = 16.dp, vertical = 3.dp)
+            .clip(SHEET_OPTION_SHAPE)
+            .background(sheetOptionColor(chosen))
             .selectable(
                 selected = chosen,
                 enabled = enabled,
@@ -523,3 +946,13 @@ internal fun thinkingLevelLabel(level: String): String =
         "xhigh" -> stringResource(R.string.remote_thinking_xhigh)
         else -> level
     }
+
+/** The slash suggestion Tab or Enter runs stands out ([ChatKeyTarget.slashHighlight]). */
+@Composable
+private fun suggestionColors(highlighted: Boolean): ListItemColors =
+    if (highlighted) ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    // Transparent, so the composer's glass shows through rather than an opaque surface-coloured block.
+    else ListItemDefaults.colors(containerColor = Color.Transparent)
+
+private fun Modifier.suggestionHighlight(highlighted: Boolean): Modifier =
+    if (highlighted) semantics { selected = true }.testTag("slashHighlight") else this

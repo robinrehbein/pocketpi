@@ -15,25 +15,46 @@ class RemoteRepositoryTest {
         origin: String = "rpc",
         status: String = "idle",
         projectId: String = "project",
-    ) = Wire.objectOf("id" to id, "origin" to origin, "status" to status, "projectId" to projectId)
+    ) = Wire.objectOf("id" to id, "title" to "Session $id", "origin" to origin, "status" to status, "projectId" to projectId)
 
     private class Pairings(var hosts: List<PairedHost>) : PairingStorage {
+        /** Runs once after the next save, as if during the write. */
+        var afterSave: (() -> Unit)? = null
+
+        /** The next load found the store unreadable and reset it, as EncryptedFileStore does. */
+        var reset = false
+
         override fun load() = hosts
 
         override fun save(hosts: List<PairedHost>) {
             this.hosts = hosts
+            afterSave?.also { afterSave = null }?.invoke()
         }
+
+        override fun takeReset() = reset.also { reset = false }
     }
 
     private class Drafts : DraftStorage {
         var values = emptyMap<DraftKey, StoredDraft>()
         var fail = false
+        var failLoad = false
+        var beforeSave: (() -> Unit)? = null
+        var afterSave: (() -> Unit)? = null
 
-        override fun load() = values.toMap()
+        /** Writes made, so a test can tell one coalesced write from several. */
+        var saves = 0
+
+        override fun load(): Map<DraftKey, StoredDraft> {
+            if (failLoad) error("Disk unavailable")
+            return values.toMap()
+        }
 
         override fun save(drafts: Map<DraftKey, StoredDraft>) {
+            beforeSave?.also { beforeSave = null }?.invoke()
             if (fail) error("Disk unavailable")
+            saves++
             values = drafts.toMap()
+            afterSave?.also { afterSave = null }?.invoke()
         }
     }
 
@@ -45,34 +66,58 @@ class RemoteRepositoryTest {
         var route: String? = null
         var closes = 0
         var readyOnConnect = true
+        /** Routes whose handshake never completes, as when that Mac is asleep. */
+        var unreachable: Set<String> = emptySet()
         var failureOnConnect: Int? = null
+        var sendFailure: (JsonObject) -> Boolean = { false }
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
+        var failureMessage: (JsonObject) -> String? = { null }
+        var failureReason: (JsonObject) -> String? = { null }
+        var beforeGuardedSend: suspend (JsonObject) -> Unit = {}
+
+        override suspend fun sendGuarded(payload: JsonObject, beforePossibleWrite: () -> Unit) {
+            beforeGuardedSend(payload)
+            currentCoroutineContext().ensureActive()
+            beforePossibleWrite()
+            send(payload)
+        }
+
+        /** Delivers [payload] as the real transport does: receipt is reported before the payload. */
+        fun deliver(payload: JsonObject) {
+            listener.inbound()
+            listener.message(payload)
+        }
 
         override fun connect(host: PairedHost) {
             connects++
             route = host.routeId
             val failure = failureOnConnect
             if (failure != null) listener.failed(true, failure)
-            else if (readyOnConnect) listener.ready(capabilities)
+            else if (readyOnConnect && host.routeId !in unreachable) listener.ready(capabilities)
         }
 
-        override fun pair(value: JsonObject) {}
+        var pairing: JsonObject? = null
+
+        override fun pair(value: JsonObject) {
+            pairing = value
+        }
 
         override fun close() {
             closes++
         }
 
         override fun send(payload: JsonObject) {
+            if (sendFailure(payload)) error("send failed")
             sent += payload
             val code = failure(payload)
             if (code != null) {
-                listener.message(
+                deliver(
                     Wire.objectOf(
                         "type" to "result",
                         "requestId" to payload.text("requestId"),
                         "ok" to false,
-                        "error" to Wire.objectOf("code" to code, "message" to code),
+                        "error" to Wire.objectOf("code" to code, "message" to (failureMessage(payload) ?: code), "reason" to failureReason(payload)),
                     )
                 )
                 return
@@ -81,7 +126,7 @@ class RemoteRepositoryTest {
         }
 
         fun result(request: JsonObject, data: JsonObject) {
-            listener.message(
+            deliver(
                 Wire.objectOf(
                     "type" to "result",
                     "requestId" to request.text("requestId"),
@@ -106,6 +151,7 @@ class RemoteRepositoryTest {
                 "sessions.list" -> data("sessions", sessions)
                 "sessions.open",
                 "sessions.create" -> Wire.objectOf("kind" to "session", "session" to opened)
+                "session.terminal.detach" -> Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
                 "session.snapshot" ->
                     Wire.objectOf(
                         "kind" to "snapshot",
@@ -124,10 +170,20 @@ class RemoteRepositoryTest {
         transport: Transport,
         drafts: Drafts = Drafts(),
         attachmentStorage: AttachmentStorage? = null,
+        hosts: List<PairedHost> = listOf(host),
+        pairings: Pairings = Pairings(hosts),
+        navigationStorage: NavigationSnapshotStorage? = null,
+        projectHint: suspend (String, String) -> String? = { _, _ -> null },
+        liveRunKept: () -> Boolean = { false },
+        pagedEditorTestGate: Boolean = false,
+        pagedEditorStorage: PagedEditorStorage? = null,
+        positiveOutcomeTestGate: Boolean = false,
+        nativePagedEditorEnabled: Boolean = false,
+        nativePositiveOutcomeEnabled: Boolean = false,
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
-            Pairings(listOf(host)),
+            pairings,
             drafts,
             transport,
             backgroundScope,
@@ -135,6 +191,16 @@ class RemoteRepositoryTest {
             attachmentStorage,
             attachmentImporter,
             now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
+            navigationStorage = navigationStorage,
+            projectHint = projectHint,
+            jitter = { 0.5 },
+            liveRunKept = liveRunKept,
+            pagedEditorTestGate = pagedEditorTestGate,
+            pagedEditorStorage = pagedEditorStorage,
+            positiveOutcomeTestGate = positiveOutcomeTestGate,
+            nativePagedEditorEnabled = nativePagedEditorEnabled,
+            nativePositiveOutcomeEnabled = nativePositiveOutcomeEnabled,
         )
 
     private fun modelData(id: String = "model") =
@@ -145,7 +211,14 @@ class RemoteRepositoryTest {
             "input" to JsonArray(listOf(JsonPrimitive("text"), JsonPrimitive("image"))),
         )
 
-    private fun configurationData(sessionId: String = "session", model: String = "model") =
+    private fun settingsData(auto: Boolean = true, steering: String = "one-at-a-time", followUp: String = "one-at-a-time") =
+        Wire.objectOf("autoCompaction" to auto, "steeringMode" to steering, "followUpMode" to followUp)
+
+    private fun configurationData(
+        sessionId: String = "session",
+        model: String = "model",
+        settings: JsonObject? = null,
+    ) =
         Wire.objectOf(
             "kind" to "configuration",
             "sessionId" to sessionId,
@@ -154,6 +227,7 @@ class RemoteRepositoryTest {
             "thinkingLevels" to JsonArray(listOf(JsonPrimitive("high"), JsonPrimitive("max"))),
             "models" to JsonArray(listOf(modelData(), modelData("other"))),
             "modelsTruncated" to false,
+            *(if (settings == null) emptyArray() else arrayOf("settings" to settings)),
         )
 
     private fun commandData(sessionId: String = "session") =
@@ -163,6 +237,77 @@ class RemoteRepositoryTest {
             "items" to JsonArray(listOf(Wire.objectOf("name" to "review", "source" to "skill"))),
             "truncated" to false,
         )
+
+    private fun advisorData(enabled: Boolean = false) = Wire.objectOf(
+        "kind" to "advisor", "sessionId" to "session", "enabled" to enabled,
+        "model" to if (enabled) JsonPrimitive("provider/model") else JsonNull,
+        "reasoning" to "high", "pending" to false, "contextShared" to enabled,
+        "attempts" to 0, "maxAttempts" to 3, "remainingAttempts" to 3, "error" to JsonNull,
+        "choices" to JsonArray(listOf(Wire.objectOf(
+            "provider" to "provider", "id" to "model", "name" to "Advisor model",
+            "levels" to JsonArray(listOf(JsonPrimitive("high"))),
+        ))),
+    )
+
+    @Test
+    fun advisorCanRecoverFromUnsupportedAndBeEnabledFromTheApp() = runTest {
+        val transport = Transport().apply { capabilities = setOf(ADVISOR_CAPABILITY) }
+        configure(transport)
+        val original = transport.response
+        var supported = false
+        var enabled = false
+        transport.failure = { request ->
+            if (request.text("type") == "session.advisor.get" && !supported) "unsupported" else null
+        }
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.advisor.get" -> advisorData(enabled)
+                "session.command" -> {
+                    enabled = request.text("text") != "/advisor off"
+                    Wire.objectOf("kind" to "accepted")
+                }
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(ADVISOR_CAPABILITY in repository.state.value.unavailableCapabilities)
+        repository.setAdvisor("provider", "model", "high")
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.command" })
+
+        supported = true
+        repository.refreshAdvisor()
+        runCurrent()
+        assertTrue(advisorControlAvailable(repository.state.value))
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        repository.setAdvisor("provider", "model", "high")
+        runCurrent()
+        assertEquals("/advisor provider/model --thinking high",
+            transport.sent.last { it.text("type") == "session.command" }.text("text"))
+        advanceTimeBy(1200)
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+
+        repository.setAdvisor(null, null, null)
+        runCurrent()
+        advanceTimeBy(1200)
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        assertTrue(advisorControlAvailable(repository.state.value))
+    }
+
+    @Test
+    fun advisorRefreshDoesNotSendToAnUnadvertisedHost() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.refreshAdvisor()
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.advisor.get" })
+    }
 
     @Test
     fun projectsDiscoveryOptsInWithoutBreakingAnOlderHost() = runTest {
@@ -180,11 +325,242 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
             val discovery = transport.sent.first { it.text("type") == "projects.list" }
-            assertTrue(discovery.text("requestId").startsWith("capabilities.v1:"))
+            assertTrue(discovery.text("requestId").startsWith("capabilities.v3:"))
             assertEquals(supportsSteer, canSteer(repository.state.value))
             assertTrue(canFollowUp(repository.state.value))
             assertTrue(repository.state.value.connected)
         }
+    }
+
+    @Test
+    fun browserCapabilityOnV3ProjectsRouteEnablesBrowserForSelectedSession() = runTest {
+        val transport = Transport().also(::configure)
+        // The frozen handshake does not advertise browser support; discovery does.
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY))))
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        runCurrent()
+
+        assertTrue(transport.sent.any {
+            it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:")
+        })
+        assertTrue(repo.state.value.connected)
+        assertEquals("session", repo.state.value.selection.sessionId)
+        assertTrue(repo.state.value.capabilitiesKnown)
+        assertTrue(SESSION_BROWSER_CAPABILITY in repo.state.value.capabilities)
+        assertTrue(repo.canOpenBrowser())
+    }
+
+    @Test
+    fun previewMenuRequiresNegotiatedCapability() {
+        val selection = RemoteSelection("host", "project", "session")
+        val state = RemoteState(connected = true, selection = selection, session = session())
+        assertFalse(chatActionAvailable(ChatAction.PREVIEW, state))
+        assertTrue(chatActionAvailable(ChatAction.PREVIEW, state.copy(capabilities = setOf(SESSION_PREVIEW_CAPABILITY))))
+    }
+
+    @Test
+    fun emulatorWatchAsksForRecoveryOnlyWhenTheHostAdvertisesIt() = runTest {
+        for (recovery in listOf(true, false)) {
+            val transport = Transport().also(::configure)
+            advertising(transport, JsonArray(listOfNotNull(JsonPrimitive(SESSION_EMULATOR_CAPABILITY), if (recovery) JsonPrimitive(SESSION_EMULATOR_RECOVERY_CAPABILITY) else null)))
+            val original = transport.response
+            val geometry = Wire.objectOf("width" to 2, "height" to 3, "rotation" to 0, "revision" to 1)
+            transport.response = { request ->
+                when (request.text("type")) {
+                    "emulator.list" -> Wire.objectOf("kind" to "emulator.profiles", "profiles" to JsonArray(listOf(Wire.objectOf("id" to "p", "label" to "Phone"))))
+                    "emulator.open" -> Wire.objectOf("kind" to "emulator.opened", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to 1, "geometry" to geometry)
+                    "emulator.status" -> Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to 1, "geometry" to geometry)
+                    "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to 1, "participants" to JsonArray(emptyList()))
+                    "emulator.watch" -> Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to 1, "streamId" to "stream")
+                    else -> original(request)
+                }
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+            repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+            assertTrue(repo.openEmulator()); runCurrent()
+            assertTrue(repo.selectEmulatorProfile("p")); runCurrent()
+            val watch = transport.sent.singleOrNull { it.text("type") == "emulator.watch" }
+                ?: error("no watch; sent " + transport.sent.map { it.text("type") } + ", view " + repo.state.value.emulator)
+            assertEquals(if (recovery) "true" else null, watch["recovery"]?.toString())
+        }
+    }
+
+    @Test
+    fun previewOnlyCapabilityOpensExactPortAndReconnectsReadOnly() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_PREVIEW_CAPABILITY), JsonPrimitive(SESSION_BROWSER_RECOVERY_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "preview", "generation" to 1,
+                    "incarnation" to "i", "tabs" to JsonArray(emptyList()), "viewportRevision" to 0, "previewPort" to 3000)
+                "browser.participants" -> Wire.objectOf("kind" to "browser.participants", "browserId" to "preview", "generation" to 1, "participants" to JsonArray(emptyList()))
+                else -> original(request)
+            }
+        }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertFalse(repo.canOpenBrowser())
+        assertTrue(repo.canOpenPreview())
+        assertFalse(repo.openPreview(0))
+        assertTrue(repo.openPreview(3000)); runCurrent()
+        assertEquals(3000, repo.state.value.previewBrowser?.previewPort)
+        assertNull(repo.state.value.browser)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_001); runCurrent()
+        val opens = transport.sent.filter { it.text("type") == "browser.open" }
+        assertEquals(2, opens.size)
+        assertTrue(opens.all { it["previewPort"]?.jsonPrimitive?.int == 3000 })
+        assertFalse(repo.state.value.previewBrowser!!.ownsControl)
+        assertTrue(transport.sent.none { it.text("type") == "browser.acquire" || it.text("type") == "browser.input" })
+    }
+
+    @Test
+    fun automaticReconnectReopensExistingBrowserOnlyAfterCapabilityDiscovery() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1,
+                    "incarnation" to "i", "tabs" to JsonArray(listOf(Wire.objectOf("id" to "tab", "title" to "T", "url" to "https://example.com"))), "viewportRevision" to 0)
+                "browser.participants" -> Wire.objectOf("kind" to "browser.participants", "browserId" to "b", "generation" to 1, "participants" to JsonArray(emptyList()))
+                else -> original(request)
+            }
+        }
+        val repo = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repo.activate(selection, ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertTrue(repo.openBrowser()); runCurrent()
+        assertEquals("b", repo.state.value.browser?.browserId)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_001); runCurrent()
+        assertTrue(repo.state.value.connected)
+        assertEquals(selection, repo.state.value.selection)
+        assertEquals(2, transport.sent.count { it.text("type") == "browser.open" })
+        assertFalse(repo.state.value.browser!!.ownsControl)
+        assertTrue(transport.sent.none { it.text("type") == "browser.acquire" || it.text("type") == "browser.input" })
+    }
+
+    @Test
+    fun reconnectDoesNotReopenClosedPaneOrPaneWithoutBrowserCapability() = runTest {
+        for (closePane in listOf(true, false)) {
+            val transport = Transport().also(::configure)
+            var supportsBrowser = true
+            val original = transport.response
+            transport.response = { request ->
+                when (request.text("type")) {
+                    "projects.list" -> JsonObject(requireNotNull(original(request)) + ("capabilities" to
+                        JsonArray(if (supportsBrowser) listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY)) else emptyList())))
+                    "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1,
+                        "incarnation" to "i", "tabs" to JsonArray(listOf(Wire.objectOf("id" to "tab", "title" to "T", "url" to "https://example.com"))), "viewportRevision" to 0)
+                    else -> original(request)
+                }
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+            repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+            assertTrue(repo.openBrowser()); runCurrent()
+            transport.listener.failed(true, R.string.remote_connection_error)
+            if (closePane) repo.closeBrowser() else supportsBrowser = false
+            advanceTimeBy(1_001); runCurrent()
+            assertTrue(repo.state.value.connected)
+            assertEquals(1, transport.sent.count { it.text("type") == "browser.open" })
+            if (closePane) assertNull(repo.state.value.browser)
+            else assertFalse(repo.canOpenBrowser())
+        }
+    }
+
+    @Test
+    fun capabilityDiscoveryFallsBackOnlyWhenListIsAbsent() = runTest {
+        for (supported in listOf(1, 2, 3)) {
+            val transport = Transport().also(::configure)
+            val original = transport.response
+            transport.response = { request ->
+                val result = original(request)
+                val id = request.text("requestId")
+                if (request.text("type") == "projects.list" && result != null &&
+                    id.startsWith("capabilities.v$supported:"))
+                    JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY)))))
+                else result
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
+            assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"))
+            assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
+        }
+    }
+
+    @Test
+    fun malformedOrOversizedCapabilityListDoesNotFallbackOrGrant() = runTest {
+        val badLists = listOf<JsonElement>(JsonNull, JsonPrimitive("invalid"),
+            JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(1))),
+            JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(""))),
+            JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive("é".repeat(33)))),
+            JsonArray(List(65) { JsonPrimitive(FILES_SEARCH_CAPABILITY) }))
+        for (bad in badLists) {
+            val transport = Transport().also(::configure)
+            advertising(transport, bad)
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            assertTrue(transport.sent.filter { it.text("type") == "projects.list" }.all { it.text("requestId").startsWith("capabilities.v3:") })
+            assertFalse(FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
+            assertFalse(repo.state.value.capabilitiesKnown)
+            assertEquals(R.string.remote_request_error, repo.state.value.error)
+        }
+    }
+
+    @Test
+    fun invalidDiscoveryKeepsPreviouslyValidatedCapabilities() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(STEER_CAPABILITY))))
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host")); runCurrent()
+        assertTrue(repo.state.value.capabilitiesKnown)
+        val capabilities = repo.state.value.capabilities
+        assertTrue(STEER_CAPABILITY in capabilities)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(""))))
+        repo.refresh(); runCurrent()
+        assertEquals(capabilities, repo.state.value.capabilities)
+        assertTrue(repo.state.value.capabilitiesKnown)
+        assertEquals(R.string.remote_request_error, repo.state.value.error)
+    }
+
+    @Test
+    fun olderRoutesRetainTheirCapabilityLimits() = runTest {
+        for ((revision, limit) in listOf(1 to 16, 2 to 32)) {
+            for (size in listOf(limit, limit + 1)) {
+                val transport = Transport().also(::configure)
+                val original = transport.response
+                transport.response = { request ->
+                    val result = original(request)
+                    if (request.text("type") == "projects.list" && result != null &&
+                        request.text("requestId").startsWith("capabilities.v$revision:"))
+                        JsonObject(result + ("capabilities" to JsonArray(
+                            listOf(JsonPrimitive(STEER_CAPABILITY)) + List(size - 1) { JsonPrimitive("unknown.$it") },
+                        )))
+                    else result
+                }
+                val repo = repository(transport)
+                repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+                assertEquals("v$revision size $size", size == limit, STEER_CAPABILITY in repo.state.value.capabilities)
+            }
+        }
+    }
+
+    @Test
+    fun v3AcceptsSixtyFourCapabilities() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY)) + List(63) { JsonPrimitive("unknown.$it") }))
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
     }
 
     @Test
@@ -277,7 +653,7 @@ class RemoteRepositoryTest {
         runCurrent()
         fun lists() = transport.sent.count { it.text("type") == "session.jobs.list" }
         val before = lists()
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         runCurrent()
         assertEquals(before + 1, lists())
@@ -493,7 +869,7 @@ class RemoteRepositoryTest {
 
         // The re-list heuristic is active again for this older host.
         val before = allLists()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "sessionId" to "session",
                 "revision" to 1, "kind" to "session.status", "status" to "running",
@@ -529,9 +905,10 @@ class RemoteRepositoryTest {
         assertEquals(0, leaseLists())
 
         // The host now advertises the lease capability; a later projects.list (here, resolving a
-        // notification while the chat stays connected) merges it in without a reconnect.
+        // notification for a session no cache knows while the chat stays connected) merges it in
+        // without a reconnect.
         leaseAdvertised = true
-        repository.openNotification("host", "session")
+        repository.openNotification("host", "elsewhere")
         runCurrent()
 
         assertTrue(canLeaseJobsList(repository.state.value))
@@ -546,7 +923,7 @@ class RemoteRepositoryTest {
             repository.activate(RemoteSelection("host", "project", "session"))
             runCurrent()
             val before = transport.jobsListRequests().size
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event", "sessionId" to "session",
                     "revision" to 1, "kind" to "session.status", "status" to "running",
@@ -565,7 +942,7 @@ class RemoteRepositoryTest {
             repository.activate(RemoteSelection("host", "project", "session"))
             runCurrent()
             val before = transport.jobsListRequests().size
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event",
                     "sessionId" to "session",
@@ -679,7 +1056,7 @@ class RemoteRepositoryTest {
         repository.unshareProject("project")
         runCurrent()
         val request = transport.sent.single { it.text("type") == "project.unshare" }
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "result",
                 "requestId" to request.text("requestId"),
@@ -731,11 +1108,11 @@ class RemoteRepositoryTest {
         transport: Transport,
         local: LocalAttachment,
         prompt: Boolean = true,
+        remoteId: String = "BBBBBBBBBBBBBBBBBBBBBB",
     ) {
         capable(transport)
         transport.capabilities += ATTACHMENTS_CAPABILITY
         val original = transport.response
-        val remoteId = "BBBBBBBBBBBBBBBBBBBBBB"
         transport.response = { request ->
             when (request.text("type")) {
                 "session.attachments.begin" ->
@@ -806,7 +1183,7 @@ class RemoteRepositoryTest {
             transport.sent.last { it.text("type") == "session.rename" }.text("title"),
         )
 
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 1, "title" to "Changed on Mac",
@@ -814,14 +1191,14 @@ class RemoteRepositoryTest {
         )
         assertEquals("Changed on Mac", repository.state.value.session?.text("title"))
         assertEquals("Changed on Mac", repository.state.value.sessions.single().text("title"))
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 0, "title" to "Stale title",
             )
         )
         assertEquals("Changed on Mac", repository.state.value.session?.text("title"))
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 2, "title" to "",
@@ -864,7 +1241,7 @@ class RemoteRepositoryTest {
         runCurrent()
         val listRequest = transport.sent.single { it.text("type") == "sessions.list" }
 
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 7, "title" to "New",
@@ -891,7 +1268,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project"))
         runCurrent()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 7, "title" to "A",
@@ -953,6 +1330,87 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun sessionListsOptInToHostWorkersAndKeepThemAsTerminalSessions() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("worker", "worker", "offline"), session("tui", "tui")))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val lists = transport.sent.filter { it.text("type") == "sessions.list" }
+        assertTrue(lists.isNotEmpty())
+        assertTrue(lists.all { it.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX) })
+        val rows = repository.state.value.sessions.associateBy { it.text("id") }
+        assertEquals("tui", rows.getValue("worker").text("origin"))
+        assertTrue(isHostWorker(rows.getValue("worker")))
+        assertEquals("tui", rows.getValue("tui").text("origin"))
+        assertFalse(isHostWorker(rows.getValue("tui")))
+    }
+
+    /** The `worker` session the host returns for `sessions.create` in the shared bash fixture. */
+    private fun fixtureWorker(): JsonObject =
+        Wire.json.parseToJsonElement(javaClass.getResource("/session-bash-v1.json")!!.readText()).jsonObject
+            .array("wireValid")
+            .single { it.text("name") == "worker-create-result" }
+            .obj("payload")
+            .obj("data")
+            .obj("session")
+
+    @Test
+    fun aWorkerCreatedFromTheFixtureStaysMarkedAsATerminalSession() = runTest {
+        val worker = fixtureWorker()
+        assertEquals("worker", worker.text("origin"))
+        val transport = Transport().also { configure(it, sessions = listOf(session()), opened = worker) }
+        val repository = repository(transport)
+        assertEquals(
+            RemoteSelection("host", "project", "worker-session"),
+            repository.createSession("host", "project"),
+        )
+        runCurrent()
+        val create = transport.sent.single { it.text("type") == "sessions.create" }
+        assertTrue(create.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX))
+        val selected = checkNotNull(repository.state.value.session)
+        assertTrue(isHostWorker(selected))
+        assertEquals("tui", selected.text("origin"))
+    }
+
+    @Test
+    fun aWorkerReachedThroughOpenIsMarked() = runTest {
+        val transport =
+            Transport().also {
+                configure(it, sessions = listOf(session("worker-session", "tui")), opened = fixtureWorker())
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "worker-session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val open = transport.sent.single { it.text("type") == "sessions.open" }
+        assertTrue(open.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX))
+        val selected = checkNotNull(repository.state.value.session)
+        assertTrue(isHostWorker(selected))
+        assertEquals("tui", selected.text("origin"))
+    }
+
+    @Test
+    fun anOlderHostsTuiAnswerStaysUnmarked() = runTest {
+        val older = JsonObject(fixtureWorker() + ("origin" to JsonPrimitive("tui")))
+        val transport =
+            Transport().also {
+                configure(it, sessions = listOf(session("worker-session", "tui")), opened = older)
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "worker-session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        assertFalse(isHostWorker(checkNotNull(repository.state.value.session)))
+        assertEquals(
+            RemoteSelection("host", "project", "worker-session"),
+            repository.createSession("host", "project"),
+        )
+        runCurrent()
+        val created = checkNotNull(repository.state.value.session)
+        assertFalse(isHostWorker(created))
+        assertEquals("tui", created.text("origin"))
+    }
+
+    @Test
     fun unsupportedTuiControlsDoNotHideCapabilitiesForLaterRpcSession() = runTest {
         val transport = Transport().also(::capable)
         val original = transport.response
@@ -962,7 +1420,7 @@ class RemoteRepositoryTest {
                     setOf("session.configuration.get", "session.commands.get") &&
                     request.text("sessionId") == "tui"
             ) {
-                transport.listener.message(
+                transport.deliver(
                     Wire.objectOf(
                         "type" to "result",
                         "requestId" to request.text("requestId"),
@@ -993,6 +1451,139 @@ class RemoteRepositoryTest {
         assertNotNull(repository.state.value.configuration)
         assertTrue(repository.state.value.commands.isNotEmpty())
         assertTrue(repository.state.value.unavailableCapabilities.isEmpty())
+    }
+
+    @Test
+    fun mixedBatchImportsInOneRunAndIsDoneOnlyAfterEveryUriWasRead() = runTest {
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, localFile()) }
+        val reads = mutableListOf<Pair<String, Boolean>>()
+        val second = CompletableDeferred<Unit>()
+        val repository =
+            repository(transport, attachmentStorage = storage) { uri, photo ->
+                reads += uri to photo
+                if (reads.size == 2) second.await()
+                val bytes = byteArrayOf(reads.size.toByte())
+                val local =
+                    if (photo) localFile(bytes, "C".repeat(22)).copy(kind = "image", name = "shot.jpg", mimeType = "image/jpeg")
+                    else localFile(bytes, "D".repeat(22)).copy(name = "spec.pdf", mimeType = "application/pdf")
+                storage.write(local, bytes)
+                local
+            }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        var done = 0
+        var readsWhenDone = -1
+        repository.importAttachments(
+            repository.state.value.selection,
+            listOf(Picked("content:shot", photo = true), Picked("content:spec.pdf", photo = false)),
+        ) {
+            done++
+            readsWhenDone = reads.size
+        }
+        runCurrent()
+        // The second URI is still being read: the drop's grants must stay.
+        assertEquals(0, done)
+        assertTrue(repository.state.value.importingAttachments)
+        second.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("content:shot" to true, "content:spec.pdf" to false), reads)
+        assertEquals(1, done)
+        assertEquals(2, readsWhenDone)
+        assertEquals(listOf("shot.jpg", "spec.pdf"), repository.state.value.attachments.map { it.name })
+        assertFalse(repository.state.value.importingAttachments)
+    }
+
+    @Test
+    fun batchKeepsTheAttachmentLimitAndRefusesWhileSendingButIsAlwaysDone() = runTest {
+        val local = localFile(byteArrayOf(1))
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, local, prompt = false) }
+        val reads = mutableListOf<String>()
+        val repository =
+            repository(transport, attachmentStorage = storage) { uri, _ ->
+                reads += uri
+                storage.write(local, byteArrayOf(1))
+                local
+            }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val selection = repository.state.value.selection
+        var done = 0
+        repository.importAttachments(selection, (1..6).map { Picked("content:$it", photo = it % 2 == 0) }) { done++ }
+        runCurrent()
+        assertEquals(R.string.remote_attachment_limits, repository.state.value.error)
+        assertTrue(reads.isEmpty())
+        assertEquals(1, done)
+
+        repository.draft("pending")
+        repository.prompt()
+        runCurrent()
+        assertTrue(repository.state.value.sending)
+        repository.importAttachments(selection, listOf(Picked("content:late", photo = true))) { done++ }
+        runCurrent()
+        assertTrue(reads.isEmpty())
+        assertEquals(2, done)
+        // A drop or a paste reaches this while the + button is disabled: it says why.
+        assertEquals(R.string.remote_attachments_busy, repository.state.value.error)
+
+        // Another chat's batch is refused too, and given back as well.
+        repository.importAttachments(selection.copy(sessionId = "other"), listOf(Picked("content:x", false))) { done++ }
+        assertEquals(3, done)
+    }
+
+    @Test
+    fun cancelledBatchIsDoneOnce() = runTest {
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, localFile()) }
+        val gate = CompletableDeferred<Unit>()
+        val repository =
+            repository(transport, attachmentStorage = storage) { _, _ ->
+                gate.await()
+                localFile()
+            }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        var done = 0
+        repository.importAttachments(repository.state.value.selection, listOf(Picked("content:a", false))) { done++ }
+        runCurrent()
+        assertEquals(0, done)
+        repository.cancelAttachmentWork()
+        runCurrent()
+        assertEquals(1, done)
+        assertTrue(repository.state.value.attachments.isEmpty())
+    }
+
+    @Test
+    fun sentImageUsesUploadedBytesAfterLocalDraftCleanupWithoutDownload() = runTest {
+        val bytes = byteArrayOf(1, 2, 3)
+        val local = localFile(bytes).copy(kind = "image", name = "photo.jpg", mimeType = "image/jpeg")
+        val remoteId = Wire.encode(ByteArray(16) { 1 })
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, local, remoteId = remoteId) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(local, bytes)
+            local
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.importAttachments(repository.state.value.selection, listOf("content:photo"), true)
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        assertFalse(storage.bytes.containsKey(local.id))
+        val remote = RemoteAttachment(
+            remoteId, local.name, local.kind, local.mimeType,
+            local.size, local.sha256, 3_600_000,
+        )
+        val result = repository.readAttachment("session", remote)
+        assertTrue(result is AttachmentReadResult.Loaded)
+        assertArrayEquals(bytes, (result as AttachmentReadResult.Loaded).bytes)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.get" })
+        assertTrue(repository.readAttachment("session", remote.copy(sha256 = "0".repeat(64))) !is AttachmentReadResult.Loaded)
     }
 
     @Test
@@ -1121,6 +1712,156 @@ class RemoteRepositoryTest {
         assertTrue(local.id in storage.removed)
     }
 
+    /**
+     * A store whose [open] hands out a new stream per call, so a test can change the bytes that one
+     * open returns or fail it. Every stream is kept, to check that each one is closed.
+     */
+    private class StreamedAttachments(private val stored: ByteArray) : AttachmentStorage {
+        val opened = mutableListOf<CountingStream>()
+        var openFailure: RuntimeException? = null
+
+        /** The bytes of the open with this index (0 is the digest pass), given the stored bytes. */
+        var openedBytes: (index: Int, stored: ByteArray) -> ByteArray = { _, bytes -> bytes }
+
+        override fun write(attachment: LocalAttachment, bytes: ByteArray) = Unit
+
+        override fun read(attachment: LocalAttachment): ByteArray = stored.copyOf()
+
+        override fun open(attachment: LocalAttachment): java.io.InputStream {
+            openFailure?.let { throw it }
+            return CountingStream(openedBytes(opened.size, stored)).also { opened += it }
+        }
+
+        override fun remove(id: String) = Unit
+
+        override fun cleanup(keepIds: Set<String>) = Unit
+    }
+
+    private class CountingStream(bytes: ByteArray) : java.io.ByteArrayInputStream(bytes) {
+        var closed = false
+            private set
+
+        override fun close() {
+            closed = true
+            super.close()
+        }
+    }
+
+    /** Imports [local] from [storage], sends the prompt and lets its paced upload finish. */
+    private suspend fun TestScope.sendOneAttachment(
+        storage: AttachmentStorage,
+        local: LocalAttachment,
+        transport: Transport,
+        photo: Boolean = false,
+    ): DefaultRemoteRepository {
+        val repository = repository(transport, attachmentStorage = storage) { _, _ -> local }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.importAttachments(
+            repository.state.value.selection,
+            listOf("content:attachment"),
+            photo,
+        )
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(1_001)
+        runCurrent()
+        return repository
+    }
+
+    @Test
+    fun anAttachmentThatCannotBeOpenedStartsNoUpload() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val local = localFile(bytes)
+        val storage = StreamedAttachments(bytes).also { it.openFailure = IllegalStateException("gone") }
+        val transport = Transport().also { attachmentResponses(it, local) }
+        sendOneAttachment(storage, local, transport)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.begin" })
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+        assertTrue(storage.opened.isEmpty())
+    }
+
+    @Test
+    fun aStreamThatChangedBeforeSendingStartsNoUpload() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val local = localFile(bytes)
+        val storage =
+            StreamedAttachments(bytes).also {
+                it.openedBytes = { index, stored -> if (index == 0) stored.copyOf(stored.size - 1) else stored }
+            }
+        val transport = Transport().also { attachmentResponses(it, local) }
+        sendOneAttachment(storage, local, transport)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.begin" })
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+        assertTrue(storage.opened.all { it.closed })
+    }
+
+    @Test
+    fun aStreamThatChangesWhileItIsSentAbortsBeforeCommit() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val changes =
+            mapOf<String, (ByteArray) -> ByteArray>(
+                "shorter" to { it.copyOf(it.size - 1) },
+                "longer" to { it.copyOf(it.size + 1) },
+                "different" to {
+                    it.copyOf().also { copy -> copy[copy.size - 1] = (copy.last() + 1).toByte() }
+                },
+            )
+        for ((change, transform) in changes) {
+            val local = localFile(bytes)
+            val storage =
+                StreamedAttachments(bytes).also {
+                    it.openedBytes = { index, stored -> if (index == 1) transform(stored) else stored }
+                }
+            val transport = Transport().also { attachmentResponses(it, local) }
+            sendOneAttachment(storage, local, transport)
+            assertTrue("$change: begins", transport.sent.any { it.text("type") == "session.attachments.begin" })
+            assertFalse("$change: commits", transport.sent.any { it.text("type") == "session.attachments.commit" })
+            assertFalse("$change: prompts", transport.sent.any { it.text("type") == "session.prompt" })
+            assertTrue("$change: closes its stream", storage.opened.all { it.closed })
+        }
+    }
+
+    @Test
+    fun aFailedChunkClosesTheStreamAndCommitsNothing() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val local = localFile(bytes)
+        val storage = StreamedAttachments(bytes)
+        val transport = Transport().also { attachmentResponses(it, local) }
+        transport.failure = { if (it.text("type") == "session.attachments.chunk") "internal" else null }
+        sendOneAttachment(storage, local, transport)
+        assertTrue(storage.opened.isNotEmpty())
+        assertTrue(storage.opened.all { it.closed })
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.commit" })
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aSentImageLargerThanOneChunkIsReadBackFromTheStreamedBytes() = runTest {
+        val bytes = ByteArray(150 * 1024) { (it % 239).toByte() }
+        val local = localFile(bytes).copy(kind = "image", name = "photo.jpg", mimeType = "image/jpeg")
+        val remoteId = Wire.encode(ByteArray(16) { 1 })
+        val storage = StreamedAttachments(bytes)
+        val transport = Transport().also { attachmentResponses(it, local, remoteId = remoteId) }
+        val repository = sendOneAttachment(storage, local, transport, photo = true)
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        assertTrue(storage.opened.all { it.closed })
+        val remote =
+            RemoteAttachment(
+                remoteId,
+                local.name,
+                local.kind,
+                local.mimeType,
+                local.size,
+                local.sha256,
+                3_600_000,
+            )
+        val result = repository.readAttachment("session", remote)
+        assertArrayEquals(bytes, (result as AttachmentReadResult.Loaded).bytes)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.get" })
+    }
+
     @Test
     fun removingUnsubmittedAttachmentCancelsRemoteUploadAndReleasesBlob() = runTest {
         val bytes = byteArrayOf(1)
@@ -1203,7 +1944,7 @@ class RemoteRepositoryTest {
             val original = transport.response
             transport.response = { request ->
                 if (request.text("type") == "session.attachments.cancel") {
-                    transport.listener.message(
+                    transport.deliver(
                         Wire.objectOf(
                             "type" to "result",
                             "requestId" to request.text("requestId"),
@@ -1377,7 +2118,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -1418,7 +2159,7 @@ class RemoteRepositoryTest {
         assertNotNull(drafts.values.values.single().mutationId)
         repository.draft("new draft")
         val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -1471,6 +2212,106 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun settingsChangeSendsOnlyTheGivenFieldsAndTakesTheRefreshedConfiguration() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
+                "session.configuration.set" ->
+                    configurationData(it.text("sessionId"), settings = settingsData(auto = false, steering = "all"))
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(true, repository.state.value.configuration?.settings?.autoCompaction)
+        repository.changeSettings()
+        repository.changeSettings(steeringMode = "sometimes")
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.configuration.set" })
+        repository.changeSettings(autoCompaction = false, steeringMode = "all")
+        runCurrent()
+        val change = transport.sent.last { it.text("type") == "session.configuration.set" }.obj("change")
+        assertEquals(setOf("kind", "autoCompaction", "steeringMode"), change.keys)
+        assertEquals("settings", change.text("kind"))
+        assertEquals(SessionSettings(false, "all", "one-at-a-time"), repository.state.value.configuration?.settings)
+        assertFalse(repository.state.value.configurationChanging)
+    }
+
+    @Test
+    fun settingsChangeIsIgnoredWithoutTheCapabilityOrReportedSettings() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.changeSettings(autoCompaction = true)
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.configuration.set" })
+    }
+
+    @Test
+    fun unsupportedSettingsChangeOnlyWithdrawsTheSettingsCapability() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
+                "session.configuration.set" -> {
+                    transport.deliver(
+                        Wire.objectOf(
+                            "type" to "result",
+                            "requestId" to it.text("requestId"),
+                            "ok" to false,
+                            "error" to Wire.objectOf("code" to "unsupported"),
+                        )
+                    )
+                    null
+                }
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.changeSettings(autoCompaction = false)
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(setOf(SETTINGS_CAPABILITY), state.unavailableCapabilities)
+        assertNotNull(state.configuration)
+    }
+
+    @Test
+    fun failedSettingsChangeReadsTheConfigurationAgain() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        var held = settingsData()
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = held)
+                "session.configuration.set" -> null
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        held = settingsData(auto = false)
+        repository.changeSettings(autoCompaction = false)
+        runCurrent()
+        advanceTimeBy(30_001)
+        runCurrent()
+        assertEquals(R.string.remote_configuration_error, repository.state.value.error)
+        assertEquals("session.configuration.get", transport.sent.last().text("type"))
+        assertEquals(false, repository.state.value.configuration?.settings?.autoCompaction)
+        assertFalse(repository.state.value.configurationChanging)
+    }
+
+    @Test
     fun uncertainCommandSurvivesRecreationWithoutReplay() = runTest {
         val transport = Transport().also(::capable)
         val drafts = Drafts()
@@ -1498,12 +2339,58 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun knownCommandIsSentWhileTheCatalogRevalidates() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.state.value.commands.any { it.name == "review" })
+        // A turn's end revalidates the catalog; the send button stays enabled meanwhile.
+        val answering = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.commands.get" -> null
+                "session.command" -> Wire.objectOf("kind" to "command", "sessionId" to "session", "status" to "dispatched")
+                else -> answering(it)
+            }
+        }
+        repository.refreshCommands()
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        repository.draft("/review  now")
+        repository.prompt()
+        runCurrent()
+        assertEquals("/review  now", transport.sent.last { it.text("type") == "session.command" }.text("text"))
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun unknownCommandIsRefusedWhileTheCatalogRevalidates() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val answering = transport.response
+        transport.response = { if (it.text("type") == "session.commands.get") null else answering(it) }
+        repository.refreshCommands()
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        repository.draft("/unknown")
+        repository.prompt()
+        runCurrent()
+        assertEquals(R.string.remote_command_unknown, repository.state.value.error)
+        assertFalse(transport.sent.any { it.text("type") == "session.command" })
+    }
+
+    @Test
     fun quotedCommandIsRetainedAndNotDispatched() = runTest {
         val transport = Transport().also(::capable)
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
-        transport.listener.message(
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -1533,15 +2420,17 @@ class RemoteRepositoryTest {
     fun sessionStatusUpdatesListWithoutOpeningChatAndWinsListResponseRace() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = repository(transport)
-        repository.activate(RemoteSelection("host"))
+        // The Projects page's read of the project gets no reply, so the open reads the list itself.
         transport.response = { request ->
             if (request.text("type") == "projects.list") data("projects", listOf(project)) else null
         }
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
         val selection = async { repository.activate(RemoteSelection("host", "project")) }
         runCurrent()
         val listRequest = transport.sent.last { it.text("type") == "sessions.list" }
         fun status(revision: Long, value: String) =
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event",
                     "sessionId" to "session",
@@ -1576,7 +2465,7 @@ class RemoteRepositoryTest {
     }
 
     @Test
-    fun sessionsFreshOnlyWhenTheListWasActuallyFetchedThisTime() = runTest {
+    fun closureProofOnlyWhenTheListWasActuallyFetchedThisTime() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
@@ -1584,14 +2473,155 @@ class RemoteRepositoryTest {
             "The list was just fetched on this connection",
             repository.state.value.sessionsFresh,
         )
+        assertFalse(repository.state.value.sessionsReused)
+        assertTrue(homeInputs(repository.state.value).sessionsFresh)
         val listRequests = transport.sent.count { it.text("type") == "sessions.list" }
         // Same connection, same project: the cached list is reused rather than refetched.
         repository.activate(RemoteSelection("host", "project"))
         assertEquals(listRequests, transport.sent.count { it.text("type") == "sessions.list" })
+        // Read on this same live connection: current for display, so no row reads last known...
+        assertTrue(repository.state.value.sessionsFresh)
+        assertTrue(repository.state.value.sessionsReused)
+        repository.state.value.let {
+            val rows = sessionListItems(it.sessions, it.connected, it.loading, confirmed = it.sessionsFresh)
+            assertEquals(listOf("session"), rows.map { row -> row.id })
+            assertFalse(rows.single().lastKnown)
+        }
+        // ...but a reused list must not be trusted to declare a session closed.
         assertFalse(
             "A reused cached list must not be trusted to declare a session closed",
-            repository.state.value.sessionsFresh,
+            homeInputs(repository.state.value).sessionsFresh,
         )
+    }
+
+    @Test
+    fun anIdenticalListOnTheLiveConnectionConfirmsTheReusedOne() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertTrue(repository.state.value.sessionsReused)
+        val before = repository.state.value.sessions
+        advanceTimeBy(60_000)
+        repository.refreshSessions()
+        runCurrent()
+        assertEquals(before, repository.state.value.sessions)
+        assertTrue(repository.state.value.sessionsFresh)
+        assertFalse("A list fetched now proves closures again", repository.state.value.sessionsReused)
+        assertTrue(homeInputs(repository.state.value).sessionsFresh)
+    }
+
+    @Test
+    fun aDisconnectUnconfirmsTheListUntilTheNextConnectionsListAnswers() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val project = RemoteSelection("host", "project")
+        repository.activate(project)
+        runCurrent()
+        assertTrue(repository.state.value.sessionsFresh)
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse("A lost connection confirms no row", repository.state.value.sessionsFresh)
+
+        // The next connection's list is held: up again, but nothing stands behind the rows yet.
+        val answered = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") null.also { held += request } else answered(request)
+        }
+        val reopening = async { repository.activate(project) }
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse("Connected again, but its list has not answered", repository.state.value.sessionsFresh)
+
+        transport.result(held.single(), answered(held.single())!!)
+        assertEquals(project, reopening.await())
+        assertTrue(repository.state.value.sessionsFresh)
+    }
+
+    @Test
+    fun aReconnectBeforeItsListAnswersShowsNoRowAsLive() = runTest {
+        val running = session("tui", origin = "tui", status = "running")
+        val transport = Transport().also { configure(it, sessions = listOf(running)) }
+        val repository = repository(transport)
+        val project = RemoteSelection("host", "project")
+        repository.activate(project)
+        runCurrent()
+        // What the list screen and the shortcuts render from the repository's state.
+        fun rows() = repository.state.value.let {
+            visibleSessionListItems(
+                it.sessions, it.connected, it.loading, hideOffline = false, stale = it.stale, confirmed = it.sessionsFresh,
+            )
+        }
+        assertFalse(rows().single().lastKnown)
+        assertTrue(rows().single().liveMacTui)
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        val answered = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") null.also { held += request } else answered(request)
+        }
+        val reopening = async { repository.activate(project) }
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.sessionsFresh)
+        assertEquals(1, held.size)
+        // Not vacuous: the cached row is still shown, exactly once, but only as last known.
+        val shown = rows()
+        assertEquals(listOf(running.text("id")), shown.map { it.id })
+        shown.single().let {
+            assertTrue("Up again, but its list has not answered: ${it.id}", it.lastKnown)
+            assertEquals(SessionAvailability.RUNNING, it.availability)
+            assertFalse(it.liveMacTui)
+            assertNull(sessionBadgeGlyph(it.availability, it.lastKnown))
+            assertFalse(canCloseSession(it, connected = true, loading = false, repository.state.value.capabilities))
+        }
+
+        transport.result(held.single(), answered(held.single())!!)
+        assertEquals(project, reopening.await())
+        assertTrue(repository.state.value.sessionsFresh)
+        assertEquals(listOf(running.text("id")), rows().map { it.id })
+        assertFalse(rows().single().lastKnown)
+        assertTrue(rows().single().liveMacTui)
+    }
+
+    @Test
+    fun aListReplyOfAConnectionThatIsGoneConfirmsNothingAfterTheReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val project = RemoteSelection("host", "project")
+        repository.activate(project)
+        runCurrent()
+        val answered = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.list") null.also { held += request } else answered(request)
+        }
+        advanceTimeBy(60_000)
+        repository.refreshSessions()
+        runCurrent()
+        val old = held.single()
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        val reopening = async { repository.activate(project) }
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.sessionsFresh)
+
+        // The old connection's reply comes late, on the new connection.
+        transport.result(old, answered(old)!!)
+        runCurrent()
+        assertFalse("A reply to a connection that is gone confirms nothing", repository.state.value.sessionsFresh)
+
+        val current = held.last { it !== old }
+        transport.result(current, answered(current)!!)
+        assertEquals(project, reopening.await())
+        assertTrue(repository.state.value.sessionsFresh)
     }
 
     @Test
@@ -1618,9 +2648,10 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         val target = RemoteSelection("host", "project", "session")
         repository.activate(target)
+        val initialProjects = transport.sent.count { it.text("type") == "projects.list" }
         val original = transport.response
         transport.response = { request ->
-            if (request.text("type") == "projects.list") data("projects", emptyList())
+            if (request.text("type") == "projects.list") JsonObject(data("projects", emptyList()) + ("capabilities" to JsonArray(emptyList())))
             else original(request)
         }
 
@@ -1629,7 +2660,7 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertEquals(RemoteSelection("host"), repository.state.value.selection)
-        assertEquals(2, transport.sent.count { it.text("type") == "projects.list" })
+        assertEquals(initialProjects + 1, transport.sent.count { it.text("type") == "projects.list" })
         assertFalse(transport.sent.any { it.text("type") == "sessions.open" })
     }
 
@@ -1649,6 +2680,421 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertEquals(connects, transport.connects)
+    }
+
+    private suspend fun TestScope.offlineRepository(transport: Transport): DefaultRemoteRepository {
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        return repository
+    }
+
+    @Test
+    fun reconnectKeepsRetryingWithCappedBackoffWhileRecoverable() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        val start = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+
+        var elapsed = 0L
+        for ((index, delay) in listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 27_000L, 27_000L, 27_000L).withIndex()) {
+            advanceTimeBy(delay - 1)
+            runCurrent()
+            assertEquals(start + index, transport.connects)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(start + index + 1, transport.connects)
+            elapsed += delay
+        }
+        assertFalse(repository.state.value.connected)
+    }
+
+    @Test
+    fun reconnectDelayIsJitteredWithinTwentyPercentAndNeverAboveTheCap() = runTest {
+        val transport = Transport().also { configure(it) }
+        val low = DefaultRemoteRepository(
+            Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            jitter = { 0.0 },
+        )
+        low.activate(RemoteSelection("host", "project", "session"))
+        low.setForeground(true)
+        low.setValidatedNetwork("wifi")
+        runCurrent()
+        val start = transport.connects
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(testScheduler.currentTime + 800, low.state.value.reconnectAt)
+        advanceTimeBy(800)
+        runCurrent()
+        assertEquals(start + 1, transport.connects)
+    }
+
+    @Test
+    fun reconnectPausesInTheBackgroundAndResumesOnForeground() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        repository.setForeground(false)
+        assertNull(repository.state.value.reconnectAt)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        transport.failureOnConnect = null
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun deniedPairingStopsReconnectAndClearsTheSchedule() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        transport.listener.failed(true, R.string.remote_denied)
+        assertNull(repository.state.value.reconnectAt)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+    }
+
+    @Test
+    fun deniedDeviceStopsReconnectEvenWhenTheTransportAsksForOne() = runTest {
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = offlineRepository(transport)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            assertNotNull(repository.state.value.reconnectAt)
+            transport.listener.failed(true, error)
+            assertNull(repository.state.value.reconnectAt)
+            assertEquals(error, repository.state.value.error)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            repository.setValidatedNetwork("cellular")
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+        }
+    }
+
+    @Test
+    fun deniedDeviceKeepsItsErrorThroughActivationAndRetriesOnlyOnRefresh() = runTest {
+        val full = RemoteSelection("host", "project", "session")
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            transport.failureOnConnect = error
+            repository.activate(full)
+            runCurrent()
+            assertEquals(error, repository.state.value.error)
+            assertEquals("host", repository.state.value.deniedRouteId)
+            assertNull(repository.state.value.reconnectAt)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            // Navigation restores must not retry it either, even after the card is dismissed.
+            repository.dismissError()
+            repository.activate(full, ActivationMode.RESTORE)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+
+            repository.refresh()
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            transport.failureOnConnect = null
+            repository.refresh()
+            runCurrent()
+            assertTrue(repository.state.value.connected)
+            assertNull(repository.state.value.deniedRouteId)
+            assertEquals(full, repository.state.value.selection)
+        }
+    }
+
+    @Test
+    fun deniedHostOpenedFromTheListIsTargetedByRouteAndRetried() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        // Nothing was selected yet, so the error card cannot rely on the selection.
+        assertNull(repository.state.value.selection.routeId)
+        assertEquals("host", repository.state.value.deniedRouteId)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals("host", repository.state.value.selection.routeId)
+        assertNull(repository.state.value.deniedRouteId)
+    }
+
+    @Test
+    fun restoringTheHostsListLeavesADeniedHostAndReenablesReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_paused
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        repository.activate(RemoteSelection(), ActivationMode.RESTORE)
+        runCurrent()
+        assertNull(repository.state.value.selection.routeId)
+
+        // Reconnect is enabled again, so a failure on another host schedules a retry.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun restoringAHealthyHostIgnoresAnotherHostsDenial() = runTest {
+        val other = PairedHost("other", "https://relay.test", "device2", "secret2", "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        transport.failureOnConnect = null
+        repository.activate(RemoteSelection("other", "project"), ActivationMode.RESTORE)
+        runCurrent()
+        assertEquals("other", transport.route)
+        assertTrue(repository.state.value.connected)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun pausedDeviceReconnectsOnlyWhenTheUserRetries() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(false, R.string.remote_device_paused)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        repository.setValidatedNetwork("cellular")
+        repository.setForeground(false)
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(transport.connects > connects)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun reconnectAtIsSetOnFailureAndClearedOnSuccess() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        val failedAt = testScheduler.currentTime
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(failedAt + 1_000, repository.state.value.reconnectAt)
+
+        transport.failureOnConnect = null
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun manualRefreshResetsTheBackoff() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000 + 2_000 + 4_000 + 8_000)
+        runCurrent()
+        assertEquals(16_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        repository.refresh()
+        runCurrent()
+        // The refresh attempt failed again; the schedule starts over at one second.
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun clearerUnreachableMessageAppearsAfterThreeFailuresAndRevertsOnConnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        // The first failure of a streak reconnects quietly; the second one raises the card.
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+
+        transport.failureOnConnect = null
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun serviceRestartCloseRetriesAfterQuarterToThreeQuartersOfASecond() = runTest {
+        for ((unit, expected) in listOf(0.0 to 250L, 0.5 to 500L, 1.0 to 750L)) {
+            val transport = Transport().also { configure(it) }
+            val repository = DefaultRemoteRepository(
+                Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+                StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+                jitter = { unit },
+            )
+            repository.activate(RemoteSelection("host", "project", "session"))
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+            runCurrent()
+            val connects = transport.connects
+            transport.listener.closed(1012)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            runCurrent()
+            // The retry waits; it neither runs at once nor takes the ordinary one-second backoff.
+            assertEquals(unit.toString(), connects, transport.connects)
+            assertEquals(unit.toString(), expected, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+            advanceTimeBy(expected - 1)
+            runCurrent()
+            assertEquals(unit.toString(), connects, transport.connects)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(unit.toString(), connects + 1, transport.connects)
+        }
+    }
+
+    @Test
+    fun repeatedServiceRestartClosesRetryQuicklyOnlyOncePerStreak() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        val start = transport.connects
+        transport.listener.closed(1012)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(500L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        advanceTimeBy(500)
+        runCurrent()
+        assertEquals(start + 1, transport.connects)
+        // The second close of the streak backs off like any other failure.
+        transport.listener.closed(1012)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertTrue(repository.state.value.reconnectAt!! - testScheduler.currentTime >= 1_000L)
+        assertEquals(start + 1, transport.connects)
+    }
+
+    @Test
+    fun serviceRestartAndFlowClosesCountTowardTheShortLivedStop() = runTest {
+        for (code in listOf(1012, 1013)) {
+            val transport = Transport().also { configure(it) }
+            val repository = chatRepository(transport)
+            // The Mac accepts each connection and the relay drops it again at once.
+            transport.response = { null }
+            transport.listener.closed(code)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            repeat(MAX_SHORT_LIVED_CONNECTIONS) {
+                advanceTimeBy(repository.state.value.reconnectAt!! - testScheduler.currentTime)
+                runCurrent()
+                assertTrue(code.toString(), repository.state.value.connected)
+                advanceTimeBy(500)
+                transport.listener.closed(code)
+                transport.listener.failed(true, R.string.remote_connection_error)
+            }
+            assertNull(code.toString(), repository.state.value.reconnectAt)
+            assertEquals(code.toString(), R.string.remote_unreachable, repository.state.value.error)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(code.toString(), connects, transport.connects)
+        }
+    }
+
+    @Test
+    fun reconnectCapSpreadsDownwardOnly() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = DefaultRemoteRepository(
+            Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            jitter = { 1.0 },
+        )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        // 1.2 s, 2.4 s, 4.8 s, 9.6 s, 19.2 s, then the capped 24 s.
+        for (wait in listOf(1_200L, 2_400L, 4_800L, 9_600L, 19_200L)) {
+            advanceTimeBy(wait)
+            runCurrent()
+        }
+        assertEquals(24_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun connectTimeoutGoesOfflineAndSchedulesAReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.readyOnConnect = false
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        val activation = async { repository.activate(RemoteSelection("host", "project", "session")) }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        activation.await()
+        assertFalse(repository.state.value.connected)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun activateCatchKeepsTheConnectionError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+    }
+
+    @Test
+    fun networkLossAndRefreshClearReconnectAt() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        repository.setValidatedNetwork(null)
+        assertNull(repository.state.value.reconnectAt)
+
+        repository.setValidatedNetwork("cell")
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        transport.failureOnConnect = null
+        repository.refresh()
+        assertNull(repository.state.value.reconnectAt)
     }
 
     @Test
@@ -1721,6 +3167,934 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun connectGivesUpJustAfterTheTransportHandshakeTimeout() = runTest {
+        val transport = Transport().also { configure(it) }
+        transport.readyOnConnect = false
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+
+        val stalled = async { repository.activate(selection) }
+        runCurrent()
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS - 1)
+        runCurrent()
+        assertFalse(stalled.isCompleted)
+        assertTrue(repository.state.value.loading)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(stalled.isCompleted)
+        assertFalse(repository.state.value.connected)
+        // Well before the 30 s the wait used to be, and only just after the transport's 20 s.
+        assertEquals(HANDSHAKE_TIMEOUT_MILLIS + 2_000, currentTime)
+        // The first failure is quiet; the card follows while the Mac stays unreachable.
+        assertNull(repository.state.value.error)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+    }
+
+    /** A connected repository on the projects list, recoverable, one second after connecting. */
+    private suspend fun TestScope.listingRepository(transport: Transport): DefaultRemoteRepository {
+        val repository = repository(transport)
+        // The Projects page's reads of each project fail, so opening the project reads its list.
+        transport.failure = { if (it.text("type") == "sessions.list") "internal" else null }
+        repository.activate(RemoteSelection("host"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.failure = { null }
+        // Every frame so far arrived before the next request goes out.
+        advanceTimeBy(1_000)
+        return repository
+    }
+
+    @Test
+    fun aListReadWithNoReplyAndNoFrameReconnectsAtOnceAndQuietly() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = listingRepository(transport)
+        val answered = transport.response
+        transport.response = { if (it.text("type") == "sessions.list") null else answered(it) }
+        val closes = transport.closes
+        val connects = transport.connects
+        val opening = async { repository.activate(RemoteSelection("host", "project")) }
+        runCurrent()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS - 1)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+
+        transport.response = answered
+        advanceTimeBy(1)
+        runCurrent()
+        opening.await()
+        // The dead socket is closed and replaced without a backoff and without an error card.
+        assertEquals(closes + 1, transport.closes)
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test fun aFrameDuringPacedAdmissionDoesNotHideADeadListRead() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = listingRepository(transport)
+        val answered = transport.response
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "sessions.list") gate.await() }
+        transport.response = { if (it.text("type") == "sessions.list") null else answered(it) }
+        val closes = transport.closes
+        val opening = async { repository.activate(RemoteSelection("host", "project")) }
+        runCurrent()
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
+        gate.complete(Unit); runCurrent()
+        transport.beforeGuardedSend = {}
+        transport.response = answered
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS); runCurrent()
+        opening.await()
+        assertEquals("Frame before dispatch must not count as liveness after dispatch", closes + 1, transport.closes)
+    }
+
+    @Test
+    fun theFirstReadAfterAReconnectDetectsADeadSocket() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        val answered = transport.response
+        transport.response = { if (it.text("type") == "projects.list") null else answered(it) }
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        // The list goes out in the same instant as the handshake's last frame.
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+
+        transport.response = answered
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
+        runCurrent()
+        assertEquals(connects + 2, transport.connects)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aListReadThatTimesOutAfterAFrameOnlyReportsARequestError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = listingRepository(transport)
+        val answered = transport.response
+        transport.response = { if (it.text("type") == "sessions.list") null else answered(it) }
+        val closes = transport.closes
+        val connects = transport.connects
+        val opening = async { repository.activate(RemoteSelection("host", "project")) }
+        runCurrent()
+        advanceTimeBy(10_000)
+        // Any frame proves the socket alive: the host is slow, not gone.
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
+        runCurrent()
+        opening.await()
+        assertEquals(closes, transport.closes)
+        assertEquals(connects, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+    }
+
+    @Test
+    fun aToolOutputReadThatTimesOutNeverEndsTheConnection() = runTest {
+        val (transport, repository) = toolOutputRepository { null }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        advanceTimeBy(1_000)
+        val closes = transport.closes
+        repository.loadToolOutput("call")
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
+        runCurrent()
+        // It may queue behind other reads on the host, so its silence says nothing about the socket.
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+        assertEquals(ToolOutputFailure.FAILED, repository.state.value.toolOutput?.failure)
+    }
+
+    @Test
+    fun aReplacedNetworkReconnectsAtOnceWithoutAnError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.failureOnConnect = null
+        val connects = transport.connects
+        repository.setValidatedNetwork("cellular")
+        assertFalse(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+        assertEquals(testScheduler.currentTime, repository.state.value.reconnectAt)
+        assertTrue(repository.state.value.stale)
+
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertFalse(repository.state.value.stale)
+        assertNull(repository.state.value.staleSince)
+    }
+
+    private val pendingQuestion = Wire.objectOf("id" to "question", "kind" to "input", "title" to "Answer")
+
+    /**
+     * A chat with a pending question, configuration, commands, advisor and a finished tool output,
+     * connected and recoverable.
+     */
+    private suspend fun TestScope.lastKnownRepository(
+        transport: Transport,
+        hosts: List<PairedHost> = listOf(host),
+        extraCapabilities: List<String> = emptyList(),
+        sessions: List<JsonObject> = listOf(session()),
+        readyCapabilities: Set<String> = emptySet(),
+    ): DefaultRemoteRepository {
+        configure(transport, sessions = sessions)
+        advertising(transport, JsonArray(fixtureCapabilities.jsonArray + extraCapabilities.map(::JsonPrimitive)))
+        transport.capabilities =
+            setOf(CONFIGURATION_CAPABILITY, COMMANDS_CAPABILITY, ADVISOR_CAPABILITY) + readyCapabilities
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.snapshot" ->
+                    JsonObject(original(request)!! + ("pendingQuestions" to JsonArray(listOf(pendingQuestion))))
+                "session.configuration.get" -> configurationData(request.text("sessionId"))
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                "session.advisor.get" -> advisorData()
+                "session.tool_output.get" -> toolOutputData(0, 2, "ok".encodeToByteArray())
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport, hosts = hosts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        repository.loadToolOutput("call")
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(listOf(pendingQuestion), state.questions)
+        assertNotNull(state.configuration)
+        assertNotNull(state.advisor)
+        assertEquals(1, state.commands.size)
+        assertEquals("ok", state.toolOutput?.text)
+        assertTrue(TOOL_OUTPUT_CAPABILITY in state.capabilities)
+        return repository
+    }
+
+    @Test
+    fun aDropKeepsTheLastKnownChatStateUntilTheReconnectReadsItAgain() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        val before = repository.state.value
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+
+        val offline = repository.state.value
+        assertFalse(offline.connected)
+        assertTrue(offline.stale)
+        assertEquals(testScheduler.currentTime, offline.staleSince)
+        assertEquals(R.string.remote_reconnecting, offline.connection)
+        assertNull(offline.error)
+        assertEquals(before.questions, offline.questions)
+        assertEquals(before.configuration, offline.configuration)
+        assertEquals(before.advisor, offline.advisor)
+        assertEquals(before.commands, offline.commands)
+        assertEquals(before.status, offline.status)
+        assertEquals(before.capabilities, offline.capabilities)
+        assertTrue(offline.capabilitiesKnown)
+        assertEquals("ok", offline.toolOutput?.text)
+        assertEquals(before.messages, offline.messages)
+
+        // The reconnect attempt fails too: now the card shows, and the chat still stays.
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+        assertEquals(before.questions, repository.state.value.questions)
+        assertEquals(before.configuration, repository.state.value.configuration)
+        assertEquals(offline.staleSince, repository.state.value.staleSince)
+
+        transport.failureOnConnect = null
+        advanceTimeBy(2_000)
+        runCurrent()
+        val back = repository.state.value
+        assertTrue(back.connected)
+        assertFalse(back.stale)
+        assertNull(back.staleSince)
+        assertNull(back.error)
+        assertEquals(RemoteSelection("host", "project", "session"), back.selection)
+        assertEquals(before.questions, back.questions)
+        assertEquals(before.configuration, back.configuration)
+        assertEquals("ok", back.toolOutput?.text)
+    }
+
+    /** Holds every configuration, commands and advisor read from now on, so what stays shows. */
+    private fun holdControls(transport: Transport) {
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") in setOf("session.configuration.get", "session.commands.get", "session.advisor.get")) null
+            else original(request)
+        }
+    }
+
+    @Test
+    fun aForcedRestoreOfTheSameChatKeepsItsPanesAndControls() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                sessions = listOf(session(), session("other")),
+                readyCapabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.close")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else original(request)
+        }
+        repository.openChanges()
+        runCurrent()
+        val before = repository.state.value
+        assertEquals("session", before.changes?.sessionId)
+        holdControls(transport)
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+
+        // Closing another chat reads the lists again with a forced restore of this one.
+        repository.closeSession("other")
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        val after = repository.state.value
+        assertFalse(after.loading)
+        assertEquals("session", after.changes?.sessionId)
+        assertEquals("ok", after.toolOutput?.text)
+        assertEquals(before.configuration, after.configuration)
+        assertEquals(before.commands, after.commands)
+        assertEquals(before.advisor, after.advisor)
+        assertEquals(listOf(pendingQuestion), after.questions)
+    }
+
+    @Test
+    fun anotherChatAndBackShowsItsControlsWhileTheyLoad() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport, sessions = listOf(session(), session("other")))
+        val before = repository.state.value
+        holdControls(transport)
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.configuration)
+        assertTrue(repository.state.value.commands.isEmpty())
+        // The first chat's tool output stays behind with it.
+        assertNull(repository.state.value.toolOutput)
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(before.configuration, repository.state.value.configuration)
+        assertEquals(before.commands, repository.state.value.commands)
+        assertEquals(before.advisor, repository.state.value.advisor)
+        assertTrue(repository.state.value.configurationLoading)
+    }
+
+    @Test
+    fun eventsDuringARestoreKeepTheCachedChatAndAskForNoExtraSnapshot() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")))
+            quoteMessages(it)
+        }
+        val quoted = transport.response
+        // Revision 5, so an event of revision 3 is older than the snapshot that follows.
+        transport.response = { request ->
+            val response = quoted(request)
+            if (request.text("type") == "session.snapshot" && response != null)
+                JsonObject(response + ("revision" to JsonPrimitive(5)))
+            else response
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertEquals(2, messages.size)
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") {
+                held += request
+                null
+            } else normal(request)
+        }
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val restoring = async { repository.activate(first, ActivationMode.RESTORE) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+
+        // Another chat's status, and one of this chat that arrives ahead of its snapshot.
+        for ((sessionId, revision) in listOf("other" to 1, "session" to 3))
+            transport.deliver(
+                Wire.objectOf(
+                    "type" to "event", "kind" to "session.status", "sessionId" to sessionId,
+                    "revision" to revision, "status" to "running",
+                )
+            )
+        runCurrent()
+        assertEquals(messages, repository.state.value.messages)
+        // The restore's own snapshot went out alongside the project list; the events ask for none.
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+
+        transport.response = normal
+        transport.result(held.single(), data("projects", listOf(project)))
+        assertEquals(first, restoring.await())
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(messages.map { it.text("id") }, repository.state.value.messages.map { it.text("id") })
+    }
+
+    @Test
+    fun aColdStartKeepsTheSavedChatWhenItsSnapshotFails() = runTest {
+        val transport = Transport().also { configure(it) }
+        val saved = listOf(
+            Wire.objectOf("id" to "a", "role" to "assistant", "text" to "Saved answer", "state" to "complete"),
+        )
+        val storage = object : NavigationSnapshotStorage {
+            override fun load() =
+                mapOf("host" to NavigationSnapshot("host", listOf(project), "project", listOf(session()), "session", saved))
+
+            override fun save(snapshots: Map<String, NavigationSnapshot>) = Unit
+        }
+        // The host is busy: the snapshot of the restored chat fails with the connection up.
+        transport.failure = { if (it.text("type") == "session.snapshot") "busy" else null }
+        val repository = repository(transport, navigationStorage = storage)
+        val chat = RemoteSelection("host", "project", "session")
+
+        assertEquals(chat, repository.activate(chat, ActivationMode.RESTORE))
+        runCurrent()
+        val state = repository.state.value
+        assertTrue(state.connected)
+        assertEquals(chat, state.selection)
+        assertEquals(saved, state.messages)
+        // The one read alongside the lists is refused, and asked for once more once they confirm the chat.
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun aRestoreThatFailsBeforeItsSnapshotStillAsksForOneForBufferedEvents() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")))
+            quoteMessages(it)
+        }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        repository.activate(chat)
+        val messages = repository.state.value.messages
+        assertEquals(2, messages.size)
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+
+        val quoted = transport.response
+        val held = mutableListOf<JsonObject>()
+        val fresh = Wire.objectOf("id" to "c", "role" to "assistant", "text" to "Third answer", "state" to "complete")
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> {
+                    held += request
+                    null
+                }
+                "session.snapshot" -> {
+                    val response = checkNotNull(quoted(request))
+                    JsonObject(
+                        response + ("revision" to JsonPrimitive(5)) +
+                            ("messages" to JsonArray(response.getValue("messages").jsonArray + fresh))
+                    )
+                }
+                else -> quoted(request)
+            }
+        }
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val restoring = async { repository.activate(chat, ActivationMode.RESTORE) }
+        runCurrent()
+        assertEquals(chat, repository.state.value.selection)
+        // An event that skips revisions waits for the snapshot the restore set up.
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 3, "status" to "running",
+            )
+        )
+        runCurrent()
+        // The restore's own snapshot went out alongside the project list; the event asks for none.
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+
+        // The project list fails with the connection up, so the restore never takes its snapshot.
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "result",
+                "requestId" to held.single().text("requestId"),
+                "ok" to false,
+                "error" to Wire.objectOf("code" to "busy", "message" to "busy"),
+            )
+        )
+        restoring.await()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        // The unconfirmed one is dropped; the chat on screen asks for its own.
+        assertEquals(snapshots + 2, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(listOf("a", "b", "c"), repository.state.value.messages.map { it.text("id") })
+    }
+
+    @Test
+    fun aRunningToolOutputDownloadStaysOnlyWhileItCanFinish() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                sessions = listOf(session(), session("other")),
+                readyCapabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            )
+        val original = transport.response
+        val chunks = mutableListOf<JsonObject>()
+        val snapshots = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.close" -> Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+                "session.tool_output.get" -> {
+                    chunks += request
+                    null
+                }
+                "session.snapshot" -> {
+                    snapshots += request
+                    null
+                }
+                else -> original(request)
+            }
+        }
+        repository.loadToolOutput("running")
+        runCurrent()
+        // A forced restore of the chat keeps the download that still runs, and it finishes.
+        repository.closeSession("other")
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        assertEquals(1, snapshots.size)
+        assertNotNull(repository.state.value.toolOutput)
+        transport.result(chunks.removeAt(0), toolOutputData(0, 2, "ok".encodeToByteArray(), toolCallId = "running"))
+        runCurrent()
+        assertEquals("ok", repository.state.value.toolOutput?.text)
+
+        // A download that a new activation of the same chat stops goes, instead of spinning. The output
+        // loaded above is complete and kept, so this one is another output.
+        repository.loadToolOutput("stopped")
+        runCurrent()
+        assertNull(repository.state.value.toolOutput?.text)
+        val again = async { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.RESTORE) }
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
+        assertNull(repository.state.value.toolOutput)
+        again.cancel()
+    }
+
+    @Test
+    fun aRememberedChangesPaneShowsFromTheFirstFrameOfTheReturn() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                sessions = listOf(session(), session("other")),
+                readyCapabilities = setOf(GIT_CAPABILITY),
+            )
+        repository.openChanges()
+        runCurrent()
+        assertEquals("session", repository.state.value.changes?.sessionId)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.changes)
+
+        val original = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                held += request
+                null
+            } else original(request)
+        }
+        val statuses = transport.sent.count { it.text("type") == "session.git.status" }
+        val returning = async { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+        // On screen, loading, before the snapshot: it never opens over a composer in use.
+        val placeholder = repository.state.value.changes
+        assertEquals("session", placeholder?.sessionId)
+        assertTrue(placeholder?.loading == true)
+        assertEquals(statuses, transport.sent.count { it.text("type") == "session.git.status" })
+
+        transport.response = original
+        transport.result(held.single(), checkNotNull(original(held.single())))
+        returning.await()
+        runCurrent()
+        assertEquals("session", repository.state.value.changes?.sessionId)
+        assertEquals(statuses + 1, transport.sent.count { it.text("type") == "session.git.status" })
+    }
+
+    @Test
+    fun aRememberedPaneWhoseReturnFailsBeforeTheSnapshotStopsLoading() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                sessions = listOf(session(), session("other")),
+                readyCapabilities = setOf(GIT_CAPABILITY),
+            )
+        repository.openChanges()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+
+        transport.failure = { if (it.text("type") == "session.snapshot") "busy" else null }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val changes = repository.state.value.changes
+        assertEquals("session", changes?.sessionId)
+        // Its own read ran instead: the pane does not wait for a snapshot that never comes.
+        assertTrue(transport.sent.any { it.text("type") == "session.git.status" && it.text("sessionId") == "session" })
+    }
+
+    @Test
+    fun creatingASessionOrRefreshingAChatKeepsOtherChatsCached() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")), opened = session("new"))
+            quoteMessages(it)
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertTrue(messages.isNotEmpty())
+        repository.activate(RemoteSelection("host", "project", "other"))
+        assertEquals(
+            RemoteSelection("host", "project", "new"),
+            repository.createSession("host", "project"),
+        )
+        runCurrent()
+        repository.refresh()
+        runCurrent()
+
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") null else normal(request)
+        }
+        val returning = async { repository.activate(first) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+        assertTrue(repository.state.value.loading)
+        returning.cancel()
+    }
+
+    @Test
+    fun aRunningToolOutputDownloadStopsWithTheConnection() = runTest {
+        val (transport, repository) = toolOutputRepository { null }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertNotNull(repository.state.value.toolOutput)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNull(repository.state.value.toolOutput)
+    }
+
+    @Test
+    fun theErrorCardFollowsAQuietReconnectThatTakesTooLong() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        // The next attempt reaches nobody and hangs in the handshake.
+        transport.readyOnConnect = false
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS - 1)
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+        assertEquals(listOf(pendingQuestion), repository.state.value.questions)
+    }
+
+    @Test
+    fun aQuietReconnectThatSucceedsInTimeNeverRaisesTheCard() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS)
+        runCurrent()
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun switchingToAnotherMacClearsTheLastKnownState() = runTest {
+        val other = PairedHost("other", "https://relay.test", "device", "secret", "Other")
+        val transport = Transport()
+        val repository = lastKnownRepository(transport, hosts = listOf(host, other))
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(repository.state.value.stale)
+
+        transport.failureOnConnect = null
+        transport.readyOnConnect = false
+        val switching = async { repository.activate(RemoteSelection("other"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val state = repository.state.value
+        assertEquals("other", transport.route)
+        assertFalse(state.stale)
+        assertNull(state.staleSince)
+        assertEquals(R.string.remote_connecting, state.connection)
+        assertTrue(state.capabilities.isEmpty())
+        assertFalse(state.capabilitiesKnown)
+        assertTrue(state.questions.isEmpty())
+        assertNull(state.configuration)
+        assertNull(state.advisor)
+        assertTrue(state.commands.isEmpty())
+        assertNull(state.toolOutput)
+        switching.cancel()
+    }
+
+    @Test
+    fun aFailureThatStopsReconnectingClearsTheLastKnownState() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.listener.failed(false, R.string.remote_device_revoked)
+        val state = repository.state.value
+        assertEquals(R.string.remote_device_revoked, state.error)
+        assertFalse(state.stale)
+        assertTrue(state.capabilities.isEmpty())
+        assertTrue(state.questions.isEmpty())
+        assertNull(state.configuration)
+    }
+
+    @Test
+    fun mutationsAreRefusedWhileDisconnected() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        repository.draft("hello")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(repository.state.value.stale)
+        val sent = transport.sent.size
+
+        repository.prompt()
+        repository.followUp()
+        repository.steer()
+        repository.answer("question", Wire.objectOf("value" to "yes"))
+        repository.abort()
+        repository.setModel("provider", "other")
+        repository.setThinkingLevel("max")
+        repository.changeSettings(autoCompaction = false, steeringMode = null, followUpMode = null)
+        repository.setAdvisor("provider", "model", "high")
+        repository.compactContext()
+        repository.refreshCommands()
+        repository.refreshConfiguration()
+        repository.refreshAdvisor()
+        runCurrent()
+
+        assertEquals(sent, transport.sent.size)
+        assertEquals("hello", repository.state.value.draft)
+        assertFalse(repository.state.value.sending)
+        assertTrue(repository.state.value.answering.isEmpty())
+        assertFalse(repository.state.value.configurationChanging)
+        assertFalse(repository.state.value.advisorChanging)
+
+        // The same answer goes out once the Mac is back.
+        transport.failureOnConnect = null
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        repository.answer("question", Wire.objectOf("value" to "yes"))
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun aReconnectWhoseHandshakeKeepsHangingKeepsTheCardAndEscalates() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        // The relay answers, the Mac never completes the handshake (asleep).
+        transport.readyOnConnect = false
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val errors = mutableListOf<Int?>()
+        repeat(200) {
+            advanceTimeBy(1_000)
+            runCurrent()
+            errors += repository.state.value.error
+        }
+        // Quiet for the first seconds, then the card stays up across every timed-out retry.
+        assertTrue(errors.take(4).all { it == null })
+        assertTrue(errors.drop(4).all { it != null })
+        assertTrue(transport.connects >= connects + 3)
+        // The third failure in a row says the Mac is unreachable.
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+        assertEquals(listOf(pendingQuestion), repository.state.value.questions)
+    }
+
+    @Test
+    fun disconnectingStopsTheQuietReconnectTimer() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.readyOnConnect = false
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNull(repository.state.value.error)
+        repository.disconnect()
+        advanceTimeBy(QUIET_RECONNECT_MILLIS * 2)
+        runCurrent()
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aSecondFailureOfAnUnprovenConnectionShowsTheCardAtOnce() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNull(repository.state.value.error)
+        // The reconnect comes up, and its socket dies before any reply proved it.
+        transport.readyOnConnect = false
+        advanceTimeBy(2_000)
+        runCurrent()
+        transport.listener.ready(transport.capabilities)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+    }
+
+    @Test
+    fun fullToolOutputWhileReconnectingSaysOffline() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(TOOL_OUTPUT_CAPABILITY in repository.state.value.capabilities)
+        val sent = transport.sent.size
+
+        // An output loaded before opens from the phone, with no request, even offline.
+        repository.loadToolOutput("call")
+        assertEquals("ok", repository.state.value.toolOutput?.text)
+        assertEquals(sent, transport.sent.size)
+        // An output not loaded yet offers a retry: the host is not too old for it.
+        repository.loadToolOutput("unloaded")
+        assertEquals(ToolOutputFailure.OFFLINE, repository.state.value.toolOutput?.failure)
+        assertEquals(sent, transport.sent.size)
+    }
+
+    @Test
+    fun forkingWhileReconnectingKeepsTheSourceAndTheReconnect() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                extraCapabilities = listOf(SESSION_FORK_CAPABILITY, SESSION_TREE_CAPABILITY),
+            )
+        val source = RemoteSelection("host", "project", "session")
+        transport.readyOnConnect = false
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(SESSION_FORK_CAPABILITY in repository.state.value.capabilities)
+        // The reconnect's activation waits for the handshake.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+
+        assertEquals(source, repository.forkSession(source, "user-1", ForkMode.RETRY))
+        assertEquals(source, repository.forkSessionAtNode(source, "node"))
+        assertTrue(transport.sent.none { it.text("type") in setOf("session.fork", "session.tree.fork") })
+
+        // The activation was left running and reads the chat once the Mac answers.
+        transport.listener.ready(transport.capabilities)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.stale)
+        assertEquals(source, repository.state.value.selection)
+    }
+
+    @Test
+    fun aRefreshThatReadsTheChatEndsTheStaleStateOfAReconnect() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.failure = { if (it.text("type") == "session.snapshot") "internal" else null }
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(2_000)
+        runCurrent()
+        // Connected again, but the chat on screen could not be read.
+        assertTrue(repository.state.value.connected)
+        assertTrue(repository.state.value.stale)
+
+        transport.failure = { null }
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.stale)
+        assertNull(repository.state.value.staleSince)
+    }
+
+    @Test
+    fun requestsRecordTypeDurationSizeAndTimeout() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            val normal = transport.response
+            transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+            repository.draft("keep this")
+            repository.prompt()
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            val requests = Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.REQUEST }
+            val prompt = requests.single { it.label == "session.prompt" }
+            assertEquals("timeout", prompt.outcome)
+            assertEquals(30_000L, prompt.durationMs)
+            assertTrue(prompt.bytes > 0)
+            val listed = requests.single { it.label == "sessions.list" }
+            assertEquals("ok", listed.outcome)
+            assertEquals(0L, listed.durationMs)
+            val stats = Diagnostics.report().requests.single { it.type == "session.prompt" }
+            assertEquals(1, stats.timeouts)
+            // Labels are protocol words only; the draft text never reaches the record.
+            assertFalse(Diagnostics.export().contains("keep this"))
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun requestFailuresRecordTheHostErrorCode() = runTest {
+        Diagnostics.clear()
+        try {
+            val transport = Transport().also { configure(it) }
+            transport.failure = { if (it.text("type") == "sessions.list") "not_found" else null }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+
+            val listed = Diagnostics.report().entries.first { it.label == "sessions.list" }
+            assertEquals("error.not_found", listed.outcome)
+            assertTrue(Diagnostics.report().activations.any { it.label == "activate.restore" })
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
     fun foregroundRecoveryReconnectsAfterAHandshakeTimesOut() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = repository(transport)
@@ -1763,6 +4137,8 @@ class RemoteRepositoryTest {
         val prompt = transport.sent.last { it.text("type") == "session.prompt" }
 
         repository.setForeground(false)
+        // Away long enough that the resume probes the chat instead of trusting it as it is.
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 5_000)
         repository.setForeground(true)
         runCurrent()
 
@@ -1799,6 +4175,8 @@ class RemoteRepositoryTest {
         val change = transport.sent.last { it.text("type") == "session.configuration.set" }
 
         repository.setForeground(false)
+        // Away long enough that the resume probes the chat instead of trusting it as it is.
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 5_000)
         repository.setForeground(true)
         runCurrent()
 
@@ -1950,13 +4328,835 @@ class RemoteRepositoryTest {
         repository.draft("keep this")
         repository.prompt()
         runCurrent()
-        advanceTimeBy(30000)
+        advanceTimeBy(29_999)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertTrue(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertNull(repository.state.value.error)
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+
+        advanceTimeBy(1)
         runCurrent()
         assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.connected)
         assertFalse(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("keep this", repository.state.value.draft)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
         assertTrue(repository.state.value.uncertain)
         assertEquals("keep this", repository.state.value.draft)
         assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun latePromptAcceptanceSettlesWithoutOverwritingNewDraft() = runTest {
+        val transport = Transport().also { configure(it) }
+        val drafts = Drafts()
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("new draft")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun lateAcceptancePreservesNewAttachments() = runTest {
+        val bytes = byteArrayOf(1)
+        val sent = localFile(bytes)
+        val added = localFile(bytes, id = "CCCCCCCCCCCCCCCCCCCCCC")
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, sent, prompt = false) }
+        val repository = repository(transport, attachmentStorage = storage) { uri, _ ->
+            val local = if (uri == "content:sent") sent else added
+            storage.write(local, bytes)
+            local
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("new")
+        repository.removeAttachment(sent.id)
+        repository.importAttachments(repository.state.value.selection, listOf("content:new"), false)
+        runCurrent()
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new", repository.state.value.draft)
+        assertEquals(listOf(added), repository.state.value.attachments)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun lateAcceptancePreservesRestoredAttachmentAfterTextEdit() = runTest {
+        restoredAttachmentSurvivesLateAcceptance(editQuote = false)
+    }
+
+    @Test
+    fun lateAcceptancePreservesRestoredAttachmentAfterQuoteEdit() = runTest {
+        restoredAttachmentSurvivesLateAcceptance(editQuote = true)
+    }
+
+    private suspend fun TestScope.restoredAttachmentSurvivesLateAcceptance(editQuote: Boolean) {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(listOf(attachment), repository.state.value.attachments)
+        if (editQuote) repository.quote("b") else repository.draft("new draft")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        val expectedText = if (editQuote) "sent" else "new draft"
+        val expectedQuote = if (editQuote) "b" else "a"
+        assertEquals(expectedText, repository.state.value.draft)
+        assertEquals(expectedQuote, repository.state.value.quote?.messageId)
+        assertEquals(listOf(attachment), repository.state.value.attachments)
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals(expectedText, stored.text)
+        assertEquals(expectedQuote, stored.quote?.messageId)
+        assertEquals(listOf(attachment), stored.attachments)
+        assertNull(stored.mutationId)
+    }
+
+    @Test
+    fun lateAcceptanceKeepsComposerEditedBeforeTimeout() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        repository.draft("typed before timeout")
+        repository.quote("b")
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("typed before timeout", repository.state.value.draft)
+        assertEquals("b", repository.state.value.quote?.messageId)
+        assertTrue(repository.state.value.attachments.isEmpty())
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun lateSettlementStorageFailureKeepsUncertainJournal() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.fail = true
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertTrue(repository.state.value.uncertain)
+        assertEquals("sent", repository.state.value.draft)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals(request.text("requestId"), drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        drafts.fail = false
+    }
+
+    @Test
+    fun failedStagedSettlementDoesNotStripJournalFromQueuedComposerWrite() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.beforeSave = {
+            repository.draft("new text")
+            val queue = repository.javaClass.getDeclaredMethod("queueDrafts", CompletableDeferred::class.java)
+            queue.isAccessible = true
+            queue.invoke(repository, CompletableDeferred<Unit>())
+            error("Disk unavailable")
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new text", stored.text)
+        assertEquals(request.text("requestId"), stored.mutationId)
+        assertEquals("sent", stored.submittedText)
+    }
+
+    @Test
+    fun reconnectDuringFailedStagedSettlementKeepsJournal() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.beforeSave = {
+            transport.listener.failed(false, R.string.remote_connection_error)
+            error("Disk unavailable")
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(request.text("requestId"), drafts.load().getValue(DraftKey("host", "session")).mutationId)
+    }
+
+    @Test
+    fun reconnectDuringSuccessfulStageReconcilesQueuedJournalAndComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.beforeSave = {
+            repository.draft("new composer")
+            val queue = repository.javaClass.getDeclaredMethod("queueDrafts", CompletableDeferred::class.java)
+            queue.isAccessible = true
+            queue.invoke(repository, CompletableDeferred<Unit>())
+            transport.listener.failed(false, R.string.remote_connection_error)
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new composer", stored.text)
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun failedNewUploadDuringSuccessfulStageCannotRestoreOldJournal() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.importAttachments(repository.state.value.selection, listOf("content:new"), false)
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.attachments.begin") "forbidden" else null }
+        drafts.beforeSave = {
+            repository.prompt()
+            repository.draft("new composer")
+            val queue = repository.javaClass.getDeclaredMethod("queueDrafts", CompletableDeferred::class.java)
+            queue.isAccessible = true
+            queue.invoke(repository, CompletableDeferred<Unit>())
+            runCurrent()
+            assertFalse(repository.state.value.sending)
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+        assertEquals("new composer", stored.text)
+        assertNotEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        val freshTransport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val fresh = repository(freshTransport, drafts, storage)
+        fresh.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("new composer", fresh.state.value.draft)
+        assertFalse(freshTransport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun queuedAcceptanceClearsTextAndQuoteWhenOnlyAttachmentWasRemoved() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also {
+            attachmentResponses(it, attachment, prompt = false)
+            quoteMessages(it)
+            it.capabilities = it.capabilities + FOLLOW_UP_CAPABILITY
+        }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("queued")
+        repository.quote("a")
+        repository.followUp()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        repository.removeAttachment(attachment.id)
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        assertEquals("", repository.state.value.draft)
+        assertNull(repository.state.value.quote)
+        assertTrue(repository.state.value.attachments.isEmpty())
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("", stored.text)
+        assertNull(stored.quote)
+        assertTrue(stored.attachments.isEmpty())
+        assertEquals(1, stored.followUps.size)
+    }
+
+    @Test
+    fun metadataCopyDoesNotKeepAcceptedQueuedComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        val comment = ReviewComment("README.md", null, 2, "New line", "Why?", GitBase.SESSION)
+        assertTrue(repository.setReviewComment(comment))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("", repository.state.value.draft)
+        assertEquals(listOf(comment), drafts.load().getValue(DraftKey("host", "session")).reviewComments)
+    }
+
+    @Test
+    fun metadataCopyDoesNotKeepLateAcceptedRestoredComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        val comment = ReviewComment("README.md", null, 2, "New line", "Why?", GitBase.SESSION)
+        assertTrue(repository.setReviewComment(comment))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("", repository.state.value.draft)
+        assertEquals(listOf(comment), drafts.load().getValue(DraftKey("host", "session")).reviewComments)
+    }
+
+    @Test
+    fun lateAcceptanceKeepsComposerEditedAwayAndBack() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("other")
+        repository.draft("sent")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("sent", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun finalSettlementFailureKeepsKnownAcceptanceAndNewComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.afterSave = {
+            repository.draft("new composer")
+            drafts.fail = true
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new composer", repository.state.value.draft)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        assertNull(drafts.load().getValue(DraftKey("host", "session")).mutationId)
+        assertNotEquals("new composer", drafts.load().getValue(DraftKey("host", "session")).text)
+        drafts.fail = false
+        repository.flush()
+        val recovered = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new composer", recovered.text)
+        assertNull(recovered.mutationId)
+    }
+
+    @Test
+    fun flushAfterDraftLoadFailureNeverOverwritesStoredDrafts() = runTest {
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft("keep")); failLoad = true }
+        val repository = repository(Transport().also { configure(it) }, drafts)
+        runCurrent()
+        assertTrue(runCatching { repository.flush() }.isFailure)
+        assertEquals(mapOf(key to StoredDraft("keep")), drafts.values)
+        assertEquals(0, drafts.saves)
+    }
+
+    @Test
+    fun reconnectDuringFailedFinalWriteDoesNotUndoAcceptanceOrNewComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.afterSave = {
+            repository.draft("new composer")
+            drafts.beforeSave = {
+                transport.listener.failed(false, R.string.remote_connection_error)
+                drafts.fail = true
+            }
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new composer", repository.state.value.draft)
+        assertNull(drafts.load().getValue(DraftKey("host", "session")).mutationId)
+    }
+
+    @Test
+    fun deliveredReceiptSurvivesFailedFinalSettlementWrite() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        drafts.afterSave = {
+            repository.draft("new composer")
+            drafts.beforeSave = {
+                transport.deliver(Wire.objectOf("type" to "event", "kind" to "follow_up.status",
+                    "sessionId" to "session", "requestId" to request.text("requestId"),
+                    "status" to "delivered", "revision" to 2))
+                drafts.fail = true
+            }
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("new composer", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun editedAwayAndBackDuringUploadIsNotOwnedByLateAcceptance() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        repository.draft("other")
+        repository.draft("sent")
+        repository.quote("b")
+        repository.quote("a")
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("sent", repository.state.value.draft)
+        assertEquals("a", repository.state.value.quote?.messageId)
+        assertTrue(repository.state.value.attachments.isEmpty())
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun textEditedDuringUploadKeepsUnchangedQuoteOnTimeoutAndDisk() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        repository.draft("new text")
+        advanceTimeBy(201)
+        runCurrent()
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.flush()
+        assertEquals("new text", repository.state.value.draft)
+        assertEquals("a", repository.state.value.quote?.messageId)
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new text", stored.text)
+        assertEquals("a", stored.quote?.messageId)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun lateAcceptanceSynchronizesChatReopenedOnSameConnection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        repository.activate(chat)
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(chat)
+        repository.draft("new")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun newerSendDuringLateSettlementWriteKeepsItsUncertainState() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("first")
+        repository.prompt()
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.afterSave = {
+            repository.draft("second")
+            repository.prompt()
+        }
+        transport.result(first, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        val second = transport.sent.last { it.text("type") == "session.prompt" }
+        assertNotEquals(first.text("requestId"), second.text("requestId"))
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(second.text("requestId"), repository.state.value.pendingSend?.mutationId)
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun oldNormalAcknowledgementCannotConfirmRetryWithSameWireId() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        val chat = RemoteSelection("host", "project", "session")
+        repository.activate(chat)
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.prompt" }
+        drafts.beforeSave = {
+            backgroundScope.launch {
+                repository.activate(RemoteSelection("host", "project"))
+                repository.activate(chat)
+                repository.draft("sent")
+                repository.prompt()
+            }
+            runCurrent()
+        }
+        transport.result(first, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "session.prompt" }
+        assertEquals(2, requests.size)
+        assertEquals(first.text("requestId"), requests.last().text("requestId"))
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.sending)
+        assertEquals(first.text("requestId"), drafts.load().getValue(DraftKey("host", "session")).mutationId)
+        transport.result(requests.last(), Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun lateErrorAndMalformedResultsDoNotConsumeValidAcceptance() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        val id = request.text("requestId")
+        transport.deliver(Wire.objectOf("type" to "result", "requestId" to id, "ok" to false,
+            "error" to Wire.objectOf("code" to "failed")))
+        transport.deliver(Wire.objectOf("type" to "result", "requestId" to id, "ok" to true,
+            "data" to Wire.objectOf("kind" to "accepted", "sessionId" to 42)))
+        runCurrent()
+        assertTrue(repository.state.value.uncertain)
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun lateAcceptanceExpiresAtItsDeadline() = runTest {
+        val clock = Diagnostics.clock
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            val normal = transport.response
+            transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+            repository.draft("sent")
+            repository.prompt()
+            runCurrent()
+            val request = transport.sent.last { it.text("type") == "session.prompt" }
+            advanceTimeBy(30_000)
+            runCurrent()
+            advanceTimeBy(120_000)
+            runCurrent()
+            transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+            runCurrent()
+            assertTrue(repository.state.value.uncertain)
+            assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        } finally {
+            Diagnostics.clock = clock
+        }
+    }
+
+    @Test
+    fun lateMalformedResultAndReusedIdCannotConfirm() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(first, Wire.objectOf("kind" to "accepted", "sessionId" to "foreign"))
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        repository.prompt()
+        runCurrent()
+        val retry = transport.sent.last { it.text("type") == "session.prompt" }
+        assertEquals(first.text("requestId"), retry.text("requestId"))
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(retry, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun lateQueuedAcceptanceIsNotDeliveryAndKeepsNewDraft() = runTest {
+        val transport = Transport().also { configure(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("new")
+        transport.deliver(Wire.objectOf("type" to "event", "kind" to "follow_up.status",
+            "sessionId" to "session", "requestId" to request.text("requestId"),
+            "status" to "cancelled", "revision" to 2))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("cancelled", repository.state.value.followUps.single().status)
+        assertEquals("new", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun issuedIdOverflowDisablesLateAcceptanceUntilDisconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        // Exercise the bound without sending thousands of unrelated network requests.
+        val record = repository.javaClass.getDeclaredMethod("recordIssuedRequest", String::class.java)
+        record.isAccessible = true
+        repeat(4097) { record.invoke(repository, "extra-$it") }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun lateAcknowledgementFromOldConnectionIsIgnored() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, host.copy(routeId = "other")))
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.activate(RemoteSelection("other", "project", "session"))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertTrue(repository.state.value.uncertain)
+        assertEquals("sent", repository.state.value.draft)
     }
 
     @Test
@@ -2026,6 +5226,252 @@ class RemoteRepositoryTest {
         assertTrue(kinds.indexOf("sessions.list") < kinds.indexOf("sessions.open"))
     }
 
+    @Test
+    fun aNotificationWhoseProjectTheAppKnowsOpensWithoutWalkingTheProjects() = runTest {
+        val transport = Transport().also { configure(it) }
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") projectsData(listOf(project, Wire.objectOf("id" to "other")))
+            else listed(request)
+        }
+        // As the home snapshot or the label worker's names know it, the caches being empty.
+        val repository = repository(transport, projectHint = { route, id -> "project".takeIf { route == "host" && id == "session" } })
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        assertEquals(listOf("project"), transport.sent.filter { it.text("type") == "sessions.list" }.map { it.text("projectId") })
+        assertEquals(1, transport.sent.count { it.text("type") == "projects.list" })
+    }
+
+    @Test
+    fun aNotificationForASessionInTheCachesSendsNoListAtAll() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        transport.sent.clear()
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        val kinds = transport.sent.map { it.text("type") }
+        assertFalse(kinds.toString(), "projects.list" in kinds || "sessions.list" in kinds)
+        assertTrue("sessions.open" in kinds)
+    }
+
+    @Test
+    fun aColdStartFindsTheNotificationsProjectInTheSavedNavigation() = runTest {
+        val transport = Transport().also { configure(it) }
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") projectsData(listOf(namedProject, Wire.objectOf("id" to "other")))
+            else listed(request)
+        }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        assertEquals("project", repository.notificationProject("host", "session"))
+        assertNull("not paired", repository.notificationProject("unpaired", "session"))
+        assertNull("never seen", repository.notificationProject("host", "unknown"))
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        assertEquals(listOf("project"), transport.sent.filter { it.text("type") == "sessions.list" }.map { it.text("projectId") })
+    }
+
+    @Test
+    fun aStaleProjectHintStillFindsTheSessionByWalking() = runTest {
+        val transport = Transport()
+        val moved = session(projectId = "other")
+        configure(transport, opened = moved)
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            when {
+                request.text("type") == "projects.list" ->
+                    data("projects", listOf(project, Wire.objectOf("id" to "other")))
+                request.text("type") == "sessions.list" ->
+                    data("sessions", if (request.text("projectId") == "other") listOf(moved) else emptyList())
+                else -> listed(request)
+            }
+        }
+        val repository = repository(transport, projectHint = { _, _ -> "project" })
+        assertEquals(RemoteSelection("host", "other", "session"), repository.openNotification("host", "session"))
+    }
+
+    @Test
+    fun theNotificationWalkReadsFourListsAtATimeAndStopsAtTheFirstHit() = runTest {
+        val transport = Transport()
+        val opened = session(projectId = "p1")
+        configure(transport, sessions = listOf(opened), opened = opened)
+        val listed = configuredResponse(transport)
+        val lists = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> projectsData((0 until 6).map { Wire.objectOf("id" to "p$it") })
+                "sessions.list" -> null.also { lists += request }
+                else -> listed(request)
+            }
+        }
+        val repository = repository(transport)
+        val opening = async { repository.openNotification("host", "session") }
+        runCurrent()
+        assertEquals(listOf("p0", "p1", "p2", "p3"), lists.map { it.text("projectId") })
+        transport.result(lists[0], data("sessions", emptyList()))
+        transport.result(lists[1], data("sessions", listOf(opened)))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "p1", "session"), opening.await())
+        // The later projects are never read, and the open reuses the walk's lists.
+        assertEquals(4, transport.sent.count { it.text("type") == "sessions.list" })
+        assertEquals(1, transport.sent.count { it.text("type") == "projects.list" })
+        assertTrue(transport.sent.any { it.text("type") == "sessions.open" })
+    }
+
+    @Test
+    fun aNotificationRequestUsesTheAppConnectionOnlyWhileItIsHealthy() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        assertNull("not connected", repository.withHealthyConnection("host") { error("no connection") })
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val result = repository.withHealthyConnection("host") { it.request("question.answer", "sessionId" to "session") }
+        assertEquals("accepted", result?.text("kind"))
+        assertEquals("question.answer", transport.sent.last().text("type"))
+        assertNull("another Mac", repository.withHealthyConnection("other") { error("another Mac") })
+        advanceTimeBy(HEALTHY_CONNECTION_MILLIS)
+        runCurrent()
+        assertNull("quiet too long", repository.withHealthyConnection("host") { error("quiet") })
+    }
+
+    @Test
+    fun aSlowAppConnectionGivesUpSoonAndAHostErrorPassesThrough() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val listed = configuredResponse(transport)
+        transport.response = { request -> if (request.text("type") == "question.answer") null else listed(request) }
+        val slow = async { repository.withHealthyConnection("host") { it.request("question.answer") } }
+        advanceTimeBy(HEALTHY_REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertTrue(slow.isCompleted)
+        assertNull(slow.await())
+        transport.failure = { request -> "already_resolved".takeIf { request.text("type") == "question.answer" } }
+        val error = runCatching { repository.withHealthyConnection("host") { it.request("question.answer") } }.exceptionOrNull()
+        assertEquals("already_resolved", (error as RemoteCommandException).code)
+    }
+
+    @Test
+    fun aKnownNotificationForAnUnreachableMacReconnectsTheMacOnScreen() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other), projectHint = { _, _ -> "project" })
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        val connects = transport.connects
+        transport.unreachable = setOf("other")
+        val opening = async { repository.openNotification("other", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // A failed open is no selection: the navigator goes back to the screen it left.
+        assertNull(opening.await())
+        // Other was tried once, without a walk that would only time out again, then Host came back.
+        assertEquals(connects + 2, transport.connects)
+        assertEquals("host", transport.route)
+        val state = repository.state.value
+        assertEquals(selection, state.selection)
+        assertTrue(state.connected)
+        assertFalse(state.loading)
+        assertEquals("session", state.session?.text("id"))
+    }
+
+    @Test
+    fun aFailedNotificationOpenRestoresTheChangesViewWithoutConfirmingItsSubagents() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also {
+            configure(
+                it,
+                sessions =
+                    listOf(
+                        session(status = "running"),
+                        JsonObject(session("child", status = "running") + ("parentSessionId" to JsonPrimitive("session"))),
+                    ),
+            )
+        }
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" ->
+                    JsonObject(original(request)!! + ("capabilities" to JsonArray(listOf(JsonPrimitive(GIT_CAPABILITY)))))
+                "session.git.status" ->
+                    Wire.objectOf(
+                        "kind" to "git.status",
+                        "sessionId" to request.text("sessionId"),
+                        "base" to request.text("base"),
+                        "available" to true,
+                        "snapshotId" to "Q2hhbmdlc1NuYXBzaG90MQ",
+                        "files" to JsonArray(listOf(Wire.objectOf("path" to "${request.text("sessionId")}.kt", "change" to "added", "additions" to 1, "deletions" to 0))),
+                        "truncated" to false,
+                        "branch" to "branch-${request.text("sessionId")}",
+                    )
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport, hosts = listOf(host, other), projectHint = { _, _ -> "project" })
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        repository.openChanges()
+        runCurrent()
+        val before = repository.state.value
+        assertTrue(before.sessionsFresh)
+        val loaded = before.changes!!.subagents.single()
+        assertEquals("child", loaded.sessionId)
+        assertTrue(loaded.running)
+        assertFalse(loaded.lastKnown)
+
+        // The Mac on screen is reconnected on a new connection whose list is not read yet.
+        transport.unreachable = setOf("other")
+        val sessionLists = transport.sent.count { it.text("type") == "sessions.list" }
+        val opening = async { repository.openNotification("other", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertNull(opening.await())
+        assertEquals("host", transport.route)
+        assertEquals(sessionLists, transport.sent.count { it.text("type") == "sessions.list" })
+        val restored = repository.state.value
+        assertEquals(selection, restored.selection)
+        assertTrue(restored.connected)
+        // The list read on the old connection comes back as last known, not confirmed.
+        assertFalse(restored.sessionsFresh)
+        assertFalse(restored.sessionsReused)
+        assertTrue(restored.projectSessions.values.none { it.verified })
+        // The restored changes view is judged by that list: the subagent no longer reads running.
+        val sub = restored.changes!!.subagents.single()
+        assertFalse(sub.running)
+        assertTrue(sub.lastKnown)
+
+        // A list read on the new connection confirms it again.
+        repository.refreshSessions()
+        runCurrent()
+        assertTrue(repository.state.value.sessionsFresh)
+        assertTrue(repository.state.value.changes!!.subagents.single().running)
+    }
+
+    @Test
+    fun aKnownNotificationOnAColdStartWithTheMacOfflineReturnsNoSelection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        transport.unreachable = setOf("host")
+        val opening = async { repository.openNotification("host", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // Not the empty selection the activation started from, which would collapse the saved stack.
+        assertNull(opening.await())
+        assertEquals(1, transport.connects)
+        assertFalse(repository.state.value.loading)
+    }
+
+    private fun configuredResponse(transport: Transport): (JsonObject) -> JsonObject? = transport.response
+
+    /** A v2 project list, which no host answers twice. */
+    private fun projectsData(items: List<JsonObject>) =
+        JsonObject(data("projects", items) + ("capabilities" to JsonArray(emptyList())))
+
     private fun quoteMessages(transport: Transport) {
         val normal = transport.response
         transport.response = { request ->
@@ -2056,6 +5502,55 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun statusEventsUpdatePreviouslyVisitedProjectCache() = runTest {
+        val transport = Transport().also { configure(it) }
+        val normal = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> data("projects", listOf(project, Wire.objectOf("id" to "other-project")))
+                "sessions.list" -> if (request.text("projectId") == "project")
+                    data("sessions", listOf(session(status = "offline")))
+                else data("sessions", listOf(session("other", projectId = "other-project")))
+                else -> normal(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(RemoteSelection("host", "other-project"))
+        transport.deliver(Wire.objectOf(
+            "type" to "event", "kind" to "session.status", "sessionId" to "session",
+            "revision" to 1, "status" to "idle",
+        ))
+        val target = RemoteSelection("host", "project", "session")
+        assertEquals(target, repository.activate(target, ActivationMode.RESTORE))
+        assertEquals("idle", repository.state.value.session?.text("status"))
+    }
+
+    @Test
+    fun returningToEarlierChatShowsCachedMessagesBeforeSnapshotCompletes() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")))
+            quoteMessages(it)
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertTrue(messages.isNotEmpty())
+        repository.activate(RemoteSelection("host", "project", "other"))
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") null else normal(request)
+        }
+        val returning = async { repository.activate(first) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+        assertTrue(repository.state.value.loading)
+        returning.cancel()
+    }
+
+    @Test
     fun unchangedQuoteAndBodyClearTogetherAfterAcknowledgment() = runTest {
         val drafts = Drafts()
         val transport =
@@ -2076,7 +5571,7 @@ class RemoteRepositoryTest {
     }
 
     @Test
-    fun quoteChangedDuringSendKeepsBothBodyAndNewQuoteOnAcknowledgment() = runTest {
+    fun quoteChangedDuringSendKeepsOnlyTheNewQuoteOnAcknowledgment() = runTest {
         val drafts = Drafts()
         val transport =
             Transport().also {
@@ -2101,8 +5596,10 @@ class RemoteRepositoryTest {
         transport.result(request, Wire.objectOf("kind" to "accepted"))
         runCurrent()
         repository.flush()
-        assertEquals("Follow up", repository.state.value.draft)
+        // The sent text is in the chat already; only the quote chosen since stays in the composer.
+        assertEquals("", repository.state.value.draft)
         assertEquals("b", repository.state.value.quote?.messageId)
+        assertEquals("", drafts.values.getValue(DraftKey("host", "session")).text)
         assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
     }
 
@@ -2183,7 +5680,7 @@ class RemoteRepositoryTest {
         )
         val original = RemoteSelection("host", "project", "session")
         repository.activate(original)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("queued")
         repository.followUp()
@@ -2191,11 +5688,77 @@ class RemoteRepositoryTest {
         assertEquals("accepted", repository.state.value.followUps.single().status)
         repository.activate(RemoteSelection("other", "project", "session"))
         repository.flush()
-        assertEquals("uncertain", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+        // An intentional switch closes the connection cleanly: the follow-up is not marked uncertain
+        // here, and the next snapshot of its Mac checks it again.
+        assertEquals("accepted", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
         val sends = transport.sent.count { it.text("type") == "session.prompt" }
         repository.activate(original)
-        assertEquals("uncertain", repository.state.value.followUps.single().status)
         assertEquals(sends, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    /** A follow-up queued on the first Mac, which then gets left on purpose for the second. */
+    private suspend fun TestScope.followUpLeftOnPurpose(transport: Transport, drafts: Drafts): DefaultRemoteRepository {
+        val other = host.copy(routeId = "other")
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt")
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else normal(request)
+        }
+        val repository = DefaultRemoteRepository(
+            Pairings(listOf(host, other)), drafts, transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+        )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        assertEquals("accepted", repository.state.value.followUps.single().status)
+        repository.activate(RemoteSelection("other", "project", "session"))
+        repository.flush()
+        return repository
+    }
+
+    @Test
+    fun aFollowUpLeftOnACleanSwitchIsUncertainAfterTheNextSnapshotThatHoldsNoReceipt() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = followUpLeftOnPurpose(transport, drafts)
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertTrue(transport.sent.count { it.text("type") == "session.snapshot" } > snapshots)
+        // Nothing the snapshot holds settles the follow-up, so it is uncertain and can be dismissed.
+        assertEquals("uncertain", repository.state.value.followUps.single().status)
+        assertEquals("uncertain", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
+    @Test
+    fun aFollowUpLeftOnACleanSwitchIsDeliveredWhenTheNextSnapshotHoldsItsReceipt() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = followUpLeftOnPurpose(transport, drafts)
+        // The state shows the other Mac's chat now; the follow-up is in the stored drafts.
+        val requestId = drafts.values.getValue(DraftKey("host", "session")).followUps.single().requestId
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(
+                    Wire.objectOf("id" to "delivered", "role" to "user", "text" to "queued",
+                        "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to "follow_up")))))
+            else normal(request)
+        }
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        // The receipt wins over the recheck: the entry is delivered, not uncertain.
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("delivered", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
     }
 
     @Test
@@ -2211,7 +5774,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repeat(64) { index ->
             repository.draft("queued $index")
@@ -2226,7 +5789,7 @@ class RemoteRepositoryTest {
         assertEquals(64, transport.sent.count { it.text("type") == "session.prompt" })
         repository.dismissFollowUp(oldest)
         assertEquals(64, repository.state.value.followUps.size)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 2, "kind" to "follow_up.status", "requestId" to oldest,
             "status" to "delivered"))
         repository.followUp()
@@ -2244,7 +5807,7 @@ class RemoteRepositoryTest {
         val last = repository.state.value.followUps.last().requestId
         repository.dismissFollowUp(last)
         assertEquals(64, repository.state.value.followUps.size)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 3, "kind" to "follow_up.status", "requestId" to last,
             "status" to "uncertain"))
         repository.dismissFollowUp(last)
@@ -2265,7 +5828,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("Change direction")
         repository.steer()
@@ -2274,11 +5837,11 @@ class RemoteRepositoryTest {
         assertEquals("steer", sent.text("delivery"))
         assertEquals("accepted", repository.state.value.followUps.single().status)
         assertEquals("steer", repository.state.value.followUps.single().delivery)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 2, "kind" to "follow_up.status", "requestId" to sent.text("requestId"),
             "status" to "delivered"))
         assertEquals("accepted", repository.state.value.followUps.single().status)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 3, "kind" to "steer.status", "requestId" to sent.text("requestId"),
             "status" to "uncertain"))
         assertEquals("uncertain", repository.state.value.followUps.single().status)
@@ -2294,7 +5857,7 @@ class RemoteRepositoryTest {
             when (request.text("type")) {
                 "session.prompt" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
                 "session.abort" -> {
-                    transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                         "revision" to 3, "kind" to "follow_up.status",
                         "requestId" to transport.sent.last { it.text("type") == "session.prompt" }.text("requestId"),
                         "status" to "uncertain"))
@@ -2305,7 +5868,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        fun status(revision: Int, value: String) = transport.listener.message(
+        fun status(revision: Int, value: String) = transport.deliver(
             Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to revision,
                 "kind" to "session.status", "status" to value)
         )
@@ -2323,7 +5886,7 @@ class RemoteRepositoryTest {
         repository.followUp()
         runCurrent()
         assertEquals(listOf("first", "second"), repository.state.value.followUps.map { it.text })
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 2, "kind" to "follow_up.status", "requestId" to first.text("requestId"),
             "status" to "delivered"))
         assertEquals("delivered", repository.state.value.followUps.first().status)
@@ -2341,7 +5904,7 @@ class RemoteRepositoryTest {
         val normal = transport.response
         transport.response = { request ->
             if (request.text("type") == "session.prompt") {
-                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                     "revision" to 2, "kind" to "follow_up.status",
                     "requestId" to request.text("requestId"), "status" to "uncertain"))
                 Wire.objectOf("kind" to "accepted", "sessionId" to "session")
@@ -2349,13 +5912,127 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("same text")
         repository.followUp()
         runCurrent()
         repository.flush()
         assertEquals("uncertain", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
+    @Test
+    fun confirmedDeliveryUpgradesUncertaintyAndCannotBeDowngraded() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        transport.capabilities = setOf(STEER_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt")
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("same text")
+        repository.steer()
+        runCurrent()
+        val id = transport.sent.last { it.text("type") == "session.prompt" }.text("requestId")
+        listOf("uncertain", "delivered", "accepted", "cancelled").forEachIndexed { index, status ->
+            transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+                "revision" to index + 2, "kind" to "steer.status", "requestId" to id, "status" to status))
+        }
+        repository.flush()
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("delivered", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
+    @Test
+    fun messageIdentityBeforeAcknowledgementSurvivesLaterAcceptedReceipt() = runTest {
+        val transport = Transport().also(::configure)
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt") {
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    "revision" to 2, "kind" to "message.upsert", "message" to Wire.objectOf(
+                        "id" to "consumed", "role" to "user", "text" to "same text",
+                        "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"),
+                            "delivery" to "follow_up"))))
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    "revision" to 3, "kind" to "follow_up.status", "requestId" to request.text("requestId"),
+                    "status" to "accepted"))
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            } else normal(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("same text")
+        repository.followUp()
+        runCurrent()
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+    }
+
+    @Test
+    fun snapshotRecoversOnlyMatchingUserDeliveryIdentity() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(followUps = listOf(
+                PendingFollowUp("first", "same text", "uncertain", "steer"),
+                PendingFollowUp("second", "same text", "uncertain", "follow_up"),
+                PendingFollowUp("third", "same text", "uncertain", "steer"))))
+        }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        fun message(id: String, requestId: String?, delivery: String = "steer", role: String = "user") =
+            Wire.objectOf("id" to id, "role" to role, "text" to "same text",
+                "remoteDelivery" to requestId?.let {
+                    Wire.objectOf("requestId" to it, "delivery" to delivery)
+                })
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(
+                    message("one", "first"), message("two", "second", "steer"),
+                    message("three", "third", role = "assistant"), message("four", null))))
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertEquals(listOf("delivered", "uncertain", "uncertain"), repository.state.value.followUps.map { it.status })
+        assertEquals(listOf("delivered", "uncertain", "uncertain"),
+            drafts.values.getValue(DraftKey("host", "session")).followUps.map { it.status })
+    }
+
+    @Test
+    fun snapshotAfterRestartResolvesLostAcknowledgementAndPreservesEditedDraft() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(
+                text = "new draft", mutationId = "lost-ack", submittedText = "sent text"))
+        }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(Wire.objectOf(
+                    "id" to "consumed", "role" to "user", "text" to "sent text",
+                    "remoteDelivery" to Wire.objectOf("requestId" to "lost-ack", "delivery" to "follow_up")))))
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("sent text", repository.state.value.followUps.single().text)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
     }
 
     @Test
@@ -2366,7 +6043,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport, drafts)
         val selection = RemoteSelection("host", "project", "session")
         repository.activate(selection)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         val normal = transport.response
         transport.response = { request ->
@@ -2393,7 +6070,7 @@ class RemoteRepositoryTest {
             transport.capabilities = capabilities
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
-            transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                 "revision" to 1, "kind" to "session.status", "status" to "running"))
             repository.draft("next")
             repository.followUp()
@@ -2417,7 +6094,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport, drafts)
         val selection = RemoteSelection("host", "project", "session")
         repository.activate(selection)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("next")
         repository.followUp()
@@ -2513,7 +6190,7 @@ class RemoteRepositoryTest {
         val normal = transport.response
         transport.response = { request ->
             if (request.text("type") == "session.snapshot") {
-                transport.listener.message(
+                transport.deliver(
                     Wire.objectOf(
                         "type" to "result",
                         "requestId" to request.text("requestId"),
@@ -2613,6 +6290,24 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aClearedPushTokenIsRegisteredAsNullAgainAfterReconnecting() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        repository.setPushToken(null)
+        runCurrent()
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(selection)
+        runCurrent()
+
+        val registrations = transport.sent.filter { it.text("type") == "push.register" }
+        assertEquals(2, registrations.size)
+        assertTrue(registrations.all { it["token"] == JsonNull })
+    }
+
+    @Test
     fun removePurgesHostDraftsAndSerializedWritesRetainLatestEdit() = runTest {
         val drafts = Drafts()
         val transport = Transport().also { configure(it) }
@@ -2636,6 +6331,35 @@ class RemoteRepositoryTest {
         repository.draft("a".repeat(128 * 1024))
         repository.draft("ä".repeat(128 * 1024))
         assertEquals("a".repeat(128 * 1024), repository.state.value.draft)
+    }
+
+    @Test
+    fun aLateComposerWriteIsFiledUnderTheChatItWasTypedIn() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = repository(transport, drafts)
+        val first = RemoteSelection("host", "project", "session")
+        val second = first.copy(sessionId = "other")
+        repository.activate(first)
+        runCurrent()
+        repository.draft(first, "fix the tes")
+        assertEquals("fix the tes", repository.state.value.draft)
+        // Back or another chat ran before the composer's flush on the way out.
+        assertEquals(second, repository.activate(second))
+        runCurrent()
+        repository.draft(first, "fix the test")
+        assertEquals("", repository.state.value.draft)
+        repository.flush()
+        assertEquals("fix the test", drafts.values.getValue(DraftKey("host", "session")).text)
+        repository.draft(second, "second chat")
+        assertEquals("second chat", repository.state.value.draft)
+        repository.activate(first)
+        runCurrent()
+        assertEquals("fix the test", repository.state.value.draft)
+        // A chat of a host that is not paired keeps nothing.
+        repository.draft(RemoteSelection("gone", "project", "session"), "lost")
+        repository.flush()
+        assertFalse(drafts.values.containsKey(DraftKey("gone", "session")))
     }
 
     @Test
@@ -2730,6 +6454,17 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         assertTrue(SUBAGENT_CONTROL_CAPABILITY in repository.state.value.capabilities)
+    }
+
+    @Test
+    fun routeCapabilitiesEnableCompactAndSessionSettings() = runTest {
+        // The host announces both only on the projects.list route, never at authentication.
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(COMPACT_CAPABILITY), JsonPrimitive(SETTINGS_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertTrue(compactAvailable(repository.state.value))
+        assertTrue(SETTINGS_CAPABILITY in repository.state.value.capabilities)
     }
 
     @Test
@@ -2963,6 +6698,154 @@ class RemoteRepositoryTest {
         assertTrue(repository.state.value.connected)
     }
 
+    @Test
+    fun aCompletedToolOutputOpensAgainWithoutARequestEvenAfterAnotherChat() = runTest {
+        val bytes = "build ok\n".encodeToByteArray()
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(), session("other")))
+        advertising(transport)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.tool_output.get")
+                toolOutputData(request.long("offset"), bytes.size.toLong(), bytes)
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        repository.cancelToolOutput()
+        repository.loadToolOutput("call")
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.tool_output.get" })
+        val download = checkNotNull(repository.state.value.toolOutput)
+        assertEquals("build ok\n", download.text)
+        assertNull(download.failure)
+    }
+
+    @Test
+    fun aStoppedToolOutputResumesAtTheBytesItAlreadyHas() = runTest {
+        val bytes = "0123456789abcdefghijklmn".encodeToByteArray()
+        var answerRest = false
+        val (transport, repository) = toolOutputRepository { request ->
+            val offset = request.long("offset").toInt()
+            when {
+                answerRest -> toolOutputData(offset.toLong(), bytes.size.toLong(), bytes.copyOfRange(offset, bytes.size))
+                offset == 0 -> toolOutputData(0, bytes.size.toLong(), bytes.copyOfRange(0, 12))
+                else -> null
+            }
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        val partial = checkNotNull(repository.state.value.toolOutput)
+        assertNull(partial.text)
+        assertEquals(12L, partial.loadedBytes)
+        assertEquals("0123456789ab", partial.preview)
+
+        repository.cancelToolOutput()
+        assertNull(repository.state.value.toolOutput)
+        answerRest = true
+        repository.loadToolOutput("call")
+        runCurrent()
+
+        val offsets = transport.sent.filter { it.text("type") == "session.tool_output.get" }.map { it.long("offset") }
+        assertEquals(listOf(0L, 12L, 12L), offsets)
+        val download = checkNotNull(repository.state.value.toolOutput)
+        assertEquals("0123456789abcdefghijklmn", download.text)
+        assertEquals(24L, download.loadedBytes)
+    }
+
+    @Test
+    fun aRunningToolOutputIsNotRequestedAgainWhileItLoads() = runTest {
+        val (transport, repository) = toolOutputRepository { null }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.tool_output.get" })
+        assertNull(repository.state.value.toolOutput?.failure)
+    }
+
+    @Test
+    fun thePreviewOfAToolOutputNeverShowsACharacterSplitByAChunk() = runTest {
+        val bytes = "a\u20ac".encodeToByteArray()
+        val (_, repository) = toolOutputRepository { request ->
+            if (request.long("offset") == 0L) toolOutputData(0, bytes.size.toLong(), bytes.copyOfRange(0, 2))
+            else null
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals("a", repository.state.value.toolOutput?.preview)
+    }
+
+    @Test
+    fun aLostChunkKeepsTheTextOfTheStoppedOutputAndTheNextLoadResumesIt() = runTest {
+        val bytes = "0123456789abcdefghijklmn".encodeToByteArray()
+        var answerRest = false
+        val (transport, repository) = toolOutputRepository { request ->
+            val offset = request.long("offset").toInt()
+            when {
+                answerRest -> toolOutputData(offset.toLong(), bytes.size.toLong(), bytes.copyOfRange(offset, bytes.size))
+                offset == 0 -> toolOutputData(0, bytes.size.toLong(), bytes.copyOfRange(0, 12))
+                else -> null
+            }
+        }
+        transport.failure = { request ->
+            if (request.text("type") == "session.tool_output.get" && request.long("offset") == 12L && !answerRest) "offline"
+            else null
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.toolOutput)
+        assertEquals(ToolOutputFailure.OFFLINE, lost.failure)
+        assertEquals(12L, lost.loadedBytes)
+        assertEquals("0123456789ab", lost.preview)
+
+        answerRest = true
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(listOf(0L, 12L, 12L), transport.sent.filter { it.text("type") == "session.tool_output.get" }.map { it.long("offset") })
+        assertEquals("0123456789abcdefghijklmn", repository.state.value.toolOutput?.text)
+    }
+
+    @Test
+    fun aFailedOutputDropsItsBytesAndTheNextLoadStartsOver() = runTest {
+        val bytes = "0123456789abcdefghijklmn".encodeToByteArray()
+        var answerRest = false
+        val (transport, repository) = toolOutputRepository { request ->
+            val offset = request.long("offset").toInt()
+            when {
+                answerRest -> toolOutputData(offset.toLong(), bytes.size.toLong(), bytes.copyOfRange(offset, bytes.size))
+                offset == 0 -> toolOutputData(0, bytes.size.toLong(), bytes.copyOfRange(0, 12))
+                else -> null
+            }
+        }
+        transport.failure = { request ->
+            if (request.text("type") == "session.tool_output.get" && request.long("offset") == 12L && !answerRest) "unavailable"
+            else null
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(ToolOutputFailure.FAILED, repository.state.value.toolOutput?.failure)
+
+        answerRest = true
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(listOf(0L, 12L, 0L), transport.sent.filter { it.text("type") == "session.tool_output.get" }.map { it.long("offset") })
+        assertEquals("0123456789abcdefghijklmn", repository.state.value.toolOutput?.text)
+    }
+
     private fun child(id: String, parentId: String, status: String) =
         JsonObject(session(id, origin = "tui", status = status) + ("parentSessionId" to JsonPrimitive(parentId)))
 
@@ -3040,21 +6923,223 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", sessionId))
-        transport.listener.message(running)
+        transport.deliver(running)
         runCurrent()
         assertEquals("threshold", repository.state.value.compaction?.reason)
         val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
-        transport.listener.message(insight("compaction-done"))
+        transport.deliver(insight("compaction-done"))
         runCurrent()
         assertNull(repository.state.value.compaction)
         assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
 
-        transport.listener.message(JsonObject(running + ("revision" to JsonPrimitive(17))))
+        transport.deliver(JsonObject(running + ("revision" to JsonPrimitive(17))))
         runCurrent()
         assertNotNull(repository.state.value.compaction)
         repository.activate(RemoteSelection("host", "project", "other"))
         runCurrent()
         assertNull(repository.state.value.compaction)
+    }
+
+    @Test
+    fun noticesReachTheSelectedSessionOnceAndResetOnSelection() = runTest {
+        val sessionId = "session"
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(sessionId), session("other")), opened = session(sessionId))
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId)
+                JsonObject(original(request)!! + ("revision" to JsonPrimitive(3)))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        fun notice(revision: Int, message: String, session: String = sessionId) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to session,
+                "revision" to revision,
+                "kind" to "session.notice",
+                "level" to "info",
+                "message" to message,
+            )
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        transport.deliver(notice(4, "No artifacts in this session yet."))
+        runCurrent()
+        val first = repository.state.value.notice
+        assertEquals("No artifacts in this session yet.", first?.message)
+        // The timeline takes the notice without asking for a snapshot.
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        // A replay and another session's notice change nothing.
+        transport.deliver(notice(4, "No artifacts in this session yet."))
+        transport.deliver(notice(5, "elsewhere", "other"))
+        runCurrent()
+        assertEquals(first, repository.state.value.notice)
+        transport.deliver(notice(5, "second"))
+        runCurrent()
+        val second = repository.state.value.notice!!
+        assertEquals("second", second.message)
+        // Dismissing the earlier notice keeps the newer one.
+        repository.dismissNotice(first!!.id)
+        assertEquals(second, repository.state.value.notice)
+        repository.dismissNotice(second.id)
+        assertNull(repository.state.value.notice)
+        transport.deliver(notice(6, "third"))
+        runCurrent()
+        assertNotNull(repository.state.value.notice)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.notice)
+    }
+
+    @Test
+    fun hostSuggestionsFollowEventsSnapshotsOfflineAndSelection() = runTest {
+        val sessionId = "session"
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(sessionId), session("other")), opened = session(sessionId))
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId)
+                JsonObject(
+                    original(request)!! +
+                        mapOf("revision" to JsonPrimitive(3), "suggestion" to JsonPrimitive("Run the tests again"))
+                )
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        // The snapshot's optional key restores the current suggestion.
+        assertEquals("Run the tests again", repository.state.value.suggestion)
+        fun suggestion(revision: Int, value: Any?) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to revision,
+                "kind" to "session.suggestion",
+                "suggestion" to value,
+            )
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        transport.deliver(suggestion(4, null))
+        runCurrent()
+        assertNull(repository.state.value.suggestion)
+        transport.deliver(suggestion(5, "Commit the change"))
+        runCurrent()
+        assertEquals("Commit the change", repository.state.value.suggestion)
+        // A malformed suggestion is ignored without an unknown-kind resync.
+        transport.deliver(suggestion(6, ""))
+        transport.deliver(suggestion(7, 42))
+        runCurrent()
+        advanceUntilIdle()
+        assertEquals("Commit the change", repository.state.value.suggestion)
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to 8,
+                "kind" to "session.status",
+                "status" to "offline",
+            )
+        )
+        runCurrent()
+        assertNull(repository.state.value.suggestion)
+        transport.deliver(suggestion(9, "Open a pull request"))
+        runCurrent()
+        assertEquals("Open a pull request", repository.state.value.suggestion)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.suggestion)
+    }
+
+    @Test
+    fun hostPullRequestsFollowEventsSnapshotsOfflineAndSelection() = runTest {
+        val sessionId = "session"
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(sessionId), session("other")), opened = session(sessionId))
+        fun pullRequest(number: Int) =
+            Wire.objectOf(
+                "number" to number,
+                "url" to "https://github.com/acme/app/pull/$number",
+                "draft" to false,
+                "review" to "approved",
+                "checks" to Wire.objectOf("state" to "done", "failed" to 0),
+            )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId)
+                JsonObject(original(request)!! + mapOf("revision" to JsonPrimitive(3), "pullRequest" to pullRequest(7)))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        // The snapshot's optional key restores the current pull request.
+        assertEquals(7L, repository.state.value.pullRequest?.number)
+        fun event(revision: Int, value: Any?) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to revision,
+                "kind" to "session.pull_request",
+                "pullRequest" to value,
+            )
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        transport.deliver(event(4, null))
+        runCurrent()
+        assertNull(repository.state.value.pullRequest)
+        transport.deliver(event(5, pullRequest(8)))
+        runCurrent()
+        assertEquals(8L, repository.state.value.pullRequest?.number)
+        // A malformed pull request is ignored without an unknown-kind resync.
+        transport.deliver(event(6, "https://github.com/acme/app/pull/9"))
+        runCurrent()
+        advanceUntilIdle()
+        assertEquals(8L, repository.state.value.pullRequest?.number)
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to 7,
+                "kind" to "session.status",
+                "status" to "offline",
+            )
+        )
+        runCurrent()
+        assertNull(repository.state.value.pullRequest)
+        transport.deliver(event(8, pullRequest(10)))
+        runCurrent()
+        assertEquals(10L, repository.state.value.pullRequest?.number)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.pullRequest)
+    }
+
+    @Test
+    fun manualCompactionDispatchesWithoutChangingTheDraft() = runTest {
+        val transport = Transport()
+        configure(transport)
+        transport.capabilities = setOf(COMPACT_CAPABILITY)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.compact") null else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("Keep this draft")
+        repository.compactContext()
+        runCurrent()
+        assertEquals("Keep this draft", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.compact" })
+        assertTrue(repository.state.value.compactionRequesting)
+        repository.compactContext()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.compact" })
+        val compact = transport.sent.last { it.text("type") == "session.compact" }
+        transport.result(compact, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertFalse(repository.state.value.compactionRequesting)
     }
 
     private fun forking(
@@ -3163,6 +7248,1236 @@ class RemoteRepositoryTest {
         assertFalse(repository.state.value.loading)
     }
 
+    private fun treeNode(id: String, parentId: String?, kind: String = "user", forkable: Boolean = true) =
+        Wire.objectOf(
+            "id" to id,
+            "parentId" to parentId,
+            "kind" to kind,
+            "preview" to "preview $id",
+            "timestamp" to "2026-01-01T12:00:00.000Z",
+            "children" to 1,
+            "forkable" to forkable,
+        )
+
+    private fun treeResult(sessionId: String) =
+        Wire.objectOf(
+            "kind" to "tree",
+            "sessionId" to sessionId,
+            "leafId" to "a1",
+            "truncated" to false,
+            "canNavigate" to true,
+            "nodes" to JsonArray(listOf(treeNode("u1", null), treeNode("a1", "u1", "assistant"))),
+        )
+
+    private fun treeing(transport: Transport, result: (JsonObject) -> JsonObject? = { null }) {
+        configure(transport, sessions = listOf(session(), session("fork")))
+        advertising(
+            transport,
+            JsonArray(listOf(JsonPrimitive(SESSION_FORK_CAPABILITY), JsonPrimitive(SESSION_TREE_CAPABILITY))),
+        )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type").startsWith("session.tree")) result(request) else original(request)
+        }
+    }
+
+    @Test
+    fun treeSendsNothingWithoutTheRouteCapability() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        assertEquals(TreeLoadResult.Failed(TreeFailure.UNSUPPORTED), repository.loadSessionTree("session"))
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.UNSUPPORTED),
+            repository.navigateSessionTree("session", "u1", false),
+        )
+        assertEquals(source, repository.forkSessionAtNode(source, "u1"))
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.tree") })
+    }
+
+    @Test
+    fun treeLoadsTheSelectedSessionsTreeAndRejectsABrokenReply() = runTest {
+        val transport = Transport()
+        var broken = false
+        treeing(transport) { request ->
+            treeResult(request.text("sessionId")).let { if (broken) JsonObject(it + ("canNavigate" to JsonPrimitive("yes"))) else it }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val loaded = repository.loadSessionTree("session") as TreeLoadResult.Loaded
+        assertEquals(listOf("u1", "a1"), loaded.tree.nodes.map { it.id })
+        val request = transport.sent.single { it.text("type") == "session.tree" }
+        assertEquals(setOf("type", "requestId", "sessionId"), request.keys)
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), repository.loadSessionTree("other"))
+        broken = true
+        assertEquals(TreeLoadResult.Failed(TreeFailure.PROTOCOL), repository.loadSessionTree("session"))
+        transport.failure = { if (it.text("type") == "session.tree") "internal" else null }
+        // A read has no unknown result.
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), repository.loadSessionTree("session"))
+        transport.failure = { if (it.text("type") == "session.tree") "not_found" else null }
+        assertEquals(TreeLoadResult.Failed(TreeFailure.NOT_FOUND), repository.loadSessionTree("session"))
+    }
+
+    private fun reloading(
+        transport: Transport,
+        origin: String = "rpc",
+        result: (JsonObject) -> JsonObject? = { null },
+    ) {
+        configure(transport, sessions = listOf(session(origin = origin)))
+        // The command catalog is advertised at authentication, reload on the route.
+        transport.capabilities = setOf(COMMANDS_CAPABILITY)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(RELOAD_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.reload" -> result(request)
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                else -> original(request)
+            }
+        }
+    }
+
+    private fun reloaded(request: JsonObject) =
+        Wire.objectOf("kind" to "reloaded", "sessionId" to request.text("sessionId"))
+
+    @Test
+    fun reloadSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("session"))
+        // The terminal session has the capability, so only its origin refuses the reload.
+        val terminal = Transport()
+        reloading(terminal, origin = "tui", result = ::reloaded)
+        val other = repository(terminal)
+        other.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), other.reloadSession("session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), other.reloadSession("elsewhere"))
+        assertTrue(transport.sent.none { it.text("type") == "session.reload" })
+        assertTrue(terminal.sent.none { it.text("type") == "session.reload" })
+        // Positive control: the same setup with a host-owned session does send it.
+        val owned = Transport()
+        reloading(owned, origin = "rpc", result = ::reloaded)
+        val rpc = repository(owned)
+        rpc.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Done, rpc.reloadSession("session"))
+        assertEquals(1, owned.sent.count { it.text("type") == "session.reload" })
+    }
+
+    @Test
+    fun reloadRefreshesTheCatalogEvenWhenARequestIsAlreadyInFlight() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        var hold = true
+        val answering = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.commands.get" && hold) null else answering(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        assertTrue(repository.state.value.commands.isEmpty())
+        hold = false
+        val catalogs = transport.sent.count { it.text("type") == "session.commands.get" }
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        runCurrent()
+        assertEquals(catalogs + 1, transport.sent.count { it.text("type") == "session.commands.get" })
+        assertFalse(repository.state.value.commandsLoading)
+        assertEquals(listOf("review"), repository.state.value.commands.map { it.name })
+    }
+
+    @Test
+    fun reloadAsksTheHostAndRefreshesTheChatAndTheCommandCatalog() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val catalogs = transport.sent.count { it.text("type") == "session.commands.get" }
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        runCurrent()
+        val request = transport.sent.single { it.text("type") == "session.reload" }
+        assertEquals(setOf("type", "requestId", "sessionId"), request.keys)
+        assertEquals("session", request.text("sessionId"))
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(catalogs + 1, transport.sent.count { it.text("type") == "session.commands.get" })
+    }
+
+    @Test
+    fun reloadMapsErrorsAndRefreshesOnlyWhenTheResultIsUnknown() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((code, failure) in
+            listOf(
+                "busy" to ReloadFailure.Busy,
+                "unsupported" to ReloadFailure.Unsupported,
+                "offline" to ReloadFailure.ConnectionFailure,
+                "forbidden" to ReloadFailure.Failed(null),
+            )) {
+            transport.failure = { if (it.text("type") == "session.reload") code else null }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(code, ReloadResult.Failed(failure), repository.reloadSession("session"))
+            runCurrent()
+            assertEquals(code, snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        transport.failure = { if (it.text("type") == "session.reload") "internal" else null }
+        transport.failureMessage = { "Extension failed to load" }
+        assertEquals(
+            ReloadResult.Failed(ReloadFailure.Failed("Extension failed to load")),
+            repository.reloadSession("session"),
+        )
+        // The host's generic text is no detail worth repeating.
+        transport.failureMessage = { "Reload failed" }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
+        transport.failureMessage = { "Reload result unknown; refresh" }
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unknown), repository.reloadSession("session"))
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.failure = { null }
+        transport.failureMessage = { null }
+        // A reply that breaks the protocol is no success.
+        transport.response = { request ->
+            if (request.text("type") == "session.reload")
+                Wire.objectOf("kind" to "reloaded", "sessionId" to "other")
+            else null
+        }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
+    }
+
+    @Test
+    fun terminalBuffersEarlyEventsAndDetachesWhenNavigatingAway() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach") null else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        val attach = transport.sent.last { it.text("type") == "session.terminal.attach" }
+        transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.data", "sessionId" to "session", "attachmentGeneration" to 3, "seq" to 0, "text" to "hello"))
+        transport.result(attach, Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24))
+        runCurrent()
+        assertEquals(listOf("hello"), repo.state.value.terminal?.output)
+        repo.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertEquals("left", repo.state.value.terminal?.ended)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.detach" })
+    }
+
+    @Test
+    fun terminalNeverAttachesWithoutCapability() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(repo.attachTerminal(80, 24))
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.attach" })
+    }
+
+    @Test
+    fun terminalKeysCannotBeEnabledByHandshakeOrV1Route() = runTest {
+        val transport = Transport()
+        transport.capabilities = setOf(SESSION_TERMINAL_KEYS_CAPABILITY)
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && result != null &&
+                request.text("requestId").startsWith("capabilities.v1:"))
+                JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY)))))
+            else result
+        }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v1:") })
+        assertFalse(SESSION_TERMINAL_KEYS_CAPABILITY in repo.state.value.capabilities)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+    }
+
+    @Test
+    fun unsupportedTerminalChordLeavesAttachmentOpenAndNextSequenceAdvances() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY), JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.key" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> original(request)
+        } }
+        transport.failure = { request -> if (request.text("type") == "session.terminal.key" && request.obj("key").text("name") == "1") "unsupported" else null }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Chord("1", ctrl = true))); runCurrent()
+        assertNull(repo.state.value.terminal?.ended)
+        assertEquals(1L, repo.state.value.terminal?.inputRejected)
+        assertFalse(repo.state.value.terminal!!.inputPending)
+        assertTrue(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+        advanceTimeBy(126); runCurrent()
+        val sent = transport.sent.filter { it.text("type") == "session.terminal.key" }
+        assertEquals(listOf(0L, 1L), sent.map { it.long("inputSeq") })
+        assertNull(repo.state.value.terminal?.ended)
+    }
+
+    @Test
+    fun terminalInputAndResizeSharePacingAndSequence() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY), JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY))))
+        val original = transport.response
+        val sentAt = mutableListOf<Long>()
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input", "session.terminal.key", "session.terminal.resize" -> {
+                sentAt += testScheduler.currentTime
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            }
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.state.value.terminal!!.keysEnabled)
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x"))); runCurrent()
+        assertTrue(repo.resizeTerminal(90, 25))
+        assertTrue(repo.resizeTerminal(100, 30))
+        assertTrue(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+        advanceTimeBy(251); runCurrent()
+        val sent = transport.sent.filter { it.text("type") in setOf("session.terminal.input", "session.terminal.key", "session.terminal.resize") }
+        assertEquals(listOf("session.terminal.input", "session.terminal.resize", "session.terminal.key"), sent.map { it.text("type") })
+        assertEquals(100L, sent[1].long("cols"))
+        assertEquals(0L, sent[0].long("inputSeq"))
+        assertEquals(1L, sent[2].long("inputSeq"))
+        assertTrue(sentAt.zipWithNext().all { (a, b) -> b - a >= 125 })
+    }
+
+    @Test
+    fun oldTerminalRejectsStructuredKeys() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+        else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertFalse(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.key" })
+    }
+
+    @Test
+    fun terminalDraftAndEnterAreAcknowledgedInOrder() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        val batch = terminalInputForKey("ls", "enter")!!
+        assertTrue(repo.sendTerminalInput(batch[0]))
+        assertEquals(true, repo.state.value.terminal?.inputPending)
+        assertFalse(repo.sendTerminalInput(batch[1]))
+        runCurrent()
+        assertEquals(false, repo.state.value.terminal?.inputPending)
+        assertTrue(repo.sendTerminalInput(batch[1])); advanceTimeBy(126); runCurrent()
+        val sent = transport.sent.filter { it.text("type") == "session.terminal.input" }
+        assertEquals(2, sent.size)
+        assertEquals("ls", sent[0].text("text"))
+        assertEquals("enter", sent[1].obj("key").text("name"))
+        assertEquals(0L, sent[0].long("inputSeq"))
+        assertEquals(1L, sent[1].long("inputSeq"))
+    }
+
+    @Test
+    fun terminalStopsOnSequenceGapAndDoesNotResendInput() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertEquals(true, repo.state.value.terminal?.inputPending)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Text("y")))
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+        transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.data", "sessionId" to "session", "attachmentGeneration" to 3, "seq" to 1, "text" to "gap"))
+        runCurrent()
+        assertEquals("sequence", repo.state.value.terminal?.ended)
+        assertEquals(false, repo.state.value.terminal?.inputPending)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Text("again")))
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+    }
+
+    @Test
+    fun lateTerminalAttachIsDetachedAfterLeavingSession() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach") null else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        val attach = transport.sent.last { it.text("type") == "session.terminal.attach" }
+        repo.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        transport.result(attach, Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24))
+        runCurrent()
+        assertEquals("left", repo.state.value.terminal?.ended)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.detach" })
+    }
+
+    @Test
+    fun terminalGoesOfflineWithoutReplayingInput() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+    }
+
+    @Test
+    fun queuedTerminalCommandsNeverGoOutAfterDisconnect() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        repo.disconnect()
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.attach" })
+
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertTrue(repo.resizeTerminal(100, 30))
+        repo.disconnect()
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.input" || it.text("type") == "session.terminal.resize" })
+    }
+
+    @Test
+    fun terminalHostDetachClearsPendingInputForNextAttachment() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x"))); runCurrent()
+        transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.detached", "sessionId" to "session", "attachmentGeneration" to 3, "reason" to "revoked"))
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("y")))
+        advanceTimeBy(126); runCurrent()
+        val inputs = transport.sent.filter { it.text("type") == "session.terminal.input" }
+        assertEquals(listOf("x", "y"), inputs.map { it.text("text") })
+        assertEquals(0L, inputs.last().long("inputSeq"))
+    }
+
+    @Test
+    fun terminalDetachFailureClosesConnectionToReleaseLease() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            else original(request) }
+        transport.failure = { if (it.text("type") == "session.terminal.detach") "offline" else null }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        val closes = transport.closes
+        repo.detachTerminal(); runCurrent()
+        assertTrue(transport.closes > closes)
+    }
+
+    @Test
+    fun terminalDetachTimeoutAndSendFailureCloseConnection() = runTest {
+        for (failBeforeSend in listOf(false, true)) {
+            val transport = Transport()
+            val worker = session(origin = "worker")
+            configure(transport, sessions = listOf(worker), opened = worker)
+            advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+            val original = transport.response
+            transport.response = { request -> when (request.text("type")) {
+                "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+                "session.terminal.detach" -> null
+                else -> original(request)
+            } }
+            transport.sendFailure = { failBeforeSend && it.text("type") == "session.terminal.detach" }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+            val closes = transport.closes
+            repo.detachTerminal(); runCurrent()
+            if (!failBeforeSend) { advanceTimeBy(REQUEST_TIMEOUT_MILLIS); runCurrent() }
+            assertTrue("failed detach must close connection, pre-send=$failBeforeSend", transport.closes > closes)
+            repo.disconnect()
+        }
+    }
+
+    @Test
+    fun terminalCancelledBeforeSendCanAttachAgainOnSameConnection() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        repo.detachTerminal()
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.attach" })
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertEquals(3L, repo.state.value.terminal?.generation)
+    }
+
+    private fun bashing(transport: Transport, origin: String = "rpc", advertise: Boolean = true) {
+        configure(transport, sessions = listOf(session(origin = origin)), opened = session(origin = origin))
+        if (advertise) advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BASH_CAPABILITY))))
+        // A command answers when the test says it ended.
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.bash") null else original(request) }
+    }
+
+    private fun Transport.bashRequests() = sent.filter { it.text("type") == "session.bash" }
+
+    private fun bashOutput(request: JsonObject, offset: Long, text: String) =
+        Wire.objectOf(
+            "type" to "host.event",
+            "kind" to "session.bash.output",
+            "sessionId" to request.text("sessionId"),
+            "requestId" to request.text("requestId"),
+            "offset" to offset,
+            "text" to text,
+        )
+
+    private fun bashResult(request: JsonObject, exitCode: Int? = 0, cancelled: Boolean = false, output: String = "") =
+        Wire.objectOf(
+            "kind" to "bash",
+            "sessionId" to request.text("sessionId"),
+            "exitCode" to exitCode,
+            "cancelled" to cancelled,
+            "truncated" to false,
+            "output" to output,
+        )
+
+    @Test
+    fun aBangDraftWithoutTheShellCapabilityIsNeverSentAsAPrompt() = runTest {
+        val transport = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("!rm -rf build")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+        assertEquals("!rm -rf build", repository.state.value.draft)
+        assertEquals(R.string.remote_shell_draft_not_sent, repository.state.value.error)
+        // A plain prompt still goes out.
+        repository.dismissError()
+        repository.draft("list the files")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aShellDraftIsNeverQueuedAsAFollowUp() = runTest {
+        val transport =
+            Transport().also { bashing(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY, STEER_CAPABILITY) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        runCurrent()
+        assertTrue(canRunShellCommands(repository.state.value))
+        repository.draft("!ls")
+        runCurrent()
+        repository.followUp()
+        repository.steer()
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertTrue(transport.bashRequests().isEmpty())
+        assertEquals("!ls", repository.state.value.draft)
+        // A plain follow-up still goes out.
+        repository.draft("list the files")
+        runCurrent()
+        repository.followUp()
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aSpaceBeforeTheBangSendsTheDraftAsAPrompt() = runTest {
+        val transport = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft(" !important: keep the tests")
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(" !important: keep the tests", transport.sent.single { it.text("type") == "session.prompt" }.text("text"))
+        assertTrue(transport.bashRequests().isEmpty())
+    }
+
+    @Test
+    fun runBashSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
+        val old = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(old)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(repository.runBash("ls", false))
+        val terminal = Transport().also { bashing(it, origin = "tui") }
+        val other = repository(terminal)
+        other.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(other.runBash("ls", true))
+        runCurrent()
+        assertTrue(old.bashRequests().isEmpty())
+        assertTrue(terminal.bashRequests().isEmpty())
+        assertNull(other.state.value.bash)
+        // Positive control: the same setup with a host-owned session does send it.
+        val owned = Transport().also { bashing(it) }
+        val rpc = repository(owned)
+        rpc.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(rpc.runBash("", false))
+        assertTrue(rpc.runBash("ls", true))
+        runCurrent()
+        val request = owned.bashRequests().single()
+        assertEquals(setOf("type", "requestId", "sessionId", "command", "excludeFromContext"), request.keys)
+        assertEquals("ls", request.text("command"))
+        assertTrue(request.flag("excludeFromContext"))
+    }
+
+    private fun workerBashing(transport: Transport, opened: JsonObject, capabilities: List<String>) {
+        configure(transport, sessions = listOf(opened), opened = opened)
+        advertising(transport, JsonArray(capabilities.map(::JsonPrimitive)))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.bash") null else original(request) }
+    }
+
+    @Test
+    fun aHostWorkerRunsABangCommandAndAHiddenOneStaysOutOfTheTranscript() = runTest {
+        val transport =
+            Transport().also {
+                workerBashing(it, fixtureWorker(), listOf(SESSION_BASH_CAPABILITY, SESSION_BASH_WORKER_CAPABILITY))
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "worker-session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        assertTrue(isHostWorker(checkNotNull(repository.state.value.session)))
+        assertTrue(canRunShellCommands(repository.state.value))
+        assertNotNull(shellDraft(repository.state.value.copy(draft = "!echo hi")))
+        val before = repository.state.value.messages
+        assertTrue(repository.runBash("echo hi", false))
+        runCurrent()
+        val shown = transport.bashRequests().single()
+        assertEquals("worker-session", shown.text("sessionId"))
+        assertEquals("echo hi", shown.text("command"))
+        assertFalse("excludeFromContext" in shown)
+        transport.deliver(bashOutput(shown, 0, "hi\n"))
+        transport.result(shown, bashResult(shown, output = "hi\n"))
+        runCurrent()
+        assertEquals(BashResult(0, false, false, "hi\n"), repository.state.value.bash?.result)
+        repository.closeBash()
+        assertTrue(repository.runBash("echo hi", true))
+        runCurrent()
+        val hidden = transport.bashRequests().last()
+        assertTrue(hidden.flag("excludeFromContext"))
+        transport.result(hidden, bashResult(hidden, output = "hi\n"))
+        runCurrent()
+        assertEquals(BashResult(0, false, false, "hi\n"), repository.state.value.bash?.result)
+        // The Mac adds the shown run to the transcript; the app and a `!!` run add nothing.
+        assertEquals(before, repository.state.value.messages)
+    }
+
+    @Test
+    fun aTerminalSessionRunsABangCommandWithTheWorkerCapability() = runTest {
+        val unmarked = session("session", "tui")
+        val transport =
+            Transport().also {
+                workerBashing(it, unmarked, listOf(SESSION_BASH_CAPABILITY, SESSION_BASH_WORKER_CAPABILITY))
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(isHostWorker(checkNotNull(repository.state.value.session)))
+        assertTrue(SESSION_BASH_WORKER_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(repository.runBash("echo hi", false))
+        runCurrent()
+        val request = transport.bashRequests().single()
+        assertEquals("session", request.text("sessionId"))
+        transport.result(request, bashResult(request, output = "a\nb"))
+        runCurrent()
+        assertEquals(BashResult(0, false, false, "a\nb"), repository.state.value.bash?.result)
+    }
+
+    @Test
+    fun aTerminalSessionSendsNothingWithoutTheWorkerCapabilityAndTheRouteDropsUnknownOnes() = runTest {
+        val transport = Transport().also { workerBashing(it, session("session", "tui"), listOf(SESSION_BASH_CAPABILITY)) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(SESSION_BASH_WORKER_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(repository.runBash("echo hi", false))
+        runCurrent()
+        assertTrue(transport.bashRequests().isEmpty())
+        // Only the worker capability: the plain one is missing, so the gate stays shut.
+        val partial = Transport().also { workerBashing(it, session("session", "tui"), listOf(SESSION_BASH_WORKER_CAPABILITY)) }
+        val other = repository(partial)
+        other.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(other.runBash("echo hi", false))
+    }
+
+    @Test
+    fun runBashStreamsOutputUntilTheResultEndsTheRun() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("git status", false))
+        // Only one at a time.
+        assertFalse(repository.runBash("ls", false))
+        runCurrent()
+        val request = transport.bashRequests().single()
+        assertFalse("excludeFromContext" in request)
+        transport.deliver(bashOutput(request, 0, "On branch dev\n"))
+        // Another request's output, and a repeat, change nothing.
+        transport.deliver(bashOutput(JsonObject(request + ("requestId" to JsonPrimitive("other"))), 0, "nope\n"))
+        transport.deliver(bashOutput(request, 0, "On branch dev\n"))
+        // The host dropped 4 bytes while the relay was backed up.
+        transport.deliver(bashOutput(request, 18, "clean\n"))
+        runCurrent()
+        val live = checkNotNull(repository.state.value.bash)
+        assertTrue(live.running)
+        assertEquals(
+            listOf(JobOutputLine.Text("On branch dev"), JobOutputLine.Skipped(4), JobOutputLine.Text("clean")),
+            live.lines,
+        )
+        assertEquals(24L, live.shownBytes)
+        transport.result(request, bashResult(request, exitCode = 1, output = "On branch dev\nxxx\nclean\n"))
+        runCurrent()
+        val done = checkNotNull(repository.state.value.bash)
+        assertFalse(done.running)
+        assertEquals(BashResult(1, false, false, "On branch dev\nxxx\nclean\n"), done.result)
+        assertEquals(listOf("On branch dev", "xxx", "clean"), done.lines.map { (it as JobOutputLine.Text).text })
+        // Output after the result is dropped.
+        transport.deliver(bashOutput(request, 24, "late\n"))
+        runCurrent()
+        assertEquals(done, repository.state.value.bash)
+        repository.closeBash()
+        assertNull(repository.state.value.bash)
+    }
+
+    @Test
+    fun abortBashSendsTheAbortAndTheCancelledResultEndsTheRun() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.bash.abort")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else if (request.text("type") == "session.bash") null
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("sleep 60", false))
+        runCurrent()
+        // A running command cannot be closed.
+        repository.closeBash()
+        assertNotNull(repository.state.value.bash)
+        repository.abortBash()
+        repository.abortBash()
+        runCurrent()
+        val abort = transport.sent.single { it.text("type") == "session.bash.abort" }
+        assertEquals(setOf("type", "requestId", "sessionId"), abort.keys)
+        assertEquals("session", abort.text("sessionId"))
+        assertTrue(checkNotNull(repository.state.value.bash).stopping)
+        val request = transport.bashRequests().single()
+        transport.result(request, bashResult(request, exitCode = null, cancelled = true))
+        runCurrent()
+        val done = checkNotNull(repository.state.value.bash)
+        assertEquals(BashResult(null, true, false, ""), done.result)
+        assertFalse(done.stopping)
+    }
+
+    @Test
+    fun abortBashStillReachesACommandWhoseRequestWasLost() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.bash.abort")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.bash") "offline" else null }
+        assertTrue(repository.runBash("sleep 60", false))
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.bash)
+        assertEquals(BashFailure.CONNECTION, lost.failure)
+        assertTrue(lost.stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals("session", transport.sent.single { it.text("type") == "session.bash.abort" }.text("sessionId"))
+        // The attempt ends the stop: accepted, and nothing more to offer.
+        val stopped = checkNotNull(repository.state.value.bash)
+        assertFalse(stopped.stopping)
+        assertTrue(stopped.stopAttempted)
+        assertTrue(stopped.stopSent)
+        assertFalse(stopped.stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
+        // Another refusal leaves nothing to stop.
+        transport.failure = { if (it.text("type") == "session.bash") "busy" else null }
+        assertTrue(repository.runBash("ls", false))
+        runCurrent()
+        assertFalse(checkNotNull(repository.state.value.bash).stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
+    }
+
+    @Test
+    fun aRunThatNeverLeftThePhoneOffersNoStop() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("sleep 60", false))
+        // The connection drops before the request goes out.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.bash)
+        assertEquals(BashFailure.CONNECTION, lost.failure)
+        assertFalse(lost.sent)
+        assertFalse(lost.stoppable)
+        assertTrue(transport.bashRequests().isEmpty())
+    }
+
+    @Test
+    fun runBashMapsTheHostRefusals() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((error, failure) in
+            listOf(
+                ("unsupported" to BASH_SWITCHED_OFF_MESSAGE) to BashFailure.SWITCHED_OFF,
+                ("unsupported" to BASH_TERMINAL_SESSION_MESSAGE) to BashFailure.TERMINAL_SESSION,
+                ("unsupported" to BASH_UPDATE_PI_MESSAGE) to BashFailure.UPDATE_PI,
+                ("unsupported" to "Reload the pi remote extension to use this control") to BashFailure.RELOAD_EXTENSION,
+                ("busy" to "Session is busy") to BashFailure.BUSY,
+                ("offline" to "Session is offline") to BashFailure.CONNECTION,
+            )) {
+            transport.failure = { if (it.text("type") == "session.bash") error.first else null }
+            transport.failureMessage = { error.second }
+            assertTrue(repository.runBash("ls", false))
+            runCurrent()
+            assertEquals(error.second, failure, repository.state.value.bash?.failure)
+            // A refusal keeps the gate: the next `!` draft still runs as a command.
+            assertTrue(canRunShellCommands(repository.state.value))
+        }
+    }
+
+    @Test
+    fun navigatingPutsTheTextInTheComposerAndRefreshesTheChat() = runTest {
+        val quote = MessageQuote("assistant-2", "assistant", "earlier answer")
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "tree.navigated",
+                "sessionId" to request.text("sessionId"),
+                "leafId" to "u1",
+                "text" to QuoteCodec.encode("second question", quote),
+            )
+        }
+        val drafts = Drafts()
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val result = repository.navigateSessionTree("session", "u2", true)
+        runCurrent()
+        assertEquals(TreeNavigateResult.Done(TreeNavigation("u1", QuoteCodec.encode("second question", quote))), result)
+        val request = transport.sent.single { it.text("type") == "session.tree.navigate" }
+        assertEquals(setOf("type", "requestId", "sessionId", "nodeId", "summarize"), request.keys)
+        assertEquals("u2", request.text("nodeId"))
+        assertTrue(request.flag("summarize"))
+        val state = repository.state.value
+        assertEquals("second question", state.draft)
+        assertEquals(quote, state.quote)
+        assertEquals("session", state.selection.sessionId)
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        repository.flush()
+        assertEquals("second question", drafts.values[DraftKey("host", "session")]?.text)
+    }
+
+    @Test
+    fun navigatingWithoutTextKeepsTheDraft() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf("kind" to "tree.navigated", "sessionId" to request.text("sessionId"), "leafId" to "a1")
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("keep me")
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(TreeNavigateResult.Done(TreeNavigation("a1", null)), repository.navigateSessionTree("session", "a1", false))
+        runCurrent()
+        assertEquals("keep me", repository.state.value.draft)
+        assertFalse(transport.sent.single { it.text("type") == "session.tree.navigate" }.flag("summarize"))
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.INVALID),
+            repository.navigateSessionTree("session", "bad id", false),
+        )
+    }
+
+    @Test
+    fun failedNavigationsMapTheirErrorsAndRefreshWhenTheResultIsUnknown() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((code, failure) in
+            listOf(
+                "busy" to TreeFailure.BUSY,
+                "cancelled" to TreeFailure.CANCELLED,
+                "unsupported" to TreeFailure.UNSUPPORTED,
+                "not_found" to TreeFailure.NOT_FOUND,
+                "invalid_request" to TreeFailure.INVALID,
+                "forbidden" to TreeFailure.FAILED,
+            )) {
+            transport.failure = { if (it.text("type") == "session.tree.navigate") code else null }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(code, TreeNavigateResult.Failed(failure), repository.navigateSessionTree("session", "u1", false))
+            runCurrent()
+            assertEquals(code, snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        // Only an `internal` that says the result is unknown, and a timeout, may have moved the leaf.
+        for ((code, message) in
+            listOf(
+                "internal" to "Navigation result unknown; refresh",
+                "timeout" to "timeout",
+            )) {
+            transport.failure = { if (it.text("type") == "session.tree.navigate") code else null }
+            transport.failureMessage = { message }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(
+                code,
+                TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT),
+                repository.navigateSessionTree("session", "u1", false),
+            )
+            runCurrent()
+            assertEquals(code, snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        transport.failure = { if (it.text("type") == "session.tree.navigate") "internal" else null }
+        transport.failureMessage = { "No model available for summarization" }
+        val before = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(TreeNavigateResult.Failed(TreeFailure.FAILED), repository.navigateSessionTree("session", "u1", true))
+        runCurrent()
+        assertEquals(before, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.failureMessage = { null }
+        transport.failure = { null }
+        // A reply that breaks the protocol is no success, and leaves the draft alone.
+        transport.response = { request ->
+            if (request.text("type") == "session.tree.navigate")
+                Wire.objectOf("kind" to "tree.navigated", "sessionId" to "other", "leafId" to null)
+            else null
+        }
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.PROTOCOL),
+            repository.navigateSessionTree("session", "u1", false),
+        )
+    }
+
+    private fun navigated(request: JsonObject, text: String? = null) =
+        Wire.objectOf(
+            "kind" to "tree.navigated",
+            "sessionId" to request.text("sessionId"),
+            "leafId" to "u1",
+            *(if (text != null) arrayOf("text" to text) else emptyArray()),
+        )
+
+    @Test
+    fun navigatedTextNeverReplacesATypedDraftOrQuote() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("typed meanwhile")
+        runCurrent()
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        runCurrent()
+        assertEquals("typed meanwhile", repository.state.value.draft)
+        assertEquals(R.string.remote_tree_text_not_inserted, repository.state.value.error)
+    }
+
+    @Test
+    fun navigatedTextNeverReplacesAQuote() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        quoteMessages(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.quote("a")
+        runCurrent()
+        assertNotNull(repository.state.value.quote)
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        assertEquals("", repository.state.value.draft)
+        assertNotNull(repository.state.value.quote)
+        assertEquals(R.string.remote_tree_text_not_inserted, repository.state.value.error)
+    }
+
+    @Test
+    fun navigatedTextFillsABlankComposerWithoutANotice() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("   ")
+        runCurrent()
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        assertEquals("step text", repository.state.value.draft)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aLostConnectionDuringANavigationIsAnUnknownResultButNotDuringARead() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val move = async { repository.navigateSessionTree("session", "u1", false) }
+        runCurrent()
+        repository.disconnect()
+        runCurrent()
+        assertEquals(TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT), move.await())
+        val reconnected = Transport()
+        treeing(reconnected)
+        val again = repository(reconnected)
+        again.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val read = async { again.loadSessionTree("session") }
+        runCurrent()
+        again.disconnect()
+        runCurrent()
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), read.await())
+    }
+
+    @Test
+    fun aNavigationWithoutAnAnswerEndsAfterTheTimeoutAndRefreshes() = runTest {
+        for ((summarize, millis) in listOf(false to 45_000L, true to 195_000L)) {
+            val transport = Transport()
+            treeing(transport)
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            val move = async { repository.navigateSessionTree("session", "u1", summarize) }
+            runCurrent()
+            advanceTimeBy(millis - 1)
+            assertFalse(summarize.toString(), move.isCompleted)
+            advanceTimeBy(2)
+            runCurrent()
+            assertEquals(TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT), move.await())
+            assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+    }
+
+    @Test
+    fun aSelectionChangeDuringANavigationLeavesEveryDraftUntouched() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val move = async { repository.navigateSessionTree("session", "u2", false) }
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.tree.navigate" }
+        repository.activate(RemoteSelection("host", "project", "fork"))
+        runCurrent()
+        transport.result(request, navigated(request, "step text"))
+        runCurrent()
+        val outcome = try { move.await() } catch (e: CancellationException) { null }
+        assertFalse(outcome is TreeNavigateResult.Done)
+        assertEquals("", repository.state.value.draft)
+        assertEquals("fork", repository.state.value.selection.sessionId)
+        repository.flush()
+    }
+
+    @Test
+    fun forkAtANodeOpensTheForkWithoutADraft() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "at",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        val fork = repository.forkSessionAtNode(source, "a1")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork"), fork)
+        val request = transport.sent.single { it.text("type") == "session.tree.fork" }
+        assertEquals(setOf("type", "requestId", "sessionId", "nodeId"), request.keys)
+        assertEquals("a1", request.text("nodeId"))
+        val state = repository.state.value
+        assertEquals(fork, state.selection)
+        assertEquals("", state.draft)
+        assertNull(state.quote)
+        assertNull(state.error)
+    }
+
+    @Test
+    fun forkAtAUserNodePrefillsTheForksComposer() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "edit",
+                "text" to "second question",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        val fork = repository.forkSessionAtNode(source, "u2")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork"), fork)
+        assertEquals("second question", repository.state.value.draft)
+    }
+
+    @Test
+    fun refusedOrBrokenForkAtANodeStaysInTheSourceChat() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            // `retry` is not a result of a tree fork.
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "retry",
+                "resend" to "accepted",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        assertEquals(source, repository.forkSessionAtNode(source, "a1"))
+        assertEquals(source, repository.state.value.selection)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertFalse(repository.state.value.loading)
+        transport.failure = { if (it.text("type") == "session.tree.fork") "invalid_request" else null }
+        assertEquals(source, repository.forkSessionAtNode(source, "t1"))
+        assertEquals(R.string.remote_tree_fork_invalid, repository.state.value.error)
+        transport.failure = { if (it.text("type") == "session.tree.fork") "busy" else null }
+        assertEquals(source, repository.forkSessionAtNode(source, "a1"))
+        assertEquals(R.string.remote_fork_busy, repository.state.value.error)
+    }
+
     @Test
     fun failedForkOfAnOfflineTerminalChatNeverLeavesTheSource() = runTest {
         var listed = session(origin = "tui")
@@ -3181,7 +8496,7 @@ class RemoteRepositoryTest {
         assertEquals(selection, repository.activate(selection))
         // The terminal quits while the chat is open; restoring it now would return the parent.
         listed = session(origin = "tui", status = "offline")
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -3279,9 +8594,27 @@ class RemoteRepositoryTest {
         return repository(transport, drafts).also {
             it.activate(RemoteSelection("host", "project", "child"))
             if (status == "running")
-                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
                     "revision" to 1, "kind" to "session.status", "status" to "running"))
         }
+    }
+
+    @Test
+    fun aChildSessionNeitherReadsNorSetsAnAdvisorOfItsOwn() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, capabilities = setOf(SUBAGENT_CONTROL_CAPABILITY, ADVISOR_CAPABILITY))
+        runCurrent()
+        assertTrue(isChildSession(repository.state.value))
+        // Opening the child already skipped the read the activation makes for a main chat.
+        assertFalse(transport.sent.any { it.text("type") == "session.advisor.get" })
+        val before = transport.sent.size
+        repository.refreshAdvisor()
+        repository.setAdvisor(null, null, null)
+        runCurrent()
+        val sent = transport.sent.drop(before).map { it.text("type") }
+        assertFalse("session.advisor.get" in sent)
+        assertFalse("session.command" in sent)
+        assertFalse(advisorControlAvailable(repository.state.value))
     }
 
     private fun controlResult(status: String, vararg extra: Pair<String, Any?>) =
@@ -3353,13 +8686,13 @@ class RemoteRepositoryTest {
         assertEquals(ChildControl(ChildControlPhase.STOPPED_BY_YOU, agentId = "a1"),
             childControl(repository.state.value))
         assertNull(childControlStatus(repository.state.value))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "idle"))
         assertEquals(R.string.remote_child_stopped_by_you, childControlStatus(repository.state.value))
         assertTrue(offersChildResume(repository.state.value))
 
         answer = controlResult("refused", "reason" to "Reviewer diff changed")
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 3, "kind" to "session.status", "status" to "running"))
         repository.stopChild()
         assertEquals(ChildControl(ChildControlPhase.STOPPING, agentId = "a1"),
@@ -3374,7 +8707,7 @@ class RemoteRepositoryTest {
     fun stopConfirmedAfterTheChildWentIdleSaysNothingWasStopped() = runTest {
         val transport = Transport()
         val repository = childRepository(transport, "running")
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "idle"))
         val sent = transport.sent.size
         repository.stopChild()
@@ -3388,7 +8721,7 @@ class RemoteRepositoryTest {
     fun stopConfirmedAfterTheChildWentOfflineSaysItIsOffline() = runTest {
         val transport = Transport()
         val repository = childRepository(transport, "running")
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "offline"))
         val sent = transport.sent.size
         repository.stopChild()
@@ -3548,10 +8881,10 @@ class RemoteRepositoryTest {
         repository.resumeChild("Continue")
         runCurrent()
         assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 1, "kind" to "session.status", "status" to "idle"))
         assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "running"))
         assertNull(childControl(repository.state.value))
         assertNull(childControlStatus(repository.state.value))
@@ -3659,12 +8992,12 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(ChildControl(ChildControlPhase.REFUSED, "Busy", "agent-2"), childControl(repository.state.value))
 
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         assertEquals(ChildControl(null, agentId = "agent-2"), childControl(repository.state.value))
         assertNull(childControlStatus(repository.state.value))
         assertFalse(offersChildResume(repository.state.value))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "idle"))
         // The UI reads the neutral entry like no entry at all.
         assertEquals(R.string.remote_child_idle, childControlStatus(repository.state.value))
@@ -3674,5 +9007,9282 @@ class RemoteRepositoryTest {
         repository.resumeChild("Continue again")
         runCurrent()
         assertEquals("agent-2", transport.sent.last { it.text("type") == "session.subagent.resume" }.text("agentId"))
+    }
+
+    private val openQuestion = Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Go?")
+
+    private suspend fun TestScope.pagedFixture(
+        question: JsonObject,
+        gate: Boolean = true,
+        questions: List<JsonObject> = listOf(question),
+        storage: PagedEditorStorage? = null,
+        reply: (JsonObject) -> JsonObject? = { null },
+    ): Pair<DefaultRemoteRepository, Transport> {
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(questions))
+            "session.question.details.get", "session.question.editor.upload.begin", "session.question.editor.upload.chunk", "session.question.editor.upload.commit" -> reply(request)
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = gate, pagedEditorStorage = storage)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        return repo to transport
+    }
+
+    private class PagedMemoryStorage : PagedEditorStorage {
+        var saved = PagedJournalSnapshot()
+        var failLoad = false
+        var failSave = false
+        var saves = 0
+        var afterSave: (() -> Unit)? = null
+        override fun load(): PagedJournalSnapshot {
+            check(!failLoad)
+            return saved
+        }
+        override fun save(snapshot: PagedJournalSnapshot) {
+            check(!failSave)
+            saves++
+            saved = snapshot
+            afterSave?.also { afterSave = null }?.invoke()
+        }
+    }
+
+    @Test fun editorRecoveryReadsOfflineWithoutMutatingJournal() = runTest {
+        val key = PagedJournalKey("host", "session", "e")
+        val foreign = PagedJournalKey("foreign", "other", "q")
+        val attempt = StoredPagedAttempt(key, "a", "g", "u", "c", "attempt\uD800", 2)
+        val release = pendingRelease("release", "foreign")
+        val original = PagedJournalSnapshot(
+            drafts = mapOf(key to StoredPagedDraft("draft\uD800", 3), foreign to StoredPagedDraft("foreign", 4)),
+            attempts = mapOf("a" to attempt), pendingReleases = mapOf(release.releaseId to release),
+        )
+        val storage = PagedMemoryStorage().apply { saved = original }
+        val transport = Transport()
+        val repo = repository(transport, pagedEditorStorage = storage)
+        runCurrent()
+        val entries = (repo.loadEditorRecovery() as EditorRecoveryLoad.Ready).entries
+        assertEquals(3, entries.size)
+        assertEquals("draft\uD800", entries.single { it.key == key && it.kind == EditorRecoveryKind.DRAFT }.text)
+        val uncertain = entries.single { it.kind == EditorRecoveryKind.UNCERTAIN_ATTEMPT }
+        assertEquals("attempt\uD800", uncertain.text)
+        assertEquals("a", uncertain.attemptId)
+        assertEquals("Host", uncertain.hostName)
+        assertNull(entries.single { it.key == foreign }.hostName)
+        assertEquals(entries.size, entries.map { it.id }.toSet().size)
+        assertEquals(original, storage.saved)
+        assertEquals(0, storage.saves)
+        assertEquals(0, transport.connects)
+        assertTrue(transport.sent.isEmpty())
+    }
+
+    @Test fun editorRecoveryDistinguishesEmptyUnavailableAndStorageFailure() = runTest {
+        val transport = Transport()
+        assertEquals(EditorRecoveryLoad.Unavailable, repository(transport).loadEditorRecovery())
+        val empty = repository(Transport(), pagedEditorStorage = PagedMemoryStorage())
+        assertEquals(EditorRecoveryLoad.Ready(emptyList()), empty.loadEditorRecovery())
+        val failed = repository(Transport(), pagedEditorStorage = PagedMemoryStorage().apply { failLoad = true })
+        assertEquals(EditorRecoveryLoad.Failed, failed.loadEditorRecovery())
+    }
+
+    @Test fun editorRecoveryPropagatesCancellation() = runTest {
+        val storage = object : PagedEditorStorage {
+            override fun load(): PagedJournalSnapshot = throw CancellationException("cancelled")
+            override fun save(snapshot: PagedJournalSnapshot) = error("unexpected write")
+        }
+        val repo = repository(Transport(), pagedEditorStorage = storage)
+        try {
+            repo.loadEditorRecovery()
+            fail("Expected cancellation")
+        } catch (_: CancellationException) { }
+    }
+
+    @Test fun editorRecoveryIdsEncodeComponentsWithoutCollisions() {
+        val first = EditorRecoveryEntry(PagedJournalKey("a", "bc", "q"), EditorRecoveryKind.DRAFT, "", 0)
+        val second = EditorRecoveryEntry(PagedJournalKey("ab", "c", "q"), EditorRecoveryKind.DRAFT, "", 0)
+        assertNotEquals(first.id, second.id)
+        assertNotEquals(first.id, first.copy(attemptId = "").id)
+        assertEquals(first.id, first.copy(text = "changed", savedAt = 1).id)
+    }
+
+    @Test fun negotiatedPositiveOutcomeRetiresOnlyExactBoundAttemptWithoutQuestion() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").contains("question_editor_positive_outcome.v1") })
+        val query = transport.sent.single { it.text("type") == "session.question.editor.outcome.get" }
+        assertEquals(Wire.parse("""{"sessionId":"session","questionId":"e","ownerIncarnationId":"owner","grantId":"g","uploadId":"u","commitRequestId":"c","byteLength":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"""), query.obj("receipt"))
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertEquals(query.obj("receipt"), transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }.obj("receipt"))
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    private fun pendingRelease(id: String = "a", route: String = "host", device: String = "device") = StoredPagedRelease(
+        id, PagedJournalKey(route, "session", "e"), device, "owner", "g", "u", "c", 0,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    )
+
+    private fun releaseTransport(): Transport = Transport().also { transport ->
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+    }
+
+    @Test fun persistedReleaseIsRetriedAfterReconstructionWithoutQuestionOrCommit() = runTest {
+        val release = pendingRelease()
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)) }
+        val transport = releaseTransport()
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        val request = transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }
+        assertEquals(PagedEditorWire.receipt(release), request.obj("receipt"))
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" || it.text("type") == "session.question.editor.outcome.get" })
+    }
+
+    @Test fun deathAfterAtomicCleanupBeforeReleaseRecoversPersistedReceipt() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val first = releaseTransport(); val normal = first.response
+        first.response = { request -> if (request.text("type") == "session.question.editor.outcome.get") Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt")) else normal(request) }
+        val gate = CompletableDeferred<Unit>()
+        var held = false
+        first.beforeGuardedSend = { if (it.text("type") == "session.question.editor.outcome.release") { held = true; gate.await() } }
+        val beforeDeath = repository(first, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        beforeDeath.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(held)
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertEquals(pendingRelease(), storage.saved.pendingReleases["a"])
+        // The first process is suspended at the possible-write boundary; reconstruct from disk.
+        assertTrue(first.sent.none { it.text("type") == "session.question.editor.outcome.release" })
+        val second = releaseTransport()
+        val afterDeath = repository(second, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        afterDeath.activate(RemoteSelection("host", "project", "session")); afterDeath.flush(); runCurrent()
+        assertEquals(1, second.sent.count { it.text("type") == "session.question.editor.outcome.release" })
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(second.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun fullReleaseQueueDrainsAndRetiresProvedAttemptWithoutResendingCommit() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val releases = (0 until 32).associate { index ->
+            val release = pendingRelease("r$index").copy(uploadId = "u$index", commitRequestId = "c$index")
+            release.releaseId to release
+        }
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt), pendingReleases = releases) }
+        val transport = releaseTransport(); val normal = transport.response
+        transport.response = { request -> if (request.text("type") == "session.question.editor.outcome.get") Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt")) else normal(request) }
+        val gate = CompletableDeferred<Unit>()
+        var held = false
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.outcome.release" && !held) { held = true; gate.await() } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(held)
+        assertEquals(attempt, storage.saved.attempts["a"])
+        assertEquals(32, storage.saved.pendingReleases.size)
+        gate.complete(Unit); runCurrent()
+        assertTrue("An already durable release must drain despite capacity pressure", transport.sent.any { it.text("type") == "session.question.editor.outcome.release" })
+        if (repo.state.value.pagedStorageFailed) { repo.retryPagedEditorStorage(); runCurrent() }
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun releaseAckLossRetainsRecordAndRetriesIdempotentlyWithFreshRequest() = runTest {
+        val release = pendingRelease()
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)) }
+        val transport = releaseTransport(); val normal = transport.response
+        var releaseCount = 0
+        transport.response = { request -> if (request.text("type") == "session.question.editor.outcome.release" && ++releaseCount == 1) null else normal(request) }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertEquals(release, storage.saved.pendingReleases[release.releaseId])
+        advanceTimeBy(36_000); runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "session.question.editor.outcome.release" }
+        assertTrue(requests.size >= 2)
+        assertNotEquals(requests[0].text("requestId"), requests[1].text("requestId"))
+        assertEquals(requests[0].obj("receipt"), requests[1].obj("receipt"))
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+    }
+
+    @Test fun pendingReleaseCannotUseDifferentRouteOrDevice() = runTest {
+        val release = pendingRelease(device = "old-device")
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)) }
+        val transport = releaseTransport()
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" })
+        assertEquals(release, storage.saved.pendingReleases[release.releaseId])
+    }
+
+    @Test fun releaseCleanupFailureKeepsRecordAndRetries() = runTest {
+        val release = pendingRelease()
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(pendingReleases = mapOf(release.releaseId to release)); failSave = true }
+        val transport = releaseTransport()
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertEquals(release, storage.saved.pendingReleases[release.releaseId])
+        storage.failSave = false
+        advanceTimeBy(5_001); runCurrent()
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.count { it.text("type") == "session.question.editor.outcome.release" } >= 2)
+    }
+
+    @Test fun positiveOutcomeMismatchAndLegacyRecordRemainFenced() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val bound = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val legacy = bound.copy(key = bound.key.copy(questionId = "legacy"), attemptId = "b", outcomeBinding = null)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to bound, "b" to legacy)) }
+        val transport = Transport().also(::configure); val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to JsonObject(request.obj("receipt") + ("ownerIncarnationId" to JsonPrimitive("other"))))
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.outcome.get" })
+        assertEquals(mapOf("a" to bound, "b" to legacy), storage.saved.attempts)
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" || it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun positiveOutcomeRetriesOnNewSelectionEpochAndIgnoresStaleRequest() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure); val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            else -> normal(request)
+        } }
+        val gate = CompletableDeferred<Unit>()
+        var held = false
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.outcome.get" && !held) { held = true; gate.await() } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(held)
+        repo.cancelSelection(); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.outcome.get" })
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun positiveOutcomeCleanupFailureRetainsFenceUntilRetryThenReleases() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)); failSave = true }
+        val transport = Transport().also(::configure); val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertEquals(attempt, storage.saved.attempts["a"])
+        assertTrue(repo.state.value.pagedStorageFailed)
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" })
+        storage.failSave = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.outcome.release" })
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun positiveCleanupReleasesOnCurrentSelectionEpochAfterDurableRemoval() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure); val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        storage.afterSave = { repo.cancelSelection() }
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertTrue(storage.saved.attempts.isEmpty())
+        val query = transport.sent.first { it.text("type") == "session.question.editor.outcome.get" }
+        val release = transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }
+        assertEquals(query.obj("receipt"), release.obj("receipt"))
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun queuedPositiveReleaseCannotUseAnotherRouteOrDevice() = runTest {
+        val binding = StoredPagedOutcomeBinding("device", "owner", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1, binding)
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure); val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY), JsonPrimitive("session.question_editor_positive_outcome.v1")))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            else -> normal(request)
+        } }
+        val gate = CompletableDeferred<Unit>()
+        var releaseHeld = false
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.outcome.release") { releaseHeld = true; gate.await() } }
+        val other = PairedHost("other", "https://relay.test", "other-device", "secret", "Other")
+        val repo = repository(transport, hosts = listOf(host, other), pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(releaseHeld)
+        assertTrue(storage.saved.attempts.isEmpty())
+        repo.activate(RemoteSelection("other")); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" || it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun pagedJournalLoadFailurePreventsCommit() = runTest {
+        val storage = PagedMemoryStorage().apply { failLoad = true }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request ->
+            if (request.text("type") == "session.question.editor.upload.begin") Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u") else null
+        }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun recoveredPagedAttemptBlocksReplacementGrant() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun recoveredPagedAttemptBlocksBoundedEditorFallback() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+        }
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh")
+        val (repo, transport) = pagedFixture(replacement, storage = storage)
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "new")); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+        assertTrue("fallback must visibly retain quarantine", "e" in repo.state.value.pagedQuarantines)
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel stays available", 1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun recoveredPagedAttemptBlocksOtherQuestionAnswerKinds() = runTest {
+        val answers = listOf(
+            Wire.objectOf("kind" to "select", "value" to "choice"),
+            Wire.objectOf("kind" to "input", "value" to "text"),
+            Wire.objectOf("kind" to "confirm", "value" to false),
+        )
+        for (answer in answers) {
+            val storage = PagedMemoryStorage().apply {
+                val key = PagedJournalKey("host", "session", "e")
+                saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+            }
+            val question = Wire.objectOf("id" to "e", "kind" to answer.text("kind"), "message" to "replacement")
+            val (repo, transport) = pagedFixture(question, storage = storage)
+            repo.answer("e", answer); runCurrent()
+            assertTrue("answer ${answer.text("kind")} must be fenced", transport.sent.none { it.text("type") == "question.answer" })
+            assertTrue("e" in repo.state.value.pagedQuarantines)
+        }
+    }
+
+    @Test fun pagedJournalLoadFailureBlocksGenericAnswerButAllowsCancel() = runTest {
+        val storage = PagedMemoryStorage().apply { failLoad = true }
+        val question = Wire.objectOf("id" to "e", "kind" to "input", "message" to "replacement")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        assertTrue(repo.state.value.pagedStorageFailed)
+        repo.answer("e", Wire.objectOf("kind" to "input", "value" to "text")); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun recoveredPagedFenceAllowsOnlyGenuinePlanCancel() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "draft", 1)))
+        }
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "plan"), storage = storage)
+        repo.answer("e", Wire.objectOf("kind" to "plan", "action" to "approve")); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "plan", "action" to "cancel")); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+        val (other, otherTransport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "input"), storage = storage)
+        other.answer("e", Wire.objectOf("kind" to "plan", "action" to "cancel")); runCurrent()
+        assertTrue(otherTransport.sent.none { it.text("type") == "question.answer" })
+    }
+
+    @Test fun queuedCancelCannotCancelSameIdReplacement() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh")
+        val (repo, transport) = pagedFixture(question, storage = PagedMemoryStorage())
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "question.answer") gate.await() }
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.open", "question" to Wire.parse(question.toString()))); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+    }
+
+    @Test fun pagedReservationWriteFailurePreventsCommit() = runTest {
+        val storage = PagedMemoryStorage().apply { failSave = true }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.question.editor.upload.begin" })
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.commit" })
+        assertTrue(repo.state.value.pagedEditors["e"]?.storageFailed == true)
+    }
+
+    @Test fun pagedCommitIsReservedBeforePossibleWriteAndLostAckSurvivesRestart() = runTest {
+        val storage = PagedMemoryStorage()
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        var reservedAtSend = false
+        transport.beforeGuardedSend = { request ->
+            if (request.text("type") == "session.question.editor.upload.commit") reservedAtSend = storage.saved.attempts.values.singleOrNull()?.text == ""
+        }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(reservedAtSend)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        val (restarted, secondTransport) = pagedFixture(replacement, storage = storage)
+        val fresh = restarted.state.value.questions.single()
+        restarted.loadPagedEditor(fresh); runCurrent()
+        assertTrue(restarted.state.value.pagedEditors["e"]?.quarantined == true)
+        restarted.submitPagedEditor(fresh, ""); runCurrent()
+        assertTrue(secondTransport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun acceptedPagedCommitCleanupCanRetryLocallyWithoutResending() = runTest {
+        val storage = PagedMemoryStorage()
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            "session.question.editor.upload.commit" -> { storage.failSave = true; Wire.objectOf("kind" to "accepted", "sessionId" to "session") }
+            else -> null
+        } }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        assertTrue(repo.state.value.pagedEditors["e"]?.storageRetryAvailable == true)
+        val sent = transport.sent.size
+        storage.failSave = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertTrue(storage.saved.attempts.isEmpty())
+        assertFalse(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        assertEquals(sent, transport.sent.size)
+    }
+
+    @Test fun recoveredPagedFenceSurvivesGenericCloseAndReplacement() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "", 1)))
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.closed", "questionId" to "e")); runCurrent()
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 2, "kind" to "question.open", "question" to replacement)); runCurrent()
+        val fresh = repo.state.value.questions.single()
+        repo.loadPagedEditor(fresh); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(fresh, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+        assertTrue(storage.saved.attempts.containsKey("a"))
+    }
+
+    @Test fun retryAfterLoadFailureKeepsRecoveredUnknownAttempt() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            val key = PagedJournalKey("host", "session", "e")
+            saved = PagedJournalSnapshot(attempts = mapOf("a" to StoredPagedAttempt(key, "a", "old", "u", "c", "", 1)))
+            failLoad = true
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new")
+        val (repo, transport) = pagedFixture(question, storage = storage)
+        val fresh = repo.state.value.questions.single()
+        repo.loadPagedEditor(fresh); runCurrent()
+        storage.failLoad = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(fresh, ""); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.upload.begin" })
+        assertTrue(storage.saved.attempts.containsKey("a"))
+    }
+
+    @Test fun retryAfterLoadFailureOffersDraftOnlyAfterFreshSourceVerification() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            saved = PagedJournalSnapshot(drafts = mapOf(PagedJournalKey("host", "session", "e") to StoredPagedDraft("saved", 1)))
+            failLoad = true
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh", "editorUploadGrantId" to "g")
+        val (repo, _) = pagedFixture(question, storage = storage)
+        val fresh = repo.state.value.questions.single()
+        repo.loadPagedEditor(fresh); runCurrent()
+        assertNull(repo.state.value.pagedEditors["e"]?.recoveryDraft)
+        storage.failLoad = false
+        repo.retryPagedEditorStorage(); runCurrent()
+        assertEquals("fresh", repo.state.value.pagedEditors["e"]?.text)
+        assertEquals("saved", repo.state.value.pagedEditors["e"]?.recoveryDraft)
+    }
+
+    @Test fun recoveredDraftRequiresExplicitRestoreAfterFreshSource() = runTest {
+        val storage = PagedMemoryStorage().apply {
+            saved = PagedJournalSnapshot(drafts = mapOf(PagedJournalKey("host", "session", "e") to StoredPagedDraft("old\uD800", 1)))
+        }
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "fresh", "editorUploadGrantId" to "new")
+        val (repo, _) = pagedFixture(question, storage = storage)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals("fresh", repo.state.value.pagedEditors["e"]?.text)
+        assertEquals("old\uD800", repo.state.value.pagedEditors["e"]?.recoveryDraft)
+        repo.editPagedEditor(displayed, "old\uD800"); runCurrent()
+        assertEquals("old\uD800", repo.state.value.pagedEditors["e"]?.text)
+    }
+
+    @Test fun pagedEditorOldPageCannotAuthorizeEqualReplacement() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val (repo, transport) = pagedFixture(question)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.question.details.get" }
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.parse(question.toString())))
+        transport.result(request, Wire.objectOf("kind" to "question_details", "sessionId" to "session", "questionId" to "e", "detailsId" to "src", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8"))
+        runCurrent()
+        assertNull(repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pacedSourcePageRechecksQuestionIdentityBeforeDispatch() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val (repo, transport) = pagedFixture(question)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.details.get") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.details.get" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.parse(question.toString())))
+        gate.complete(Unit); runCurrent()
+        assertEquals("A replacement question cannot receive the old source request", 0, transport.sent.count { it.text("type") == "session.question.details.get" })
+    }
+
+    @Test fun pagedEditorDisconnectRevokesCapturedInlineAuthority() = runTest {
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g"))
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals("hello", repo.state.value.pagedEditors["e"]?.text)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertTrue(repo.state.value.pagedEditors.isEmpty())
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pacedBeginRechecksQuestionIdentityAfterAdmissionWait() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.upload.begin") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.parse(question.toString())))
+        gate.complete(Unit); runCurrent()
+        assertEquals("An equal replacement cannot inherit a queued begin", 0, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pacedCommitCancelledBeforeDispatchDoesNotCreateUncertainReceipt() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.upload.commit") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.closed", "questionId" to "e"))
+        gate.complete(Unit); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        assertNotEquals(QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+    }
+
+    @Test fun pacedAdmissionDoesNotConsumeRequestResponseTimeout() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            "session.question.editor.upload.commit" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> null
+        } }
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.question.editor.upload.begin") gate.await() }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        assertNotEquals("No receipt before a possible commit write", QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        gate.complete(Unit); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        assertEquals("A dispatched commit retains its receipt until question close", QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.closed", "questionId" to "e")); runCurrent()
+        assertNull(repo.state.value.questionBlocks["e"])
+    }
+
+    @Test fun pagedEditorMalformedUploadAckNeverCommits() = runTest {
+        for (wrongOffset in listOf(0, 6)) {
+            val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g")) { request -> when (request.text("type")) {
+                "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+                "session.question.editor.upload.chunk" -> Wire.objectOf("kind" to "editor_upload_ack", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to wrongOffset)
+                else -> null
+            } }
+            val displayed = repo.state.value.questions.single()
+            repo.loadPagedEditor(displayed); runCurrent()
+            repo.submitPagedEditor(displayed, "hello"); runCurrent()
+            assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.chunk" })
+            assertEquals(0, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        }
+    }
+
+    @Test fun pagedEditorUnknownCommitDoesNotAutomaticallyResend() = runTest {
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+    }
+
+    @Test fun pagedEditorPendingCommitRemainsBlockedAfterReconnectAndFreshSnapshot() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1500); runCurrent()
+        assertTrue("test must reconnect before attempting a second answer", repo.state.value.connected)
+        val redisplayed = repo.state.value.questions.single()
+        assertEquals("uncertainty must be visible before source reload", QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        repo.loadPagedEditor(redisplayed); runCurrent()
+        assertTrue("uncertainty must also be visible after reconnect", repo.state.value.pagedEditors["e"]?.quarantined == true)
+        repo.submitPagedEditor(redisplayed, ""); runCurrent()
+        assertEquals("an open snapshot is not proof that the old commit failed", 1,
+            transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorUncertainCommitStillAllowsProofIndependentCancel() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(QuestionBlock.UNCERTAIN, repo.state.value.questionBlocks["e"])
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals("cancel alone cannot prove that the commit was rejected", 1,
+            transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorUncertainReceiptAllowsCancelAfterCapabilityRevocation() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        val previous = transport.response
+        transport.response = { request -> if (request.text("type") == "projects.list")
+            JsonObject(checkNotNull(previous(request)) + ("capabilities" to JsonArray(emptyList()))) else previous(request) }
+        repo.openNotification("host", "unknown"); runCurrent()
+        assertFalse(QUESTION_PAGED_EDITOR_CAPABILITY in repo.state.value.capabilities)
+        assertTrue("receipt quarantine survives capability loss", "e" in repo.state.value.pagedQuarantines)
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorOversizedDraftRemainsVisibleWithExplicitRetentionWarning() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g")
+        val (repo, _) = pagedFixture(question)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        val oversized = "x".repeat(2_097_153)
+        repo.editPagedEditor(displayed, oversized); runCurrent()
+        val view = requireNotNull(repo.state.value.pagedEditors["e"])
+        assertEquals(oversized, view.text)
+        assertTrue(view.retentionWarning)
+        repo.editPagedEditor(displayed, "recovered"); runCurrent()
+        assertFalse(requireNotNull(repo.state.value.pagedEditors["e"]).retentionWarning)
+    }
+
+    @Test fun pagedEditorDraftCapacityKeepsActiveDraftsAndWarnsInsteadOfEvictingThem() = runTest {
+        val first = Wire.objectOf("id" to "e0", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g0")
+        val (repo, transport) = pagedFixture(first)
+        for (i in 1..32) {
+            val next = Wire.objectOf("id" to "e$i", "kind" to "editor", "prefill" to "original", "editorUploadGrantId" to "g$i")
+            transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to i, "kind" to "question.open", "question" to next)); runCurrent()
+        }
+        for (i in 0..32) {
+            val displayed = repo.state.value.questions.first { it.text("id") == "e$i" }
+            repo.loadPagedEditor(displayed); runCurrent()
+            repo.editPagedEditor(displayed, "draft-$i"); runCurrent()
+        }
+        val overflow = requireNotNull(repo.state.value.pagedEditors["e32"])
+        assertEquals("draft-32", overflow.text)
+        assertTrue("the visible value has no retained slot", overflow.retentionWarning)
+        val firstDisplayed = repo.state.value.questions.first { it.text("id") == "e0" }
+        repo.loadPagedEditor(firstDisplayed); runCurrent()
+        assertEquals("draft-0", repo.state.value.pagedEditors["e0"]?.text)
+    }
+
+    @Test fun pagedEditorOldUnreachableDraftExpiresWithoutBeingAttachedToReplacement() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val (repo, transport) = pagedFixture(first)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.editPagedEditor(displayed, "old draft"); runCurrent()
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1, "kind" to "question.open", "question" to replacement)); runCurrent()
+        advanceTimeBy(15 * 60_000L + 1); runCurrent()
+        val current = repo.state.value.questions.single()
+        repo.loadPagedEditor(current); runCurrent()
+        assertEquals("second", repo.state.value.pagedEditors["e"]?.text)
+        assertNull("unreachable historical draft expires", repo.state.value.pagedEditors["e"]?.recoveryDraft)
+    }
+
+    @Test fun pagedEditorReceiptCapacityDoesNotEvictUnknownReceipts() = runTest {
+        val first = Wire.objectOf("id" to "e0", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g0")
+        val (repo, transport) = pagedFixture(first) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to request.text("questionId"), "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        for (i in 0 until 32) {
+            if (i > 0) {
+                val next = Wire.objectOf("id" to "e$i", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g$i")
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to i, "kind" to "question.open", "question" to next)); runCurrent()
+            }
+            val displayed = repo.state.value.questions.first { it.text("id") == "e$i" }
+            repo.loadPagedEditor(displayed); runCurrent()
+            repo.submitPagedEditor(displayed, ""); runCurrent()
+        }
+        assertEquals(32, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        val next = Wire.objectOf("id" to "overflow", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "overflow")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 32, "kind" to "question.open", "question" to next)); runCurrent()
+        val displayed = repo.state.value.questions.first { it.text("id") == "overflow" }
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertTrue(repo.state.value.pagedEditors["overflow"]?.capacityFull == true)
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(32, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorUncertainCommitSurvivesSnapshotUntilCloseThenNewOpen() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g")
+        val (repo, transport) = pagedFixture(question) { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> null
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        val earlier = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") Wire.objectOf(
+            "kind" to "snapshot", "sessionId" to "session", "revision" to 5, "status" to "waiting",
+            "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question))) else earlier(request) }
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 5, "kind" to "snapshot.required")); runCurrent()
+        repo.loadPagedEditor(repo.state.value.questions.single()); runCurrent()
+        repo.submitPagedEditor(repo.state.value.questions.single(), ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 6, "kind" to "question.closed", "questionId" to "e")); runCurrent()
+        val replacement = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "new-grant")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 7, "kind" to "question.open", "question" to replacement)); runCurrent()
+        val current = repo.state.value.questions.single()
+        repo.loadPagedEditor(current); runCurrent()
+        repo.submitPagedEditor(current, ""); runCurrent()
+        assertEquals("an observed replacement owns its own grant", 2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorReplayedTerminalCloseReleasesOnlyOldReceipt() = runTest {
+        val (transport, host) = journalTransport(capabilities = listOf(QUESTION_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY))
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> normal(request)
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi")
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g1")
+        host.live("question.open", "question" to first); runCurrent()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.editor.upload.commit" })
+        host.record("question.closed", "questionId" to "e")
+        val second = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g2")
+        host.record("question.open", "question" to second)
+        host.live("session.status", "status" to "waiting"); runCurrent()
+        assertTrue("the missed terminal must be delivered via session.events", "session.events" in host.answers)
+        val replacement = repo.state.value.questions.single()
+        assertEquals("g2", replacement.text("editorUploadGrantId"))
+        repo.loadPagedEditor(replacement); runCurrent()
+        repo.submitPagedEditor(replacement, ""); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorLiveCloseHeldForReplayReleasesItsReceipt() = runTest {
+        val (transport, host) = journalTransport(capabilities = listOf(QUESTION_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY))
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> normal(request)
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi")
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g1")
+        host.live("question.open", "question" to first); runCurrent()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        host.record("session.status", "status" to "waiting")
+        host.live("question.closed", "questionId" to "e"); runCurrent()
+        val resume = transport.firstPages().last()
+        transport.response = answer
+        transport.result(resume, host.answer(resume)); runCurrent()
+        val second = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g2")
+        host.live("question.open", "question" to second); runCurrent()
+        val replacement = repo.state.value.questions.single()
+        repo.loadPagedEditor(replacement); runCurrent()
+        repo.submitPagedEditor(replacement, ""); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorLiveCloseDrainedAfterFailedResumeReleasesItsReceipt() = runTest {
+        val (transport, host) = journalTransport(capabilities = listOf(QUESTION_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY))
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            else -> normal(request)
+        } }
+        transport.failure = { if (it.text("type") == "session.question.editor.upload.commit") "outcome_unknown" else null }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi")
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g1")
+        host.live("question.open", "question" to first); runCurrent()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        repo.submitPagedEditor(displayed, ""); runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        val missed = host.record("session.status", "status" to "waiting")
+        host.live("session.status", "status" to "running"); runCurrent()
+        val resume = transport.firstPages().last()
+        transport.deliver(missed)
+        host.live("question.closed", "questionId" to "e"); runCurrent()
+        transport.response = answer
+        transport.deliver(Wire.objectOf("type" to "result", "requestId" to resume.text("requestId"), "ok" to false,
+            "error" to Wire.objectOf("code" to "failed", "message" to "failed")))
+        runCurrent()
+        val second = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "", "editorUploadGrantId" to "g2")
+        host.live("question.open", "question" to second); runCurrent()
+        val replacement = repo.state.value.questions.single()
+        repo.loadPagedEditor(replacement); runCurrent()
+        repo.submitPagedEditor(replacement, ""); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    @Test fun pagedEditorDraftSurvivesLoadingAnotherQuestionWithoutTransferringToReplacement() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val second = Wire.objectOf("id" to "f", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        val (repo, transport) = pagedFixture(first, questions = listOf(first, second))
+        val displayedFirst = repo.state.value.questions.first { it.text("id") == "e" }
+        val displayedSecond = repo.state.value.questions.first { it.text("id") == "f" }
+        repo.loadPagedEditor(displayedFirst); runCurrent()
+        repo.editPagedEditor(displayedFirst, "bad\rbut visible")
+        repo.loadPagedEditor(displayedSecond); runCurrent()
+        repo.loadPagedEditor(displayedFirst); runCurrent()
+        assertEquals("bad\rbut visible", repo.state.value.pagedEditors["e"]?.text)
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g3")))
+        runCurrent()
+        val replacement = repo.state.value.questions.first { it.text("id") == "e" }
+        repo.loadPagedEditor(replacement); runCurrent()
+        assertEquals("first", repo.state.value.pagedEditors["e"]?.text)
+    }
+
+    @Test fun pagedEditorStaleUploadCannotLeaveAnotherQuestionPermanentlyBusy() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val second = Wire.objectOf("id" to "f", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        val (repo, transport) = pagedFixture(first, questions = listOf(first, second))
+        val displayedFirst = repo.state.value.questions.first { it.text("id") == "e" }
+        val displayedSecond = repo.state.value.questions.first { it.text("id") == "f" }
+        repo.loadPagedEditor(displayedFirst); runCurrent()
+        repo.submitPagedEditor(displayedFirst, "first"); runCurrent()
+        val begin = transport.sent.last { it.text("type") == "session.question.editor.upload.begin" }
+        repo.loadPagedEditor(displayedSecond); runCurrent()
+        transport.result(begin, Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)); runCurrent()
+        repo.submitPagedEditor(displayedSecond, "second"); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        assertEquals("f", transport.sent.last { it.text("type") == "session.question.editor.upload.begin" }.text("questionId"))
+    }
+
+    @Test fun pagedEditorOldFinalizerCannotReleaseNewQuestionsUpload() = runTest {
+        val first = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first", "editorUploadGrantId" to "g1")
+        val second = Wire.objectOf("id" to "f", "kind" to "editor", "prefill" to "second", "editorUploadGrantId" to "g2")
+        val (repo, transport) = pagedFixture(first, questions = listOf(first, second))
+        val a = repo.state.value.questions.first { it.text("id") == "e" }
+        val b = repo.state.value.questions.first { it.text("id") == "f" }
+        repo.loadPagedEditor(a); runCurrent()
+        repo.submitPagedEditor(a, "first"); runCurrent()
+        val beginA = transport.sent.last { it.text("type") == "session.question.editor.upload.begin" }
+        repo.loadPagedEditor(b); runCurrent()
+        repo.submitPagedEditor(b, "second"); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+        transport.result(beginA, Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)); runCurrent()
+        repo.submitPagedEditor(b, "second"); runCurrent()
+        assertEquals("A's finalizer must not permit a second concurrent B upload", 2,
+            transport.sent.count { it.text("type") == "session.question.editor.upload.begin" })
+    }
+
+    private val productionEditorCaps = setOf(
+        QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY,
+        QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY,
+    )
+
+    private suspend fun TestScope.productionPagedFixture(
+        marker: JsonElement?,
+        caps: Set<String> = productionEditorCaps,
+        version: Int = 3,
+        paged: Boolean = true,
+        positive: Boolean = true,
+        storage: PagedEditorStorage? = PagedMemoryStorage(),
+    ): Pair<DefaultRemoteRepository, Transport> {
+        val baseQuestion = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "grant")
+        val question = if (marker == null) baseQuestion else JsonObject(baseQuestion + ("native" to marker))
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> {
+                val result = checkNotNull(normal(request))
+                if (request.text("requestId").startsWith("capabilities.v$version:"))
+                    JsonObject(result + ("capabilities" to JsonArray(caps.map(::JsonPrimitive))))
+                else result
+            }
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 0)
+            "session.question.editor.upload.chunk" -> Wire.objectOf("kind" to "editor_upload_ack", "sessionId" to "session", "questionId" to "e", "uploadId" to "u", "nextOffset" to 5)
+            "session.question.editor.upload.commit" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorStorage = storage, nativePagedEditorEnabled = paged, nativePositiveOutcomeEnabled = positive)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        return repo to transport
+    }
+
+    @Test fun productionNativePagedEditorLoadsAndUploadsWithDurableJournal() = runTest {
+        val storage = PagedMemoryStorage()
+        val (repo, transport) = productionPagedFixture(JsonPrimitive(true), storage = storage)
+        val request = transport.sent.first { it.text("type") == "projects.list" }.text("requestId")
+        assertTrue(request.contains(QUESTION_PAGED_EDITOR_OPT_IN)); assertTrue(request.contains(QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN))
+        val question = repo.state.value.questions.single()
+        repo.loadPagedEditor(question); runCurrent()
+        assertEquals("hello", repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(question, "hello"); runCurrent()
+        assertEquals(listOf("session.question.editor.upload.begin", "session.question.editor.upload.chunk", "session.question.editor.upload.commit"),
+            transport.sent.map { it.text("type") }.filter { it.startsWith("session.question.editor.upload.") })
+        assertTrue(transport.sent.none { it.text("type") == "question.answer" })
+    }
+
+    @Test fun productionPagedEditorRequiresStrictBooleanNativeQuestion() = runTest {
+        for (marker in listOf(null, JsonPrimitive(false), JsonPrimitive("true"), JsonNull)) {
+            val (repo, transport) = productionPagedFixture(marker)
+            val question = repo.state.value.questions.single()
+            repo.loadPagedEditor(question); repo.submitPagedEditor(question, "hello"); runCurrent()
+            assertTrue("marker=$marker", repo.state.value.pagedEditors.isEmpty())
+            assertTrue("marker=$marker", transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+        }
+    }
+
+    @Test fun productionPagedEditorRequiresV3NativeBasePagedAndDurableStore() = runTest {
+        val cases = listOf(
+            Triple(2, productionEditorCaps, true),
+            Triple(3, productionEditorCaps - QUESTION_EDITOR_CAPABILITY, true),
+            Triple(3, productionEditorCaps - NATIVE_EDITOR_CAPABILITY, true),
+            Triple(3, productionEditorCaps - QUESTION_PAGED_EDITOR_CAPABILITY, true),
+            Triple(3, productionEditorCaps, false),
+        )
+        for ((version, caps, durable) in cases) {
+            val (repo, transport) = productionPagedFixture(JsonPrimitive(true), caps, version, storage = if (durable) PagedMemoryStorage() else null)
+            val question = repo.state.value.questions.single()
+            repo.loadPagedEditor(question); repo.submitPagedEditor(question, "hello"); runCurrent()
+            assertTrue("version=$version caps=$caps durable=$durable", repo.state.value.pagedEditors.isEmpty())
+            assertTrue(transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+        }
+    }
+
+    @Test fun productionPagedAndPositiveOptInsAreIndependentAndRequireJournal() = runTest {
+        for ((paged, positive, durable, expectedPaged, expectedPositive) in listOf(
+            listOf(false, false, true, false, false), listOf(false, true, true, false, false),
+            listOf(true, false, true, true, false), listOf(true, true, true, true, true),
+            listOf(true, true, false, false, false),
+        )) {
+            val (repo, transport) = productionPagedFixture(JsonPrimitive(true), paged = paged, positive = positive, storage = if (durable) PagedMemoryStorage() else null)
+            val request = transport.sent.first { it.text("type") == "projects.list" }.text("requestId")
+            assertEquals(expectedPaged, request.contains(QUESTION_PAGED_EDITOR_OPT_IN))
+            assertEquals(expectedPositive, request.contains(QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN))
+            repo.loadPagedEditor(repo.state.value.questions.single()); runCurrent()
+            assertEquals(expectedPaged, repo.state.value.pagedEditors["e"]?.text == "hello")
+            assertEquals(expectedPositive, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in repo.state.value.capabilities)
+        }
+    }
+
+    @Test fun productionStaleOutcomeAfterDisconnectKeepsFenceUntilFreshScopedQuery() = runTest {
+        val hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1,
+            StoredPagedOutcomeBinding("device", "owner", 0, hash))
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        var firstQuery: JsonObject? = null
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(productionEditorCaps.map(::JsonPrimitive))))
+            "session.question.editor.outcome.get" -> if (firstQuery == null) {
+                firstQuery = request
+                null // The real request was sent; its applied response is delayed until after disconnect.
+            } else Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorStorage = storage, nativePagedEditorEnabled = true, nativePositiveOutcomeEnabled = true)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi")
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        val stale = checkNotNull(firstQuery)
+        assertEquals(attempt, storage.saved.attempts["a"])
+        transport.listener.failed(true, R.string.remote_connection_error); runCurrent()
+        assertFalse(repo.state.value.connected)
+        transport.result(stale, Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to stale.obj("receipt"))); runCurrent()
+        assertEquals(attempt, storage.saved.attempts["a"])
+        assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.question.editor.outcome.release" || it.text("type").startsWith("session.question.editor.upload.") })
+
+        advanceTimeBy(1_000); runCurrent()
+        val queries = transport.sent.filter { it.text("type") == "session.question.editor.outcome.get" }
+        assertEquals(2, queries.size)
+        assertNotEquals(stale.text("requestId"), queries[1].text("requestId"))
+        assertEquals(stale.obj("receipt"), queries[1].obj("receipt"))
+        assertEquals(stale.obj("receipt"), transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }.obj("receipt"))
+        assertTrue(storage.saved.attempts.isEmpty()); assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun productionRecoversAndReleasesStoredNativeOutcomeWithoutLiveQuestion() = runTest {
+        val hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        val attempt = StoredPagedAttempt(PagedJournalKey("host", "session", "e"), "a", "g", "u", "c", "", 1,
+            StoredPagedOutcomeBinding("device", "owner", 0, hash))
+        val storage = PagedMemoryStorage().apply { saved = PagedJournalSnapshot(attempts = mapOf("a" to attempt)) }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(productionEditorCaps.map(::JsonPrimitive))))
+            "session.question.editor.outcome.get" -> Wire.objectOf("kind" to "editor_outcome", "status" to "applied", "receipt" to request.obj("receipt"))
+            "session.question.editor.outcome.release" -> Wire.objectOf("kind" to "editor_outcome_released")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorStorage = storage, nativePagedEditorEnabled = true, nativePositiveOutcomeEnabled = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
+        assertTrue(repo.state.value.questions.isEmpty())
+        val receipt = Wire.parse("""{"sessionId":"session","questionId":"e","ownerIncarnationId":"owner","grantId":"g","uploadId":"u","commitRequestId":"c","byteLength":0,"sha256":"$hash"}""")
+        assertEquals(receipt, transport.sent.single { it.text("type") == "session.question.editor.outcome.get" }.obj("receipt"))
+        assertEquals(receipt, transport.sent.single { it.text("type") == "session.question.editor.outcome.release" }.obj("receipt"))
+        assertTrue(storage.saved.attempts.isEmpty()); assertTrue(storage.saved.pendingReleases.isEmpty())
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun defaultGateDoesNotAdvertiseOrLoadPagedEditor() = runTest {
+        val (repo, transport) = pagedFixture(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello", "editorUploadGrantId" to "g"), gate = false)
+        val discovery = transport.sent.first { it.text("type") == "projects.list" }
+        assertFalse(discovery.text("requestId").contains(QUESTION_PAGED_EDITOR_OPT_IN))
+        assertFalse(QUESTION_PAGED_EDITOR_CAPABILITY in repo.state.value.capabilities)
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertTrue(repo.state.value.pagedEditors.isEmpty())
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+    }
+
+    @Test fun pagedEditorReadsAndVerifiesSourceBeforeSequentialUpload() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"grant-1","editorSource":{"purpose":"editor_prefill","id":"src-1","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(
+                JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> Wire.objectOf("kind" to "question_details", "sessionId" to "session",
+                "questionId" to "e", "detailsId" to "src-1", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+            "session.question.editor.upload.begin" -> Wire.objectOf("kind" to "editor_upload_begun", "sessionId" to "session", "questionId" to "e", "uploadId" to "upload-1", "nextOffset" to 0)
+            "session.question.editor.upload.chunk" -> Wire.objectOf("kind" to "editor_upload_ack", "sessionId" to "session", "questionId" to "e", "uploadId" to "upload-1", "nextOffset" to 5)
+            "session.question.editor.upload.commit" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertEquals("hello", repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        val commands = transport.sent.filter { it.text("type").startsWith("session.question.") }
+        assertEquals(listOf("session.question.details.get", "session.question.editor.upload.begin",
+            "session.question.editor.upload.chunk", "session.question.editor.upload.commit"), commands.map { it.text("type") })
+        assertEquals("grant-1", commands[1].text("grantId"))
+        assertEquals(Wire.objectOf("kind" to "paged", "id" to "src-1"), commands[1].obj("source"))
+        assertEquals("aGVsbG8", commands[2].text("data"))
+        assertEquals("upload-1", commands[3].text("uploadId"))
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun pagedEditorBadSourceNeverBecomesEditableOrUploadsAndCancelStillWorks() = runTest {
+        val question = Wire.parse("""{"id":"e","kind":"editor","editorUploadGrantId":"g","editorSource":{"purpose":"editor_prefill","id":"src","totalBytes":5,"sha256":"${"a".repeat(64)}"}}""")
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_EDITOR_CAPABILITY), JsonPrimitive(QUESTION_PAGED_EDITOR_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> Wire.objectOf("kind" to "question_details", "sessionId" to "session", "questionId" to "e", "detailsId" to "src", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+            else -> normal(request)
+        } }
+        val repo = repository(transport, pagedEditorTestGate = true)
+        repo.activate(RemoteSelection("host", "project", "session")); repo.flush()
+        val displayed = repo.state.value.questions.single()
+        repo.loadPagedEditor(displayed); runCurrent()
+        assertNull(repo.state.value.pagedEditors["e"]?.text)
+        repo.submitPagedEditor(displayed, "hello"); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type").startsWith("session.question.editor.upload.") })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+    }
+
+    private suspend fun TestScope.editorRepository(transport: Transport, question: JsonObject, capability: Boolean = true): DefaultRemoteRepository {
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(
+                if (capability) listOf(JsonPrimitive("session.question_editor.v1")) else emptyList())))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            else -> normal(request)
+        } }
+        return repository(transport).also { it.activate(RemoteSelection("host", "project", "session")); it.flush() }
+    }
+
+    private suspend fun TestScope.nativePresenceRepository(transport: Transport): DefaultRemoteRepository {
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            val result = normal(request)
+            if (request.text("type") == "projects.list") JsonObject(checkNotNull(result) +
+                ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1"),
+                    JsonPrimitive("session.question_editor_native.v1"), JsonPrimitive(SESSION_FORK_CAPABILITY)))))
+            else if (request.text("type") == "session.editor.presence")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else result
+        }
+        return repository(transport).also {
+            it.setForeground(true)
+            it.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+        }
+    }
+
+    private fun Transport.presences() = sent.filter { it.text("type") == "session.editor.presence" }
+
+    @Test fun nativePresenceRequiresRenderedOwnerAndStopsOnForegroundLoss() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        assertTrue(transport.presences().isEmpty())
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(listOf(true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(listOf(true, true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        repo.setForeground(false); runCurrent()
+        assertEquals(listOf(true, true, false), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        advanceTimeBy(10000); runCurrent()
+        assertEquals(3, transport.presences().size)
+        release()
+    }
+
+    @Test fun staleDisposalCannotReleaseNewRenderedOwner() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        val old = repo.acquireNativeEditorPresence(selection); runCurrent()
+        val current = repo.acquireNativeEditorPresence(selection); runCurrent()
+        old(); runCurrent()
+        assertFalse(transport.presences().any { it["active"]?.jsonPrimitive?.boolean == false })
+        current(); runCurrent()
+        assertEquals(false, transport.presences().last()["active"]?.jsonPrimitive?.boolean)
+    }
+
+    @Test fun wrongSelectionAndDisconnectedOwnerNeverSendPresenceToAnotherConnection() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val wrong = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "other")); runCurrent()
+        assertTrue(transport.presences().isEmpty())
+        wrong()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val before = transport.presences().size
+        release(); runCurrent()
+        assertEquals(before, transport.presences().size)
+    }
+
+    @Test fun unsupportedPresenceStopsHeartbeatWithoutRepeatedRequests() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        transport.failure = { if (it.text("type") == "session.editor.presence") "unsupported" else null }
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        advanceTimeBy(20000); runCurrent()
+        assertEquals(1, transport.presences().size)
+        release(); runCurrent()
+        assertEquals(1, transport.presences().size)
+    }
+
+    @Test fun nativeHeartbeatWaitsForReplyAndRetriesTransientFailure() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var held: JsonObject? = null
+        transport.response = { request ->
+            if (request.text("type") == "session.editor.presence" && held == null) {
+                held = request
+                null
+            } else normal(request)
+        }
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        advanceTimeBy(6000); runCurrent()
+        assertEquals(1, transport.presences().size)
+        transport.result(checkNotNull(held), Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.editor.presence") "temporary" else null }
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(2, transport.presences().size)
+        transport.failure = { null }
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(3, transport.presences().size)
+        release()
+    }
+
+    @Test fun refusedForkRestartsHeartbeatCanceledWhileRequestWasInFlight() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var held: JsonObject? = null
+        transport.response = { request ->
+            if (request.text("type") == "session.editor.presence" && held == null) {
+                held = request
+                null
+            } else normal(request)
+        }
+        transport.failure = { if (it.text("type") == "session.fork") "busy" else null }
+        val selection = RemoteSelection("host", "project", "session")
+        val release = repo.acquireNativeEditorPresence(selection)
+        runCurrent()
+        assertEquals(1, transport.presences().size)
+        assertEquals(selection, repo.forkSession(selection, "user-1", ForkMode.EDIT))
+        runCurrent()
+        assertEquals(selection, repo.state.value.selection)
+        assertEquals(listOf(true, true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        transport.result(checkNotNull(held), Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(listOf(true, true, true), transport.presences().map { it["active"]?.jsonPrimitive?.boolean })
+        release()
+    }
+
+    @Test fun nativePresenceReconnectRenegotiatesBeforeRenewing() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        repo.setValidatedNetwork("wifi"); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        val before = transport.presences().size
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1000); runCurrent()
+        assertTrue(repo.state.value.connected)
+        val after = transport.presences().drop(before)
+        assertTrue(after.isNotEmpty())
+        assertTrue(after.all { it.text("sessionId") == "session" && it["active"]?.jsonPrimitive?.boolean == true })
+        release()
+    }
+
+    @Test fun staleOwnerCannotSendOldSessionToNewHost() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            val result = normal(request)
+            if (request.text("type") == "projects.list") JsonObject(checkNotNull(result) +
+                ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1"), JsonPrimitive("session.question_editor_native.v1")))))
+            else result
+        }
+        val second = PairedHost("other-host", "https://relay.test", "device-2", "secret-2", "Other")
+        val repo = repository(transport, hosts = listOf(host, second))
+        repo.setForeground(true)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        repo.activate(RemoteSelection("other-host", "project", "session")); runCurrent()
+        val before = transport.presences().size
+        release(); runCurrent()
+        advanceTimeBy(10000); runCurrent()
+        assertEquals(before, transport.presences().size)
+    }
+
+    @Test fun nativeCapabilityRevocationDetachesAndRegrantResumesVisibleOwner() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var native = false
+        transport.response = { request ->
+            val result = normal(request)
+            if (request.text("type") == "projects.list") JsonObject(checkNotNull(result) +
+                ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1")) +
+                    if (native) listOf(JsonPrimitive("session.question_editor_native.v1")) else emptyList())))
+            else result
+        }
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        repo.openNotification("host", "missing-1"); runCurrent()
+        assertEquals(false, transport.presences().last()["active"]?.jsonPrimitive?.boolean)
+        native = true
+        repo.openNotification("host", "missing-2"); runCurrent()
+        assertEquals(true, transport.presences().last()["active"]?.jsonPrimitive?.boolean)
+        release()
+    }
+
+    @Test fun firstPresenceAckPromotesLocalRequiredSnapshotOnlyOnce() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var promoted = false
+        transport.response = { request -> when (request.text("type")) {
+            "session.editor.presence" -> { promoted = true; normal(request) }
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(
+                    if (promoted) Wire.objectOf("id" to "e", "kind" to "editor", "native" to true, "prefill" to "hello")
+                    else Wire.objectOf("id" to "e", "kind" to "local_required"))))
+            else -> normal(request)
+        } }
+        repo.openNotification("host", "unknown"); runCurrent()
+        // Trigger a fresh snapshot without claiming visibility first.
+        repo.setForeground(false); repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        assertEquals("editor", repo.state.value.questions.single().text("kind"))
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        advanceTimeBy(10000); runCurrent()
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        release()
+    }
+
+    @Test fun lateInitialSnapshotCannotOverwritePostPresencePromotion() = runTest {
+        val transport = Transport()
+        val repo = nativePresenceRepository(transport)
+        val normal = transport.response
+        var held: JsonObject? = null
+        transport.response = { request -> when (request.text("type")) {
+            "session.snapshot" -> if (held == null) { held = request; null } else Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting",
+                "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(
+                    Wire.objectOf("id" to "e", "kind" to "editor", "native" to true, "prefill" to "hello"))))
+            else -> normal(request)
+        } }
+        repo.setForeground(false); repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+        transport.result(checkNotNull(held), Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+            "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(
+                Wire.objectOf("id" to "e", "kind" to "local_required")))))
+        runCurrent(); advanceTimeBy(20); runCurrent()
+        assertEquals("editor", repo.state.value.questions.single().text("kind"))
+        release()
+    }
+
+    @Test fun nativeCapabilityRequiresBaseCapabilityAndV3OptIn() = runTest {
+        for (version in 2..3) for (base in listOf(false, true)) {
+            val transport = Transport().also(::configure)
+            val normal = transport.response
+            transport.response = { request ->
+                val result = normal(request)
+                if (request.text("type") == "projects.list" &&
+                    request.text("requestId").startsWith("capabilities.v$version:"))
+                    JsonObject(checkNotNull(result) + ("capabilities" to JsonArray(
+                        listOf(JsonPrimitive("session.question_editor_native.v1")) +
+                            if (base) listOf(JsonPrimitive("session.question_editor.v1")) else emptyList())))
+                else result
+            }
+            val repo = repository(transport)
+            repo.setForeground(true)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            val release = repo.acquireNativeEditorPresence(RemoteSelection("host", "project", "session")); runCurrent()
+            assertEquals(version == 3 && base, transport.presences().isNotEmpty())
+            release()
+        }
+    }
+
+    @Test fun editorAnswerRequiresNegotiatedCapabilityAndValidExactValue() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello")
+        for (capability in listOf(false, true)) {
+            val transport = Transport()
+            val repo = editorRepository(transport, question, capability)
+            for (value in listOf("x".repeat(65537), "bad\rvalue", "bad\u001bvalue", "\uD800")) {
+                repo.answer("e", Wire.objectOf("kind" to "editor", "value" to value)); runCurrent()
+            }
+            assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+            val value = "😀\n\t" + "x".repeat(65530)
+            repo.answer("e", Wire.objectOf("kind" to "editor", "value" to value)); runCurrent()
+            assertEquals(if (capability) 1 else 0, transport.sent.count { it.text("type") == "question.answer" })
+            if (capability) assertEquals(value, transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("value"))
+        }
+    }
+
+    @Test fun nativeEditorAnswerNeedsNativeCapabilityButCancelStillWorks() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original", "native" to true)
+        val transport = Transport()
+        val repo = editorRepository(transport, question)
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "changed")); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+    }
+
+    @Test fun malformedNativeMarkerNeverAllowsEditorAnswerButAllowsCancel() = runTest {
+        for (marker in listOf<JsonElement>(JsonPrimitive(false), JsonPrimitive("true"), JsonNull)) {
+            val question = JsonObject(Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original") + ("native" to marker))
+            val transport = Transport()
+            val repo = editorRepository(transport, question)
+            repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "changed")); runCurrent()
+            assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+            repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+            assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+        }
+    }
+
+    @Test fun editorDraftScopeChangesWhenConnectionDropsEvenIfQuestionIsRetained() = runTest {
+        val transport = Transport()
+        val repo = editorRepository(transport, Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original"))
+        val before = repo.state.value
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val disconnected = repo.state.value
+        assertFalse(disconnected.connected)
+        assertTrue(disconnected.questions.single() === before.questions.single())
+        assertTrue("the retained draft must lose authority", disconnected.editorQuestionGeneration > before.editorQuestionGeneration)
+    }
+
+    @Test fun queuedEditorAnswerCannotSendAfterSameIdQuestionReplacement() = runTest {
+        val transport = Transport()
+        val repo = editorRepository(transport, Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first"))
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "draft"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "replacement")))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun editorDetailsCannotBeSubmittedButCancellationRemainsAvailable() = runTest {
+        val transport = Transport()
+        val repo = editorRepository(transport, Wire.parse("""{"id":"e","kind":"editor","prefill":"partial","details":{"id":"d","totalBytes":1,"sha256":"${"a".repeat(64)}"}}"""))
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "partial")); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+    }
+
+    @Test fun editorCapabilityIsNeverGrantedByV2Fallback() = runTest {
+        val transport = Transport().also(::configure)
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v2:"))
+                JsonObject(checkNotNull(result) + ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1")))))
+            else result
+        }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"))
+        assertTrue(ids[1].startsWith("capabilities.v2:"))
+        assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
+    }
+
+    @Test
+    fun repositoryRejectsUnverifiedDetailsYesButStillSendsNo() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        val question = Wire.parse("""{"id":"q","kind":"confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting",
+                "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            else normal(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to false))
+        runCurrent()
+        assertEquals(Wire.objectOf("kind" to "confirm", "value" to false), transport.sent.last { it.text("type") == "question.answer" }["answer"])
+    }
+
+    @Test
+    fun positiveConfirmCannotSendForMissingQuestion() = runTest {
+        val transport = Transport()
+        val repository = answering(transport)
+        repository.answer("missing", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun queuedPositiveConfirmCannotSendAfterQuestionClosesOrIsReplaced() = runTest {
+        for (replace in listOf(false, true)) {
+            val transport = Transport()
+            val repository = answering(transport)
+            repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+            val event = if (replace) Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+                "kind" to "question.open", "question" to Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Different?"))
+            else Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+                "kind" to "question.closed", "questionId" to "q")
+            transport.deliver(event)
+            runCurrent()
+            assertEquals("replace=$replace", 0, transport.sent.count { it.text("type") == "question.answer" })
+        }
+    }
+
+    @Test
+    fun revokedThenRegrantedCapabilityCannotResurrectAnOlderDetailsLoad() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        val question = Wire.parse("""{"id":"q","kind":"confirm","title":"Confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        var granted = true
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(
+                if (granted) listOf(JsonPrimitive(QUESTION_DETAILS_CAPABILITY)) else emptyList())))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> null
+            else -> normal(request)
+        } }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.question.details.get" }
+        granted = false
+        repository.setForeground(true)
+        repository.setNetwork("wifi", validated = true, path = "first")
+        runCurrent()
+        assertFalse(QUESTION_DETAILS_CAPABILITY in repository.state.value.capabilities)
+        granted = true
+        repository.setNetwork("wifi", validated = true, path = "second")
+        runCurrent()
+        assertTrue(QUESTION_DETAILS_CAPABILITY in repository.state.value.capabilities)
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        val reads = transport.sent.filter { it.text("type") == "session.question.details.get" }
+        assertEquals(2, reads.size)
+        val page = Wire.objectOf("kind" to "question_details", "sessionId" to "session", "questionId" to "q",
+            "detailsId" to "d", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+        transport.result(first, page)
+        runCurrent()
+        assertTrue(repository.state.value.questionDetails["q"]?.loading == true)
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        transport.result(reads.last(), page)
+        runCurrent()
+        assertEquals("hello", repository.state.value.questionDetails["q"]?.text)
+    }
+
+    @Test
+    fun forbiddenDetailsAnswerRequiresExplicitReloadAndNewApproval() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        val question = Wire.parse("""{"id":"q","kind":"confirm","title":"Confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_DETAILS_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> Wire.objectOf("kind" to "question_details", "sessionId" to "session",
+                "questionId" to "q", "detailsId" to "d", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+            else -> normal(request)
+        } }
+        var forbidden = true
+        transport.failure = { if (it.text("type") == "question.answer" && forbidden) "forbidden" else null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        assertEquals("hello", repository.state.value.questionDetails["q"]?.text)
+        val yes = Wire.objectOf("kind" to "confirm", "value" to true)
+        repository.answer("q", yes)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+        assertNull(repository.state.value.questionDetails["q"]?.text)
+        assertTrue(repository.state.value.questionDetails["q"]?.failed == true)
+        forbidden = false
+        repository.answer("q", yes)
+        runCurrent()
+        assertEquals("no automatic retry or stale approval", 1, transport.sent.count { it.text("type") == "question.answer" })
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.details.get" })
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        assertEquals("hello", repository.state.value.questionDetails["q"]?.text)
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.details.get" })
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+        repository.answer("q", yes)
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    /** A selected session with [openQuestion] pending; `question.answer` fails like [code]. */
+    private suspend fun TestScope.answering(
+        transport: Transport,
+        code: String? = null,
+        message: String? = null,
+    ): DefaultRemoteRepository {
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting",
+                "messages" to JsonArray(emptyList()),
+                "pendingQuestions" to JsonArray(listOf(openQuestion)))
+            else if (request.text("type") == "question.answer") null
+            else normal(request)
+        }
+        transport.failure = { request ->
+            if (request.text("type") == "question.answer") code else null
+        }
+        transport.failureMessage = { message }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertEquals(listOf(openQuestion), repository.state.value.questions)
+        return repository
+    }
+
+    private fun TestScope.answerQuestion(repository: DefaultRemoteRepository) {
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+    }
+
+    private fun Transport.questionClosed(revision: Int) =
+        listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to revision, "kind" to "question.closed", "questionId" to "q"))
+
+    @Test
+    fun answerClosedElsewhereDropsTheQuestionAndSaysSo() = runTest {
+        for (code in listOf("already_resolved", "not_found")) {
+            val repository = answering(Transport(), code)
+            answerQuestion(repository)
+            val state = repository.state.value
+            assertTrue(code, state.questions.isEmpty())
+            assertTrue(code, state.answering.isEmpty())
+            assertEquals(code, R.string.remote_question_answered_elsewhere, state.error)
+        }
+    }
+
+    @Test
+    fun unsupportedAnswerLeavesTheQuestionNotAnswerableHereAndDoesNotRetry() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "unsupported")
+        answerQuestion(repository)
+        val state = repository.state.value
+        assertEquals(listOf(openQuestion), state.questions)
+        assertEquals(mapOf("q" to QuestionBlock.LOCAL_ONLY), state.questionBlocks)
+        assertTrue(state.answering.isEmpty())
+        assertNull(state.error)
+        answerQuestion(repository)
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun uncertainAnswerKeepsControlsOffUntilTheQuestionCloses() = runTest {
+        val cases = listOf(
+            "uncertain" to null,
+            "internal" to "Command outcome unknown; refresh before retrying",
+        )
+        for ((code, message) in cases) {
+            val transport = Transport()
+            val repository = answering(transport, code, message)
+            answerQuestion(repository)
+            assertEquals(code, mapOf("q" to QuestionBlock.UNCERTAIN), repository.state.value.questionBlocks)
+            assertEquals(code, listOf(openQuestion), repository.state.value.questions)
+            assertNull(code, repository.state.value.error)
+            answerQuestion(repository)
+            assertEquals(code, 1, transport.sent.count { it.text("type") == "question.answer" })
+            transport.questionClosed(1)
+            assertTrue(code, repository.state.value.questions.isEmpty())
+            assertTrue(code, repository.state.value.questionBlocks.isEmpty())
+        }
+    }
+
+    @Test
+    fun structuredUnknownAnswerIgnoresTheHostMessageAndDoesNotRetry() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "internal", "Owner reply unavailable")
+        transport.failureReason = { "outcome_unknown" }
+        answerQuestion(repository)
+        assertEquals(mapOf("q" to QuestionBlock.UNCERTAIN), repository.state.value.questionBlocks)
+        assertEquals(listOf(openQuestion), repository.state.value.questions)
+        assertNull(repository.state.value.error)
+        answerQuestion(repository)
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun anExplicitDifferentReasonDoesNotUseTheLegacyTimeoutMessage() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "internal", "Command outcome unknown; refresh before retrying")
+        transport.failureReason = { "definite_failure" }
+        answerQuestion(repository)
+        assertTrue(repository.state.value.questionBlocks.isEmpty())
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+    }
+
+    @Test
+    fun uncertainAnswerClearsOnTheNextSnapshotThatStillHasTheQuestion() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "uncertain")
+        answerQuestion(repository)
+        assertEquals(mapOf("q" to QuestionBlock.UNCERTAIN), repository.state.value.questionBlocks)
+        val earlier = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 5, "status" to "waiting",
+                "messages" to JsonArray(emptyList()),
+                "pendingQuestions" to JsonArray(listOf(openQuestion)))
+            else earlier(request)
+        }
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 5, "kind" to "snapshot.required"))
+        runCurrent()
+        assertTrue(repository.state.value.questionBlocks.isEmpty())
+        assertEquals(listOf(openQuestion), repository.state.value.questions)
+    }
+
+    @Test
+    fun internalErrorWithoutThePeerTimeoutMessageStaysGeneric() = runTest {
+        val repository = answering(Transport(), "internal", "boom")
+        answerQuestion(repository)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.questionBlocks.isEmpty())
+    }
+
+    @Test
+    fun offlineAnswerSaysTheSessionIsOfflineAndKeepsTheQuestion() = runTest {
+        val repository = answering(Transport(), "offline")
+        answerQuestion(repository)
+        val state = repository.state.value
+        assertEquals(R.string.remote_question_session_offline, state.error)
+        assertEquals(listOf(openQuestion), state.questions)
+        assertTrue(state.questionBlocks.isEmpty())
+        assertTrue(state.answering.isEmpty())
+    }
+
+    @Test
+    fun otherAnswerErrorsStayGeneric() = runTest {
+        for (code in listOf("busy", "forbidden", "invalid_request")) {
+            val repository = answering(Transport(), code)
+            answerQuestion(repository)
+            assertEquals(code, R.string.remote_request_error, repository.state.value.error)
+            assertEquals(code, listOf(openQuestion), repository.state.value.questions)
+        }
+    }
+
+    @Test
+    fun closeWhileAnsweringClearsPendingWithoutAnError() = runTest {
+        val transport = Transport()
+        val repository = answering(transport)
+        answerQuestion(repository)
+        assertEquals(setOf("q"), repository.state.value.answering)
+        transport.questionClosed(1)
+        assertTrue(repository.state.value.answering.isEmpty())
+        assertTrue(repository.state.value.questions.isEmpty())
+        // The host's late refusal for the same answer adds no error.
+        val request = transport.sent.last { it.text("type") == "question.answer" }
+        transport.listener.message(Wire.objectOf("type" to "result", "requestId" to request.text("requestId"),
+            "ok" to false, "error" to Wire.objectOf("code" to "already_resolved", "message" to "closed")))
+        runCurrent()
+        assertNull(repository.state.value.error)
+    }
+
+    // ---- Forward compatibility, typed errors, proven-connection backoff, pairing timeout ----
+
+    private suspend fun TestScope.chatRepository(
+        transport: Transport,
+        liveRunKept: () -> Boolean = { false },
+    ): DefaultRemoteRepository {
+        val repository = repository(transport, liveRunKept = liveRunKept)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        return repository
+    }
+
+    private fun event(revision: Int, kind: String, vararg fields: Pair<String, Any?>) =
+        Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to revision, "kind" to kind, *fields)
+
+    private fun Transport.snapshotRequests() = sent.count { it.text("type") == "session.snapshot" }
+
+    @Test
+    fun unknownPayloadTypeAndEventKindKeepTheConnectionAndResyncAtMostEveryTenSeconds() = runTest {
+        val transport = Transport().also { configure(it) }
+        val snapshotTimes = mutableListOf<Long>()
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") snapshotTimes += testScheduler.currentTime
+            original(request)
+        }
+        val repository = chatRepository(transport)
+        val closes = transport.closes
+        snapshotTimes.clear()
+
+        transport.deliver(Wire.objectOf("type" to "host.future", "anything" to 1))
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+
+        // A newer host sends a kind this app does not know, once a second for 25 s.
+        val start = testScheduler.currentTime
+        for (revision in 1..25) {
+            transport.deliver(event(revision, "future.kind"))
+            runCurrent()
+            advanceTimeBy(1_000)
+        }
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals(closes, transport.closes)
+        assertNull(repository.state.value.error)
+        // One snapshot right away, then one at the end of each ten-second window.
+        assertEquals(listOf(start, start + 10_000, start + 20_000), snapshotTimes)
+
+        // The revision stayed in step, so the next known event applies without a snapshot.
+        transport.deliver(event(26, "session.status", "status" to "running"))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(3, snapshotTimes.size)
+    }
+
+    @Test
+    fun malformedTimelineEventRequestsASnapshotInsteadOfGoingOffline() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        // An upsert without its message.
+        transport.deliver(event(1, "message.upsert"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(snapshots + 1, transport.snapshotRequests())
+    }
+
+    @Test
+    fun unknownSessionStatusKeepsTheLastStatusAndRequestsOneSnapshot() = runTest {
+        val transport = Transport().also { configure(it) }
+        val original = transport.response
+        val repository = chatRepository(transport)
+        transport.deliver(event(1, "session.status", "status" to "running"))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        // The resync stays unanswered, so the state shows what the event left behind.
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else original(request) }
+        val snapshots = transport.snapshotRequests()
+
+        transport.deliver(event(2, "session.status", "status" to "retrying"))
+        runCurrent()
+
+        assertEquals("running", repository.state.value.status)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(snapshots + 1, transport.snapshotRequests())
+    }
+
+    @Test
+    fun advisorStatusWithTheTimelineRevisionCostsNoSnapshot() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        transport.deliver(event(1, "advisor.status", "advisor" to Wire.objectOf()))
+        runCurrent()
+        transport.deliver(event(2, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals("running", repository.state.value.status)
+        assertEquals(snapshots, transport.snapshotRequests())
+    }
+
+    @Test
+    fun malformedFollowUpReceiptIsDroppedAndTheTimelineStaysInStep() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        transport.deliver(event(1, "follow_up.status", "requestId" to "request", "status" to "bogus"))
+        runCurrent()
+        transport.deliver(event(2, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals("running", repository.state.value.status)
+        assertEquals(snapshots, transport.snapshotRequests())
+    }
+
+    @Test
+    fun malformedResultFailsOnlyItsRequest() = runTest {
+        val titled = JsonObject(session() + ("title" to JsonPrimitive("Old")))
+        val transport = Transport().also { configure(it, sessions = listOf(titled), opened = titled) }
+        transport.capabilities = setOf(RENAME_CAPABILITY)
+        val repository = chatRepository(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.rename") {
+                transport.deliver(
+                    Wire.objectOf("type" to "result", "requestId" to request.text("requestId"), "ok" to "yes")
+                )
+                null
+            } else normal(request)
+        }
+
+        repository.renameSession("session", "Renamed")
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+    }
+
+    @Test
+    fun unreadableFrameReconnectsLikeALostConnection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+
+        transport.deliver(Wire.objectOf("requestId" to "no type"))
+
+        assertFalse(repository.state.value.connected)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun requestErrorsAreTypedByKind() = runTest {
+        val transport = Transport()
+        reloading(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+
+        // No reply: the reload may have run.
+        val timedOut = async { repository.reloadSession("session") }
+        advanceTimeBy(60_001)
+        runCurrent()
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unknown), timedOut.await())
+
+        val lost = async { repository.reloadSession("session") }
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(ReloadResult.Failed(ReloadFailure.ConnectionFailure), lost.await())
+    }
+
+    @Test
+    fun connectionsDroppedRightAfterReadyGrowTheBackoffAndStopAfterFive() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val working = transport.response
+        // The Mac accepts each connection and drops it before answering anything.
+        transport.response = { null }
+        transport.listener.failed(true, R.string.remote_connection_error)
+
+        val waits = mutableListOf<Long>()
+        repeat(MAX_SHORT_LIVED_CONNECTIONS) {
+            val wait = repository.state.value.reconnectAt!! - testScheduler.currentTime
+            waits += wait
+            val connects = transport.connects
+            advanceTimeBy(wait)
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertTrue(repository.state.value.connected)
+            advanceTimeBy(500)
+            transport.listener.failed(true, R.string.remote_connection_error)
+        }
+
+        // The ready connections did not reset the backoff.
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L), waits)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // Retry still connects, and the first answered request resets the backoff.
+        transport.response = working
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun stoppedReconnectsResumeOnTheNextForegroundOrNetworkSignal() = runTest {
+        for (signal in listOf("foreground", "network")) {
+            val transport = Transport().also { configure(it) }
+            val repository = chatRepository(transport)
+            transport.response = { null }
+            transport.listener.failed(true, R.string.remote_connection_error)
+            repeat(MAX_SHORT_LIVED_CONNECTIONS) {
+                advanceTimeBy(repository.state.value.reconnectAt!! - testScheduler.currentTime)
+                runCurrent()
+                transport.listener.failed(true, R.string.remote_connection_error)
+            }
+            assertNull(signal, repository.state.value.reconnectAt)
+            val connects = transport.connects
+
+            if (signal == "foreground") {
+                repository.setForeground(false)
+                repository.setForeground(true)
+            } else repository.setValidatedNetwork("cellular")
+            // A network change reconnects after the first, reset step of the backoff.
+            advanceTimeBy(1_000)
+            runCurrent()
+
+            assertEquals(signal, connects + 1, transport.connects)
+            assertTrue(signal, repository.state.value.connected)
+        }
+    }
+
+    @Test
+    fun connectionsBrokenAfterTheirFirstAnswerGrowTheBackoffAndStopAfterFive() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        assertTrue(repository.state.value.connected)
+
+        // Every connection answers its requests and then gets a frame this app cannot read.
+        fun breakConnection() {
+            transport.listener.broken()
+            transport.listener.failed(true, R.string.remote_connection_error)
+        }
+        breakConnection()
+        val waits = mutableListOf<Long>()
+        repeat(MAX_BROKEN_CONNECTIONS - 1) {
+            val wait = repository.state.value.reconnectAt!! - testScheduler.currentTime
+            waits += wait
+            val connects = transport.connects
+            val sent = transport.sent.size
+            advanceTimeBy(wait)
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertTrue(repository.state.value.connected)
+            // The reconnect answered requests, which proves it, but it breaks again.
+            assertTrue(transport.sent.size > sent)
+            advanceTimeBy(500)
+            breakConnection()
+        }
+
+        // The answered requests did not reset the backoff of the broken connections.
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), waits)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // Retry still connects; a connection that stays up ends the run of broken ones.
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(CONNECTION_PROVEN_MILLIS)
+        runCurrent()
+        breakConnection()
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        breakConnection()
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // A plain drop after an answer still starts the backoff from the beginning.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun backoffResetsOnlyAfterAnAnsweredRequestOrThirtySecondsUp() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val working = transport.response
+        transport.response = { null }
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // Up for six seconds without an answer: no longer short-lived, but not proven either.
+        advanceTimeBy(1_000)
+        runCurrent()
+        advanceTimeBy(6_000)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // Up for thirty seconds proves the connection even without an answer.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        // A frame after the reads went out: they are slow, not on a dead socket.
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
+        advanceTimeBy(CONNECTION_PROVEN_MILLIS)
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // An answered request proves it at once, even if the connection drops right after.
+        advanceTimeBy(1_000)
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        transport.response = working
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    private fun pairingCode() =
+        "pi-remote://pair#" + Wire.encode(
+            Wire.objectOf(
+                "v" to 1,
+                "relay" to "https://relay.test",
+                "routeId" to Wire.random(),
+                "pairId" to Wire.random(),
+                "secret" to Wire.random(32),
+                "expiresAt" to 1,
+            ).toString().toByteArray()
+        )
+
+    private suspend fun TestScope.pairingRepository(
+        transport: Transport,
+        pairings: Pairings = Pairings(emptyList()),
+    ): DefaultRemoteRepository {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        val repository = repository(transport, hosts = emptyList(), pairings = pairings)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        return repository
+    }
+
+    @Test
+    fun pairingNotApprovedInTimeSaysSoAndClearsTheDeadline() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val started = testScheduler.currentTime
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            assertTrue(repository.state.value.loading)
+            assertNull(repository.state.value.pairingDeadline)
+
+            advanceTimeBy(2_000)
+            transport.listener.approval()
+            assertEquals(R.string.remote_approval, repository.state.value.connection)
+            assertEquals(started + PAIRING_TIMEOUT_MILLIS, repository.state.value.pairingDeadline)
+
+            advanceTimeBy(PAIRING_TIMEOUT_MILLIS)
+            runCurrent()
+            assertNull(pairing.await())
+            assertEquals(R.string.remote_pairing_timeout, repository.state.value.error)
+            assertNull(repository.state.value.pairingDeadline)
+            assertFalse(repository.state.value.loading)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun pairingTimeoutReportedByTheTransportKeepsItsText() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            transport.listener.failed(false, R.string.remote_pairing_timeout)
+            runCurrent()
+            assertNull(pairing.await())
+            assertEquals(R.string.remote_pairing_timeout, repository.state.value.error)
+            assertNull(repository.state.value.pairingDeadline)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun approvedPairingClearsTheDeadline() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            assertNotNull(repository.state.value.pairingDeadline)
+
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            transport.listener.persistPairing(paired)
+            transport.listener.paired(paired)
+            runCurrent()
+
+            assertEquals(RemoteSelection(paired.routeId), pairing.await())
+            assertNull(repository.state.value.pairingDeadline)
+            assertTrue(repository.state.value.connected)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun cancelPairingEndsThePairingWithoutAnError() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val closes = transport.closes
+
+            repository.cancelPairing()
+            runCurrent()
+
+            assertNull(pairing.await())
+            assertTrue(transport.closes > closes)
+            assertFalse(repository.state.value.loading)
+            assertNull(repository.state.value.pairingDeadline)
+            assertNull(repository.state.value.error)
+            assertEquals(R.string.remote_offline, repository.state.value.connection)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun pairingCancelledDuringItsWriteDoesNotStayPaired() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val pairings = Pairings(emptyList())
+            val repository = pairingRepository(transport, pairings)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            pairings.afterSave = { repository.cancelPairing() }
+
+            // The transport then never acknowledges the pairing to the Mac.
+            assertTrue(runCatching { transport.listener.persistPairing(paired) }.isFailure)
+            runCurrent()
+
+            assertNull(pairing.await())
+            assertEquals(emptyList<PairedHost>(), pairings.hosts)
+            assertEquals(emptyList<PairedHost>(), repository.state.value.hosts)
+            assertFalse(repository.state.value.loading)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun failedPairingsNeverReconnectAutomatically() = runTest {
+        try {
+            for (error in listOf(R.string.remote_connection_error, R.string.remote_storage_error, R.string.remote_denied)) {
+                val transport = Transport().also { configure(it) }
+                val repository = pairingRepository(transport)
+                val pairing = async { repository.pair(pairingCode()) }
+                runCurrent()
+                transport.listener.approval()
+                // Even when asked to reconnect, a failed pairing has no host to return to.
+                transport.listener.failed(true, error)
+                runCurrent()
+                assertNull(pairing.await())
+                assertEquals(error, repository.state.value.error)
+                assertNull(repository.state.value.reconnectAt)
+                assertNull(repository.state.value.pairingDeadline)
+                val connects = transport.connects
+                advanceTimeBy(120_000)
+                runCurrent()
+                assertEquals(connects, transport.connects)
+            }
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    // ---- Tiered resume and network signals ----
+
+    private fun Transport.typeCount(type: String) = sent.count { it.text("type") == type }
+
+    @Test
+    fun aZombieSocketAfterALongBackgroundReconnectsQuietly() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        advanceTimeBy(120_000)
+        runCurrent()
+        val closes = transport.closes
+        val connects = transport.connects
+        transport.readyOnConnect = false
+
+        repository.setForeground(true)
+        runCurrent()
+
+        assertEquals(closes + 1, transport.closes)
+        assertEquals(connects + 1, transport.connects)
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+        // The chat stays on screen while it reconnects.
+        assertTrue(repository.state.value.stale)
+        assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
+
+        transport.listener.ready(emptySet())
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertFalse(repository.state.value.stale)
+    }
+
+    @Test
+    fun aProbeWithoutAnswerReconnectsAtOnceAndSaysItChecksOnlyAfterASecond() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        advanceTimeBy(20_000)
+        val original = transport.response
+        transport.response = { if (it.text("type") == "session.snapshot") null else original(it) }
+        val snapshots = transport.typeCount("session.snapshot")
+        val connects = transport.connects
+
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
+        assertFalse(repository.state.value.loading)
+        assertEquals(R.string.remote_connected, repository.state.value.connection)
+        advanceTimeBy(RESUME_PROBE_HINT_MILLIS - 1)
+        runCurrent()
+        assertEquals(R.string.remote_connected, repository.state.value.connection)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(R.string.remote_checking_connection, repository.state.value.connection)
+
+        transport.response = original
+        advanceTimeBy(RESUME_PROBE_TIMEOUT_MILLIS - RESUME_PROBE_HINT_MILLIS)
+        runCurrent()
+        // No backoff: the reconnect went out in the same instant the probe gave up.
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_connected, repository.state.value.connection)
+    }
+
+    @Test
+    fun aProbeThatAnswersClearsTheCheckingLine() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        advanceTimeBy(20_000)
+        val original = transport.response
+        transport.response = { if (it.text("type") == "session.snapshot") null else original(it) }
+        repository.setForeground(true)
+        runCurrent()
+        advanceTimeBy(RESUME_PROBE_HINT_MILLIS)
+        runCurrent()
+        assertEquals(R.string.remote_checking_connection, repository.state.value.connection)
+
+        val probe = transport.sent.last { it.text("type") == "session.snapshot" }
+        transport.result(probe, original(probe)!!)
+        runCurrent()
+        assertEquals(R.string.remote_connected, repository.state.value.connection)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aShortSwitchWithEventsFlowingSendsNothing() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        advanceTimeBy(2_000)
+        transport.deliver(event(1, "session.status", "status" to "running"))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val sent = transport.sent.size
+        val messages = repository.state.value.messages
+
+        repository.setForeground(true)
+        runCurrent()
+
+        assertEquals(sent, transport.sent.size)
+        assertSame(messages, repository.state.value.messages)
+        assertFalse(repository.state.value.loading)
+    }
+
+    @Test
+    fun aShortSwitchProbesInPlaceWithoutLoadingOrReselecting() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        advanceTimeBy(20_000)
+        runCurrent()
+        val loading = mutableListOf<Boolean>()
+        val watcher = backgroundScope.launch { repository.state.collect { loading += it.loading } }
+        runCurrent()
+        val projects = transport.typeCount("projects.list")
+        val sessions = transport.typeCount("sessions.list")
+        val snapshots = transport.typeCount("session.snapshot")
+
+        repository.setForeground(true)
+        runCurrent()
+        watcher.cancel()
+
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
+        assertEquals(projects + 1, transport.typeCount("projects.list"))
+        assertEquals(sessions + 1, transport.typeCount("sessions.list"))
+        assertFalse(transport.sent.any { it.text("type") == "sessions.open" })
+        assertFalse(loading.any { it })
+        assertTrue(repository.state.value.sessionsFresh)
+        assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
+    }
+
+    @Test
+    fun aSocketKeptAliveInTheBackgroundIsProbedNotReconnected() = runTest {
+        try {
+            Diagnostics.clear()
+            Diagnostics.clock = { testScheduler.currentTime }
+            val transport = Transport().also { configure(it) }
+            val repository = chatRepository(transport)
+            repository.setForeground(false)
+            for (revision in 1..10) {
+                advanceTimeBy(30_000)
+                transport.deliver(
+                    event(revision, "session.status", "status" to if (revision % 2 == 0) "idle" else "running")
+                )
+            }
+            runCurrent()
+            val connects = transport.connects
+            val closes = transport.closes
+            val snapshots = transport.typeCount("session.snapshot")
+
+            repository.setForeground(true)
+            runCurrent()
+
+            assertEquals(connects, transport.connects)
+            assertEquals(closes, transport.closes)
+            assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
+            assertTrue(repository.state.value.connected)
+            assertTrue(Diagnostics.export().contains("recovery recover.fresh_foreground probe"))
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun destinationDraftDuringDelayedOpenPreservesActiveChatAndReloadsWhenReady() = runTest {
+        val a = RemoteSelection("host", "project", "a")
+        val b = a.copy(sessionId = "b")
+        val aKey = DraftKey("host", "a")
+        val bKey = DraftKey("host", "b")
+        val storedA = StoredDraft(text = "A draft")
+        val drafts = Drafts().apply { values = mapOf(aKey to storedA) }
+        val transport = Transport().also { configure(it, sessions = listOf(session("a"), session("b")), opened = session("b")) }
+        val repository = repository(transport, drafts)
+        assertEquals(a, repository.activate(a, ActivationMode.RESTORE))
+        runCurrent()
+        val answer = transport.response
+        val hostReply = CompletableDeferred<JsonObject>()
+        transport.response = { if (it.text("type") == "sessions.open") null else answer(it) }
+        val opening = async { repository.activate(b, ActivationMode.USER_OPEN) }
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "sessions.open" }
+        val delivery = launch { transport.result(request, hostReply.await()) }
+
+        assertEquals(a, repository.state.value.selection)
+        repository.draft(b, "B prepared while A is selected")
+        assertEquals("A draft", repository.state.value.draft)
+        assertEquals("B prepared while A is selected", repository.peekDraftText(b))
+        repository.flush()
+        assertEquals(storedA, drafts.load().getValue(aKey))
+        assertEquals("B prepared while A is selected", drafts.load().getValue(bKey).text)
+
+        hostReply.complete(checkNotNull(answer(request)))
+        delivery.join()
+        assertEquals(b, opening.await())
+        runCurrent()
+        assertEquals("B prepared while A is selected", repository.state.value.draft)
+        assertFalse(repository.state.value.loading)
+        repository.flush()
+        val reloaded = repository(Transport().also { configure(it, sessions = listOf(session("a"), session("b"))) }, drafts)
+        runCurrent()
+        assertEquals("A draft", reloaded.peekDraftText(a))
+        assertEquals("B prepared while A is selected", reloaded.peekDraftText(b))
+    }
+
+    @Test
+    fun failedAndCancelledDestinationOpensKeepBothDraftsRecoverableFromStorage() = runTest {
+        for (cancelled in listOf(false, true)) {
+            val a = RemoteSelection("host", "project", "a")
+            val b = a.copy(sessionId = "b")
+            val aKey = DraftKey("host", "a")
+            val bKey = DraftKey("host", "b")
+            val storedA = StoredDraft(text = "A draft")
+            val drafts = Drafts().apply { values = mapOf(aKey to storedA) }
+            val transport = Transport().also { configure(it, sessions = listOf(session("a"), session("b")), opened = session("b")) }
+            val repository = repository(transport, drafts)
+            assertEquals(a, repository.activate(a, ActivationMode.RESTORE))
+            runCurrent()
+            val answer = transport.response
+            val hostReply = CompletableDeferred<Unit>()
+            transport.response = { if (it.text("type") == "sessions.open") null else answer(it) }
+            val opening = async { repository.activate(b, ActivationMode.USER_OPEN) }
+            runCurrent()
+            val request = transport.sent.last { it.text("type") == "sessions.open" }
+            val delivery = launch {
+                hostReply.await()
+                transport.deliver(Wire.objectOf(
+                    "type" to "result", "requestId" to request.text("requestId"), "ok" to false,
+                    "error" to Wire.objectOf("code" to "busy", "message" to "Open refused"),
+                ))
+            }
+            assertEquals(a, repository.state.value.selection)
+            repository.draft(b, "B retained")
+            assertEquals("A draft", repository.state.value.draft)
+            if (cancelled) {
+                repository.cancelSelection()
+                opening.cancelAndJoin()
+                delivery.cancelAndJoin()
+            } else {
+                hostReply.complete(Unit)
+                delivery.join()
+                opening.await()
+            }
+            runCurrent()
+            assertEquals(a, repository.state.value.selection)
+            assertEquals("A draft", repository.state.value.draft)
+            assertEquals("B retained", repository.peekDraftText(b))
+            repository.flush()
+            assertEquals(storedA, drafts.load().getValue(aKey))
+            assertEquals("B retained", drafts.load().getValue(bKey).text)
+            val reloaded = repository(Transport().also { configure(it, sessions = listOf(session("a"), session("b"))) }, drafts)
+            runCurrent()
+            assertEquals("A draft", reloaded.peekDraftText(a))
+            assertEquals("B retained", reloaded.peekDraftText(b))
+            assertEquals(b, reloaded.activate(b, ActivationMode.RESTORE))
+            assertEquals("B retained", reloaded.state.value.draft)
+        }
+    }
+
+    @Test
+    fun previewDraftStaysWithSourceUntilDelayedOpenCompletes() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val parent = RemoteSelection("host", "project")
+        val source = parent.copy(sessionId = "session")
+        repository.activate(parent)
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(source, ActivationMode.USER_OPEN) }
+        runCurrent()
+        repository.draft(source, "prepared")
+        assertEquals(parent, repository.state.value.selection)
+        assertEquals("prepared", repository.peekDraftText(source))
+        val open = transport.sent.last { it.text("type") == "sessions.open" }
+        transport.response = original
+        transport.result(open, original(open)!!)
+        runCurrent()
+        assertEquals(source, opening.await())
+        assertEquals("prepared", repository.state.value.draft)
+    }
+
+    @Test
+    fun cancelledOpenKeepsItsSourceDraft() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val parent = RemoteSelection("host", "project")
+        val source = parent.copy(sessionId = "session")
+        repository.activate(parent)
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(source, ActivationMode.USER_OPEN) }
+        runCurrent()
+        repository.draft(source, "retained")
+        repository.cancelSelection()
+        opening.cancel()
+        runCurrent()
+        assertEquals("retained", repository.peekDraftText(source))
+        assertEquals(parent, repository.state.value.selection)
+    }
+
+    @Test
+    fun aReplacedNetworkWhileLoadingReconnectsAtOnce() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        val connects = transport.connects
+        transport.response = original
+
+        repository.setValidatedNetwork("cellular")
+        runCurrent()
+
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        // The open did not wait out its request timeout.
+        assertTrue(opening.isCompleted)
+        assertTrue(testScheduler.currentTime < REQUEST_TIMEOUT_MILLIS)
+    }
+
+    @Test
+    fun aForegroundReturnDuringAnActivationRunsOnceItEnds() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        repository.setForeground(false)
+        // A restore that started in the background is not abandoned when the app returns.
+        val opening = async { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        advanceTimeBy(20_000)
+        runCurrent()
+        val snapshots = transport.typeCount("session.snapshot")
+
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        assertEquals(snapshots, transport.typeCount("session.snapshot"))
+
+        val open = transport.sent.last { it.text("type") == "sessions.open" }
+        transport.response = original
+        transport.result(open, original(open)!!)
+        runCurrent()
+        opening.await()
+
+        assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
+        // The activation's snapshot went out with the open; then the deferred resume's probe.
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
+        assertFalse(repository.state.value.loading)
+    }
+
+    @Test
+    fun anOpenFromBeforeALongBackgroundOnAQuietSocketEndsWithItsPreviousSelection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        repository.setForeground(false)
+        // Away longer than a short switch, the socket quiet for longer than a live one would be,
+        // and the open's request not yet timed out.
+        advanceTimeBy(RESUME_LIVE_SOCKET_MILLIS + 1_000)
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        transport.response = original
+        val connects = transport.connects
+        val closes = transport.closes
+
+        repository.setForeground(true)
+        runCurrent()
+
+        // The open ended through its error path, not by cancellation, so the caller can put its
+        // navigation back in order.
+        assertTrue(opening.isCompleted)
+        assertFalse(opening.isCancelled)
+        assertEquals(RemoteSelection("host", "project"), opening.await())
+        assertEquals(closes + 1, transport.closes)
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.loading)
+        assertNull(repository.state.value.error)
+        assertEquals(RemoteSelection("host", "project"), repository.state.value.selection)
+        assertTrue(testScheduler.currentTime < REQUEST_TIMEOUT_MILLIS)
+    }
+
+    @Test
+    fun anOpenFromBeforeABackgroundOnALiveSocketRunsOnAndTheResumeFollows() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 2_000)
+        // The socket still delivers frames.
+        transport.deliver(Wire.objectOf("type" to "ping"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        val connects = transport.connects
+        val snapshots = transport.typeCount("session.snapshot")
+
+        repository.setForeground(true)
+        runCurrent()
+        assertFalse(opening.isCompleted)
+        assertTrue(repository.state.value.loading)
+        assertEquals(connects, transport.connects)
+
+        val open = transport.sent.last { it.text("type") == "sessions.open" }
+        transport.response = original
+        transport.result(open, original(open)!!)
+        runCurrent()
+
+        assertEquals(RemoteSelection("host", "project", "session"), opening.await())
+        assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
+        assertEquals(connects, transport.connects)
+        // The activation's snapshot went out with the open; then the deferred resume's probe.
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
+    }
+
+    @Test
+    fun aNetworkUnblockedAfterTheReturnStillResumesByTier() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        // A long lock: Android blocks the backgrounded app's network and unblocks it only after
+        // the app is back.
+        repository.setForeground(false)
+        repository.setNetwork(null, false)
+        advanceTimeBy(15 * 60_000L)
+        runCurrent()
+        val closes = transport.closes
+        val connects = transport.connects
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        repository.setNetwork("wifi", true)
+        runCurrent()
+        // The zombie socket is replaced at once rather than probed first.
+        assertEquals(closes + 1, transport.closes)
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aNetworkUnblockedAfterAShortSwitchSendsNothing() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        repository.setNetwork(null, false)
+        advanceTimeBy(2_000)
+        transport.deliver(event(1, "session.status", "status" to "running"))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val sent = transport.sent.size
+        repository.setForeground(true)
+        repository.setNetwork("wifi", true)
+        runCurrent()
+
+        assertEquals(sent, transport.sent.size)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aReturnWhileAlreadyOfflineReconnectsWithoutAnotherFailure() = runTest {
+        try {
+            Diagnostics.clear()
+            Diagnostics.clock = { testScheduler.currentTime }
+            val transport = Transport().also { configure(it) }
+            val repository = chatRepository(transport)
+            transport.failureOnConnect = R.string.remote_connection_error
+            transport.listener.failed(true, R.string.remote_connection_error)
+            advanceTimeBy(1)
+            runCurrent()
+            assertFalse(repository.state.value.connected)
+            repository.setForeground(false)
+            advanceTimeBy(120_000)
+            runCurrent()
+            transport.failureOnConnect = null
+            val connects = transport.connects
+            val closes = transport.closes
+
+            repository.setForeground(true)
+            runCurrent()
+
+            assertEquals(connects + 1, transport.connects)
+            assertEquals(closes, transport.closes)
+            assertTrue(repository.state.value.connected)
+            assertFalse(Diagnostics.export().contains("stale.retry"))
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun aMovedRouteWhileOfflineKeepsTheBackoff() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setNetwork("wifi", true, "wlan0:192.168.1.5")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        runCurrent()
+        val reconnectAt = repository.state.value.reconnectAt
+        assertNotNull(reconnectAt)
+        val connects = transport.connects
+
+        repository.setNetwork("wifi", true, "wlan0:192.168.1.6")
+        runCurrent()
+
+        assertEquals(connects, transport.connects)
+        assertEquals(reconnectAt, repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun aForegroundReturnListsTheJobsOnce() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = true)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+
+        // A probe: the controller lists once on its own.
+        var lists = transport.jobsListRequests().size
+        repository.setForeground(false)
+        advanceTimeBy(20_000)
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(lists + 1, transport.jobsListRequests().size)
+
+        // A reconnect: nothing goes out over the dead socket. The chat lists the jobs once the
+        // reconnect's activation has ended, as after any activation.
+        lists = transport.jobsListRequests().size
+        repository.setForeground(false)
+        advanceTimeBy(120_000)
+        runCurrent()
+        val connects = transport.connects
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertEquals(lists, transport.jobsListRequests().size)
+    }
+
+    @Test
+    fun aSocketFailingWithoutANetworkWaitsForOneAndReconnectsWhenItReturns() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setValidatedNetwork(null)
+        assertTrue(repository.state.value.connected)
+
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(R.string.remote_waiting_for_network, repository.state.value.connection)
+        assertNull(repository.state.value.error)
+        assertNull(repository.state.value.reconnectAt)
+        val connects = transport.connects
+        advanceTimeBy(QUIET_RECONNECT_MILLIS + 60_000)
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(connects, transport.connects)
+
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aNetworkLostAfterTheSocketFailedWaitsForItInsteadOfTheCard() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+
+        repository.setValidatedNetwork(null)
+        assertEquals(R.string.remote_waiting_for_network, repository.state.value.connection)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS + 1_000)
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertNull(repository.state.value.reconnectAt)
+
+        transport.failureOnConnect = null
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun theSameNetworkReturningProbesTheSocketWithoutATeardown() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val closes = transport.closes
+        val snapshots = transport.typeCount("session.snapshot")
+
+        repository.setValidatedNetwork(null)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+
+        assertEquals(closes, transport.closes)
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun validationOfTheNetworkInUseRetriesAWaitingReconnectAtOnce() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setNetwork("wifi", validated = false)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        runCurrent()
+        // The captive network still lets the app try, on its backoff.
+        assertNotNull(repository.state.value.reconnectAt)
+        val connects = transport.connects
+
+        transport.failureOnConnect = null
+        repository.setNetwork("wifi", validated = true)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+    }
+
+    // ---- Cold start ------------------------------------------------------------------------
+
+    private class SavedNavigation(val snapshots: Map<String, NavigationSnapshot>) : NavigationSnapshotStorage {
+        override fun load() = snapshots
+
+        override fun save(snapshots: Map<String, NavigationSnapshot>) = Unit
+    }
+
+    private val namedProject = Wire.objectOf("id" to "project", "name" to "Saved project")
+
+    /** [configure], with projects that carry the names quick chats show. */
+    private fun configureNamed(transport: Transport, sessions: List<JsonObject> = listOf(session())) {
+        configure(transport, sessions)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") data("projects", listOf(namedProject))
+            else original(request)
+        }
+    }
+
+    private fun savedHost(
+        projectId: String? = null,
+        sessions: List<JsonObject> = emptyList(),
+    ) =
+        mapOf(
+            "host" to
+                NavigationSnapshot(
+                    "host",
+                    listOf(namedProject),
+                    projectId = projectId,
+                    sessions = sessions,
+                    projectChats = listOf(
+                        Wire.objectOf("projectId" to "project", "projectName" to "Saved project", "session" to session()),
+                    ),
+                )
+        )
+
+    /** Runs the test dispatcher until [condition] holds, while real IO threads make progress. */
+    private fun TestScope.runUntil(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        runCurrent()
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "Timed out" }
+            Thread.sleep(5)
+            runCurrent()
+        }
+    }
+
+    @Test
+    fun aRestoreConnectsWhileTheSavedNavigationStillLoads() = runTest {
+        val transport = Transport().also { configureNamed(it) }
+        // Holds the load on its IO thread, like a large snapshot that decrypts slowly.
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val storage = object : NavigationSnapshotStorage {
+            override fun load(): Map<String, NavigationSnapshot> {
+                gate.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                return savedHost()
+            }
+
+            override fun save(snapshots: Map<String, NavigationSnapshot>) = Unit
+        }
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val repository =
+                DefaultRemoteRepository(
+                    Pairings(listOf(host)),
+                    Drafts(),
+                    transport,
+                    backgroundScope,
+                    io,
+                    now = { testScheduler.currentTime },
+                    navigationStorage = storage,
+                    jitter = { 0.5 },
+                )
+            repository.setPushToken("token")
+            val restoring = async { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
+            runUntil { transport.connects == 1 }
+            // The navigation snapshot still loads, so the activation itself has not started.
+            assertTrue(repository.state.value.hostsLoaded)
+            assertEquals(RemoteSelection(), repository.state.value.selection)
+            assertTrue(transport.sent.none { it.text("type") == "projects.list" })
+            // A request sent now would be cancelled by the activation's selection change.
+            assertTrue(transport.sent.none { it.text("type") == "push.register" })
+
+            gate.countDown()
+            runUntil { restoring.isCompleted }
+            assertEquals(RemoteSelection("host"), restoring.await())
+            assertEquals(1, transport.connects)
+            assertEquals(1, transport.sent.count { it.text("type") == "push.register" })
+            // The saved list showed first, but the connection reads its own.
+            assertTrue(transport.sent.any { it.text("type") == "projects.list" })
+            assertEquals(listOf(namedProject), repository.state.value.projects)
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun aNotificationThatReplacesTheRestoreConnectsOnlyToItsOwnMac() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also { configureNamed(it) }
+        // Holds the pairings, so the restore still waits to connect when the notification comes.
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val pairings = object : PairingStorage {
+            override fun load(): List<PairedHost> {
+                gate.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                return listOf(host, other)
+            }
+
+            override fun save(hosts: List<PairedHost>) = Unit
+        }
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val repository =
+                DefaultRemoteRepository(
+                    pairings,
+                    Drafts(),
+                    transport,
+                    backgroundScope,
+                    io,
+                    now = { testScheduler.currentTime },
+                    navigationStorage = SavedNavigation(savedHost()),
+                    jitter = { 0.5 },
+                )
+            val restoring = launch { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
+            runCurrent()
+            // What the navigator does when a tapped notification replaces the restore.
+            restoring.cancel()
+            repository.cancelSelection()
+            val opening = async { repository.openNotification("other", "session") }
+            gate.countDown()
+            runUntil { opening.isCompleted }
+            assertEquals(1, transport.connects)
+            assertEquals("other", transport.route)
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun aProcessThatNothingRestoresNeverConnects() = runTest {
+        // As when FCM, a worker or the widget starts the process: the repository loads, the push
+        // token arrives, and no screen asks for a Mac.
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        repository.setPushToken("token")
+        runCurrent()
+        assertEquals(0, transport.connects)
+        assertTrue(transport.sent.isEmpty())
+        assertTrue(repository.state.value.hostsLoaded)
+        assertEquals(listOf(host), repository.state.value.hosts)
+    }
+
+    @Test
+    fun hostsStayUnloadedWhileTheirReadFails() = runTest {
+        val transport = Transport()
+        val pairings = object : PairingStorage {
+            override fun load(): List<PairedHost> = error("Keystore unavailable")
+
+            override fun save(hosts: List<PairedHost>) = Unit
+        }
+        val repository =
+            DefaultRemoteRepository(
+                pairings,
+                Drafts(),
+                transport,
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        assertFalse(repository.state.value.hostsLoaded)
+        assertFalse(repository.state.value.hostsUnreadable)
+        runCurrent()
+        assertFalse(repository.state.value.hostsLoaded)
+        // The Hosts screen says the read failed rather than loading for good.
+        assertTrue(repository.state.value.hostsUnreadable)
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        repository.disconnect()
+        assertTrue(repository.state.value.hostsUnreadable)
+    }
+
+    @Test
+    fun aResetPairingStoreSaysSoOnceAndPairingWorksAgain() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val pairings = Pairings(emptyList()).apply { reset = true }
+            val repository = repository(transport, hosts = emptyList(), pairings = pairings)
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+            runCurrent()
+            assertEquals(R.string.remote_storage_pairings_reset, repository.state.value.error)
+            assertTrue(repository.state.value.hostsLoaded)
+            assertFalse(repository.state.value.hostsUnreadable)
+
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            transport.listener.persistPairing(paired)
+            transport.listener.paired(paired)
+            runCurrent()
+            assertEquals(RemoteSelection(paired.routeId), pairing.await())
+            assertEquals(listOf(paired), pairings.hosts)
+            assertNotEquals(R.string.remote_storage_pairings_reset, repository.state.value.error)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun aResetDraftStoreRemovesOrphanedAttachmentsAndKeepsTyping() = runTest {
+        val transport = Transport().also { configure(it) }
+        val orphan = localFile(id = "OOOOOOOOOOOOOOOOOOOOOO")
+        val attachments = Attachments().apply { bytes[orphan.id] = ByteArray(1) }
+        val drafts = object : DraftStorage {
+            var values = emptyMap<DraftKey, StoredDraft>()
+            private var reset = true
+
+            override fun load() = values
+
+            override fun save(drafts: Map<DraftKey, StoredDraft>) {
+                values = drafts.toMap()
+            }
+
+            override fun takeReset() = reset.also { reset = false }
+        }
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(host)),
+                drafts,
+                transport,
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                attachmentStorage = attachments,
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        runCurrent()
+        assertEquals(R.string.remote_storage_drafts_reset, repository.state.value.error)
+        assertEquals(listOf(orphan.id), attachments.removed)
+        assertTrue(attachments.bytes.isEmpty())
+
+        repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        repository.draft("new text")
+        runCurrent()
+        repository.flush()
+        assertEquals("new text", drafts.values.values.single().text)
+    }
+
+    @Test
+    fun aReadableDraftStoreKeepsTheAttachmentsItsDraftsReference() = runTest {
+        val transport = Transport().also { configure(it) }
+        val referenced = localFile(id = "RRRRRRRRRRRRRRRRRRRRRR")
+        val orphan = localFile(id = "OOOOOOOOOOOOOOOOOOOOOO")
+        val attachments = Attachments().apply {
+            bytes[referenced.id] = ByteArray(1)
+            bytes[orphan.id] = ByteArray(1)
+        }
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(attachments = listOf(referenced)))
+        }
+        val repository = repository(transport, drafts = drafts, attachmentStorage = attachments)
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(setOf(referenced.id), attachments.bytes.keys)
+    }
+
+    @Test
+    fun aDisconnectKeepsTheHostsLoaded() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        runCurrent()
+        assertTrue(repository.state.value.hostsLoaded)
+        repository.disconnect()
+        assertTrue(repository.state.value.hostsLoaded)
+        assertEquals(listOf(host), repository.state.value.hosts)
+    }
+
+    @Test
+    fun aUserOpenOfAMacShowsItsSavedListsUnverifiedUntilTheMacAnswers() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.readyOnConnect = false
+        }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        runCurrent()
+        val opening = async { repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val shown = repository.state.value
+        assertEquals(RemoteSelection("host"), shown.selection)
+        assertTrue(shown.loading)
+        assertFalse(shown.connected)
+        assertEquals(listOf("Saved project"), shown.projects.map { it.text("name") })
+        assertEquals(listOf("session"), shown.projectChats.map { it.session.text("id") })
+        assertFalse(shown.projectChats.single().verified)
+
+        transport.listener.ready(emptySet())
+        assertEquals(RemoteSelection("host"), opening.await())
+        runCurrent()
+        assertEquals(listOf(namedProject), repository.state.value.projects)
+        assertTrue(repository.state.value.projectChats.single().verified)
+    }
+
+    @Test
+    fun aUserOpenOfAnUnreachableMacStaysOnItsSavedList() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.failureOnConnect = R.string.remote_connection_error
+        }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        runCurrent()
+        assertEquals(RemoteSelection("host"), repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN))
+        val state = repository.state.value
+        assertEquals(RemoteSelection("host"), state.selection)
+        assertFalse(state.connected)
+        assertEquals(listOf("Saved project"), state.projects.map { it.text("name") })
+    }
+
+    @Test
+    fun aUserOpenOfAProjectShowsItsSavedSessions() = runTest {
+        val transport = Transport().also {
+            configureNamed(it, sessions = listOf(session(), session("fresh")))
+            it.readyOnConnect = false
+        }
+        val saved = savedHost(projectId = "project", sessions = listOf(session()))
+        val repository = repository(transport, navigationStorage = SavedNavigation(saved))
+        runCurrent()
+        val project = RemoteSelection("host", "project")
+        val opening = async { repository.activate(project, ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertEquals(project, repository.state.value.selection)
+        assertEquals(listOf("session"), repository.state.value.sessions.map { it.text("id") })
+        assertFalse(repository.state.value.sessionsFresh)
+
+        transport.listener.ready(emptySet())
+        assertEquals(project, opening.await())
+        assertEquals(listOf("session", "fresh"), repository.state.value.sessions.map { it.text("id") })
+        assertTrue(repository.state.value.sessionsFresh)
+    }
+
+    @Test
+    fun aUserOpenOfAChatStillWaitsForItsCanonicalSession() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.readyOnConnect = false
+        }
+        val saved = savedHost(projectId = "project", sessions = listOf(session()))
+        val repository = repository(transport, navigationStorage = SavedNavigation(saved))
+        runCurrent()
+        val chat = RemoteSelection("host", "project", "session")
+        val opening = async { repository.activate(chat, ActivationMode.USER_OPEN) }
+        runCurrent()
+        // An open may fork a history session, so nothing is selected before sessions.open.
+        assertEquals(RemoteSelection(), repository.state.value.selection)
+        transport.listener.ready(emptySet())
+        assertEquals(chat, opening.await())
+    }
+
+    @Test
+    fun attachmentCleanupDoesNotHoldBackTheFirstActivation() = runTest {
+        val transport = Transport().also { configure(it) }
+        var connectsAtCleanup: Int? = null
+        val attachments = object : AttachmentStorage {
+            override fun write(attachment: LocalAttachment, bytes: ByteArray) = Unit
+
+            override fun read(attachment: LocalAttachment): ByteArray = ByteArray(0)
+
+            override fun remove(id: String) = Unit
+
+            override fun cleanup(keepIds: Set<String>) {
+                connectsAtCleanup = transport.connects
+            }
+        }
+        val repository = repository(transport, attachmentStorage = attachments)
+        val opening = async { repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertEquals(RemoteSelection("host"), opening.await())
+        // The activation got past initialization before the directory IO ran.
+        assertEquals(1, connectsAtCleanup)
+    }
+
+    /**
+     * A repository whose saved navigation loads on a real IO thread and waits for [gate], like a
+     * large snapshot that decrypts slowly; the test closes [io].
+     */
+    private fun TestScope.gatedRepository(
+        transport: Transport,
+        gate: java.util.concurrent.CountDownLatch,
+        snapshots: Map<String, NavigationSnapshot>,
+        io: CoroutineDispatcher,
+    ): DefaultRemoteRepository {
+        val storage = object : NavigationSnapshotStorage {
+            override fun load(): Map<String, NavigationSnapshot> {
+                gate.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                return snapshots
+            }
+
+            override fun save(snapshots: Map<String, NavigationSnapshot>) = Unit
+        }
+        return DefaultRemoteRepository(
+            Pairings(listOf(host)),
+            Drafts(),
+            transport,
+            backgroundScope,
+            io,
+            now = { testScheduler.currentTime },
+            navigationStorage = storage,
+            jitter = { 0.5 },
+        )
+    }
+
+    @Test
+    fun aUserOpenOfAProjectAfterItsMacReadsTheSavedSessionListAgain() = runTest {
+        val transport = Transport().also { configureNamed(it, sessions = listOf(session(), session("fresh"))) }
+        val saved = savedHost(projectId = "project", sessions = listOf(session()))
+        val repository = repository(transport, navigationStorage = SavedNavigation(saved))
+        runCurrent()
+        // The quick chats' reads of each project fail, so only the saved list is at hand.
+        transport.failure = { if (it.text("type") == "sessions.list") "internal" else null }
+        assertEquals(RemoteSelection("host"), repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN))
+        runCurrent()
+        transport.failure = { null }
+        val lists = transport.sent.count { it.text("type") == "sessions.list" }
+        val project = RemoteSelection("host", "project")
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        // The saved list showed the Mac's projects first; this connection never read it.
+        assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > lists)
+        assertEquals(listOf("session", "fresh"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun aListReadOnTheConnectionIsReusedOnTheNextOpen() = runTest {
+        val transport = Transport().also { configureNamed(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        runCurrent()
+        val project = RemoteSelection("host", "project")
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        assertEquals(RemoteSelection("host"), repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN))
+        val projects = transport.sent.count { it.text("type") == "projects.list" }
+        val sessions = transport.sent.count { it.text("type") == "sessions.list" }
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        assertEquals(projects, transport.sent.count { it.text("type") == "projects.list" })
+        assertEquals(sessions, transport.sent.count { it.text("type") == "sessions.list" })
+    }
+
+    @Test
+    fun aProjectOpenedAfterAnEarlyRestoreReadsItsSessionsAgain() = runTest {
+        val transport = Transport().also { configureNamed(it, sessions = listOf(session(), session("fresh"))) }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val saved = savedHost(projectId = "project", sessions = listOf(session()))
+            val repository = gatedRepository(transport, gate, saved, io)
+            // The quick chats' reads of each project fail, so only the saved list is at hand.
+            transport.failure = { if (it.text("type") == "sessions.list") "internal" else null }
+            val restoring = async { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
+            runUntil { transport.connects == 1 }
+            gate.countDown()
+            runUntil { restoring.isCompleted }
+            assertEquals(RemoteSelection("host"), restoring.await())
+            runCurrent()
+            transport.failure = { null }
+            val lists = transport.sent.count { it.text("type") == "sessions.list" }
+
+            val project = RemoteSelection("host", "project")
+            val opening = async { repository.activate(project, ActivationMode.USER_OPEN) }
+            runUntil { opening.isCompleted }
+            assertEquals(project, opening.await())
+            assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > lists)
+            assertEquals(listOf("session", "fresh"), repository.state.value.sessions.map { it.text("id") })
+            assertEquals(1, transport.connects)
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun anEarlyConnectionThatFailsLeavesTheReconnectToTheRestore() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.failureOnConnect = R.string.remote_connection_error
+        }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val repository = gatedRepository(transport, gate, savedHost(), io)
+            repository.setNetwork("wifi", true)
+            repository.setForeground(true)
+            val stack = mutableListOf<androidx.navigation3.runtime.NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"))
+            val navigator = RemoteNavigator(repository, stack, backgroundScope)
+            navigator.restore()
+            runUntil { transport.connects == 1 }
+            transport.failureOnConnect = null
+            // Longer than any backoff, while the saved navigation still loads.
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(1, transport.connects)
+            assertNull(repository.state.value.reconnectAt)
+            assertEquals(RemoteSelection(), repository.state.value.selection)
+
+            gate.countDown()
+            runUntil { repository.state.value.selection == RemoteSelection("host") && !repository.state.value.loading }
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(RemoteSelection("host"), repository.state.value.selection)
+            assertTrue(repository.state.value.connected)
+            assertEquals(2, transport.connects)
+            navigator.reconcile(repository.state.value)
+            assertEquals(RemoteNavKey.Projects("host"), stack.last())
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun aRestoreDoesNotRetryADeviceItsEarlyConnectionFoundPaused() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.failureOnConnect = R.string.remote_device_paused
+        }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val repository = gatedRepository(transport, gate, savedHost(), io)
+            val restoring = async { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
+            runUntil { transport.connects == 1 }
+            assertEquals("host", repository.state.value.deniedRouteId)
+            gate.countDown()
+            runUntil { restoring.isCompleted }
+            restoring.await()
+            runCurrent()
+            assertEquals(1, transport.connects)
+            assertEquals("host", repository.state.value.deniedRouteId)
+            assertEquals(R.string.remote_device_paused, repository.state.value.error)
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun aRestoreReadsItsSnapshotAlongsideTheListsAndTheControlsBeforeItsReply() = runTest {
+        val transport =
+            Transport().apply { capabilities = setOf(CONFIGURATION_CAPABILITY, ADVISOR_CAPABILITY, COMMANDS_CAPABILITY) }
+        configure(transport)
+        quoteMessages(transport)
+        val answer = transport.response
+        val held = mutableMapOf<String, JsonObject>()
+        transport.response = { request ->
+            when (val type = request.text("type")) {
+                "projects.list", "sessions.list", "session.snapshot" -> {
+                    held[type] = request
+                    null
+                }
+                "session.configuration.get" -> configurationData()
+                "session.commands.get" -> commandData()
+                "session.advisor.get" -> advisorData()
+                else -> answer(request)
+            }
+        }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val restoring = async { repository.activate(chat, ActivationMode.RESTORE) }
+        runCurrent()
+        // The snapshot and the session list go out with the projects, before any reply.
+        assertEquals(
+            listOf("session.snapshot", "sessions.list", "projects.list"),
+            transport.sent.map { it.text("type") }.filter { it in held },
+        )
+        assertEquals(setOf("session.snapshot", "sessions.list", "projects.list"), held.keys)
+
+        transport.result(
+            held.getValue("projects.list"),
+            JsonObject(data("projects", listOf(project)) + ("capabilities" to JsonArray(emptyList()))),
+        )
+        runCurrent()
+        // Nothing is selected before the lists confirm the chat.
+        assertNull(repository.state.value.selection.sessionId)
+        transport.result(held.getValue("sessions.list"), data("sessions", listOf(session())))
+        runCurrent()
+        assertEquals(chat, repository.state.value.selection)
+        assertTrue(repository.state.value.loading)
+        // The controls are read while the snapshot still is.
+        val sent = transport.sent.map { it.text("type") }
+        for (type in listOf("session.configuration.get", "session.advisor.get", "session.commands.get"))
+            assertTrue(type, type in sent)
+        assertEquals(1, sent.count { it == "session.snapshot" })
+
+        val snapshot = held.getValue("session.snapshot")
+        transport.result(snapshot, checkNotNull(answer(snapshot)))
+        assertEquals(chat, restoring.await())
+        runCurrent()
+        val state = repository.state.value
+        assertFalse(state.loading)
+        assertEquals(listOf("a", "b"), state.messages.map { it.text("id") })
+        assertEquals("model", state.configuration?.model?.id)
+        assertEquals(listOf("review"), state.commands.map { it.name })
+        assertNotNull(state.advisor)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun aRestoreOfAMissingSessionDropsItsHeldSnapshotAndLandsOnTheProject() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("other")))
+        quoteMessages(transport)
+        val answer = transport.response
+        val snapshots = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                snapshots += request
+                null
+            } else answer(request)
+        }
+        val repository = repository(transport)
+        val parent = RemoteSelection("host", "project")
+        assertEquals(parent, repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.RESTORE))
+        runCurrent()
+        // It went out alongside the lists and was dropped with the chat.
+        assertEquals(1, snapshots.size)
+        assertEquals(parent, repository.state.value.selection)
+
+        // Its late reply, and an event of the gone chat, change nothing.
+        transport.result(snapshots.single(), checkNotNull(answer(snapshots.single())))
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 1, "status" to "running",
+            )
+        )
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(parent, state.selection)
+        assertNull(state.session)
+        assertTrue(state.messages.isEmpty())
+        assertFalse(state.loading)
+        assertEquals(listOf("other"), state.sessions.map { it.text("id") })
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun aLiveOpenWhoseIdChangesDropsTheSnapshotReadAlongside() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session()), opened = session("moved"))
+        quoteMessages(transport)
+        val answer = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session") {
+                held += request
+                null
+            } else answer(request)
+        }
+        val repository = repository(transport)
+        val moved = RemoteSelection("host", "project", "moved")
+        assertEquals(moved, repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN))
+        runCurrent()
+        // The open goes out first, the snapshot of the live chat right behind it; the open's ID wins.
+        val sent = transport.sent.map { it.text("type") }
+        assertTrue(sent.indexOf("sessions.open") < sent.indexOf("session.snapshot"))
+        assertEquals(
+            listOf("session", "moved"),
+            transport.sent.filter { it.text("type") == "session.snapshot" }.map { it.text("sessionId") },
+        )
+        assertEquals(moved, repository.state.value.selection)
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+
+        transport.result(held.single(), JsonObject(checkNotNull(answer(held.single())) + ("messages" to JsonArray(emptyList()))))
+        runCurrent()
+        assertEquals(moved, repository.state.value.selection)
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+    }
+
+    @Test
+    fun historyOpenPreservesBothDraftsAndLateSourceFlushUpdatesRecovery() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("old", origin = "history")), opened = session("fork"))
+        val sourceKey = DraftKey("host", "old")
+        val canonicalKey = DraftKey("host", "fork")
+        val drafts = Drafts().apply {
+            values = mapOf(
+                sourceKey to StoredDraft(text = "source"),
+                canonicalKey to StoredDraft(text = "canonical", mutationId = "unconfirmed", submittedText = "sent"),
+            )
+        }
+        val repository = repository(transport, drafts)
+        val source = RemoteSelection("host", "project", "old")
+        val canonical = source.copy(sessionId = "fork")
+        assertEquals(canonical, repository.activate(source, ActivationMode.USER_OPEN))
+        assertEquals("canonical", repository.state.value.draft)
+        assertEquals("source", repository.state.value.preparedText)
+        repository.draft(source, "late source")
+        assertEquals("late source", repository.state.value.preparedText)
+        assertEquals("canonical", repository.state.value.draft)
+        repository.flush()
+        assertEquals("late source", drafts.values.getValue(sourceKey).text)
+        assertEquals("canonical", drafts.values.getValue(canonicalKey).text)
+        assertEquals("unconfirmed", drafts.values.getValue(canonicalKey).mutationId)
+        repository.cancelSelection()
+        assertNull(repository.state.value.preparedText)
+    }
+
+    @Test
+    fun aHistoryOpenWaitsForTheForkBeforeItsSnapshot() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("old", origin = "history")), opened = session("fork"))
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.open") {
+                opens += request
+                null
+            } else answer(request)
+        }
+        val repository = repository(transport)
+        val opening = async { repository.activate(RemoteSelection("host", "project", "old"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertEquals(1, opens.size)
+        assertEquals(0, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        assertEquals(RemoteSelection("host", "project", "fork"), opening.await())
+        assertEquals(
+            listOf("fork"),
+            transport.sent.filter { it.text("type") == "session.snapshot" }.map { it.text("sessionId") },
+        )
+    }
+
+    @Test
+    fun aRevisionGapAfterAConcurrentOpenAsksForOneResync() = runTest {
+        val transport = Transport()
+        configure(transport)
+        quoteMessages(transport)
+        val quoted = transport.response
+        var revision = 5
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                "sessions.open" -> {
+                    opens += request
+                    null
+                }
+                "session.snapshot" -> JsonObject(checkNotNull(quoted(request)) + ("revision" to JsonPrimitive(revision)))
+                else -> quoted(request)
+            }
+        }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val opening = async { repository.activate(chat, ActivationMode.USER_OPEN) }
+        runCurrent()
+        // The snapshot answered before the open did; nothing is selected yet.
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertNull(repository.state.value.selection.sessionId)
+        // Revision 7 of the chat arrives meanwhile: 6 never does.
+        revision = 7
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 7, "status" to "running",
+            )
+        )
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+
+        transport.result(opens.single(), checkNotNull(quoted(opens.single())))
+        assertEquals(chat, opening.await())
+        runCurrent()
+        // The held snapshot (revision 5) is applied, and the gap to 7 asks for exactly one more.
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+        assertFalse(repository.state.value.loading)
+    }
+
+    /** A snapshot at [revision] with messages a and b; the requests of [held] types get no reply. */
+    private fun heldOpenTransport(revision: () -> Int, vararg held: String): Pair<Transport, MutableList<JsonObject>> {
+        val transport = Transport()
+        configure(transport)
+        quoteMessages(transport)
+        val quoted = transport.response
+        val waiting = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                in held -> {
+                    waiting += request
+                    null
+                }
+                "session.snapshot" -> JsonObject(checkNotNull(quoted(request)) + ("revision" to JsonPrimitive(revision())))
+                else -> quoted(request)
+            }
+        }
+        return transport to waiting
+    }
+
+    private fun streamed(revision: Int, text: String) =
+        Wire.objectOf(
+            "type" to "event", "kind" to "message.upsert", "sessionId" to "session", "revision" to revision,
+            "message" to Wire.objectOf("id" to "streaming", "role" to "assistant", "text" to text, "state" to "streaming"),
+        )
+
+    private fun shownText(repository: DefaultRemoteRepository) =
+        repository.state.value.messages.lastOrNull()?.optionalText("text")
+
+    @Test
+    fun streamingUpsertsPublishAtMostOncePerSixteenMillisecondsAndTheLastOneWins() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        advanceTimeBy(100)
+
+        // The first upsert after a quiet spell shows at once.
+        transport.deliver(streamed(1, "a"))
+        runCurrent()
+        assertEquals("a", shownText(repository))
+
+        // Ten more in the same millisecond wait for one trailing publish.
+        for (index in 2..11) transport.deliver(streamed(index, "a".repeat(index)))
+        runCurrent()
+        assertEquals("a", shownText(repository))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS - 1)
+        runCurrent()
+        assertEquals("a", shownText(repository))
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals("a".repeat(11), shownText(repository))
+
+        // The trailing publish counts as a publish: the next upsert 5 ms later waits for 16 ms after it.
+        advanceTimeBy(5)
+        transport.deliver(streamed(12, "late"))
+        runCurrent()
+        assertEquals("a".repeat(11), shownText(repository))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS - 5)
+        runCurrent()
+        assertEquals("late", shownText(repository))
+
+        // An upsert 16 ms or more after the last publish shows at once, with no trailing publish left.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(streamed(13, "again"))
+        runCurrent()
+        assertEquals("again", shownText(repository))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals("again", shownText(repository))
+    }
+
+    @Test
+    fun anyOtherEventPublishesAtOnceWithTheWaitingUpsertAndCancelsTheTrailingPublish() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        advanceTimeBy(100)
+        transport.deliver(streamed(1, "a"))
+        transport.deliver(streamed(2, "ab"))
+        runCurrent()
+        assertEquals("a", shownText(repository))
+
+        transport.deliver(event(3, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertEquals("running", repository.state.value.status)
+        assertEquals("ab", shownText(repository))
+        // The status publish is the new reference: an upsert right after it waits, and one
+        // publish follows, not two.
+        transport.deliver(streamed(4, "abc"))
+        runCurrent()
+        assertEquals("ab", shownText(repository))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals("abc", shownText(repository))
+    }
+
+    @Test
+    fun aTrailingPublishIsDroppedWhenTheChatChanges() = runTest {
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = chatRepository(transport)
+        advanceTimeBy(100)
+        transport.deliver(streamed(1, "a"))
+        transport.deliver(streamed(2, "ab"))
+        runCurrent()
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS * 2)
+        runCurrent()
+
+        assertEquals("other", repository.state.value.selection.sessionId)
+        assertNotEquals("ab", shownText(repository))
+    }
+
+    private fun upsert(revision: Int, id: String) =
+        Wire.objectOf(
+            "type" to "event", "kind" to "message.upsert", "sessionId" to "session", "revision" to revision,
+            "message" to Wire.objectOf("id" to id, "role" to "assistant", "text" to "Answer $id", "state" to "complete"),
+        )
+
+    private fun running(revision: Int) =
+        Wire.objectOf(
+            "type" to "event", "kind" to "session.status", "sessionId" to "session",
+            "revision" to revision, "status" to "running",
+        )
+
+    private class NavigationSaves : NavigationSnapshotStorage {
+        val saves = mutableListOf<Map<String, NavigationSnapshot>>()
+
+        override fun load() = emptyMap<String, NavigationSnapshot>()
+
+        override fun save(snapshots: Map<String, NavigationSnapshot>) {
+            saves += snapshots
+        }
+
+        fun lastText() = saves.last().getValue("host").messages.lastOrNull()?.optionalText("text")
+    }
+
+    /** A chat open and running, with the writes its open caused done. */
+    private suspend fun TestScope.streamingChat(
+        storage: NavigationSaves,
+    ): Pair<Transport, DefaultRemoteRepository> {
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = repository(transport, navigationStorage = storage)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        transport.deliver(running(1))
+        advanceTimeBy(5_000)
+        runCurrent()
+        return transport to repository
+    }
+
+    @Test
+    fun streamedUpsertsWriteTheNavigationSnapshotAtMostOncePerFifteenSeconds() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        val before = storage.saves.size
+        assertTrue(before > 0)
+
+        // 100 upserts spread over 15 s.
+        for (index in 1..100) {
+            transport.deliver(upsert(1 + index, "m$index"))
+            advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS / 100)
+        }
+        runCurrent()
+        assertTrue("${storage.saves.size - before} writes", storage.saves.size - before <= 1)
+
+        // The tail reaches storage within the interval of the last event.
+        advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS)
+        runCurrent()
+        assertTrue(storage.saves.size - before <= 2)
+        assertEquals("Answer m100", storage.lastText())
+        // Nothing streamed since: no further writes.
+        val settled = storage.saves.size
+        advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS * 4)
+        runCurrent()
+        assertEquals(settled, storage.saves.size)
+    }
+
+    @Test
+    fun goingToTheBackgroundWritesTheStreamedTailAtOnce() = runTest {
+        val storage = NavigationSaves()
+        val (transport, repository) = streamingChat(storage)
+        transport.deliver(upsert(2, "tail"))
+        runCurrent()
+        val before = storage.saves.size
+
+        repository.setForeground(false)
+        runCurrent()
+
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals("Answer tail", storage.lastText())
+    }
+
+    @Test
+    fun theEndOfARunWritesTheNavigationSnapshot() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        transport.deliver(upsert(2, "last"))
+        runCurrent()
+        val before = storage.saves.size
+
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 3, "status" to "idle",
+            )
+        )
+        // Within the write queue's one second, far sooner than the streaming interval.
+        advanceTimeBy(1_100)
+        runCurrent()
+
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals("Answer last", storage.lastText())
+        assertEquals("idle", storage.saves.last().getValue("host").sessions.first().text("status"))
+    }
+
+    @Test
+    fun anotherSessionsRepeatedStatusWritesNothingButItsTransitionDoes() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        val before = storage.saves.size
+        fun other(revision: Int, status: String) =
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "other",
+                "revision" to revision, "status" to status,
+            )
+
+        transport.deliver(other(1, "idle"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(before, storage.saves.size)
+
+        transport.deliver(other(2, "running"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals(
+            "running",
+            storage.saves.last().getValue("host").sessions.single { it.text("id") == "other" }.text("status"),
+        )
+    }
+
+    @Test
+    fun eventsThatArriveWhileARestoreHoldsItsSnapshotReachTheChat() = runTest {
+        val (transport, held) = heldOpenTransport({ 5 }, "projects.list")
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val restoring = async { repository.activate(chat, ActivationMode.RESTORE) }
+        runCurrent()
+        // The snapshot (revision 5) is in; the project list is not, so no Timeline exists yet.
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertNull(repository.state.value.selection.sessionId)
+        transport.deliver(upsert(6, "c"))
+        transport.deliver(running(7))
+        runCurrent()
+
+        transport.result(held.single(), JsonObject(data("projects", listOf(project)) + ("capabilities" to JsonArray(emptyList()))))
+        assertEquals(chat, restoring.await())
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(listOf("a", "b", "c"), state.messages.map { it.text("id") })
+        assertEquals("running", state.status)
+        assertFalse(state.loading)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun eventsThatArriveWhileALiveOpenRunsReachTheChat() = runTest {
+        val (transport, held) = heldOpenTransport({ 5 }, "sessions.open")
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val opening = async { repository.activate(chat, ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertNull(repository.state.value.selection.sessionId)
+        transport.deliver(upsert(6, "c"))
+        transport.deliver(running(7))
+        runCurrent()
+
+        transport.result(held.single(), Wire.objectOf("kind" to "session", "session" to session()))
+        assertEquals(chat, opening.await())
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(listOf("a", "b", "c"), state.messages.map { it.text("id") })
+        assertEquals("running", state.status)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun moreEventsThanAHeldSnapshotKeepsAskForOneResync() = runTest {
+        var revision = 5
+        val (transport, held) = heldOpenTransport({ revision }, "projects.list")
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val restoring = async { repository.activate(chat, ActivationMode.RESTORE) }
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+        // Revisions 6 to 205: the oldest ones no longer fit, so the rest leaves a gap.
+        for (next in 6..205) transport.deliver(running(next))
+        revision = 205
+        runCurrent()
+
+        transport.result(held.single(), JsonObject(data("projects", listOf(project)) + ("capabilities" to JsonArray(emptyList()))))
+        assertEquals(chat, restoring.await())
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+        assertFalse(repository.state.value.loading)
+    }
+
+    @Test
+    fun aHeldSnapshotRefusedByTheHostIsAskedForOnceMore() = runTest {
+        val transport = Transport()
+        configure(transport)
+        quoteMessages(transport)
+        var refusals = 1
+        transport.failure = { if (it.text("type") == "session.snapshot" && refusals-- > 0) "not_found" else null }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        assertEquals(chat, repository.activate(chat, ActivationMode.USER_OPEN))
+        runCurrent()
+        // The one read alongside the open was refused before the open revived the chat.
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(chat, repository.state.value.selection)
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aCachedChatTheHostRefusesShowsOnlyTheSnapshotsError() = runTest {
+        val transport =
+            Transport().apply { capabilities = setOf(CONFIGURATION_CAPABILITY, ADVISOR_CAPABILITY, COMMANDS_CAPABILITY) }
+        configure(transport, sessions = listOf(session(), session("other")))
+        quoteMessages(transport)
+        val answer = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.configuration.get" -> configurationData(request.text("sessionId"))
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                "session.advisor.get" -> JsonObject(advisorData() + ("sessionId" to JsonPrimitive(request.text("sessionId"))))
+                else -> answer(request)
+            }
+        }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        repository.activate(chat)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.error)
+
+        // The chat ended meanwhile: the host refuses every read of it.
+        transport.failure = {
+            if (it.optionalText("sessionId") == "session" && it.text("type") != "sessions.open") "not_found" else null
+        }
+        assertEquals(chat, repository.activate(chat, ActivationMode.USER_OPEN))
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(chat, state.selection)
+        assertEquals(listOf("a", "b"), state.messages.map { it.text("id") })
+        assertEquals(R.string.remote_request_error, state.error)
+        assertFalse(state.configurationLoading)
+        assertFalse(state.advisorLoading)
+        assertFalse(state.commandsLoading)
+    }
+
+    @Test
+    fun aChatLeftBehindIsPreviewedWithItsDraft() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(), session("other"), session("old", origin = "history")))
+        quoteMessages(transport)
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        assertNull(repository.peekCachedChat(chat))
+        repository.activate(chat)
+        runCurrent()
+        repository.draft("half typed")
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val preview = checkNotNull(repository.peekCachedChat(chat))
+        assertEquals(listOf("a", "b"), preview.messages.map { it.text("id") })
+        assertEquals("half typed", preview.draft)
+        assertEquals("session", preview.session?.text("id"))
+        // A history session known only from its row previews without messages, to say it opens as a copy.
+        val history = checkNotNull(repository.peekCachedChat(RemoteSelection("host", "project", "old")))
+        assertTrue(history.messages.isEmpty())
+        assertEquals("history", history.session?.text("origin"))
+        assertNull(repository.peekCachedChat(RemoteSelection("host", "project", "unknown")))
+        // Peeking never touches the repository's own state.
+        assertFalse(repository.state.value.preview)
+        assertEquals(RemoteSelection("host", "project", "other"), repository.state.value.selection)
+    }
+
+    /**
+     * [configure], with the named projects of [lists] and each one's sessions, read from [lists] at
+     * each request. A sessions.list that [hold] picks gets no reply; it waits in the returned list
+     * for the test to answer.
+     */
+    private fun configureProjects(
+        transport: Transport,
+        lists: Map<String, List<JsonObject>>,
+        hold: (JsonObject) -> Boolean = { false },
+        opened: JsonObject = session(),
+    ): MutableList<JsonObject> {
+        configure(transport, opened = opened)
+        val held = mutableListOf<JsonObject>()
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" ->
+                    data("projects", lists.keys.map { Wire.objectOf("id" to it, "name" to "Project $it") })
+                "sessions.list" ->
+                    if (hold(request)) {
+                        held += request
+                        null
+                    } else data("sessions", lists[request.text("projectId")].orEmpty())
+                else -> original(request)
+            }
+        }
+        return held
+    }
+
+    private fun Transport.lists(projectId: String? = null) =
+        sent.count { it.text("type") == "sessions.list" && (projectId == null || it.text("projectId") == projectId) }
+
+    private fun updated(session: JsonObject, at: Long) = JsonObject(session + ("updatedAt" to JsonPrimitive(at)))
+
+    @Test
+    fun returningToProjectsWithinThirtySecondsReadsNoListsUntilAReconnect() = runTest {
+        val transport = Transport()
+        configureProjects(
+            transport,
+            mapOf("a" to listOf(session("one", projectId = "a")), "b" to listOf(session("two", projectId = "b"))),
+        )
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val project = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(2, transport.lists())
+
+        // Into a project and back, twice: the lists the Projects page read are still fresh.
+        repeat(2) {
+            assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+            assertEquals(root, repository.activate(root))
+            runCurrent()
+            advanceTimeBy(10_000)
+        }
+        assertEquals(2, transport.lists())
+
+        // Once they are 30 s old, a return reads them again.
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        assertEquals(4, transport.lists())
+
+        // A reconnect reads them at once.
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertEquals(6, transport.lists())
+    }
+
+    @Test
+    fun aProjectOpenedWhileTheProjectsPageReadsKeepsTheLateRepliesForTheNextOpen() = runTest {
+        val transport = Transport()
+        val held = configureProjects(
+            transport,
+            mapOf(
+                "a" to listOf(session("one", projectId = "a")),
+                "b" to listOf(session("two", projectId = "b"), session("three", projectId = "b")),
+            ),
+            // The Projects page's read of b is still on its way.
+            hold = { it.text("projectId") == "b" && transport.lists("b") == 1 },
+        )
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(1, held.size)
+
+        // Opening a project the Projects page already read asks the Mac for nothing.
+        val a = RemoteSelection("host", "a")
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        assertEquals(1, transport.lists("a"))
+        assertEquals(listOf("one"), repository.state.value.sessions.map { it.text("id") })
+
+        // The reply that comes after the open is kept, not dropped with the old selection.
+        transport.result(
+            held.single(),
+            data("sessions", listOf(session("two", projectId = "b"), session("three", projectId = "b"))),
+        )
+        runCurrent()
+        assertEquals(
+            listOf("two", "three"),
+            repository.state.value.projectSessions.getValue("b").sessions.map { it.text("id") },
+        )
+        val b = RemoteSelection("host", "b")
+        assertEquals(b, repository.activate(b, ActivationMode.USER_OPEN))
+        assertEquals(1, transport.lists("b"))
+        assertEquals(listOf("two", "three"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun projectListsKeepHostWorkersAsTerminalSessions() = runTest {
+        val transport = Transport()
+        configureProjects(
+            transport,
+            mapOf("a" to listOf(session("worker", "worker", "running", projectId = "a"))),
+        )
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = repository.state.value.projectChats.single().session
+        assertEquals("tui", chat.text("origin"))
+        assertTrue(isHostWorker(chat))
+        assertTrue(isHostWorker(repository.state.value.projectSessions.getValue("a").sessions.single()))
+    }
+
+    @Test
+    fun featuredChatsStayVerifiedUntilTheirProjectsReplyReplacesThem() = runTest {
+        val transport = Transport()
+        val lists =
+            mutableMapOf(
+                "a" to listOf(session("waits", status = "waiting", projectId = "a")),
+                "b" to listOf(session("runs", status = "running", projectId = "b")),
+            )
+        var holding = false
+        val held = configureProjects(transport, lists, hold = { holding })
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        repository.activate(root, ActivationMode.USER_OPEN)
+        runCurrent()
+        assertEquals(listOf("waits", "runs"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertTrue(repository.state.value.projectChats.all { it.verified })
+
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        holding = true
+        repository.activate(RemoteSelection("host", "a"), ActivationMode.USER_OPEN)
+        repository.activate(root)
+        runCurrent()
+        assertEquals(2, held.size)
+        // Waiting and running chats keep their place while the lists come in.
+        assertEquals(listOf("waits", "runs"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertTrue(repository.state.value.projectChats.all { it.verified })
+
+        transport.result(
+            held.first { it.text("projectId") == "a" },
+            data("sessions", listOf(session("waits", projectId = "a"))),
+        )
+        runCurrent()
+        // Only a's reply replaced its row: it now waits for nothing and drops behind b's running chat.
+        assertEquals(listOf("runs", "waits"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertTrue(repository.state.value.projectChats.all { it.verified })
+    }
+
+    @Test
+    fun projectSessionsKeepEveryListedSessionWithItsCounts() = runTest {
+        val transport = Transport()
+        val many =
+            List(2) { session("waiting$it", status = "waiting", projectId = "a") } +
+                List(3) { session("running$it", status = "running", projectId = "a") } +
+                List(10) { session("idle$it", projectId = "a") }
+        configureProjects(transport, mapOf("a" to many, "b" to listOf(session("other", projectId = "b"))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val state = repository.state.value
+        // The Projects page features 12 chats; the aggregate keeps all 16.
+        assertEquals(12, state.projectChats.size)
+        val a = state.projectSessions.getValue("a")
+        assertEquals(15, a.sessions.size)
+        assertTrue(a.verified)
+        assertEquals(SessionCounts(waiting = 2, running = 3), a.counts)
+        assertEquals("Project a", a.projectName)
+        assertEquals(SessionCounts(), state.projectSessions.getValue("b").counts)
+
+        // Live status events patch the rows and the counts.
+        fun status(sessionId: String, value: String) =
+            transport.deliver(
+                Wire.objectOf(
+                    "type" to "event", "sessionId" to sessionId, "revision" to 1,
+                    "kind" to "session.status", "status" to value,
+                )
+            )
+        status("idle0", "running")
+        status("waiting0", "idle")
+        val patched = repository.state.value.projectSessions.getValue("a")
+        assertEquals(SessionCounts(waiting = 1, running = 4), patched.counts)
+        assertEquals("running", patched.sessions.first { it.text("id") == "idle0" }.text("status"))
+
+        // A dropped connection leaves the rows unconfirmed and without counts.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val dropped = repository.state.value.projectSessions.getValue("a")
+        assertFalse(dropped.verified)
+        assertNull(dropped.counts)
+        assertEquals(15, dropped.sessions.size)
+    }
+
+    @Test
+    fun projectSessionsRestoredFromTheSavedNavigationCarryNoCounts() = runTest {
+        val transport = Transport().also {
+            configureNamed(it, sessions = listOf(session(), session("fresh", status = "waiting")))
+            it.readyOnConnect = false
+        }
+        val saved = savedHost(projectId = "project", sessions = listOf(session(status = "waiting")))
+        val repository = repository(transport, navigationStorage = SavedNavigation(saved))
+        runCurrent()
+        val opening = async { repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val restored = repository.state.value.projectSessions.getValue("project")
+        assertEquals(listOf("session"), restored.sessions.map { it.text("id") })
+        assertFalse(restored.verified)
+        assertNull(restored.counts)
+
+        transport.listener.ready(emptySet())
+        opening.await()
+        runCurrent()
+        val read = repository.state.value.projectSessions.getValue("project")
+        assertEquals(listOf("session", "fresh"), read.sessions.map { it.text("id") })
+        assertTrue(read.verified)
+        assertEquals(SessionCounts(waiting = 1), read.counts)
+    }
+
+    @Test
+    fun anUnknownSessionWhileAChatIsOpenReadsOnlyTheProjectThatHoldsIt() = runTest {
+        val transport = Transport()
+        val lists =
+            mutableMapOf(
+                "a" to listOf(session("chat", projectId = "a")),
+                "b" to listOf(updated(session("old", projectId = "b"), 100)),
+                "c" to listOf(updated(session("older", projectId = "c"), 50)),
+            )
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = RemoteSelection("host", "a", "chat")
+        assertEquals(chat, repository.activate(chat))
+        runCurrent()
+        assertEquals(3, transport.lists())
+        fun status(sessionId: String, revision: Long = 1) =
+            transport.deliver(
+                Wire.objectOf(
+                    "type" to "event", "sessionId" to sessionId, "revision" to revision,
+                    "kind" to "session.status", "status" to "running",
+                )
+            )
+
+        // Within 30 s of the lists, a session none holds waits for them to age, with no second report.
+        lists["b"] = lists.getValue("b") + updated(session("new", status = "running", projectId = "b"), 200)
+        status("new")
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(3, transport.lists())
+
+        // Started in b, the project active most lately, which is read first and alone.
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        runCurrent()
+        assertEquals(4, transport.lists())
+        assertEquals(2, transport.lists("b"))
+        val b = repository.state.value.projectSessions.getValue("b")
+        assertEquals(listOf("old", "new"), b.sessions.map { it.text("id") })
+        assertEquals(SessionCounts(running = 1), b.counts)
+        assertEquals(chat, repository.state.value.selection)
+    }
+
+    private fun Transport.status(sessionId: String, value: String = "running", revision: Long = 1) =
+        deliver(
+            Wire.objectOf(
+                "type" to "event", "sessionId" to sessionId, "revision" to revision,
+                "kind" to "session.status", "status" to value,
+            )
+        )
+
+    @Test
+    fun aChatCreatedInAProjectTheProjectsPageReadShowsInItsListOnTheWayBack() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists, opened = session("new", projectId = "a"))
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        assertEquals(1, transport.lists("a"))
+
+        lists["a"] = listOf(session("new", projectId = "a")) + lists.getValue("a")
+        assertEquals(RemoteSelection("host", "a", "new"), repository.createSession("host", "a"))
+        runCurrent()
+        // Back to the project: the Projects page's read of it no longer stands in for one.
+        repository.cancelSelection()
+        assertEquals(a, repository.activate(a))
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("new", "old"), repository.state.value.sessions.map { it.text("id") })
+        assertEquals(
+            listOf("new", "old"),
+            repository.state.value.projectSessions.getValue("a").sessions.map { it.text("id") },
+        )
+    }
+
+    @Test
+    fun anUnknownSessionReadForTheProjectOnScreenShowsInItsList() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+
+        // A chat started on the Mac in the project on screen.
+        lists["a"] = lists.getValue("a") + session("started", status = "running", projectId = "a")
+        transport.status("started")
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("old", "started"), repository.state.value.sessions.map { it.text("id") })
+        assertTrue(repository.state.value.sessionsFresh)
+
+        // The cache holds the list on screen, so the next open needs no read and shows it.
+        repository.cancelSelection()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("old", "started"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun aCachedSessionsListIsReadOnceBehindItAndNotAgainWithinFiveSeconds() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(1, transport.lists("a"))
+
+        // A chat started on the Mac since the Projects page read the list.
+        advanceTimeBy(SESSION_REFRESH_INTERVAL_MILLIS)
+        lists["a"] = listOf(session("started", projectId = "a")) + lists.getValue("a")
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        // The cached list shows at once; its read follows.
+        assertEquals(listOf("old"), repository.state.value.sessions.map { it.text("id") })
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("started", "old"), repository.state.value.sessions.map { it.text("id") })
+        assertTrue(repository.state.value.sessionsFresh)
+
+        // Back and in again within five seconds: the list just read is shown without a read.
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        advanceTimeBy(SESSION_REFRESH_INTERVAL_MILLIS - 1_000)
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("started", "old"), repository.state.value.sessions.map { it.text("id") })
+
+        // Another project the Projects page read long enough ago is read too, right after.
+        val b = RemoteSelection("host", "b")
+        assertEquals(b, repository.activate(b, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(2, transport.lists("b"))
+    }
+
+    @Test
+    fun aNewlySharedProjectAppearsWithoutAReconnect() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("one", projectId = "a")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        val connects = transport.connects
+        fun projectLists() = transport.sent.count { it.text("type") == "projects.list" }
+        val read = projectLists()
+
+        // Within ten seconds, the reused list is not read again.
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        assertEquals(read, projectLists())
+
+        lists["c"] = listOf(session("shared", status = "waiting", projectId = "c"))
+        advanceTimeBy(PROJECTS_REVALIDATE_MILLIS)
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        assertEquals(read + 1, projectLists())
+        assertEquals(listOf("a", "c"), repository.state.value.projects.map { it.text("id") })
+        // Its sessions are read along with it, though the other lists are not 30 s old.
+        assertEquals(1, transport.lists("c"))
+        assertEquals(1, transport.lists("a"))
+        assertEquals(listOf("shared"), repository.state.value.projectSessions.getValue("c").sessions.map { it.text("id") })
+        assertEquals(connects, transport.connects)
+
+        // An unchanged list changes nothing on screen.
+        advanceTimeBy(PROJECTS_REVALIDATE_MILLIS)
+        val projects = repository.state.value.projects
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(read + 2, projectLists())
+        assertSame(projects, repository.state.value.projects)
+    }
+
+    @Test
+    fun aProjectListThatArrivesDuringAnOpenIsNotLostToIt() = runTest {
+        val transport = Transport()
+        var holdB = true
+        val lists = mutableMapOf("a" to listOf(session("one", projectId = "a")), "b" to listOf(session("two", projectId = "b")))
+        val heldSessions = configureProjects(transport, lists, hold = { holdB && it.text("projectId") == "b" })
+        var holdProjects = false
+        val heldProjects = mutableListOf<JsonObject>()
+        val answer = transport.response
+        transport.response = { request ->
+            if (holdProjects && request.text("type") == "projects.list") null.also { heldProjects += request }
+            else answer(request)
+        }
+        fun projects(ids: Collection<String>) = data("projects", ids.map { Wire.objectOf("id" to it, "name" to "Project $it") })
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        val b = RemoteSelection("host", "b")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+
+        // Opening a project reads the reused project list behind it; that reply waits.
+        advanceTimeBy(PROJECTS_REVALIDATE_MILLIS)
+        holdProjects = true
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        val revalidation = heldProjects.single()
+
+        // Another project, whose list the Projects page never got, is opened and waits for it.
+        val opening = async { repository.activate(b, ActivationMode.USER_OPEN) }
+        runCurrent()
+        val bList = heldSessions.last()
+        // A project shared on the Mac meanwhile comes with the reply, while the open still runs.
+        lists["c"] = listOf(session("three", projectId = "c"))
+        holdProjects = false
+        transport.result(revalidation, projects(lists.keys))
+        runCurrent()
+        holdB = false
+        transport.result(bList, data("sessions", lists.getValue("b")))
+        assertEquals(b, opening.await())
+        runCurrent()
+
+        // Back on Projects at once, the new project is there.
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        assertEquals(listOf("a", "b", "c"), repository.state.value.projects.map { it.text("id") })
+    }
+
+    @Test
+    fun anUnknownSessionOnTheSessionsListReadsThatListAtOnce() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(1, transport.lists("a"))
+
+        // Started on the Mac once the list is a few seconds old: read at once.
+        advanceTimeBy(SESSION_REFRESH_INTERVAL_MILLIS)
+        lists["a"] = lists.getValue("a") + session("started", status = "running", projectId = "a")
+        transport.status("started")
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("old", "started"), repository.state.value.sessions.map { it.text("id") })
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(1, transport.lists("b"))
+
+        // Reported just after a read, the list is read again once it is five seconds old.
+        lists["a"] = lists.getValue("a") + session("another", status = "running", projectId = "a")
+        transport.status("another")
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        advanceTimeBy(SESSION_REFRESH_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(3, transport.lists("a"))
+        assertEquals(listOf("old", "started", "another"), repository.state.value.sessions.map { it.text("id") })
+        assertEquals(1, transport.lists("b"))
+    }
+
+    @Test
+    fun pullToRefreshReadsTheListsOnScreenAgain() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("one", projectId = "a")), "b" to listOf(session("two", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        fun projectLists() = transport.sent.count { it.text("type") == "projects.list" }
+        val read = projectLists()
+
+        // On Projects: the projects and every project's list, however fresh.
+        repository.revalidateLists()
+        runCurrent()
+        assertEquals(read + 1, projectLists())
+        assertEquals(4, transport.lists())
+
+        // On a project's Sessions list: the projects and that list.
+        val a = RemoteSelection("host", "a")
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        repository.revalidateLists()
+        runCurrent()
+        assertEquals(read + 2, projectLists())
+        assertEquals(3, transport.lists("a"))
+        assertEquals(2, transport.lists("b"))
+    }
+
+    @Test
+    fun aSessionNoProjectHoldsIsLookedForOnceAWhile() = runTest {
+        val transport = Transport()
+        val lists = mapOf("a" to listOf(session("chat", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = RemoteSelection("host", "a", "chat")
+        assertEquals(chat, repository.activate(chat))
+        runCurrent()
+        assertEquals(2, transport.lists())
+
+        // A subagent child that never registers, say, reports one status after another.
+        transport.status("child")
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(4, transport.lists())
+        assertEquals(2, transport.lists("a"))
+        transport.status("child", value = "idle", revision = 2)
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        transport.status("child", value = "running", revision = 3)
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(4, transport.lists())
+
+        // A while later it is looked for again.
+        advanceTimeBy(MISSING_SESSION_RETRY_MILLIS)
+        transport.status("child", value = "idle", revision = 4)
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(6, transport.lists())
+    }
+
+    @Test
+    fun aProjectNoLongerSharedLeavesTheProjectsPageWithinTheThrottle() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf(
+            "a" to listOf(session("one", status = "waiting", projectId = "a")),
+            "b" to listOf(session("two", status = "waiting", projectId = "b")),
+        )
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        repository.activate(root, ActivationMode.USER_OPEN)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(setOf("a", "b"), repository.state.value.projectSessions.keys)
+        assertEquals(2, transport.lists())
+
+        // The resume reads the projects again, within the lists' 30 s: b is gone, a not read again.
+        lists.remove("b")
+        val projectLists = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 1_000)
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(transport.sent.count { it.text("type") == "projects.list" } > projectLists)
+        assertEquals(2, transport.lists())
+        assertEquals(listOf("one"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertEquals(setOf("a"), repository.state.value.projectSessions.keys)
+    }
+
+    private fun userMessage(revision: Int, id: String, text: String) =
+        Wire.objectOf(
+            "type" to "event", "kind" to "message.upsert", "sessionId" to "session", "revision" to revision,
+            "message" to Wire.objectOf("id" to id, "role" to "user", "text" to text, "state" to "complete"),
+        )
+
+    /** A plain prompt whose request stays unanswered, so its send is still in flight. */
+    private suspend fun TestScope.inFlightPrompt(transport: Transport, drafts: Drafts, text: String): RemoteRepository {
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft(text)
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.prompt()
+        runCurrent()
+        return repository
+    }
+
+    @Test
+    fun keystrokesBecomeOneDelayedDraftWrite() = runTest {
+        val drafts = Drafts()
+        val repository = repository(Transport().also(::configure), drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val saves = drafts.saves
+        val typed = "A longer draft, typed one letter at a time"
+        for (length in 1..typed.length) repository.draft(typed.take(length))
+        runCurrent()
+        assertEquals(saves, drafts.saves)
+        advanceTimeBy(299)
+        runCurrent()
+        assertEquals(saves, drafts.saves)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(saves + 1, drafts.saves)
+        assertEquals(typed, drafts.values.getValue(DraftKey("host", "session")).text)
+    }
+
+    @Test
+    fun sendJournalIsWrittenAtOnceAndFlushWritesTypingStillWaitingForItsDelay() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, drafts, "Journal me")
+        val key = DraftKey("host", "session")
+        // The clock did not move: the journal is stored before the request is answered.
+        assertNotNull(drafts.values.getValue(key).mutationId)
+        assertEquals("Journal me", drafts.values.getValue(key).submittedText)
+        repository.draft("Typed after")
+        val saves = drafts.saves
+        repository.flush()
+        assertEquals("Typed after", drafts.values.getValue(key).text)
+        assertEquals(saves + 1, drafts.saves)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(saves + 1, drafts.saves)
+    }
+
+    @Test
+    fun plainPromptLeavesTheComposerAndShowsPendingUntilAcknowledgedAndInTheTimeline() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, drafts, "Hello pi")
+        assertEquals("", repository.state.value.draft)
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+        assertEquals("Hello pi", repository.state.value.pendingSend?.text)
+        assertTrue(repository.state.value.connected)
+        assertTrue(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertNull(repository.state.value.error)
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.sending)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(repository.state.value.error)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(userMessage(1, "user-1", "Hello pi"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+    }
+
+    /**
+     * A chat of two messages (`a`, `b`) whose connection was lost: stale, idle, with the composer
+     * free. [reconnect] false leaves the repository without a reason to reconnect on its own.
+     */
+    private suspend fun TestScope.offlineChat(
+        transport: Transport,
+        drafts: Drafts,
+        reconnect: Boolean = true,
+    ): RemoteRepository {
+        configure(transport)
+        quoteMessages(transport)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        if (reconnect) {
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+        }
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        assertTrue(repository.state.value.stale)
+        assertEquals("idle", repository.state.value.status)
+        return repository
+    }
+
+    /** The reconnect's snapshot lists one more message after `a` and `b`. */
+    private fun answerWithNewMessage(transport: Transport) {
+        val normal = transport.response
+        transport.response = { request ->
+            val reply = normal(request)
+            if (request.text("type") == "session.snapshot" && reply != null)
+                JsonObject(
+                    reply + ("messages" to JsonArray(
+                        (reply["messages"] as JsonArray) +
+                            Wire.objectOf("id" to "c", "role" to "user", "text" to "From the terminal", "state" to "complete")
+                    ))
+                )
+            else reply
+        }
+    }
+
+    @Test
+    fun promptTypedOfflineIsQueuedAndSentUnderTheSameRequestIdAfterTheReconnect() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        val key = DraftKey("host", "session")
+
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+
+        val queued = repository.state.value.pendingSend
+        assertEquals(PendingSendState.QUEUED, queued?.state)
+        assertEquals("Queued while offline", queued?.text)
+        assertEquals("b", queued?.afterMessageId)
+        assertEquals("", repository.state.value.draft)
+        // It is journaled but not a failed send: no warning, nothing on the wire.
+        assertFalse(repository.state.value.uncertain)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        repository.flush()
+        assertEquals(queued?.mutationId, drafts.values.getValue(key).mutationId)
+        assertEquals("Queued while offline", drafts.values.getValue(key).submittedText)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        val request = transport.sent.single { it.text("type") == "session.prompt" }
+        assertEquals(queued?.mutationId, request.text("requestId"))
+        assertEquals("Queued while offline", request.text("text"))
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("", repository.state.value.draft)
+    }
+
+    @Test
+    fun queuedPromptStaysQueuedAcrossTheReconnectUntilTheSnapshotIsIn() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Wait for the snapshot")
+        repository.prompt()
+        runCurrent()
+        val normal = transport.response
+        // The reconnect's chat snapshot is answered late.
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                held += request
+                null
+            } else normal(request)
+        }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertFalse(repository.state.value.uncertain)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        transport.result(held.last(), normal(held.last())!!)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun queuedPromptIsNotSentWhenTheChatMovedOnAndItsTextComesBack() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Written against an old view")
+        repository.prompt()
+        runCurrent()
+        answerWithNewMessage(transport)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Written against an old view", repository.state.value.draft)
+        assertTrue(repository.state.value.uncertain)
+        // An explicit resend reuses the request ID, as every unconfirmed prompt does.
+        val id = repository.state.value.pendingSend?.mutationId
+        repository.prompt()
+        runCurrent()
+        assertEquals(id, transport.sent.single { it.text("type") == "session.prompt" }.text("requestId"))
+    }
+
+    @Test
+    fun queuedPromptIsNotSentWhilePiIsNotIdleAfterTheReconnect() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Pi started meanwhile")
+        repository.prompt()
+        runCurrent()
+        val normal = transport.response
+        transport.response = { request ->
+            val reply = normal(request)
+            if (request.text("type") == "session.snapshot" && reply != null) JsonObject(reply + ("status" to JsonPrimitive("running")))
+            else reply
+        }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun queuedPromptWaitsForTheOwedResumeWhenAnEventWasHeldDuringTheReconnectSnapshot() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        host.record("session.status", "status" to "running")
+        host.record("session.status", "status" to "idle")
+        val repository = chatRepository(transport)
+        dropConnection(transport)
+        repository.draft("Written against an old view")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        // The host restarted, and the reconnect's snapshot is answered late.
+        host.restart()
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request && held.isEmpty()) {
+                held += request
+                null
+            } else normal(request)
+        }
+        advanceTimeBy(1_000)
+        runCurrent()
+        val reply = host.answer(held.single())
+        // A message from the terminal arrives in the new epoch while the snapshot is in flight.
+        host.live("message.upsert", "message" to Wire.objectOf("id" to "u1", "role" to "user", "text" to "From the terminal", "state" to "complete"))
+        runCurrent()
+        transport.result(held.single(), reply)
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        // The owed resume brought the message in, and the chat moved on: the prompt is not sent.
+        assertEquals(listOf("m1", "u1"), shownIds(repository))
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Written against an old view", repository.state.value.draft)
+    }
+
+    @Test
+    fun aSendTheDropLeftNotConfirmedCanBeQueuedOfflineAndGoesOutUnderItsRequestId() = runTest {
+        val transport = Transport()
+        configure(transport)
+        quoteMessages(transport)
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        repository.draft("Cut off by the drop")
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.prompt()
+        runCurrent()
+        val dropped = transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Cut off by the drop", repository.state.value.draft)
+        transport.response = normal
+
+        // Sent again while offline: queued in place of the dropped bubble, under the same request ID.
+        repository.prompt()
+        runCurrent()
+        val queued = repository.state.value.pendingSend
+        assertEquals(PendingSendState.QUEUED, queued?.state)
+        assertEquals(dropped, queued?.mutationId)
+        assertEquals("", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        val resent = transport.sent.filter { it.text("type") == "session.prompt" }
+        assertEquals(2, resent.size)
+        assertEquals(dropped, resent.last().text("requestId"))
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun aQueuedPromptTurnsNotConfirmedWhenTheReadItWaitsForFails() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        host.record("session.status", "status" to "running")
+        host.record("session.status", "status" to "idle")
+        val repository = chatRepository(transport)
+        dropConnection(transport)
+        repository.draft("Waits for the resume")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        // The host restarted, and the reconnect's snapshot is answered late.
+        host.restart()
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request && held.isEmpty()) {
+                held += request
+                null
+            } else normal(request)
+        }
+        advanceTimeBy(1_000)
+        runCurrent()
+        val reply = host.answer(held.single())
+        // An event held during the snapshot owes a resume, and that read fails.
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.snapshot") "internal" else null }
+        transport.result(held.single(), reply)
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertTrue(transport.sent.count { it.text("type") == "session.snapshot" } > 1)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Waits for the resume", repository.state.value.draft)
+    }
+
+    @Test
+    fun aDropDuringTheReadAQueuedPromptWaitsForKeepsItQueuedOnAnImmediateScope() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        // The app's scope runs on Dispatchers.Main.immediate: a failed request's awaiter runs
+        // inside failed(), before the state says the connection is gone.
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(this@RemoteRepositoryTest.host)),
+                Drafts(),
+                transport,
+                CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        dropConnection(transport)
+        repository.draft("Waits for the next reconnect")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        // The reconnect's read of the chat gets no answer before the link drops again.
+        val normal = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else normal(request) }
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertTrue(transport.sent.any { it.text("type") == "session.snapshot" })
+
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+
+        assertFalse(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertEquals("", repository.state.value.draft)
+    }
+
+    @Test
+    fun aQueuedPromptWhoseReadFailsGoesOutOnTheRetryThatFailureScheduled() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        host.record("session.status", "status" to "running")
+        host.record("session.status", "status" to "idle")
+        val repository = chatRepository(transport)
+        dropConnection(transport)
+        repository.draft("Goes out on the retry")
+        repository.prompt()
+        runCurrent()
+        host.restart()
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        // The reconnect's snapshot and the resume it owes are both answered by hand.
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request && held.size < 2) {
+                held += request
+                null
+            } else normal(request)
+        }
+        advanceTimeBy(1_000)
+        runCurrent()
+        val reply = host.answer(held.single())
+        // An event held during the snapshot owes a resume.
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        transport.result(held.single(), reply)
+        runCurrent()
+        assertEquals(2, held.size)
+        // While the resume is awaited, an event arrives behind a gap, and then the resume fails:
+        // the failure schedules another resume, which may still send the prompt.
+        host.record("session.status", "status" to "idle")
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "result",
+                "requestId" to held.last().text("requestId"),
+                "ok" to false,
+                "error" to Wire.objectOf("code" to "internal", "message" to "internal"),
+            )
+        )
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        assertTrue(transport.firstPages().size > 2)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun cancellingTheQueuedPromptReturnsItsTextAndClearsTheJournal() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Changed my mind")
+        repository.prompt()
+        runCurrent()
+        repository.draft("typed since")
+
+        repository.cancelQueuedPrompt()
+        runCurrent()
+
+        assertNull(repository.state.value.pendingSend)
+        assertEquals("Changed my mind\n\ntyped since", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+        repository.flush()
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+        assertEquals("Changed my mind\n\ntyped since", stored.text)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun queuedPromptExpiresAfterFifteenMinutesAsNotConfirmed() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        // No foreground, no network: nothing reconnects on its own.
+        val repository = offlineChat(transport, drafts, reconnect = false)
+        repository.draft("Too late")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        advanceTimeBy(QUEUED_PROMPT_MILLIS - 1)
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        advanceTimeBy(2)
+        runCurrent()
+
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Too late", repository.state.value.draft)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        // Never dropped: the journal keeps it for a restart.
+        repository.flush()
+        assertEquals("Too late", drafts.values.getValue(DraftKey("host", "session")).submittedText)
+    }
+
+    @Test
+    fun disconnectingOrRemovingTheMacEndsTheQueuedPromptAndKeepsItsJournal() = runTest {
+        for (remove in listOf(false, true)) {
+            val drafts = Drafts()
+            val transport = Transport()
+            val repository = offlineChat(transport, drafts, reconnect = false)
+            val key = DraftKey("host", "session")
+            repository.draft("Left behind")
+            repository.prompt()
+            runCurrent()
+            val id = repository.state.value.pendingSend?.mutationId
+
+            if (remove) repository.remove("host") else repository.disconnect()
+            runCurrent()
+            assertNull(repository.state.value.pendingSend)
+
+            // The expiry is gone with the screen: it does not put the text back into a composer
+            // nobody looks at.
+            advanceTimeBy(QUEUED_PROMPT_MILLIS + 1)
+            runCurrent()
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+            repository.flush()
+            if (remove) {
+                // Nor does it write the removed Mac's journal back.
+                assertNull(drafts.values[key])
+                continue
+            }
+            val stored = drafts.values.getValue(key)
+            assertEquals("", stored.text)
+            assertEquals(id, stored.mutationId)
+            assertEquals("Left behind", stored.submittedText)
+
+            // Opened again, the chat reconciles the journal as after a process death.
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            assertNull(repository.state.value.pendingSend)
+            assertTrue(repository.state.value.uncertain)
+        }
+    }
+
+    @Test
+    fun queuedPromptOlderThanFifteenMinutesIsNotSentWhenTheReconnectComesLate() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts(), reconnect = false)
+        repository.draft("Stale")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(QUEUED_PROMPT_MILLIS + 1)
+        runCurrent()
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun queuedPromptWhoseAutoSendFailsComesBackToTheComposerUnderTheSameRequestId() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        val key = DraftKey("host", "session")
+        repository.draft("Link drops again")
+        repository.prompt()
+        runCurrent()
+        val id = repository.state.value.pendingSend?.mutationId
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Link drops again", repository.state.value.draft)
+        assertTrue(repository.state.value.uncertain)
+        repository.flush()
+        assertEquals(id, drafts.values.getValue(key).mutationId)
+        assertEquals("Link drops again", drafts.values.getValue(key).text)
+        // Sending the restored text again reuses the request ID.
+        transport.failure = { null }
+        repository.prompt()
+        runCurrent()
+        assertEquals(id, transport.sent.last { it.text("type") == "session.prompt" }.text("requestId"))
+    }
+
+    @Test
+    fun queuedPromptThatExpiresKeepsItsTextAheadOfWhatWasTypedSince() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts, reconnect = false)
+        repository.draft("Queued first")
+        repository.prompt()
+        runCurrent()
+        repository.draft("typed after")
+        val id = repository.state.value.pendingSend?.mutationId
+
+        advanceTimeBy(QUEUED_PROMPT_MILLIS + 1)
+        runCurrent()
+
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Queued first\n\ntyped after", repository.state.value.draft)
+        repository.flush()
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals(id, stored.mutationId)
+        assertEquals("Queued first", stored.submittedText)
+        assertEquals("Queued first\n\ntyped after", stored.text)
+    }
+
+    @Test
+    fun sendingNewTextWhileAPromptStillWaitsTakesTheQueuedPromptBackFirst() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Waiting in the queue")
+        repository.prompt()
+        runCurrent()
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                held += request
+                null
+            } else normal(request)
+        }
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        repository.draft("typed meanwhile")
+        repository.prompt()
+        runCurrent()
+
+        // Nothing went out; the journal was not overwritten and the user sees both texts.
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertNull(repository.state.value.pendingSend)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("Waiting in the queue\n\ntyped meanwhile", repository.state.value.draft)
+        transport.result(held.last(), normal(held.last())!!)
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun leavingTheChatGivesTheQueuedPromptBack() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Stay in this chat")
+        repository.prompt()
+        runCurrent()
+
+        repository.cancelSelection()
+        repository.activate(RemoteSelection("host", "project"), ActivationMode.USER_OPEN)
+        runCurrent()
+        repository.flush()
+
+        assertNull(repository.state.value.pendingSend)
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals("Stay in this chat", stored.text)
+        assertNull(stored.mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun onlyPlainPromptsOfAChatLoadedFromTheMacAreQueued() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        for (draft in listOf("/review", "!ls", "   ")) {
+            repository.draft(draft)
+            repository.prompt()
+            runCurrent()
+            assertNull(draft, repository.state.value.pendingSend)
+        }
+        // One at a time.
+        repository.draft("first")
+        repository.prompt()
+        runCurrent()
+        repository.draft("second")
+        repository.prompt()
+        runCurrent()
+        assertEquals("first", repository.state.value.pendingSend?.text)
+        assertEquals("second", repository.state.value.draft)
+    }
+
+    @Test
+    fun timelineMessageBeforeTheAcknowledgementClearsThePendingSendOnceAcknowledged() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, Drafts(), "Hello pi")
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(userMessage(1, "user-1", "Hello pi"))
+        runCurrent()
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+        transport.result(transport.sent.last { it.text("type") == "session.prompt" }, Wire.objectOf("kind" to "accepted"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun transportFailureWhileAwaitingPromptAcknowledgementRetainsUncertaintyWithoutReplay() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, drafts, "Keep after disconnect")
+        val request = transport.sent.single { it.text("type") == "session.prompt" }
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+
+        assertFalse(repository.state.value.connected)
+        assertFalse(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertEquals("Keep after disconnect", repository.state.value.draft)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        repository.flush()
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals(request.text("requestId"), stored.mutationId)
+        assertEquals("Keep after disconnect", stored.submittedText)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun capabilityRequestOptsInToPromptDeliveryReceiptsWithoutAddingWireFields() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val request = transport.sent.first { it.text("type") == "projects.list" }
+        assertTrue(request.text("requestId").contains("remote_prompt_delivery.v1"))
+        assertEquals(setOf("type", "requestId"), request.keys)
+    }
+
+    private fun promptReceiptTransport(): Transport = Transport().also {
+        configure(it)
+        advertising(it, JsonArray(listOf(JsonPrimitive("remote_prompt_delivery.v1"))))
+    }
+
+    @Test
+    fun promptReceiptIsIgnoredWhenHostDidNotAdvertiseOptInCapability() = runTest {
+        val key = DraftKey("host", "session")
+        for (handshake in listOf(emptySet(), setOf("remote_prompt_delivery.v1"))) {
+            val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+                text = "Original", mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+            val transport = Transport().also {
+                it.capabilities = handshake
+                configure(it)
+                advertising(it, JsonArray(emptyList()))
+            }
+            withTimeline(transport, Wire.objectOf("id" to "source", "role" to "user", "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to "lost-id", "delivery" to "prompt")))
+            val repository = repository(transport, drafts)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            repository.flush()
+            assertTrue(repository.state.value.capabilitiesKnown)
+            assertTrue("Handshake alone must not enable prompt receipts", repository.state.value.uncertain)
+            assertEquals("lost-id", drafts.values.getValue(key).mutationId)
+            assertEquals("Original", repository.state.value.draft)
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        }
+    }
+
+    @Test
+    fun promptCapabilityOmissionRevokesReceiptBeforeFallbackReturns() = runTest {
+        val transport = promptReceiptTransport()
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertTrue("remote_prompt_delivery.v1" in repository.state.value.capabilities)
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        repository.draft("Original")
+        repository.prompt()
+        runCurrent()
+        val requestId = transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+        val prior = transport.response
+        transport.response = { request ->
+            when {
+                request.text("type") != "projects.list" -> prior(request)
+                request.text("requestId").startsWith("capabilities.v3:") -> data("projects", listOf(project))
+                else -> null // Hold fallback open, leaving the previous capability unrefreshed.
+            }
+        }
+        val beforeDiscovery = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 1_000)
+        repository.setForeground(true)
+        runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "projects.list" }.drop(beforeDiscovery)
+        assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v3:") })
+        assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v2:") })
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to "prompt"))))
+        runCurrent()
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Original", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun sourceUserPromptReceiptSettlesLostAcknowledgementWithoutRetry() = runTest {
+        val drafts = Drafts()
+        val transport = promptReceiptTransport()
+        val repository = inFlightPrompt(transport, drafts, "Lost prompt")
+        val request = transport.sent.single { it.text("type") == "session.prompt" }
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.uncertain)
+        transport.listener.ready(transport.capabilities)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        val beforeDiscovery = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 1_000)
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue("Reconnected transport must complete a fresh v3 capability read",
+            transport.sent.count { it.text("type") == "projects.list" } > beforeDiscovery)
+        assertTrue("remote_prompt_delivery.v1" in repository.state.value.capabilities)
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "other-session",
+            "revision" to 1, "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "other-source", "role" to "user", "text" to "Lost prompt",
+                "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"), "delivery" to "prompt"))))
+        runCurrent()
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        // A recovered source message identifies the original request, irrespective of its text.
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Lost prompt",
+                "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"), "delivery" to "prompt"))))
+        runCurrent()
+        repository.flush()
+        assertNull(repository.state.value.pendingSend)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("", repository.state.value.draft)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        repository.draft("New draft")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 2, "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Lost prompt",
+                "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"), "delivery" to "prompt"))))
+        runCurrent()
+        assertEquals("New draft", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun promptReceiptKeepsComposerEditedBackToTheSameSubmittedText() = runTest {
+        val transport = promptReceiptTransport()
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Original")
+        repository.prompt()
+        runCurrent()
+        val requestId = transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        repository.draft("Changed")
+        repository.draft("Original")
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "message.upsert", "message" to Wire.objectOf(
+                "id" to "source", "role" to "user", "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to "prompt"))))
+        runCurrent()
+        assertEquals("Original", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(repository.state.value.pendingSend)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun promptReceiptFromSnapshotPreservesNewComposerEditsAndClearsOnlyTheJournal() = runTest {
+        val quote = MessageQuote("new-quote", "assistant", "new excerpt")
+        val attachment = LocalAttachment("new-file", "new.txt", "file", "text/plain", 1, "a".repeat(64))
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+            text = "Edited after send", quote = quote, attachments = listOf(attachment),
+            mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+        val transport = promptReceiptTransport()
+        withTimeline(transport, Wire.objectOf("id" to "source", "role" to "user", "text" to "Original",
+            "remoteDelivery" to Wire.objectOf("requestId" to "lost-id", "delivery" to "prompt")))
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.flush()
+        val stored = drafts.values.getValue(key)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(stored.mutationId)
+        assertEquals("Edited after send", repository.state.value.draft)
+        assertEquals(quote, repository.state.value.quote)
+        assertEquals(listOf(attachment), repository.state.value.attachments)
+        assertEquals("Edited after send", stored.text)
+        assertEquals(quote, stored.quote)
+        assertEquals(listOf(attachment), stored.attachments)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun promptRecoveryRejectsWrongIdentityRoleDeliveryAndMatchingTextAlone() = runTest {
+        val key = DraftKey("host", "session")
+        for ((role, requestId, delivery) in listOf(
+            Triple("user", "other", "prompt"), Triple("assistant", "lost-id", "prompt"),
+            Triple("user", "lost-id", "follow_up"), Triple("user", "", "prompt"),
+        )) {
+            val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+                text = "Original", mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+            val transport = promptReceiptTransport()
+            withTimeline(transport, Wire.objectOf("id" to "source", "role" to role, "text" to "Original",
+                "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to delivery)))
+            val repository = repository(transport, drafts)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            repository.flush()
+            assertTrue("Unexpected confirmation for $role/$requestId/$delivery", repository.state.value.uncertain)
+            assertEquals("lost-id", drafts.values.getValue(key).mutationId)
+            assertEquals("Original", repository.state.value.draft)
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        }
+    }
+
+    /** Reopen from the durable snapshot after an unacknowledged prompt is restored. */
+    private suspend fun TestScope.savedUnconfirmedPrompt(): Pair<Map<DraftKey, StoredDraft>, String> {
+        val drafts = Drafts()
+        val transport = promptReceiptTransport()
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Original")
+        repository.prompt()
+        runCurrent()
+        assertEquals("Original", repository.state.value.draft)
+        repository.flush()
+        return drafts.values.toMap() to transport.sent.single { it.text("type") == "session.prompt" }.text("requestId")
+    }
+
+    private fun receiptTransport(id: String): Transport = promptReceiptTransport().also { transport ->
+        withTimeline(transport, Wire.objectOf("id" to "source", "role" to "user", "text" to "Original",
+            "remoteDelivery" to Wire.objectOf("requestId" to id, "delivery" to "prompt")))
+    }
+
+    @Test
+    fun restoredPromptReceiptClearsUntouchedComposerAfterRepositoryReopen() = runTest {
+        val (snapshot, id) = savedUnconfirmedPrompt()
+        val drafts = Drafts().apply { values = snapshot }
+        val transport = receiptTransport(id)
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun restoredPromptEditedAwayAndBackSurvivesReopenAndReceipt() = runTest {
+        val (snapshot, id) = savedUnconfirmedPrompt()
+        val beforeReceipt = Drafts().apply { values = snapshot }
+        val editor = repository(promptReceiptTransport(), beforeReceipt)
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.draft("Changed")
+        editor.draft("Original")
+        editor.flush()
+        val drafts = Drafts().apply { values = beforeReceipt.values.toMap() }
+        val transport = receiptTransport(id)
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun restoredPromptQuoteEditedAwayAndBackSurvivesReopenAndReceipt() = runTest {
+        val (snapshot, id) = savedUnconfirmedPrompt()
+        val beforeReceipt = Drafts().apply { values = snapshot }
+        val editingTransport = promptReceiptTransport()
+        withTimeline(editingTransport, Wire.objectOf("id" to "reply", "role" to "assistant", "text" to "A reply"))
+        val editor = repository(editingTransport, beforeReceipt)
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.quote("reply")
+        assertNotNull(editor.state.value.quote)
+        editor.quote(null)
+        editor.flush()
+        val drafts = Drafts().apply { values = beforeReceipt.values.toMap() }
+        val transport = receiptTransport(id)
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertNull(reopened.state.value.quote)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun quoteEditedDuringSendDoesNotPreventTextRecoveryAfterReopen() = runTest {
+        val drafts = Drafts()
+        val transport = promptReceiptTransport()
+        withTimeline(transport, Wire.objectOf("id" to "reply", "role" to "assistant", "text" to "A reply"))
+        val editor = inFlightPrompt(transport, drafts, "Original")
+        editor.quote("reply")
+        val newQuote = editor.state.value.quote
+        assertNotNull(newQuote)
+        editor.flush()
+        val reopenedTransport = promptReceiptTransport()
+        val reopened = repository(reopenedTransport, Drafts().apply { values = drafts.values.toMap() })
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("Original", reopened.state.value.draft)
+        assertEquals(newQuote, reopened.state.value.quote)
+        assertTrue(reopened.state.value.uncertain)
+        assertTrue(reopenedTransport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun attachmentRemovedDuringUploadDoesNotPreventTextRecoveryAfterReopen() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.attachments.begin") gate.await() }
+        val editor = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.importAttachments(editor.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        editor.draft("Original")
+        editor.prompt()
+        runCurrent()
+        editor.removeAttachment(attachment.id)
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        editor.flush()
+        val reopenedTransport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val reopened = repository(reopenedTransport, Drafts().apply { values = drafts.values.toMap() }, storage)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("Original", reopened.state.value.draft)
+        assertTrue(reopened.state.value.attachments.isEmpty())
+        assertTrue(reopened.state.value.uncertain)
+        assertTrue(reopenedTransport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun legacyEmptyComposerRestoresTextButReceiptDoesNotEraseAmbiguousText() = runTest {
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+            mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+        val transport = receiptTransport("lost-id")
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(key).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun userClearedUnconfirmedPromptStaysEmptyAfterRepositoryReopen() = runTest {
+        val (snapshot, _) = savedUnconfirmedPrompt()
+        val beforeReopen = Drafts().apply { values = snapshot }
+        val editor = repository(promptReceiptTransport(), beforeReopen)
+        editor.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        editor.draft("")
+        editor.flush()
+        val transport = promptReceiptTransport()
+        val reopened = repository(transport, Drafts().apply { values = beforeReopen.values.toMap() })
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("", reopened.state.value.draft)
+        assertTrue(reopened.state.value.uncertain)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun legacyJournalWithIdenticalComposerKeepsTextOnReceipt() = runTest {
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft(
+            text = "Original", mutationId = "lost-id", submittedText = "Original", submittedDelivery = "prompt")) }
+        val transport = receiptTransport("lost-id")
+        val reopened = repository(transport, drafts)
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        reopened.flush()
+        assertEquals("Original", reopened.state.value.draft)
+        assertFalse(reopened.state.value.uncertain)
+        assertNull(drafts.values.getValue(key).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun unconfirmedPromptIsNotConfirmedAndItsTextReturnsToTheComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Keep me")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Keep me", repository.state.value.draft)
+        assertTrue(repository.state.value.uncertain)
+        advanceTimeBy(301)
+        runCurrent()
+        assertEquals("Keep me", drafts.values.getValue(DraftKey("host", "session")).text)
+    }
+
+    @Test
+    fun resendOfAnUnconfirmedPromptReusesItsMutationId() = runTest {
+        val transport = Transport().also(::configure)
+        var failing = true
+        transport.failure = { if (failing && it.text("type") == "session.prompt") "internal" else null }
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Once only")
+        repository.prompt()
+        runCurrent()
+        failing = false
+        repository.prompt()
+        runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "session.prompt" }
+        assertEquals(2, requests.size)
+        assertEquals(requests[0].text("requestId"), requests[1].text("requestId"))
+        assertEquals("Once only", QuoteCodec.decode(requests[1].text("text")).body)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun processDeathRightAfterTappingSendKeepsTheJournalAndOffersTheUncertainActions() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        inFlightPrompt(transport, drafts, "Lost in flight")
+        val key = DraftKey("host", "session")
+        // The composer is already clear, so the journal alone holds the prompt.
+        assertEquals("", drafts.values.getValue(key).text)
+        val mutationId = drafts.values.getValue(key).mutationId
+        assertNotNull(mutationId)
+        // A new process reads only what the first one stored.
+        val reopenedTransport = Transport().also(::configure)
+        val reopened = repository(reopenedTransport, Drafts().apply { values = drafts.values })
+        reopened.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("Lost in flight", reopened.state.value.draft)
+        assertTrue(reopened.state.value.connected)
+        assertFalse(reopened.state.value.sending)
+        assertTrue(reopened.state.value.uncertain)
+        assertNull(reopened.state.value.pendingSend)
+        assertTrue(reopenedTransport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun flushOnStopWaitsForTheTypingStillInItsDelayAndIsNotDelayedByIt() = runTest {
+        val drafts = Drafts()
+        val repository = repository(Transport().also(::configure), drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.draft("Typed just before stop")
+        val key = DraftKey("host", "session")
+        assertNotEquals("Typed just before stop", drafts.values[key]?.text)
+        // No clock advance: the flush itself writes, it does not wait for the delay.
+        repository.flush()
+        assertEquals("Typed just before stop", drafts.values.getValue(key).text)
+    }
+
+    @Test
+    fun unresolvedPromptReturnsItsTextToTheComposerAfterRestart() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(mutationId = "lost", submittedText = "Lost text"))
+        }
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("Lost text", repository.state.value.draft)
+        assertTrue(repository.state.value.uncertain)
+        assertNull(repository.state.value.pendingSend)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    private fun chatMessage(id: String, role: String, text: String) =
+        Wire.objectOf("id" to id, "role" to role, "text" to text, "state" to "complete")
+
+    /** The chat shows [messages] from its snapshot on, as a host with that timeline sends them. */
+    private fun withTimeline(transport: Transport, vararg messages: JsonObject) {
+        val normal = transport.response
+        transport.response = { request ->
+            val response = normal(request)
+            if (request.text("type") == "session.snapshot" && response != null)
+                JsonObject(response + ("messages" to JsonArray(messages.toList())))
+            else response
+        }
+    }
+
+    private fun acknowledge(transport: Transport) {
+        transport.result(transport.sent.last { it.text("type") == "session.prompt" }, Wire.objectOf("kind" to "accepted"))
+    }
+
+    @Test
+    fun pendingSendStartsAfterAMessageThatIsNotPublishedYet() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        advanceTimeBy(100)
+        transport.deliver(userMessage(1, "u1", "continue"))
+        runCurrent()
+        // A second identical prompt, from the terminal, waits for the trailing publish.
+        transport.deliver(userMessage(2, "u2", "continue"))
+        runCurrent()
+        assertEquals("u1", repository.state.value.messages.last().text("id"))
+        repository.draft("continue")
+        repository.prompt()
+        runCurrent()
+        acknowledge(transport)
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        assertEquals("u2", repository.state.value.messages.last().text("id"))
+        // The terminal's copy came before this send, so it does not settle it.
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun repeatedPromptStaysPendingUntilItsOwnCopyArrives() = runTest {
+        val transport = Transport().also(::configure)
+        // The chat already ends with an identical prompt; that one is not the host's copy of this.
+        withTimeline(transport, chatMessage("u1", "user", "continue"), chatMessage("a1", "assistant", "Done."))
+        val repository = inFlightPrompt(transport, Drafts(), "continue")
+        acknowledge(transport)
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(userMessage(1, "user-2", "continue"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun hostCopyWithOtherLineEndingsOrTrailingWhitespaceSettlesThePrompt() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, Drafts(), "Line one\nline two")
+        acknowledge(transport)
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(userMessage(1, "user-1", "Line one\r\nline two \n"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun acknowledgedPromptIsConfirmedEvenWhenTheWriteAfterTheAcknowledgementFails() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, drafts, "Acknowledged")
+        drafts.fail = true
+        acknowledge(transport)
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(userMessage(1, "user-1", "Acknowledged"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun quotingDuringTheSendKeepsTheSentTextOutOfTheComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        withTimeline(transport, chatMessage("a1", "assistant", "First answer"))
+        val repository = inFlightPrompt(transport, drafts, "Hello pi")
+        repository.quote("a1")
+        runCurrent()
+        assertNotNull(repository.state.value.quote)
+        acknowledge(transport)
+        runCurrent()
+        // The sent prompt is in the chat, not back in the composer; the new quote stays.
+        assertEquals("", repository.state.value.draft)
+        assertNotNull(repository.state.value.quote)
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals("", stored.text)
+        assertNotNull(stored.quote)
+        assertNull(stored.mutationId)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun plainPromptDoesNotReuseTheRequestIdOfAnUnresolvedFollowUp() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(
+                DraftKey("host", "session") to
+                    StoredDraft(
+                        text = "Same",
+                        mutationId = "follow-up-id",
+                        submittedText = "Same",
+                        submittedDelivery = "follow_up",
+                    )
+            )
+        }
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        assertNotEquals("follow-up-id", request.text("requestId"))
+    }
+
+    @Test
+    fun plainPromptStillReusesTheRequestIdOfAnUnresolvedPrompt() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(
+                DraftKey("host", "session") to
+                    StoredDraft(
+                        text = "Same",
+                        mutationId = "prompt-id",
+                        submittedText = "Same",
+                        submittedDelivery = "prompt",
+                    )
+            )
+        }
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        assertEquals("prompt-id", request.text("requestId"))
+    }
+
+    // ---- Resume from a revision (resume.v1:) ------------------------------------------------
+
+    /**
+     * A host that journals the events of "session" for phones, as noah-monorepo's phone journal
+     * does: a first page whose request ID names the journal's epoch and a revision it still holds
+     * is answered with `session.events`, any other first page with a snapshot carrying the epoch.
+     * Other sessions get a snapshot with an epoch of their own.
+     */
+    private class JournalHost(private val transport: Transport) {
+        var epoch = "A".repeat(22)
+        var revision = 0L
+        var status = "idle"
+        var tasks: JsonArray? = null
+        var cursor: String? = null
+        val messages = LinkedHashMap<String, JsonObject>()
+        val journal = mutableListOf<JsonObject>()
+        /** How each first page of "session" was answered, in order. */
+        val answers = mutableListOf<String>()
+
+        /** An event of "session" the journal keeps; [live] also delivers it. */
+        fun record(kind: String, vararg fields: Pair<String, Any?>): JsonObject {
+            revision++
+            val event = Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to revision, "kind" to kind, *fields)
+            journal += event
+            when (kind) {
+                "message.upsert" -> event.obj("message").let { messages[it.text("id")] = it }
+                "session.status" -> status = event.text("status")
+            }
+            return event
+        }
+
+        fun live(kind: String, vararg fields: Pair<String, Any?>) = transport.deliver(record(kind, *fields))
+
+        /** A new host process: a new epoch, revisions from 0, an empty journal; the history stays. */
+        fun restart() {
+            epoch = "B".repeat(22)
+            revision = 0
+            journal.clear()
+        }
+
+        fun answer(request: JsonObject): JsonObject {
+            val base = parseResumeRequest(request.text("requestId"))
+            val sessionId = request.text("sessionId")
+            fun snapshot(revision: Long, status: String, messages: List<JsonObject>, epoch: String?, tasks: JsonArray?, cursor: String?) =
+                JsonObject(
+                    buildMap {
+                        put("kind", JsonPrimitive("snapshot"))
+                        put("sessionId", JsonPrimitive(sessionId))
+                        put("revision", JsonPrimitive(revision))
+                        put("status", JsonPrimitive(status))
+                        put("messages", JsonArray(messages))
+                        put("pendingQuestions", JsonArray(emptyList()))
+                        if (epoch != null && base != null && "cursor" !in request) put("epoch", JsonPrimitive(epoch))
+                        if (tasks != null && request["includeTasks"] == JsonPrimitive(true)) put("tasks", tasks)
+                        if (cursor != null) put("nextCursor", JsonPrimitive(cursor))
+                    }
+                )
+            if (sessionId != "session") return snapshot(0, "idle", emptyList(), "C".repeat(22), null, null)
+            if ("cursor" !in request && base?.epoch == epoch && base.revision <= revision) {
+                answers += "session.events"
+                return Wire.objectOf(
+                    "kind" to "session.events", "sessionId" to "session", "epoch" to epoch, "from" to base.revision,
+                    "revision" to revision, "events" to JsonArray(journal.filter { it.long("revision") > base.revision }),
+                )
+            }
+            if ("cursor" !in request) answers += "snapshot"
+            return snapshot(revision, status, messages.values.toList(), epoch, tasks, cursor)
+        }
+    }
+
+    private fun journalTransport(
+        sessions: List<JsonObject> = listOf(session()),
+        capabilities: List<String> = emptyList(),
+    ): Pair<Transport, JournalHost> {
+        val transport = Transport().also { configure(it, sessions) }
+        val host = JournalHost(transport)
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.snapshot" -> host.answer(request)
+                "projects.list" ->
+                    if (capabilities.isEmpty()) original(request)
+                    else JsonObject(original(request)!! + ("capabilities" to JsonArray(capabilities.map(::JsonPrimitive))))
+                else -> original(request)
+            }
+        }
+        return transport to host
+    }
+
+    private fun journalMessage(id: String, text: String) =
+        Wire.objectOf("id" to id, "role" to "assistant", "text" to text, "state" to "complete")
+
+    private fun Transport.firstPages(sessionId: String = "session") =
+        sent.filter { it.text("type") == "session.snapshot" && it.text("sessionId") == sessionId && "cursor" !in it }
+
+    private fun JsonObject.resumeBase() = parseResumeRequest(text("requestId"))
+
+    private fun shownIds(repository: DefaultRemoteRepository) = repository.state.value.messages.map { it.text("id") }
+
+    /**
+     * [chatRepository], with what its opening read (the first load, and the probe that its
+     * foreground signal starts) forgotten: [JournalHost.answers] then holds only later answers.
+     */
+    private suspend fun TestScope.openedChat(
+        transport: Transport,
+        host: JournalHost,
+        liveRunKept: () -> Boolean = { false },
+    ): DefaultRemoteRepository {
+        val repository = chatRepository(transport, liveRunKept)
+        val first = transport.firstPages().first()
+        assertTrue(first.text("requestId").startsWith("resume.v1:-:0:"))
+        assertEquals(ResumeBase(null, 0), first.resumeBase())
+        host.answers.clear()
+        return repository
+    }
+
+    private fun TestScope.dropConnection(transport: Transport) {
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+    }
+
+    private fun TestScope.reconnect(repository: DefaultRemoteRepository) {
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun theFirstLoadAsksWithTheFreshFormAndAReconnectReplaysWithoutClearingTheChat() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        host.live("session.status", "status" to "running")
+        runCurrent()
+
+        dropConnection(transport)
+        // What the phone missed while it was away.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        host.record("session.title", "title" to "Renamed")
+        host.record("session.status", "status" to "waiting")
+        reconnect(repository)
+
+        val resume = transport.firstPages().last()
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals(ResumeBase(host.epoch, 2), resume.resumeBase())
+        assertEquals(listOf("session.events"), host.answers)
+        // m1 was never replayed: the chat was continued, not cleared.
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("waiting", repository.state.value.status)
+        val row = repository.state.value.sessions.single()
+        assertEquals("waiting", row.text("status"))
+        assertEquals("Renamed", row.text("title"))
+        assertFalse(repository.state.value.stale)
+        // The next live event follows on from the replay without another request.
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun anOlderHostIsAlwaysAskedWithTheFreshForm() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val opened = transport.firstPages().size
+        dropConnection(transport)
+        reconnect(repository)
+        val pages = transport.firstPages()
+        assertEquals(opened + 1, pages.size)
+        assertTrue(pages.all { it.resumeBase() == ResumeBase(null, 0) })
+    }
+
+    @Test
+    fun aFollowUpLeftUncertainByADisconnectIsDeliveredByAReplayedReceipt() = runTest {
+        val (transport, host) = journalTransport()
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val journalAnswer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt") Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else journalAnswer(request)
+        }
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        repository.draft("next")
+        repository.followUp()
+        runCurrent()
+        assertEquals("accepted", repository.state.value.followUps.single().status)
+        val requestId = transport.sent.last { it.text("type") == "session.prompt" }.text("requestId")
+
+        dropConnection(transport)
+        assertEquals("uncertain", repository.state.value.followUps.single().status)
+        host.record("follow_up.status", "requestId" to requestId, "status" to "delivered")
+        reconnect(repository)
+
+        assertEquals("session.events", host.answers.last())
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+    }
+
+    @Test
+    fun aReplayedNoticeShowsNothing() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        dropConnection(transport)
+        host.record("session.notice", "level" to "info", "message" to "Context is almost full.")
+        reconnect(repository)
+
+        assertEquals("session.events", host.answers.last())
+        assertNull(repository.state.value.notice)
+        // The notice's revision was applied: the next event needs no snapshot.
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aGapResumesWhileUnknownKindsAndSnapshotRequiredAskWithTheFreshForm() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+
+        // A lost event: the gap is filled from the journal.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        assertEquals(ResumeBase(host.epoch, 1), transport.firstPages().last().resumeBase())
+        assertEquals(listOf("session.events"), host.answers)
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("running", repository.state.value.status)
+
+        // An event of a kind this app does not know: only a snapshot says what it changed.
+        host.live("future.kind")
+        runCurrent()
+        assertEquals(ResumeBase(null, 0), transport.firstPages().last().resumeBase())
+        assertEquals("snapshot", host.answers.last())
+
+        host.live("snapshot.required")
+        runCurrent()
+        assertEquals(ResumeBase(null, 0), transport.firstPages().last().resumeBase())
+        assertEquals(listOf("session.events", "snapshot", "snapshot"), host.answers)
+    }
+
+    @Test
+    fun liveEventsThatOvertakeTheReplyWaitForItAndApplyOnce() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "Wor"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        // The host made its reply before this event, which arrives first.
+        val reply = host.answer(resume)
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals(listOf("m1"), shownIds(repository))
+
+        transport.result(resume, reply)
+        runCurrent()
+
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("World", repository.state.value.messages.last().text("text"))
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun theForegroundProbeOfTheOpenChatResumes() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        repository.setForeground(false)
+        advanceTimeBy(20_000)
+        // A frozen socket never delivered it.
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+
+        repository.setForeground(true)
+        runCurrent()
+
+        assertEquals(ResumeBase(host.epoch, 0), transport.firstPages().last().resumeBase())
+        assertEquals("session.events", host.answers.last())
+        assertEquals(listOf("m1"), shownIds(repository))
+    }
+
+    @Test
+    fun aHostRestartAnswersTheResumeWithASnapshotThatStartsTheChatOver() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        repeat(3) { host.record("session.status", "status" to if (it % 2 == 0) "running" else "idle") }
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        val before = host.epoch
+
+        dropConnection(transport)
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m1", "After the restart"))
+        reconnect(repository)
+
+        assertEquals(ResumeBase(before, 4), transport.firstPages().last().resumeBase())
+        assertEquals("snapshot", host.answers.last())
+        // Revision 1 of the new epoch is not mistaken for an outdated reply.
+        assertEquals("After the restart", repository.state.value.messages.single().text("text"))
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aSessionWhoseEpochChangesOnALiveConnectionShowsItsNewStatusAndTitleInTheList() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        host.live("session.title", "title" to "Before")
+        host.live("session.status", "status" to "idle")
+        host.live("session.title", "title" to "Before again")
+        runCurrent()
+        assertEquals("Before again", repository.state.value.sessions.single().text("title"))
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 5), resume.resumeBase())
+        // The session is reopened in place before the request arrives: a new epoch from revision 0.
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m3", "Reopened"))
+        transport.response = answer
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals("snapshot", host.answers.last())
+
+        // The new epoch counts from 1 again, below the revisions the list saw before.
+        host.live("session.status", "status" to "waiting")
+        host.live("session.title", "title" to "After")
+        runCurrent()
+        val row = repository.state.value.sessions.single()
+        assertEquals("waiting", row.text("status"))
+        assertEquals("After", row.text("title"))
+        assertEquals("waiting", repository.state.value.status)
+    }
+
+    @Test
+    fun aNewEpochStatusSentWhileTheResumeIsInFlightShowsInTheList() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        assertEquals("idle", repository.state.value.sessions.single().text("status"))
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 3), resume.resumeBase())
+
+        // The session is reopened in place, and its first status counts from 1 again, below what
+        // the list saw; it arrives before the reply.
+        host.restart()
+        host.live("session.status", "status" to "waiting")
+        runCurrent()
+        transport.response = answer
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+
+        assertEquals("snapshot", host.answers.last())
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals("waiting", repository.state.value.sessions.single().text("status"))
+    }
+
+    @Test
+    fun aChatReopenedWithoutItsTimelineShowsItsNewEpochStatusAndTitleInTheList() = runTest {
+        val others = (1..DETACHED_TIMELINES).map { "other$it" }
+        val (transport, host) = journalTransport(sessions = listOf(session()) + others.map { session(it) })
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        host.live("session.title", "title" to "Before")
+        host.live("session.status", "status" to "idle")
+        host.live("session.title", "title" to "Before again")
+        runCurrent()
+        fun row() = repository.state.value.sessions.single { it.text("id") == "session" }
+        assertEquals("Before again", row().text("title"))
+
+        // Enough other chats are opened that the kept Timeline of the first one is dropped.
+        for (other in others) {
+            repository.activate(RemoteSelection("host", "project", other))
+            runCurrent()
+        }
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m1", "Reopened"))
+        val pages = transport.firstPages().size
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        // Read afresh, not resumed.
+        assertEquals(ResumeBase(null, 0), transport.firstPages()[pages].resumeBase())
+        assertEquals("snapshot", host.answers.last())
+
+        host.live("session.status", "status" to "waiting")
+        host.live("session.title", "title" to "After")
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+        assertEquals("After", row().text("title"))
+        assertEquals("waiting", repository.state.value.status)
+    }
+
+    private fun listEvent(sessionId: String, revision: Long, kind: String, vararg fields: Pair<String, Any?>) =
+        Wire.objectOf("type" to "event", "sessionId" to sessionId, "revision" to revision, "kind" to kind, *fields)
+
+    @Test
+    fun aListOnlySessionShowsAStatusAndTitleThatNameANewEpochAtALowRevision() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val repository = openedChat(transport, host)
+        fun row() = repository.state.value.sessions.single { it.text("id") == "other" }
+        transport.deliver(listEvent("other", 9, "session.status", "status" to "running", "epoch" to "A".repeat(22)))
+        transport.deliver(listEvent("other", 10, "session.title", "title" to "Before", "epoch" to "A".repeat(22)))
+        runCurrent()
+        assertEquals("running", row().text("status"))
+        assertEquals("Before", row().text("title"))
+
+        // The session restarted: its revisions count from 1 again.
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        transport.deliver(listEvent("other", 2, "session.title", "title" to "After", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+        assertEquals("After", row().text("title"))
+
+        // The same epoch keeps the newer-revision-wins guard.
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "idle", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+    }
+
+    @Test
+    fun aLateStatusOfAnEpochTheSessionLeftDoesNotReachTheList() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val repository = openedChat(transport, host)
+        fun row() = repository.state.value.sessions.single { it.text("id") == "other" }
+        transport.deliver(listEvent("other", 9, "session.status", "status" to "running", "epoch" to "A".repeat(22)))
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+
+        // A late event of the old epoch neither shows nor starts the guard over.
+        transport.deliver(listEvent("other", 10, "session.status", "status" to "idle", "epoch" to "A".repeat(22)))
+        transport.deliver(listEvent("other", 11, "session.title", "title" to "Old", "epoch" to "A".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+        assertFalse(row().optionalText("title") == "Old")
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "running", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("waiting", row().text("status"))
+    }
+
+    @Test
+    fun aRetiredEpochStatusCannotPoisonTheSelectedTimeline() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running", "epoch" to host.epoch)
+        runCurrent()
+        val oldEpoch = host.epoch
+        host.restart()
+        host.record("session.status", "status" to "waiting", "epoch" to host.epoch)
+        host.live("snapshot.required")
+        runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        transport.deliver(listEvent("session", 3, "session.status", "status" to "idle", "epoch" to oldEpoch))
+        runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        host.live("session.status", "status" to "running", "epoch" to host.epoch)
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals("running", repository.state.value.sessions.single().text("status"))
+    }
+
+    @Test
+    fun anUnknownEpochStatusRequestsAnAuthoritativePageBeforeChangingTheTimeline() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running", "epoch" to host.epoch)
+        runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        val pages = transport.firstPages().size
+        host.restart()
+        host.live("session.status", "status" to "waiting", "epoch" to host.epoch)
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+        val page = transport.firstPages().last()
+        assertEquals(ResumeBase(null, 0), page.resumeBase())
+        transport.response = answer
+        transport.result(page, host.answer(page))
+        runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+    }
+
+    @Test
+    fun aFirstPageOvertakenByAnUnknownEpochDoesNotPublishProvisionalContent() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("old", "old"))
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        val repository = repository(transport)
+        val activation = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+        val first = transport.firstPages().first()
+        val oldPage = host.answer(first)
+        host.restart()
+        host.live("session.status", "status" to "waiting", "epoch" to host.epoch)
+        runCurrent()
+        transport.result(first, oldPage); runCurrent()
+        assertFalse(shownIds(repository).contains("old"))
+        val retry = transport.firstPages().last()
+        assertNotEquals(first.text("requestId"), retry.text("requestId"))
+        transport.response = answer
+        transport.result(retry, host.answer(retry)); runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        assertTrue(shownIds(repository).contains("old"))
+        activation.cancel()
+    }
+
+    @Test
+    fun aPageBehindAnObservedEpochEventDoesNotPublishProvisionalQuestions() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running", "epoch" to host.epoch); runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        host.restart()
+        host.live("session.status", "status" to "waiting", "epoch" to host.epoch); runCurrent()
+        val first = transport.firstPages().last()
+        val question = Wire.objectOf("id" to "old-question", "kind" to "editor", "prefill" to "stale")
+        val provisional = JsonObject(host.answer(first) + ("pendingQuestions" to JsonArray(listOf(question))))
+        host.live("session.status", "status" to "idle", "epoch" to host.epoch); runCurrent()
+        transport.result(first, provisional); runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertTrue(repository.state.value.questions.isEmpty())
+        val retry = transport.firstPages().last()
+        assertNotEquals(first.text("requestId"), retry.text("requestId"))
+        val pageCount = transport.firstPages().size
+        transport.response = answer
+        transport.result(retry, host.answer(retry)); runCurrent()
+        assertEquals(pageCount, transport.firstPages().size)
+        assertEquals("idle", repository.state.value.status)
+        assertTrue(repository.state.value.questions.isEmpty())
+    }
+
+    @Test
+    fun anUnconfirmedEpochCannotRetireTheAuthoritativeSelectedEpoch() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running", "epoch" to host.epoch); runCurrent()
+        val pages = transport.firstPages().size
+        transport.deliver(listEvent("session", 9, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals("running", repository.state.value.status)
+        assertEquals("running", repository.state.value.sessions.single().text("status"))
+        transport.deliver(listEvent("session", 10, "session.status", "status" to "offline", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals("running", repository.state.value.sessions.single().text("status"))
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun anAuthoritativePageRestoresTheTitleAfterAnUnconfirmedEpochEvent() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(JsonObject(session() + ("title" to JsonPrimitive("Initial")))))
+        val repository = openedChat(transport, host)
+        host.live("session.title", "title" to "Current", "epoch" to host.epoch); runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        transport.deliver(listEvent("session", 1, "session.title", "title" to "Wrong", "epoch" to "B".repeat(22)))
+        runCurrent()
+        val page = transport.firstPages().last()
+        assertEquals("Wrong", repository.state.value.sessions.single().text("title"))
+        transport.response = answer
+        transport.result(page, host.answer(page)); runCurrent()
+        assertEquals("Current", repository.state.value.sessions.single().text("title"))
+        assertEquals("Current", repository.state.value.session?.text("title"))
+    }
+
+    private suspend fun TestScope.crossProjectTitleFixture(): Triple<Transport, JournalHost, DefaultRemoteRepository> {
+        val first = JsonObject(session() + ("title" to JsonPrimitive("Original")))
+        val other = JsonObject(session("other", projectId = "other-project") + ("title" to JsonPrimitive("Other")))
+        val (transport, host) = journalTransport(sessions = listOf(first))
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> data("projects", listOf(project, Wire.objectOf("id" to "other-project")))
+            "sessions.list" -> data("sessions", if (request.text("projectId") == "other-project") listOf(other) else listOf(first))
+            else -> normal(request)
+        } }
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "other-project", "other")); runCurrent()
+        assertEquals("other", repository.state.value.selection.sessionId)
+        return Triple(transport, host, repository)
+    }
+
+    @Test
+    fun anUnconfirmedCrossProjectTitleDoesNotSurviveAnAuthoritativeOldEpoch() = runTest {
+        val (transport, host, repository) = crossProjectTitleFixture()
+        transport.deliver(listEvent("session", 1, "session.title", "title" to "Provisional", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("Original", repository.state.value.projectSessions.getValue("project").sessions.single().text("title"))
+        val normal = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session")
+            Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "epoch" to host.epoch,
+                "revision" to host.revision, "status" to host.status, "messages" to JsonArray(host.messages.values.toList()),
+                "pendingQuestions" to JsonArray(emptyList())) else normal(request) }
+        repository.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertEquals("Original", repository.state.value.sessions.single().text("title"))
+        assertEquals("Original", repository.state.value.session?.text("title"))
+    }
+
+    @Test
+    fun anUnconfirmedCrossProjectTitleAppearsWhenItsEpochIsConfirmed() = runTest {
+        val (_, host, repository) = crossProjectTitleFixture()
+        host.restart()
+        host.live("session.title", "title" to "New title", "epoch" to host.epoch)
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertEquals("New title", repository.state.value.sessions.single().text("title"))
+        assertEquals("New title", repository.state.value.session?.text("title"))
+    }
+
+    @Test
+    fun aMalformedEpochTitleKeepsLegacyTitleBehaviorDuringAnUnconfirmedEpoch() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        transport.deliver(listEvent("session", 1, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        runCurrent()
+        val page = transport.firstPages().last()
+        host.live("session.title", "title" to "Legacy", "epoch" to "bad")
+        runCurrent()
+        assertEquals("Legacy", repository.state.value.sessions.single().text("title"))
+        transport.response = answer
+        transport.result(page, host.answer(page)); runCurrent()
+        assertEquals("Legacy", repository.state.value.sessions.single().text("title"))
+    }
+
+    @Test
+    fun anAuthoritativePageKeepsANewerConfirmedEpochTitle() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(JsonObject(session() + ("title" to JsonPrimitive("Initial")))))
+        val repository = openedChat(transport, host)
+        host.live("session.title", "title" to "Before", "epoch" to host.epoch); runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        transport.deliver(listEvent("session", 1, "session.title", "title" to "Provisional", "epoch" to "B".repeat(22)))
+        runCurrent()
+        val page = transport.firstPages().last()
+        host.live("session.title", "title" to "Newer", "epoch" to host.epoch); runCurrent()
+        transport.response = answer
+        transport.result(page, host.answer(page)); runCurrent()
+        assertEquals("Newer", repository.state.value.sessions.single().text("title"))
+    }
+
+    @Test
+    fun anAuthoritativePageKeepsALocalRenameAfterAProvisionalTitle() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(JsonObject(session() + ("title" to JsonPrimitive("Initial")))))
+        transport.capabilities = setOf(RENAME_CAPABILITY)
+        val base = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.rename") Wire.objectOf("kind" to "session",
+                "session" to JsonObject(session() + ("title" to JsonPrimitive("User rename"))))
+            else base(request)
+        }
+        val repository = openedChat(transport, host)
+        host.live("session.title", "title" to "Before", "epoch" to host.epoch); runCurrent()
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        transport.deliver(listEvent("session", 1, "session.title", "title" to "Provisional", "epoch" to "B".repeat(22)))
+        runCurrent()
+        val page = transport.firstPages().last()
+        repository.renameSession("session", "User rename"); runCurrent()
+        assertEquals("User rename", repository.state.value.sessions.single().text("title"))
+        transport.response = answer
+        transport.result(page, host.answer(page)); runCurrent()
+        assertEquals("User rename", repository.state.value.sessions.single().text("title"))
+    }
+
+    @Test
+    fun anUnconfirmedEpochCannotRetireAReopenedSessionsAuthoritativeEpoch() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "other")
+                Wire.objectOf("kind" to "snapshot", "sessionId" to "other", "epoch" to "D".repeat(22),
+                    "revision" to 1, "status" to "running", "messages" to JsonArray(emptyList()),
+                    "pendingQuestions" to JsonArray(emptyList()))
+            else answer(request)
+        }
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other")); runCurrent()
+        assertEquals("running", repository.state.value.status)
+        repository.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        transport.deliver(listEvent("other", 9, "session.status", "status" to "waiting", "epoch" to "E".repeat(22)))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other")); runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals("running", repository.state.value.sessions.single { it.text("id") == "other" }.text("status"))
+        transport.deliver(listEvent("other", 10, "session.status", "status" to "offline", "epoch" to "E".repeat(22)))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals("running", repository.state.value.sessions.single { it.text("id") == "other" }.text("status"))
+    }
+
+    @Test
+    fun aFreshReadAfterAnEpochEventCanEstablishALaterUnannouncedEpoch() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        val pages = transport.firstPages().size
+        transport.deliver(listEvent("session", 1, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        runCurrent()
+        val read = transport.firstPages().last()
+        assertEquals(pages + 1, transport.firstPages().size)
+        host.epoch = "C".repeat(22)
+        host.revision = 0
+        host.journal.clear()
+        host.record("session.status", "status" to "running", "epoch" to host.epoch)
+        transport.response = answer
+        transport.result(read, host.answer(read)); runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aNewEpochDuringAFreshReadRetriesAnOldPageOnce() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        host.live("snapshot.required"); runCurrent()
+        val page = transport.firstPages().last()
+        val oldPage = host.answer(page)
+        host.restart()
+        host.live("session.status", "status" to "waiting", "epoch" to host.epoch); runCurrent()
+        transport.result(page, oldPage); runCurrent()
+        val retry = transport.firstPages().last()
+        assertNotEquals(page.text("requestId"), retry.text("requestId"))
+        transport.response = answer
+        transport.result(retry, host.answer(retry)); runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+    }
+
+    @Test
+    fun aLaterUnknownEpochRetriesAfterAnEarlierEpochCouldNotBeConfirmed() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val initialPages = transport.firstPages().size
+        // B's pages remain at zero despite the observed revision 1. Recovery must stop after one retry.
+        host.epoch = "B".repeat(22)
+        host.revision = 0
+        host.journal.clear()
+        transport.deliver(listEvent("session", 1, "session.status", "status" to "waiting", "epoch" to host.epoch))
+        runCurrent()
+        val pages = transport.firstPages().size
+        assertEquals(initialPages + 2, pages)
+        host.epoch = "C".repeat(22)
+        host.revision = 0
+        host.journal.clear()
+        host.live("session.status", "status" to "running", "epoch" to host.epoch)
+        runCurrent()
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals("running", repository.state.value.status)
+    }
+
+    @Test
+    fun aReconnectRetainsThePreviousTimelinesConfirmedEpochWhenTheHostRestarts() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val oldEpoch = host.epoch
+        dropConnection(transport)
+        host.restart()
+        host.record("session.status", "status" to "waiting", "epoch" to host.epoch)
+        reconnect(repository)
+        assertEquals("waiting", repository.state.value.status)
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        transport.deliver(listEvent("session", 2, "session.status", "status" to "running", "epoch" to oldEpoch))
+        runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals("waiting", repository.state.value.sessions.single().text("status"))
+    }
+
+    @Test
+    fun aPageOfAConfirmedRetiredEpochCannotReplaceTheSelectedTimeline() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("old", "old"))
+        val repository = openedChat(transport, host)
+        val oldPage = host.answer(transport.firstPages().first())
+        host.restart()
+        host.record("session.status", "status" to "waiting", "epoch" to host.epoch)
+        host.live("snapshot.required"); runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+        host.live("snapshot.required"); runCurrent()
+        val page = transport.firstPages().last()
+        val count = transport.firstPages().size
+        transport.result(page, oldPage); runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        // This was already a fresh request: keep B and stop instead of retrying forever.
+        assertEquals(count, transport.firstPages().size)
+        assertEquals("waiting", repository.state.value.sessions.single().text("status"))
+        transport.response = answer
+    }
+
+    @Test
+    fun aFirstPageOfAnEpochTheSessionLeftDoesNotReachTheList() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        // B is only an event observation; the resulting fresh page confirms A is still current.
+        transport.deliver(listEvent("session", 1, "session.status", "status" to "waiting", "epoch" to "B".repeat(22)))
+        runCurrent()
+        assertEquals("idle", repository.state.value.sessions.single().text("status"))
+
+        // A subsequent page in A reflects its newer status.
+        host.record("session.status", "status" to "running")
+        host.live("snapshot.required")
+        runCurrent()
+        assertEquals("snapshot", host.answers.last())
+        assertEquals("running", repository.state.value.status)
+        assertEquals("running", repository.state.value.sessions.single().text("status"))
+    }
+
+    @Test
+    fun withoutAnEpochOnTheEventsTheGuardsOfASessionReopenedInPlaceStayUntilTheReconnect() = runTest {
+        // Pins a limitation: a first page in an epoch the lists did not know cannot tell whether
+        // the guards came from another incarnation or from newer live events.
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val repository = openedChat(transport, host)
+        fun row() = repository.state.value.sessions.single { it.text("id") == "other" }
+        transport.deliver(listEvent("other", 900, "session.status", "status" to "running"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertEquals("other", repository.state.value.selection.sessionId)
+        val shown = row().text("status")
+
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "waiting"))
+        runCurrent()
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals(shown, row().text("status"))
+        assertFalse(row().text("status") == "waiting")
+    }
+
+    @Test
+    fun aHeldCompactionPastTheResumeReplyRefreshesTheContextUsageOnce() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                request.text("type") == "session.context.get" -> null
+                else -> answer(request)
+            }
+        }
+        val before = transport.contextReads().size
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        // The host answered the resume before the compaction, so its reply does not carry it; the
+        // compaction arrives before the open's reply selects the chat.
+        val reply = host.answer(resume)
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        assertEquals("other", repository.state.value.selection.sessionId)
+        assertEquals(before, transport.contextReads().size)
+
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        transport.result(resume, reply)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertEquals("session", repository.state.value.selection.sessionId)
+        assertNull(repository.state.value.compaction)
+        // Applied from the held events after the reply, and refreshed once.
+        assertEquals(before + 1, transport.contextReads().size)
+    }
+
+    @Test
+    fun aRejectedHeldPageDoesNotRunAStaleCompactionHintBeforeRecovery() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val oldPage = host.answer(transport.firstPages().first())
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                request.text("type") == "session.context.get" -> null
+                else -> answer(request)
+            }
+        }
+        val opening = backgroundScope.launch {
+            repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        }
+        runCurrent()
+        val first = transport.firstPages().last()
+        // This old-epoch event waits for the held page without its selected-chat hint.
+        host.live("session.compaction", "state" to "done", "epoch" to host.epoch)
+        host.restart()
+        runCurrent()
+        assertEquals("other", repository.state.value.selection.sessionId)
+
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        // The old compaction is now buffered in the selected Timeline. The new epoch overtakes
+        // its page, which must discard the buffered event rather than run its delayed hint.
+        host.live("session.status", "status" to "waiting", "epoch" to host.epoch)
+        runCurrent()
+        val readsAfterSelection = transport.contextReads().size
+        transport.result(first, oldPage)
+        runCurrent()
+        assertEquals(readsAfterSelection, transport.contextReads().size)
+        val retry = transport.firstPages().last()
+        assertNotEquals(first.text("requestId"), retry.text("requestId"))
+        transport.result(retry, host.answer(retry))
+        runCurrent()
+        assertEquals(readsAfterSelection, transport.contextReads().size)
+        assertTrue(opening.isCompleted)
+
+        // A later event in the authoritative journal still runs its selected-chat hint once.
+        host.live("session.compaction", "state" to "done", "epoch" to host.epoch)
+        runCurrent()
+        assertEquals(readsAfterSelection + 1, transport.contextReads().size)
+    }
+
+    @Test
+    fun aHeldAdvisorStatusDoesNotOverwriteTheNewerAdvisorTheActivationRead() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(ADVISOR_CAPABILITY)
+        fun advisorOf(sessionId: String, enabled: Boolean) =
+            JsonObject(advisorData(enabled) + ("sessionId" to JsonPrimitive(sessionId)))
+        val journal = transport.response
+        val advisorReads = mutableListOf<JsonObject>()
+        var holdAdvisor = false
+        transport.response = { request ->
+            if (request.text("type") == "session.advisor.get")
+                if (holdAdvisor && request.text("sessionId") == "session") null.also { advisorReads += request }
+                else advisorOf(request.text("sessionId"), enabled = false)
+            else journal(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        holdAdvisor = true
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                else -> answer(request)
+            }
+        }
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val resume = transport.firstPages().last()
+        val reply = host.answer(resume)
+        // An older advisor status arrives before the open selects the chat, past the reply.
+        val stale = advisorOf("session", enabled = true).filterKeys { it != "kind" && it != "choices" }
+        host.live("advisor.status", "advisor" to JsonObject(stale))
+        runCurrent()
+
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        // The activation's own read is newer than that event.
+        transport.result(advisorReads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+
+        transport.result(resume, reply)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    private fun advisorOf(sessionId: String, enabled: Boolean) =
+        JsonObject(advisorData(enabled) + ("sessionId" to JsonPrimitive(sessionId)))
+
+    /** An advisor status event's `advisor` object: the advisor without its kind and choices. */
+    private fun advisorStatus(enabled: Boolean) =
+        JsonObject(advisorOf("session", enabled).filterKeys { it != "kind" && it != "choices" })
+
+    /**
+     * Opens "session" again after the phone missed an advisor status of it ([replayedEnabled]),
+     * with the activation's advisor read answered ([readEnabled]) before the resume reply that
+     * replays the status, or after it with [readFirst] false. Returns the repository and the
+     * advisor reads of "session" that are still to be answered.
+     */
+    private suspend fun TestScope.advisorReplayedAfterARead(
+        replayedEnabled: Boolean,
+        readEnabled: Boolean,
+        readFirst: Boolean = true,
+    ): Triple<Transport, DefaultRemoteRepository, MutableList<JsonObject>> {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(ADVISOR_CAPABILITY)
+        val journal = transport.response
+        val advisorReads = mutableListOf<JsonObject>()
+        var holdAdvisor = false
+        transport.response = { request ->
+            if (request.text("type") == "session.advisor.get")
+                if (holdAdvisor && request.text("sessionId") == "session") null.also { advisorReads += request }
+                else advisorOf(request.text("sessionId"), enabled = false)
+            else journal(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        // Missed while the chat was left.
+        host.record("advisor.status", "advisor" to advisorStatus(replayedEnabled))
+        val answer = transport.response
+        holdAdvisor = true
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session") null else answer(request)
+        }
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        assertEquals(1, advisorReads.size)
+        if (readFirst) {
+            transport.result(advisorReads.removeAt(0), advisorOf("session", readEnabled))
+            runCurrent()
+            assertEquals(readEnabled, repository.state.value.advisor?.enabled)
+        }
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        return Triple(transport, repository, advisorReads)
+    }
+
+    @Test
+    fun aReplayedAdvisorStatusOlderThanTheActivationsReadDoesNotOverwriteIt() = runTest {
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
+        // Read again instead of merged; the host still reports what the first read did.
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        transport.result(reads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aReplayedAdvisorStatusNewerThanTheReadShowsThroughTheReadAgain() = runTest {
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
+        // The host turned it on after the activation's read: the read after the reply shows it.
+        transport.result(reads.single(), advisorOf("session", enabled = true))
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aReplayWhileTheActivationsAdvisorReadIsUnansweredSendsNoSecondRead() = runTest {
+        val (transport, repository, reads) =
+            advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false, readFirst = false)
+        // The replayed status is not merged, and the read in flight covers it: no second read.
+        assertEquals(1, reads.size)
+        assertNotEquals(true, repository.state.value.advisor?.enabled)
+        transport.result(reads.single(), advisorOf("session", enabled = false))
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+    }
+
+    @Test
+    fun aLiveAdvisorStatusAfterTheReadStillAppliesWithoutAnotherRead() = runTest {
+        // The replay leaves the live merge that follows intact.
+        val (transport, repository, reads) = advisorReplayedAfterARead(replayedEnabled = true, readEnabled = false)
+        reads.forEach { transport.result(it, advisorOf("session", enabled = false)) }
+        runCurrent()
+        val before = transport.sent.count { it.text("type") == "session.advisor.get" }
+
+        transport.deliver(listEvent("session", 3, "advisor.status", "advisor" to advisorStatus(enabled = true)))
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+        assertEquals(before, transport.sent.count { it.text("type") == "session.advisor.get" })
+    }
+
+    @Test
+    fun aHeldCompactionIsRefreshedOnceAcrossASameSessionReactivation() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                request.text("type") == "session.context.get" -> null
+                else -> answer(request)
+            }
+        }
+        val before = transport.contextReads().size
+
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val first = transport.firstPages().last()
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        assertEquals("session", repository.state.value.selection.sessionId)
+        val pages = transport.firstPages().size
+
+        // The chat is activated again before the first resume answers: its Timeline is continued.
+        val again = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+        val second = transport.firstPages().drop(pages).single()
+        assertEquals(ResumeBase(host.epoch, 1), second.resumeBase())
+        transport.result(second, host.answer(second))
+        runCurrent()
+        assertTrue(again.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertNull(repository.state.value.compaction)
+        assertEquals(before + 1, transport.contextReads().size)
+        // The first resume's late reply changes nothing.
+        transport.result(first, host.answer(first))
+        runCurrent()
+        assertEquals(before + 1, transport.contextReads().size)
+        opening.cancel()
+    }
+
+    @Test
+    fun aHeldCompactionPastTheFirstPageRefreshesTheContextUsageOnce() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        val repository = openedChat(transport, host)
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        val pages = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "other" -> null.also { pages += request }
+                request.text("type") == "session.context.get" -> null
+                else -> answer(request)
+            }
+        }
+        val before = transport.contextReads().size
+
+        // A chat never opened: its first page is read afresh alongside the open.
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "other"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertEquals(ResumeBase(null, 0), pages.single().resumeBase())
+        // The page is at revision 0; the compaction after it arrives before the chat is selected.
+        transport.deliver(listEvent("other", 1, "session.compaction", "state" to "running", "reason" to "manual"))
+        transport.deliver(listEvent("other", 2, "session.compaction", "state" to "done"))
+        runCurrent()
+        assertEquals("session", repository.state.value.selection.sessionId)
+        assertEquals(before, transport.contextReads().size)
+
+        transport.result(opens.single(), Wire.objectOf("kind" to "session", "session" to session("other")))
+        runCurrent()
+        transport.result(pages.single(), checkNotNull(answer(pages.single())))
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("other", repository.state.value.selection.sessionId)
+        assertNull(repository.state.value.compaction)
+        assertEquals(before + 1, transport.contextReads().size)
+    }
+
+    @Test
+    fun aLiveCompactionPastTheResumeReplyIsNotRefreshedAgainWhenItsBufferDrains() = runTest {
+        val (transport, host) = journalTransport()
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val before = transport.contextReads().size
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") in setOf("session.snapshot", "session.context.get")) null else answer(request)
+        }
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        val reply = host.answer(resume)
+
+        // Past the reply's revision, and live for the selected chat: refreshed on arrival.
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        assertEquals(before + 1, transport.contextReads().size)
+
+        transport.result(resume, reply)
+        runCurrent()
+        assertEquals("session.events", host.answers.last())
+        assertNull(repository.state.value.compaction)
+        assertEquals(before + 1, transport.contextReads().size)
+    }
+
+    @Test
+    fun aCompactionHeldForAnOpenBeforeItsChatWasSelectedRefreshesTheContextUsageOnce() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when {
+                request.text("type") == "sessions.open" -> null.also { opens += request }
+                request.text("type") == "session.snapshot" && request.text("sessionId") == "session" -> null
+                request.text("type") == "session.context.get" -> null
+                else -> answer(request)
+            }
+        }
+        val before = transport.contextReads().size
+
+        // The open of the kept chat holds its resume; the compaction arrives before the open's reply
+        // selects the chat, so its context refresh is skipped then.
+        val opening = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        assertEquals("other", repository.state.value.selection.sessionId)
+        assertEquals(before, transport.contextReads().size)
+
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        runCurrent()
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertEquals("session", repository.state.value.selection.sessionId)
+        // The replay runs the refresh the held event skipped, once.
+        assertEquals(before + 1, transport.contextReads().size)
+    }
+
+    @Test
+    fun aListStatusWithoutAnEpochAtALowRevisionIsStillDropped() = runTest {
+        val (transport, host) = journalTransport(sessions = listOf(session(), session("other")))
+        val repository = openedChat(transport, host)
+        fun row() = repository.state.value.sessions.single { it.text("id") == "other" }
+        transport.deliver(listEvent("other", 9, "session.status", "status" to "running"))
+        transport.deliver(listEvent("other", 10, "session.title", "title" to "Before"))
+        runCurrent()
+
+        transport.deliver(listEvent("other", 1, "session.status", "status" to "waiting"))
+        transport.deliver(listEvent("other", 2, "session.title", "title" to "After"))
+        runCurrent()
+        assertEquals("running", row().text("status"))
+        assertEquals("Before", row().text("title"))
+    }
+
+    @Test
+    fun aReplayedCompactionDoneClearsAndRefreshesTheContextUsage() = runTest {
+        val (transport, host) = journalTransport()
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        var usedTokens = 150_000
+        val stream = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.context.get")
+                Wire.objectOf(
+                    "kind" to "context",
+                    "sessionId" to request.text("sessionId"),
+                    "usedTokens" to usedTokens,
+                    "contextWindow" to 200_000,
+                    "percent" to usedTokens / 2_000.0,
+                )
+            else stream(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.refreshContextUsage()
+        runCurrent()
+        assertEquals(150_000L, repository.state.value.contextUsage?.usedTokens)
+        fun reads() = transport.sent.count { it.text("type") == "session.context.get" }
+        val before = reads()
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") in setOf("session.snapshot", "session.context.get")) null else answer(request)
+        }
+
+        // The compaction's events are lost; a later status leaves a gap that the journal fills.
+        host.record("session.compaction", "state" to "running", "reason" to "manual")
+        host.record("session.compaction", "state" to "done")
+        usedTokens = 20_000
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        val resume = transport.firstPages().last()
+        val reply = host.answer(resume)
+        assertEquals("session.events", host.answers.last())
+        transport.result(resume, reply)
+        runCurrent()
+        // Cleared as the replay applies, and read again.
+        assertNull(repository.state.value.contextUsage)
+        assertEquals(before + 1, reads())
+
+        val read = transport.sent.last { it.text("type") == "session.context.get" }
+        transport.result(read, checkNotNull(answer(read)))
+        runCurrent()
+        assertEquals(20_000L, repository.state.value.contextUsage?.usedTokens)
+    }
+
+    private fun contextReply(sessionId: String, usedTokens: Int) =
+        Wire.objectOf(
+            "kind" to "context",
+            "sessionId" to sessionId,
+            "usedTokens" to usedTokens,
+            "contextWindow" to 200_000,
+            "percent" to usedTokens / 2_000.0,
+        )
+
+    private fun Transport.contextReads() = sent.filter { it.text("type") == "session.context.get" }
+
+    @Test
+    fun aCompactionThatArrivesLiveWhileTheResumeIsInFlightRefreshesTheContextUsageOnce() = runTest {
+        val (transport, host) = journalTransport()
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val before = transport.contextReads().size
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") in setOf("session.snapshot", "session.context.get")) null else answer(request)
+        }
+        // A lost event: the gap resume goes out and waits for its reply.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+
+        // The compaction reaches the app live while the resume is in flight; its reply carries it too.
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        assertNull(repository.state.value.contextUsage)
+        assertEquals(before + 1, transport.contextReads().size)
+        transport.result(transport.contextReads().last(), contextReply("session", 20_000))
+        runCurrent()
+        assertEquals(20_000L, repository.state.value.contextUsage?.usedTokens)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals("session.events", host.answers.last())
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        // The replay neither reads the usage again nor clears it.
+        assertEquals(before + 1, transport.contextReads().size)
+        assertEquals(20_000L, repository.state.value.contextUsage?.usedTokens)
+    }
+
+    @Test
+    fun aCompactionHeardWhileTheSelectedChatWasDetachedIsNotRefreshedAgainByTheRefocusResume() = runTest {
+        val (transport, host) = streamTransport()
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val before = transport.contextReads().size
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.context.get") null else answer(request) }
+        // In the background past the grace: the chat stays selected, its Timeline detaches.
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        host.live("session.compaction", "state" to "running", "reason" to "manual")
+        host.live("session.compaction", "state" to "done")
+        runCurrent()
+        assertEquals(before + 1, transport.contextReads().size)
+        transport.result(transport.contextReads().last(), contextReply("session", 20_000))
+        runCurrent()
+        assertEquals(20_000L, repository.state.value.contextUsage?.usedTokens)
+        host.answers.clear()
+        val pages = transport.firstPages().size
+
+        // Back in front: the refocus resumes from revision 1 and replays the compaction.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertEquals(ResumeBase(host.epoch, 1), transport.firstPages()[pages].resumeBase())
+        assertEquals("session.events", host.answers.first())
+        assertEquals(before + 1, transport.contextReads().size)
+        assertEquals(20_000L, repository.state.value.contextUsage?.usedTokens)
+    }
+
+    // The test scope and the app's immediate one (Dispatchers.Main.immediate) order the scheduled
+    // reread differently against the activation's end, so each gets a test.
+    @Test
+    fun aFocusThatLapsedDuringAnActivationReadsTheFirstPageOnceNotTwice() = runTest {
+        focusLapsedDuringAnActivation(immediate = false)
+    }
+
+    @Test
+    fun aFocusThatLapsedDuringAnActivationReadsTheFirstPageOnceNotTwiceOnAnImmediateScope() = runTest {
+        focusLapsedDuringAnActivation(immediate = true)
+    }
+
+    private suspend fun TestScope.focusLapsedDuringAnActivation(immediate: Boolean) {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(this@RemoteRepositoryTest.host)),
+                Drafts(),
+                transport,
+                if (immediate) CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
+                else backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        // Left for the list, and the app goes to the background past the grace.
+        repository.activate(RemoteSelection("host", "project"))
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        // Filtered by the empty focus.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        val pages = transport.firstPages().size
+
+        // An activation in the background reopens the chat out of focus, so its focus lapses.
+        val opening = async { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        assertEquals(pages + 1, transport.firstPages().size)
+        val read = transport.firstPages().last()
+        // Back in front before the reply: the activation keeps the focus it sent until it ends.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        transport.response = answer
+        transport.result(read, host.answer(read))
+        runCurrent()
+        opening.await()
+        assertFalse(repository.state.value.loading)
+        assertEquals(listOf("session"), transport.focuses().last())
+        // One fresh first page, read after the focus that names the chat. The foreground probe
+        // that waited for the activation may resume from it afterwards; that is no reread.
+        val rereads = transport.firstPages().drop(pages + 1).filter { it.resumeBase() == ResumeBase(null, 0) }
+        assertEquals("immediate=$immediate", 1, rereads.size)
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(rereads.single()))
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+    }
+
+    private val resumeTasks = JsonArray(listOf(Wire.objectOf("id" to 1, "text" to "Write tests", "status" to "pending")))
+
+    @Test
+    fun knownTasksStayAfterAReplayAndUnknownOnesAreReadWithOneFreshRequest() = runTest {
+        for (known in listOf(true, false)) {
+            val (transport, host) = journalTransport(capabilities = listOf(SESSION_TASKS_CAPABILITY))
+            // An unknown list: the host could not read the session's tasks.
+            host.tasks = if (known) resumeTasks else null
+            val repository = openedChat(transport, host)
+            val expected = if (known) TaskFreshness.LIVE else TaskFreshness.UNAVAILABLE
+            assertEquals(known.toString(), expected, repository.state.value.tasks.freshness)
+            dropConnection(transport)
+            assertEquals(known.toString(), if (known) TaskFreshness.STALE else expected, repository.state.value.tasks.freshness)
+            val pages = transport.firstPages().size
+            host.answers.clear()
+            host.record("session.status", "status" to "running")
+            reconnect(repository)
+
+            assertEquals(known.toString(), if (known) listOf("session.events") else listOf("session.events", "snapshot"), host.answers)
+            if (known) {
+                assertEquals(pages + 1, transport.firstPages().size)
+                assertEquals(SessionTasks(listOf(SessionTask(1, "Write tests", TaskStatus.PENDING)), TaskFreshness.LIVE), repository.state.value.tasks)
+            } else {
+                val refresh = transport.firstPages().last()
+                assertEquals(pages + 2, transport.firstPages().size)
+                assertEquals(ResumeBase(null, 0), refresh.resumeBase())
+                assertEquals(JsonPrimitive(true), refresh["includeTasks"])
+            }
+            assertEquals(known.toString(), "running", repository.state.value.status)
+        }
+    }
+
+    @Test
+    fun aKeptChatResumesOnReselectAndBringsBackItsTasksStaleUntilTheReply() = runTest {
+        val (transport, host) =
+            journalTransport(sessions = listOf(session(), session("other")), capabilities = listOf(SESSION_TASKS_CAPABILITY))
+        host.tasks = resumeTasks
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        assertEquals(TaskFreshness.LIVE, repository.state.value.tasks.freshness)
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertTrue(repository.state.value.tasks.items.isEmpty())
+        // The chat left gets events that no Timeline on screen applies.
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session") null else answer(request)
+        }
+        val pages = transport.firstPages().size
+
+        val reselect = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        // What the chat showed comes back at once, its tasks marked stale.
+        assertEquals(listOf("m1"), shownIds(repository))
+        assertEquals("Write tests", repository.state.value.tasks.items.single().text)
+        assertEquals(TaskFreshness.STALE, repository.state.value.tasks.freshness)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+
+        assertTrue(reselect.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals(TaskFreshness.LIVE, repository.state.value.tasks.freshness)
+        assertEquals("Write tests", repository.state.value.tasks.items.single().text)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aStaleCursorTakesOneFreshFirstPageAndRetriesTheOlderPageOnce() = runTest {
+        for (failures in listOf(1, 2)) {
+            val (transport, host) = journalTransport()
+            host.cursor = "first:1"
+            host.record("message.upsert", "message" to journalMessage("m2", "World"))
+            val repository = openedChat(transport, host)
+            host.cursor = "second:1"
+            var left = failures
+            transport.failure = { request -> if ("cursor" in request && left-- > 0) "stale_cursor" else null }
+            val answer = transport.response
+            transport.response = { request ->
+                if ("cursor" in request)
+                    Wire.objectOf(
+                        "kind" to "snapshot", "sessionId" to "session", "revision" to host.revision, "status" to "idle",
+                        "messages" to JsonArray(listOf(journalMessage("m1", "Hello"))), "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                else answer(request)
+            }
+            val before = transport.sent.count { it.text("type") == "session.snapshot" }
+
+            repository.older()
+            runCurrent()
+
+            val reads = transport.sent.filter { it.text("type") == "session.snapshot" }.drop(before)
+            assertEquals(failures.toString(), 3, reads.size)
+            assertEquals("first:1", reads[0].text("cursor"))
+            assertEquals(ResumeBase(null, 0), reads[1].resumeBase())
+            assertEquals("second:1", reads[2].text("cursor"))
+            if (failures == 1) {
+                assertEquals(listOf("m1", "m2"), shownIds(repository))
+                assertNull(repository.state.value.error)
+            } else {
+                assertEquals(listOf("m2"), shownIds(repository))
+                assertEquals(R.string.remote_request_error, repository.state.value.error)
+            }
+        }
+    }
+
+    @Test
+    fun anOlderPageThatFinishesDuringAResumeLeavesTheEventsHeldForIt() = runTest {
+        val (transport, host) = journalTransport()
+        host.cursor = "first:1"
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        val repository = openedChat(transport, host)
+        val opened = host.revision
+        val pages = transport.firstPages().size
+        val answer = transport.response
+        transport.response = { request ->
+            when {
+                request.text("type") != "session.snapshot" -> answer(request)
+                "cursor" in request ->
+                    Wire.objectOf(
+                        "kind" to "snapshot", "sessionId" to "session", "revision" to opened, "status" to "idle",
+                        "messages" to JsonArray(listOf(journalMessage("m1", "Hello"))), "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                // The resume's reply is slow.
+                else -> null
+            }
+        }
+
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m3", "Again"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, opened), resume.resumeBase())
+        host.live("session.status", "status" to "waiting")
+        repository.older()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        // The older page is in; the events held for the resume still wait, and nothing else was asked.
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+
+        assertEquals(listOf("session.events"), host.answers)
+        assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun anEpochRestartThatDropsEventsHeldForTheResumeFetchesThemWithOneResume() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        repeat(3) { host.record("session.status", "status" to "running") }
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "idle")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 4), resume.resumeBase())
+        // The session is reopened in place before the request arrives: a new epoch from revision 0.
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m3", "Reopened"))
+        val reply = host.answer(resume)
+        // An event of the new epoch overtakes the reply, and nothing follows it.
+        host.live("session.status", "status" to "waiting")
+        runCurrent()
+        transport.response = answer
+        transport.result(resume, reply)
+        runCurrent()
+
+        assertEquals(listOf("snapshot", "session.events"), host.answers)
+        assertEquals(ResumeBase(host.epoch, 1), transport.firstPages().last().resumeBase())
+        assertEquals(pages + 2, transport.firstPages().size)
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
+    }
+
+    /** Answers [request], which is still waiting, with the host error [code]. */
+    private fun Transport.hostError(request: JsonObject, code: String) =
+        deliver(
+            Wire.objectOf(
+                "type" to "result",
+                "requestId" to request.text("requestId"),
+                "ok" to false,
+                "error" to Wire.objectOf("code" to code, "message" to code),
+            )
+        )
+
+    @Test
+    fun aFailedResumeAsksOnceMoreOnlyWhenAnEventThatArrivedMeanwhileWaitsBehindAGap() = runTest {
+        for (arrival in listOf(true, false)) {
+            val (transport, host) = journalTransport()
+            host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+            val repository = openedChat(transport, host)
+            val opened = host.revision
+            val pages = transport.firstPages().size
+            val answer = transport.response
+            transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+            // A lost event: the gap resume goes out, and its reply is slow.
+            host.record("session.status", "status" to "running")
+            host.live("message.upsert", "message" to journalMessage("m2", "World"))
+            runCurrent()
+            val resume = transport.firstPages().last()
+            assertEquals(ResumeBase(host.epoch, opened), resume.resumeBase())
+            // This one waits for the reply, behind the same gap.
+            if (arrival) host.live("session.status", "status" to "waiting")
+            runCurrent()
+            transport.response = answer
+            transport.hostError(resume, "internal_error")
+            runCurrent()
+
+            if (arrival) {
+                val retry = transport.firstPages().last()
+                assertEquals(pages + 2, transport.firstPages().size)
+                assertEquals(ResumeBase(host.epoch, opened), retry.resumeBase())
+                assertEquals(listOf("session.events"), host.answers)
+                assertEquals(listOf("m1", "m2"), shownIds(repository))
+                assertEquals("waiting", repository.state.value.status)
+            } else {
+                // The failed request's own gap waits for the next live event, so a host that keeps
+                // failing is not asked again in a loop.
+                assertEquals(pages + 1, transport.firstPages().size)
+                assertEquals(listOf("m1"), shownIds(repository))
+                assertEquals(R.string.remote_request_error, repository.state.value.error)
+            }
+        }
+    }
+
+    @Test
+    fun aLiveEventThatOvertakesTheStaleCursorRecoveryWaitsForItsFirstPage() = runTest {
+        val (transport, host) = journalTransport()
+        host.cursor = "first:1"
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        val repository = openedChat(transport, host)
+        host.cursor = "second:1"
+        // Another device's first pages retired the first token for good.
+        transport.failure = { request -> if ("cursor" in request && request.text("cursor") == "first:1") "stale_cursor" else null }
+        var firstPage: JsonObject? = null
+        val answer = transport.response
+        transport.response = { request ->
+            when {
+                request.text("type") != "session.snapshot" -> answer(request)
+                // A cursor page counts in its first page's revision.
+                "cursor" in request ->
+                    Wire.objectOf(
+                        "kind" to "snapshot", "sessionId" to "session", "revision" to firstPage!!.long("revision"),
+                        "status" to "idle", "messages" to JsonArray(listOf(journalMessage("m1", "Hello"))),
+                        "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                // The recovery's first page is slow.
+                else -> null
+            }
+        }
+        val before = transport.sent.count { it.text("type") == "session.snapshot" }
+
+        repository.older()
+        runCurrent()
+        val recovery = transport.firstPages().last()
+        assertEquals(ResumeBase(null, 0), recovery.resumeBase())
+        val reply = host.answer(recovery)
+        firstPage = reply
+        // The streaming session's next event overtakes the reply.
+        host.live("message.upsert", "message" to journalMessage("m3", "Again"))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals(listOf("m2"), shownIds(repository))
+
+        transport.result(recovery, reply)
+        runCurrent()
+
+        val reads = transport.sent.filter { it.text("type") == "session.snapshot" }.drop(before)
+        assertEquals(3, reads.size)
+        assertEquals("first:1", reads[0].text("cursor"))
+        assertEquals("second:1", reads[2].text("cursor"))
+        assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
+        assertNull(repository.state.value.error)
+    }
+
+    /** A host with a phone journal that also advertises `remote.stream.v1` and answers focus and pings. */
+    private fun streamTransport(
+        sessions: List<JsonObject> = listOf(session(), session("other")),
+    ): Pair<Transport, JournalHost> {
+        val (transport, host) = journalTransport(sessions, capabilities = listOf(STREAM_CAPABILITY))
+        val answer = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.focus" -> Wire.objectOf("kind" to "session.focus", "sessionIds" to request.getValue("sessionIds"))
+                "remote.ping" -> Wire.objectOf("kind" to "pong", "relayRttMs" to 40)
+                else -> answer(request)
+            }
+        }
+        return transport to host
+    }
+
+    private fun Transport.focuses() =
+        sent.filter { it.text("type") == "session.focus" }.map { focus -> focus.getValue("sessionIds").jsonArray.map { it.jsonPrimitive.content } }
+
+    private fun Transport.pings() = sent.count { it.text("type") == "remote.ping" }
+
+    @Test fun aFrameDuringPacedFocusAdmissionDoesNotHideADeadConnection() = runTest {
+        val (transport, host) = streamTransport()
+        val repository = openedChat(transport, host)
+        val gate = CompletableDeferred<Unit>()
+        transport.beforeGuardedSend = { if (it.text("type") == "session.focus") gate.await() }
+        repository.activate(RemoteSelection("host", "project")); runCurrent()
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
+        val closes = transport.closes
+        transport.response = { null }
+        gate.complete(Unit); runCurrent()
+        transport.beforeGuardedSend = {}
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS); runCurrent()
+        assertTrue("Frame before focus dispatch must not hide a dead socket", transport.closes > closes)
+    }
+
+    private fun Transport.lastIndexOf(type: String) = sent.indexOfLast { it.text("type") == type }
+
+    @Test
+    fun theFocusGoesOnlyToAConnectionThatAdvertisedTheStreamCapability() = runTest {
+        val (legacy, legacyHost) = journalTransport()
+        openedChat(legacy, legacyHost)
+        dropConnection(legacy)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(legacy.focuses().isEmpty())
+        assertEquals(0, legacy.pings())
+
+        val (transport, host) = streamTransport()
+        val repository = openedChat(transport, host)
+        assertEquals(listOf(listOf("session")), transport.focuses())
+        // Sent once the capabilities reply named it, not before.
+        assertTrue(transport.lastIndexOf("session.focus") > transport.sent.indexOfFirst { it.text("type") == "projects.list" })
+
+        // A new connection starts legacy: its focus follows its own capabilities reply.
+        dropConnection(transport)
+        reconnect(repository)
+        assertEquals(listOf(listOf("session"), listOf("session")), transport.focuses())
+        assertTrue(transport.lastIndexOf("session.focus") > transport.lastIndexOf("projects.list"))
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun theFocusFollowsTheSelectionAndNarrowsInTheBackgroundAfterTheGrace() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+
+        // The lists at once.
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        // Another chat: its focus goes out before its first page.
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertEquals(listOf("other"), transport.focuses().last())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(transport.firstPages("other").last()))
+
+        // Back to the first chat, kept since it was left: focus, then its resume.
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(resume))
+        val count = transport.focuses().size
+
+        // The background keeps the focus for the grace, then narrows it.
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS - 1)
+        runCurrent()
+        assertEquals(count, transport.focuses().size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        // Back in the foreground the chat is in focus again.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+    }
+
+    @Test
+    fun aLiveRunKeepsTheFocusInTheBackgroundUntilItEnds() = runTest {
+        val (transport, host) = streamTransport()
+        host.status = "running"
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        assertEquals("running", repository.state.value.status)
+        val count = transport.focuses().size
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS * 2)
+        runCurrent()
+        assertEquals(count, transport.focuses().size)
+
+        // The run ends: past the grace, the focus narrows at once.
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        val pages = transport.firstPages().size
+        // Detached: what the host still sends of the chat applies nothing and asks for nothing.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals(pages, transport.firstPages().size)
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(listOf("m1"), shownIds(repository))
+    }
+
+    @Test
+    fun aRefocusedChatAppliesAnEventThatOvertakesItsResumeAfterTheReplay() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        // Out of focus the host still sends this chat's other events; the detached Timeline
+        // ignores them, so a gap asks for nothing.
+        host.live("session.title", "title" to "Renamed")
+        // An upsert the focus filtered.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        assertEquals(pages, transport.firstPages().size)
+
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        repository.setForeground(true)
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(resume))
+
+        // Sent before the host took the focus: it carries `after` over the filtered upsert.
+        transport.deliver(JsonObject(host.record("session.status", "status" to "running") + ("after" to JsonPrimitive(2))))
+        runCurrent()
+        // Held for the reply.
+        assertEquals(listOf("m1"), shownIds(repository))
+        assertEquals("idle", repository.state.value.status)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals("session.events", host.answers.last())
+        // The replayed first appearance shows in its place, and the held event once after it.
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun pingsGoOncePerConnectionThenEveryThirtySecondsInTheForegroundAndATimeoutEndsNothing() = runTest {
+        val (transport, host) = streamTransport()
+        val repository = openedChat(transport, host)
+        assertEquals(1, transport.pings())
+
+        advanceTimeBy(PING_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(2, transport.pings())
+
+        // None in the background.
+        repository.setForeground(false)
+        advanceTimeBy(PING_INTERVAL_MILLIS + 10_000)
+        runCurrent()
+        assertEquals(2, transport.pings())
+
+        repository.setForeground(true)
+        runCurrent()
+        advanceTimeBy(PING_INTERVAL_MILLIS - 10_000)
+        runCurrent()
+        assertEquals(3, transport.pings())
+
+        // A ping without its pong is recorded and ends nothing.
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "remote.ping") null else answer(request) }
+        val connects = transport.connects
+        val closes = transport.closes
+        advanceTimeBy(PING_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(4, transport.pings())
+        advanceTimeBy(PING_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(connects, transport.connects)
+        assertEquals(closes, transport.closes)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun pingsFeedTheRoundTripSummaryAndATimeoutIsCountedNotFatal() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val (transport, host) = streamTransport()
+            val repository = openedChat(transport, host)
+
+            val rtt = checkNotNull(Diagnostics.link().rtt)
+            assertEquals(1, rtt.count)
+            assertEquals(40L, rtt.relayMs)
+            assertEquals(0L, Diagnostics.link().count(Diagnostics.Counter.PING_TIMEOUTS))
+
+            val answer = transport.response
+            transport.response = { request -> if (request.text("type") == "remote.ping") null else answer(request) }
+            advanceTimeBy(PING_INTERVAL_MILLIS)
+            runCurrent()
+            advanceTimeBy(PING_TIMEOUT_MILLIS + 1)
+            runCurrent()
+
+            assertEquals(1L, Diagnostics.link().count(Diagnostics.Counter.PING_TIMEOUTS))
+            assertEquals(1, Diagnostics.link().rtt?.count)
+            assertTrue(repository.state.value.connected)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    /**
+     * [streamTransport]'s chat at m1 (revision 1) with a resume that stays unanswered, asked for by
+     * a gap (revision 3), and the reply the host made when the request came in. Then the app goes
+     * to the background past the grace, so the focus narrows while the Timeline waits, and the host
+     * records m2 (revision 4), an upsert that focus filtered.
+     */
+    private suspend fun TestScope.lapsedFocus(): LapsedFocus {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        host.record("session.title", "title" to "Renamed")
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        val reply = host.answer(resume)
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        return LapsedFocus(transport, host, repository, resume, reply, answer)
+    }
+
+    private class LapsedFocus(
+        val transport: Transport,
+        val host: JournalHost,
+        val repository: DefaultRemoteRepository,
+        val resume: JsonObject,
+        val reply: JsonObject,
+        val answer: (JsonObject) -> JsonObject?,
+    )
+
+    /** A status event the host sent before it took the focus again: `after` spans the filtered m2. */
+    private fun LapsedFocus.statusOverTheFilteredUpsert(status: String) =
+        transport.deliver(JsonObject(host.record("session.status", "status" to status) + ("after" to JsonPrimitive(3))))
+
+    @Test
+    fun aFocusThatLapsedWhileAResumeWasAwaitedReadsTheChatAfreshOnceItsReplyIsIn() = runTest {
+        val lapsed = lapsedFocus()
+        val (transport, host, repository) = Triple(lapsed.transport, lapsed.host, lapsed.repository)
+
+        // Back before the reply: the chat is in focus again, and nothing else goes out for it yet.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        val pages = transport.firstPages().size
+        lapsed.statusOverTheFilteredUpsert("idle")
+        runCurrent()
+
+        transport.result(lapsed.resume, lapsed.reply)
+        runCurrent()
+        // The held status moved the Timeline past m2, which the replay did not hold: the chat reads
+        // a fresh first page, after the focus that names it.
+        assertEquals(pages + 1, transport.firstPages().size)
+        val reread = transport.firstPages().last()
+        assertEquals(ResumeBase(null, 0), reread.resumeBase())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(reread))
+        assertEquals(listOf("m1"), shownIds(repository))
+
+        transport.result(reread, host.answer(reread))
+        runCurrent()
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aFocusThatLapsedDetachesTheChatOnceItsReplyIsInAndTheRefocusReadsItAfresh() = runTest {
+        val lapsed = lapsedFocus()
+        val (transport, host, repository) = Triple(lapsed.transport, lapsed.host, lapsed.repository)
+        lapsed.statusOverTheFilteredUpsert("idle")
+        runCurrent()
+        transport.result(lapsed.resume, lapsed.reply)
+        runCurrent()
+        val pages = transport.firstPages().size
+
+        // Detached once the reply is in: a gap asks for nothing.
+        host.record("session.title", "title" to "Again")
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals(pages, transport.firstPages().size)
+        assertEquals("idle", repository.state.value.status)
+
+        // The refocus does not resume from a revision past m2: it reads a fresh first page, once.
+        transport.response = lapsed.answer
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals(ResumeBase(null, 0), transport.firstPages().last().resumeBase())
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("running", repository.state.value.status)
+    }
+
+    @Test
+    fun aRefocusAfterTheGraceRefreshesTheConfigurationEvenWhenItsResumeAnswersAfterTheProbe() = runTest {
+        val (transport, host) = streamTransport()
+        transport.capabilities = setOf(CONFIGURATION_CAPABILITY)
+        val stream = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.configuration.get") configurationData(request.text("sessionId"))
+            else stream(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        fun reads() = transport.sent.count { it.text("type") == "session.configuration.get" }
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+
+        // The refocus resume stays unanswered while the probe's list comes back.
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        val before = reads()
+        val lists = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertTrue(transport.sent.count { it.text("type") == "projects.list" } > lists)
+        assertEquals(before + 1, reads())
+
+        // The late reply moves the chat but asks for no second read.
+        val resume = transport.firstPages().last()
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals(before + 1, reads())
+    }
+
+    @Test
+    fun aRefocusOnAnImmediateScopeSendsTheFocusBeforeExactlyOneResume() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        // The app's scope runs on Dispatchers.Main.immediate: a launched probe runs at once.
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(this@RemoteRepositoryTest.host)),
+                Drafts(),
+                transport,
+                CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        host.answers.clear()
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+
+        val from = transport.sent.size
+        repository.setForeground(true)
+        runCurrent()
+        val order =
+            transport.sent.drop(from).mapNotNull { request ->
+                when {
+                    request.text("type") == "session.focus" -> "focus"
+                    request.text("type") == "session.snapshot" && "cursor" !in request -> "resume"
+                    else -> null
+                }
+            }
+        assertEquals(listOf("focus", "resume"), order)
+        assertTrue(transport.sent.drop(from).any { it.text("type") == "projects.list" })
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+    }
+
+    @Test
+    fun aForegroundReturnDuringAnOpenKeepsTheFocusTheOpenSent() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        // The open and its first page stay unanswered, so the activation is still in flight.
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "sessions.open" || (request.text("type") == "session.snapshot" && request.text("sessionId") == "other")) null
+            else answer(request)
+        }
+        val opening = async {
+            repository.activate(RemoteSelection("host", "project", "other"), ActivationMode.USER_OPEN)
+        }
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        assertEquals(listOf("other"), transport.focuses().last())
+        val focuses = transport.focuses().size
+
+        // Home and straight back: the list the open leaves must not take the focus back.
+        repository.setForeground(false)
+        runCurrent()
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf(listOf("other")), transport.focuses().drop(focuses - 1))
+        opening.cancel()
+    }
+
+    @Test
+    fun theBackgroundGraceEndsOnTheTimerEvenWhenTheWallClockIsSetBack() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        var offset = 0L
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(this@RemoteRepositoryTest.host)),
+                Drafts(),
+                transport,
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime + offset },
+                jitter = { 0.5 },
+            )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+
+        repository.setForeground(false)
+        offset = -60_000
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+    }
+
+    // ---- A push wakes the main connection ----
+
+    @Test
+    fun aPushWakesABackgroundedConnectionThatDroppedAndClosesItWhenTheWindowEnds() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        dropConnection(transport)
+        // In the background nothing reconnects on its own.
+        advanceTimeBy(30_000)
+        runCurrent()
+        val connects = transport.connects
+        assertFalse(repository.state.value.connected)
+
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        // The woken connection streams nothing.
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 1)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(closes, transport.closes)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(closes + 1, transport.closes)
+        assertFalse(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertNull(repository.state.value.reconnectAt)
+        // Closed for good: no retry follows in the background, and the next return reconnects.
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(listOf("session"), transport.focuses().last())
+    }
+
+    @Test
+    fun aPushWakeKeepsRetryingInTheBackgroundOnlyWhileTheWindowIsOpen() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val connects = transport.connects
+
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        // The attempt failed: the usual backoff runs inside the window.
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 1_000)
+        runCurrent()
+        assertTrue(transport.connects > connects + 1)
+        advanceTimeBy(1_000)
+        runCurrent()
+        val after = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(after, transport.connects)
+        assertNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun aPushWakeDoesNothingForAColdProcessAnotherMacTheForegroundOrAConnectedApp() = runTest {
+        val transport = Transport().also { configure(it) }
+        val cold = repository(transport)
+        cold.setForeground(false)
+        cold.setValidatedNetwork("wifi")
+        cold.pushWake("host")
+        runCurrent()
+        assertEquals(0, transport.connects)
+
+        val repository = chatRepository(transport)
+        val connects = transport.connects
+        // Connected: nothing to start.
+        repository.setForeground(false)
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS * 2)
+        runCurrent()
+        assertTrue("no window, so nothing closes it", repository.state.value.connected)
+
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        repository.pushWake("other")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // In front the ordinary reconnect applies; the push adds nothing.
+        repository.setForeground(true)
+        runCurrent()
+        val reconnected = transport.connects
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val failedAttempts = transport.connects
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(failedAttempts, transport.connects)
+        assertTrue(reconnected <= failedAttempts)
+    }
+
+    @Test
+    fun aPushWakeNeedsANetworkAndAllowedReconnects() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        repository.setNetwork(null, false)
+        val connects = transport.connects
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        repository.setNetwork("wifi", true)
+        repository.disconnect()
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+    }
+
+    @Test
+    fun theReturnToTheForegroundKeepsTheWokenConnectionAndEndsTheWindow() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        repository.pushWake("host")
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+
+        repository.setForeground(true)
+        runCurrent()
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS * 2)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aWindowEndClosesTheSocketOfAChatThatRunsOrWaitsWithoutALiveRunService() = runTest {
+        // The status alone is no live run: the service starts only when the app goes to the
+        // background, so a wake that finds a running or waiting chat must not leave the socket open.
+        for (status in listOf("running", "waiting")) {
+            val (transport, host) = streamTransport()
+            host.status = status
+            host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+            val repository = openedChat(transport, host)
+            repository.setForeground(false)
+            advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+            dropConnection(transport)
+            repository.pushWake("host")
+            runCurrent()
+            assertTrue(repository.state.value.connected)
+            assertEquals(status, repository.state.value.status)
+            // Not streamed to a phone nobody looks at.
+            assertEquals(emptyList<String>(), transport.focuses().last())
+
+            val closes = transport.closes
+            advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS)
+            runCurrent()
+            assertEquals(closes + 1, transport.closes)
+            assertFalse(repository.state.value.connected)
+        }
+    }
+
+    @Test
+    fun aWindowEndKeepsTheConnectionOfALiveRunTheServiceKeeps() = runTest {
+        val (transport, host) = streamTransport()
+        host.status = "running"
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        var kept = false
+        val repository = openedChat(transport, host) { kept }
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        dropConnection(transport)
+        kept = true
+        repository.pushWake("host")
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals("running", repository.state.value.status)
+        // The run keeps its chat in focus.
+        assertEquals(listOf("session"), transport.focuses().last())
+
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS * 2)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aQueuedPromptWaitsForTheForegroundWhenAPushWakesTheConnectionInTheBackground() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+        repository.setForeground(false)
+        runCurrent()
+
+        repository.pushWake("host")
+        runCurrent()
+        // Read again in the background, but Robin does not see a prompt go out from there.
+        assertTrue(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+
+        // The return in front, still inside the window, reads the chat again and sends it.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun aQueuedPromptHeldByAWakeGoesOutOnTheReconnectAfterTheWindowEnded() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+        repository.setForeground(false)
+        runCurrent()
+        repository.pushWake("host")
+        runCurrent()
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+
+        repository.setForeground(true)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    /**
+     * A streamed chat with a prompt queued while its connection was down, the app in the background
+     * and the Mac's first pages held in [held], answered only when the test says so.
+     */
+    private suspend fun TestScope.queuedPromptInTheBackground(
+        held: MutableList<JsonObject>,
+    ): Triple<Transport, JournalHost, DefaultRemoteRepository> {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        dropConnection(transport)
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) {
+                held += request
+                null
+            } else normal(request)
+        }
+        return Triple(transport, host, repository)
+    }
+
+    @Test
+    fun aQueuedPromptIsNotReleasedByARejectedRetiredPage() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val (transport, host, repository) = queuedPromptInTheBackground(held)
+        repository.pushWake("host"); runCurrent()
+        val wake = held.single()
+        val oldPage = Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "epoch" to host.epoch,
+            "revision" to host.revision, "status" to host.status, "messages" to JsonArray(host.messages.values.toList()),
+            "pendingQuestions" to JsonArray(emptyList()))
+        host.restart()
+        host.record("session.status", "status" to "idle", "epoch" to host.epoch)
+        transport.result(wake, host.answer(wake)); runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        repository.setForeground(true); runCurrent()
+        val reread = held.last()
+        assertNotEquals(wake.text("requestId"), reread.text("requestId"))
+        transport.result(reread, oldPage); runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun aQueuedPromptWaitsForTheRereadWhenTheForegroundComesBeforeTheWokenChatsReply() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val (transport, host, repository) = queuedPromptInTheBackground(held)
+
+        // The wake connects with an empty focus, and the chat's first page is answered late.
+        repository.pushWake("host")
+        runCurrent()
+        val woken = held.single()
+        // Back in front before that reply lands; the reply that follows was read out of focus.
+        repository.setForeground(true)
+        runCurrent()
+        // Meanwhile pi's terminal wrote to the chat, unseen by the woken connection's empty focus.
+        val reply = host.answer(woken)
+        host.record("message.upsert", "message" to Wire.objectOf("id" to "u1", "role" to "user", "text" to "From the terminal", "state" to "complete"))
+        transport.result(woken, reply)
+        runCurrent()
+
+        // The chat is read again in focus, and the prompt waits for that read.
+        val rereads = held.drop(1)
+        assertTrue(rereads.isNotEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        // The fresh read shows the message the late reply missed: the chat moved on.
+        rereads.forEach { transport.result(it, host.answer(it)) }
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals(listOf("m1", "u1"), shownIds(repository))
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Queued while offline", repository.state.value.draft)
+    }
+
+    @Test
+    fun aQueuedPromptGoesOutAfterTheRereadWhenTheForegroundComesBeforeTheWokenChatsReply() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val (transport, host, repository) = queuedPromptInTheBackground(held)
+        repository.pushWake("host")
+        runCurrent()
+        val woken = held.single()
+        repository.setForeground(true)
+        runCurrent()
+        transport.result(woken, host.answer(woken))
+        runCurrent()
+        val rereads = held.drop(1)
+        assertTrue(rereads.isNotEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        // The fresh read shows the chat as it was: the prompt goes out once, after it.
+        rereads.forEach { transport.result(it, host.answer(it)) }
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun aSecondPushExtendsTheWindow() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        repository.pushWake("host")
+        runCurrent()
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 10_000)
+        runCurrent()
+        repository.pushWake("host")
+        runCurrent()
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 1)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(closes + 1, transport.closes)
+    }
+
+    @Test
+    fun aWorkerWaitsForTheWokenConnectionAndThenUsesIt() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        // Without a window nothing is waited for.
+        val before = testScheduler.currentTime
+        repository.awaitPushWake("host")
+        assertEquals(before, testScheduler.currentTime)
+        assertNull(repository.withHealthyConnection("host") { error("no connection") })
+
+        transport.readyOnConnect = false
+        repository.pushWake("host")
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        val read =
+            async {
+                repository.awaitPushWake("host")
+                repository.withHealthyConnection("host") { it.request("question.answer", "sessionId" to "session") }
+            }
+        runCurrent()
+        assertFalse(read.isCompleted)
+        advanceTimeBy(500)
+        transport.listener.ready(emptySet())
+        runCurrent()
+        assertEquals("accepted", read.await()?.text("kind"))
+        assertEquals(500, testScheduler.currentTime - before)
+    }
+
+    @Test
+    fun aWorkerStopsWaitingForAWakeThatDoesNotConnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        transport.readyOnConnect = false
+        repository.pushWake("host")
+        runCurrent()
+        val before = testScheduler.currentTime
+        val read = async { repository.awaitPushWake("host") }
+        advanceTimeBy(PUSH_WAKE_WAIT_MILLIS - 1)
+        runCurrent()
+        assertFalse(read.isCompleted)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(read.isCompleted)
+        assertEquals(PUSH_WAKE_WAIT_MILLIS, testScheduler.currentTime - before)
+        assertNull(repository.withHealthyConnection("host") { error("not connected") })
+    }
+
+    @Test
+    fun aWorkerThatStartsBeforeThePostedWakeRanStillWaitsForTheWokenConnection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        transport.readyOnConnect = false
+        // The push posts the wake to a busy main thread, as RemoteApplication.onPushWake does, and
+        // the expedited worker starts on a thread of its own before the wake ran.
+        backgroundScope.launch { repository.pushWake("host") }
+        val read =
+            async(UnconfinedTestDispatcher(testScheduler)) {
+                repository.awaitPushWake("host")
+                repository.withHealthyConnection("host") { it.request("question.answer", "sessionId" to "session") }
+            }
+        assertFalse(read.isCompleted)
+        runCurrent()
+        assertFalse(read.isCompleted)
+        advanceTimeBy(500)
+        transport.listener.ready(emptySet())
+        runCurrent()
+        assertEquals("accepted", read.await()?.text("kind"))
+    }
+
+    private val workerControls by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/session-worker-controls-v1.json")!!.readText()).jsonObject
+            .array("wireValid")
+            .associate { it.text("name") to it.obj("payload") }
+    }
+
+    private fun workerControlSession(): JsonObject =
+        workerControls.getValue("worker-create-result").obj("data").obj("session")
+
+    private fun terminalControlSession(): JsonObject =
+        workerControls.getValue("terminal-session").obj("data").array("items").single()
+
+    private fun controlling(transport: Transport, vararg sessions: JsonObject, v2: Boolean = true) {
+        configure(transport, sessions = sessions.toList(), opened = sessions.first())
+        transport.capabilities = setOf(SESSION_CLOSE_CAPABILITY, COMMANDS_CAPABILITY)
+        advertising(
+            transport,
+            JsonArray(
+                (listOf(FOLLOW_UP_CAPABILITY, STEER_CAPABILITY, RELOAD_CAPABILITY) +
+                    (if (v2) listOf(HOST_WORKER_V2_CAPABILITY) else emptyList())).map(::JsonPrimitive),
+            ),
+        )
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.prompt", "session.close" ->
+                    Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+                "session.reload" -> reloaded(request)
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                "session.snapshot" -> JsonObject(original(request)!! + ("revision" to JsonPrimitive(2)))
+                else -> original(request)
+            }
+        }
+    }
+
+    /** Selects [id] and puts it in the running state, at revision 3, just before the fixture's event. */
+    private suspend fun TestScope.runningRepository(transport: Transport, id: String): DefaultRemoteRepository {
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", id))
+        runCurrent()
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to id,
+            "revision" to 3, "kind" to "session.status", "status" to "running"))
+        return repository
+    }
+
+    private fun refuseControls(transport: Transport, vararg types: String) {
+        val refusal = workerControls.getValue("controls-unsupported").obj("error")
+        transport.failure = { if (it.text("type") in types) refusal.text("code") else null }
+        transport.failureMessage = { refusal.text("message") }
+    }
+
+    @Test
+    fun aWorkerAndAnUnmarkedTerminalSessionQueueAFollowUpWithV2() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val id = session.text("id")
+            val transport = Transport().also { controlling(it, session) }
+            val repository = runningRepository(transport, id)
+            assertTrue(canFollowUp(repository.state.value))
+            assertTrue(canSteer(repository.state.value))
+            assertFalse(showsTuiInfo(repository.state.value))
+
+            repository.draft("After this")
+            repository.followUp()
+            runCurrent()
+
+            val sent = transport.sent.single { it.text("type") == "session.prompt" }
+            assertEquals("follow_up", sent.text("delivery"))
+            assertEquals(id, sent.text("sessionId"))
+            assertEquals("accepted", repository.state.value.followUps.single().status)
+            val status = workerControls.getValue("follow-up-status")
+            transport.deliver(
+                JsonObject(status + ("sessionId" to JsonPrimitive(id)) + ("requestId" to JsonPrimitive(sent.text("requestId")))),
+            )
+            assertEquals(status.text("status"), repository.state.value.followUps.single().status)
+        }
+    }
+
+    @Test
+    fun withoutV2ATerminalSessionAndAWorkerStayIdleOnly() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val transport = Transport().also { controlling(it, session, v2 = false) }
+            val repository = runningRepository(transport, session.text("id"))
+            assertFalse(canFollowUp(repository.state.value))
+            assertFalse(canSteer(repository.state.value))
+            assertTrue(showsTuiInfo(repository.state.value))
+            repository.draft("After this")
+            repository.followUp()
+            repository.steer()
+            runCurrent()
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        }
+    }
+
+    @Test
+    fun anRpcSessionKeepsItsControlsWithAndWithoutV2() = runTest {
+        for (v2 in listOf(true, false)) {
+            val transport = Transport().also { controlling(it, session(), v2 = v2) }
+            val repository = runningRepository(transport, "session")
+            assertTrue(canFollowUp(repository.state.value))
+            assertTrue(canSteer(repository.state.value))
+            assertFalse(showsTuiInfo(repository.state.value))
+            repository.draft("After this")
+            repository.followUp()
+            runCurrent()
+            assertEquals("follow_up", transport.sent.single { it.text("type") == "session.prompt" }.text("delivery"))
+        }
+    }
+
+    @Test
+    fun workerV2RequiresAdvertisementOnV2OrV3Route() = runTest {
+        val v1Only = Transport().also { controlling(it, terminalControlSession()) }
+        val advertised = v1Only.response
+        v1Only.response = { request ->
+            val result = advertised(request)
+            if (request.text("type") == "projects.list" &&
+                (request.text("requestId").startsWith("capabilities.v3:") || request.text("requestId").startsWith("capabilities.v2:")))
+                JsonObject(checkNotNull(result) - "capabilities")
+            else result
+        }
+        val repository = runningRepository(v1Only, "terminal-session")
+        assertTrue(v1Only.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v1:") })
+        assertTrue(FOLLOW_UP_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(HOST_WORKER_V2_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(canFollowUp(repository.state.value))
+
+        val handshake = Transport().also {
+            controlling(it, terminalControlSession(), v2 = false)
+            it.capabilities = it.capabilities + HOST_WORKER_V2_CAPABILITY
+        }
+        val authenticated = runningRepository(handshake, "terminal-session")
+        assertFalse(HOST_WORKER_V2_CAPABILITY in authenticated.state.value.capabilities)
+
+        val v2Transport = Transport().also { controlling(it, terminalControlSession()) }
+        val v2Advertised = v2Transport.response
+        v2Transport.response = { request ->
+            val result = v2Advertised(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:"))
+                JsonObject(checkNotNull(result) - "capabilities")
+            else result
+        }
+        val v2Route = runningRepository(v2Transport, "terminal-session")
+        assertTrue(v2Transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v2:") })
+        assertTrue(HOST_WORKER_V2_CAPABILITY in v2Route.state.value.capabilities)
+
+        val v3Transport = Transport().also { controlling(it, terminalControlSession()) }
+        val v3Route = runningRepository(v3Transport, "terminal-session")
+        assertTrue(v3Transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:") })
+        assertTrue(HOST_WORKER_V2_CAPABILITY in v3Route.state.value.capabilities)
+        val unadvertised = runningRepository(Transport().also { controlling(it, terminalControlSession(), v2 = false) }, "terminal-session")
+        assertFalse(HOST_WORKER_V2_CAPABILITY in unadvertised.state.value.capabilities)
+    }
+
+    @Test
+    fun aRefusalMarksOnlyThatControlOfThatSessionAndKeepsTheDraft() = runTest {
+        val other = terminalControlSession().let { JsonObject(it + ("id" to JsonPrimitive("other-session"))) }
+        val transport = Transport().also { controlling(it, terminalControlSession(), other) }
+        val repository = runningRepository(transport, "terminal-session")
+        refuseControls(transport, "session.prompt")
+
+        repository.draft("After this")
+        repository.followUp()
+        runCurrent()
+
+        val state = repository.state.value
+        assertEquals(R.string.remote_session_control_reload_pi, state.error)
+        assertEquals(mapOf("terminal-session" to setOf(ExtensionControl.FOLLOW_UP)), state.sessionControlUnsupported)
+        assertFalse(canFollowUp(state))
+        assertTrue(canSteer(state))
+        assertTrue(showsTuiInfo(state))
+        // The host took nothing: the draft stays and no submission is left to reconcile.
+        assertEquals("After this", state.draft)
+        assertFalse(state.uncertain)
+        assertTrue(state.followUps.isEmpty())
+        // It is hidden now, so tapping does not reach the host again.
+        repository.followUp()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+
+        repository.activate(RemoteSelection("host", "project", "other-session"))
+        runCurrent()
+        transport.failure = { null }
+        assertEquals("other-session", repository.state.value.selection.sessionId)
+        assertTrue(canFollowUp(repository.state.value))
+        // Back on the refused session nothing is left to reconcile and the draft is still there.
+        repository.activate(RemoteSelection("host", "project", "terminal-session"))
+        runCurrent()
+        assertEquals("terminal-session", repository.state.value.selection.sessionId)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("After this", repository.state.value.draft)
+    }
+
+    @Test
+    fun anotherUnsupportedRefusalMarksNothing() = runTest {
+        val transport = Transport().also { controlling(it, terminalControlSession()) }
+        val repository = runningRepository(transport, "terminal-session")
+        transport.failure = { if (it.text("type") == "session.prompt") "unsupported" else null }
+        transport.failureMessage = { "Queued input requires something else" }
+        repository.draft("After this")
+        repository.followUp()
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.sessionControlUnsupported.isEmpty())
+        assertTrue(canFollowUp(repository.state.value))
+    }
+
+    @Test
+    fun theSameRefusalOfAnRpcSessionMarksNothing() = runTest {
+        val transport = Transport().also { controlling(it, session()) }
+        val repository = runningRepository(transport, "session")
+        refuseControls(transport, "session.prompt")
+        repository.draft("After this")
+        repository.followUp()
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.sessionControlUnsupported.isEmpty())
+        assertTrue(canFollowUp(repository.state.value))
+    }
+
+    @Test
+    fun reloadRunsForAWorkerAndATerminalSessionWithV2() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val id = session.text("id")
+            val transport = Transport().also { controlling(it, session) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", id))
+            runCurrent()
+            assertEquals(ReloadAvailability.RUNS, reloadAvailability(repository.state.value))
+            assertEquals(ReloadResult.Done, repository.reloadSession(id))
+            assertEquals(id, transport.sent.single { it.text("type") == "session.reload" }.text("sessionId"))
+        }
+    }
+
+    @Test
+    fun withoutV2ReloadExplainsItselfAndSendsNothing() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val id = session.text("id")
+            val transport = Transport().also { controlling(it, session, v2 = false) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", id))
+            runCurrent()
+            assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(repository.state.value))
+            assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession(id))
+            assertTrue(transport.sent.none { it.text("type") == "session.reload" })
+        }
+    }
+
+    @Test
+    fun aRefusedReloadMarksThatControlAndSaysToReloadPi() = runTest {
+        val transport = Transport().also { controlling(it, terminalControlSession()) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "terminal-session"))
+        runCurrent()
+        refuseControls(transport, "session.reload")
+
+        assertEquals(ReloadResult.Failed(ReloadFailure.ReloadPi), repository.reloadSession("terminal-session"))
+        assertEquals(R.string.remote_session_control_reload_pi, reloadFailureText(ReloadFailure.ReloadPi))
+
+        val state = repository.state.value
+        assertEquals(mapOf("terminal-session" to setOf(ExtensionControl.RELOAD)), state.sessionControlUnsupported)
+        assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(state))
+        assertTrue(canFollowUp(state))
+        // Marked, so the next try stays on the phone.
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("terminal-session"))
+        assertEquals(1, transport.sent.count { it.text("type") == "session.reload" })
+    }
+
+    @Test
+    fun anRpcReloadWorksWithoutV2AndKeepsItsUnsupportedFailure() = runTest {
+        val transport = Transport().also { controlling(it, session(), v2 = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(repository.state.value))
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        refuseControls(transport, "session.reload")
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("session"))
+        assertTrue(repository.state.value.sessionControlUnsupported.isEmpty())
+    }
+
+    @Test
+    fun onlyAnRpcSessionAndAMarkedWorkerWithV2Close() = runTest {
+        val running = { row: JsonObject -> JsonObject(row + ("status" to JsonPrimitive("running"))) }
+        val worker = running(workerControlSession())
+        val terminal = running(terminalControlSession())
+        val rpc = JsonObject(session() + ("title" to JsonPrimitive("RPC")))
+        for ((row, v2, closes) in
+            listOf(
+                Triple(worker, true, true),
+                Triple(worker, false, false),
+                Triple(terminal, true, false),
+                Triple(rpc, false, true),
+                Triple(rpc, true, true),
+            )) {
+            val id = row.text("id")
+            val transport = Transport().also { controlling(it, row, v2 = v2) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            val listed = sessionListItem(repository.state.value.sessions.single(), true, false, confirmed = true)
+            assertEquals("$id with v2=$v2", closes, canCloseSession(listed, true, false, repository.state.value.capabilities))
+            repository.closeSession(id)
+            runCurrent()
+            val sent = transport.sent.filter { it.text("type") == "session.close" }
+            assertEquals("$id with v2=$v2", if (closes) 1 else 0, sent.size)
+            if (closes) assertEquals(id, sent.single().text("sessionId"))
+        }
+    }
+
+    @Test
+    fun aWorkerThatExitedAnswersOfflineAndStaysClosableAgain() = runTest {
+        val worker = JsonObject(workerControlSession() + ("status" to JsonPrimitive("running")))
+        val transport = Transport().also { controlling(it, worker) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.close") "offline" else null }
+        repository.closeSession("worker-session")
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        transport.failure = { null }
+        repository.closeSession("worker-session")
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.close" })
     }
 }

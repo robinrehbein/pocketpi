@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_chat_a11y_expanded">Ausgeklappt</string>
+    <string name="remote_chat_a11y_collapsed">Eingeklappt</string>
+    <string name="remote_chat_a11y_diff_added_line">Zeile %1$d hinzugefügt: %2$s</string>
+    <string name="remote_chat_a11y_diff_removed_line">Zeile %1$d entfernt: %2$s</string>
+    <string name="remote_chat_a11y_diff_context_line">Zeile %1$d: %2$s</string>
+    <string name="remote_chat_a11y_diff_added">Hinzugefügt: %1$s</string>
+    <string name="remote_chat_a11y_diff_removed">Entfernt: %1$s</string>
+    <string name="remote_chat_a11y_diff_blank">leere Zeile</string>
+</resources>

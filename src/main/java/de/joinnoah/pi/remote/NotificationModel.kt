@@ -24,6 +24,29 @@ internal enum class PushEvent(val wire: String) {
         get() = this != QUESTION && this != COMPLETE
 }
 
+/**
+ * Why a run ended without an answer: the `failure` of a `complete` push (`push.run_failure.v1`). The
+ * Mac sends a category, never pi's error text. A category this version does not know is [UNKNOWN].
+ */
+internal enum class RunFailure(val wire: String) {
+    /** The run's last answer was an error: from the model's provider, or one pi's agent loop caught. */
+    AGENT_ERROR("agent_error"),
+
+    /** The pi running the session went away during the run. */
+    WORKER_EXITED("worker_exited"),
+
+    /** Any category a later Mac adds; its own name only carries it through the label upgrade. */
+    UNKNOWN("unknown"),
+}
+
+private val failureCategory = Regex("[a-z0-9_]{1,64}")
+
+/** A known category, [RunFailure.UNKNOWN] for a later one, null for none or a malformed value. */
+internal fun parseRunFailure(value: String?): RunFailure? =
+    value?.takeIf { failureCategory.matches(it) }?.let { wire ->
+        RunFailure.entries.find { it.wire == wire } ?: RunFailure.UNKNOWN
+    }
+
 /** The data of one push message. It only ever carries opaque identifiers, never chat text. */
 internal data class PushPayload(
     val routeId: String,
@@ -36,6 +59,8 @@ internal data class PushPayload(
     val jobId: String? = null,
     /** Completions bundled into this push, in 1..[MAX_PUSH_COUNT]. */
     val count: Int = 1,
+    /** A completion whose run ended without an answer. */
+    val failure: RunFailure? = null,
 )
 
 private val opaqueId = Regex("[A-Za-z0-9_-]{1,256}")
@@ -69,8 +94,17 @@ internal fun parsePushPayload(data: Map<String, String>): PushPayload? {
             (kind == PushEvent.JOB_DONE || kind == PushEvent.JOB_STUCK) && isOpaqueId(it)
         },
         if (kind == PushEvent.SUBAGENT_DONE || kind == PushEvent.JOB_DONE) count else 1,
+        if (kind == PushEvent.COMPLETE) parseRunFailure(data["failure"]) else null,
     )
 }
+
+/** What a failed run's notice says below its title. */
+internal fun runFailureText(failure: RunFailure): Int =
+    when (failure) {
+        RunFailure.AGENT_ERROR -> R.string.remote_notification_failure_agent_error
+        RunFailure.WORKER_EXITED -> R.string.remote_notification_failure_worker_exited
+        RunFailure.UNKNOWN -> R.string.remote_notification_failure_unknown
+    }
 
 /** Where a tapped notification leads: a session, optionally with its background jobs open. */
 internal data class NotificationTarget(
@@ -120,7 +154,11 @@ internal fun attentionTitle(payload: PushPayload): AttentionTitle =
             else AttentionTitle.Single(R.string.remote_notification_job_done)
         PushEvent.JOB_STUCK -> AttentionTitle.Single(R.string.remote_notification_job_stuck)
         PushEvent.QUESTION -> AttentionTitle.Single(R.string.remote_notification_question)
-        PushEvent.COMPLETE -> AttentionTitle.Single(R.string.remote_notification_complete)
+        PushEvent.COMPLETE ->
+            AttentionTitle.Single(
+                if (payload.failure != null) R.string.remote_notification_run_failed
+                else R.string.remote_notification_complete
+            )
     }
 
 internal sealed interface ActionLabel {
@@ -141,6 +179,9 @@ internal sealed interface NotificationAction {
 
     /** Opens the session to answer there, for questions too big for a notification. */
     data object AnswerInApp : NotificationAction
+
+    /** Opens the session to review a plan there, one too long to approve from a notification. */
+    data object ReviewInApp : NotificationAction
 }
 
 internal data class QuestionNotification(
@@ -150,6 +191,8 @@ internal data class QuestionNotification(
     val title: String?,
     val body: String?,
     val actions: List<NotificationAction>,
+    /** What auto mode blocked, when a `confirm` asks whether to run it once anyway. */
+    val escalation: ConfirmEscalation? = null,
 )
 
 internal const val MAX_OPTION_ACTIONS = 3
@@ -163,11 +206,21 @@ private fun bounded(text: String?, limit: Int): String? =
 
 private fun cut(text: String?, limit: Int): Boolean = (text?.trim()?.length ?: 0) > limit
 
-/** Answering needs the whole question in view; otherwise the notification only opens the app. */
+/**
+ * Answering needs the whole question in view; otherwise the notification only opens the app. A plan
+ * gets its own action there, so the button never reads like an approval.
+ */
 private fun answerInAppOnly(content: QuestionNotification): QuestionNotification =
     if (content.actions.none { it is NotificationAction.Answer || it == NotificationAction.Reply })
         content
-    else content.copy(actions = listOf(NotificationAction.AnswerInApp))
+    else
+        content.copy(
+            actions =
+                listOf(
+                    if (content.kind == "plan") NotificationAction.ReviewInApp
+                    else NotificationAction.AnswerInApp
+                )
+        )
 
 /** The question a notification is about: the oldest one still pending. */
 internal fun notifiedQuestion(pending: List<JsonObject>): JsonObject? = pending.firstOrNull()
@@ -177,7 +230,9 @@ internal fun notifiedQuestion(pending: List<JsonObject>): JsonObject? = pending.
  *
  * [backgroundAnswers] is false below Android 12 (API 31): there an action cannot require unlocking,
  * so answering from a locked screen would be possible and only in-app answers are offered. Content
- * the notification had to shorten is also answered in the app, never blind.
+ * the notification had to shorten is also answered in the app, never blind. [question] is the full
+ * pending question from `session.snapshot`, never a push body, so a plan is approved from the
+ * notification only when all of it fits there.
  */
 internal fun questionNotification(
     question: JsonObject,
@@ -205,7 +260,8 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
         val id = question.text("id")
         require(id.isNotBlank() && id.length <= 256)
         when (val kind = question.text("kind")) {
-            "confirm" ->
+            "confirm" -> {
+                val escalation = confirmEscalation(question)
                 QuestionNotification(
                     id,
                     kind,
@@ -213,7 +269,10 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
                     bounded(question.optionalText("message"), MAX_NOTIFICATION_TEXT),
                     listOf(
                         NotificationAction.Answer(
-                            ActionLabel.Resource(R.string.remote_yes),
+                            // An escalation's yes runs the call once; there is no session allow.
+                            ActionLabel.Resource(
+                                if (escalation != null) R.string.remote_escalation_yes else R.string.remote_yes
+                            ),
                             Wire.objectOf("kind" to "confirm", "value" to true),
                         ),
                         NotificationAction.Answer(
@@ -221,7 +280,9 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
                             Wire.objectOf("kind" to "confirm", "value" to false),
                         ),
                     ),
+                    escalation,
                 )
+            }
             "select" -> {
                 val options = question.getValue("options").jsonArray.map {
                     val value = it.jsonPrimitive
@@ -266,7 +327,8 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
                     bounded(question.optionalText("plan"), MAX_NOTIFICATION_TEXT),
                     listOf(
                         NotificationAction.Answer(
-                            ActionLabel.Resource(R.string.remote_notification_approve),
+                            // The app's own words, so approving reads the same everywhere.
+                            ActionLabel.Resource(R.string.remote_plan_approve),
                             Wire.objectOf("kind" to "plan", "action" to "approve"),
                         ),
                         NotificationAction.Open,
@@ -323,3 +385,64 @@ internal fun answerOutcome(error: Throwable?): AnswerOutcome =
 internal fun isPlanApproval(answer: JsonObject): Boolean =
     answer.optionalText("kind") == "plan" &&
         (answer["action"] as? JsonPrimitive)?.content == "approve"
+
+/** What to do about notifications right after a pairing succeeded. */
+internal enum class PairingNotificationStep {
+    NOTHING,
+
+    /** Android 13+: explain, then request POST_NOTIFICATIONS. */
+    ASK,
+
+    /** Below Android 13 no permission exists, so push can simply be switched on. */
+    ENABLE,
+}
+
+/**
+ * The step after a pairing: once ever, and only while push is configured, off, not switched off by
+ * the user and not yet allowed. A denial counts as an answer, so nothing is offered again on its
+ * own; the buttons in the app stay.
+ */
+internal fun pairingNotificationStep(
+    sdk: Int,
+    granted: Boolean,
+    pushConfigured: Boolean,
+    settings: RemoteSettings,
+): PairingNotificationStep =
+    when {
+        !pushConfigured ||
+            settings.pushEnabled ||
+            settings.pushOptedOut ||
+            settings.notificationPromptShown -> PairingNotificationStep.NOTHING
+        sdk < 33 -> PairingNotificationStep.ENABLE
+        granted -> PairingNotificationStep.NOTHING
+        else -> PairingNotificationStep.ASK
+    }
+
+/** [pairingNotificationStep], recorded before the dialog shows so a restart never asks twice. */
+internal fun offerNotificationPermission(
+    sdk: Int,
+    granted: Boolean,
+    pushConfigured: Boolean,
+    settings: SettingsRepository,
+): PairingNotificationStep =
+    pairingNotificationStep(sdk, granted, pushConfigured, settings.state.value).also {
+        if (it != PairingNotificationStep.NOTHING) settings.markNotificationPromptShown()
+    }
+
+/**
+ * Whether the user has answered for push: it is on, it was switched off, or the permission was offered
+ * after a pairing (a denial counts as an answer, see [pairingNotificationStep]).
+ */
+internal val RemoteSettings.notificationsDecided: Boolean
+    get() = pushEnabled || pushOptedOut || notificationPromptShown
+
+/**
+ * Whether the Projects page of one Mac shows the notification card: only while push is configured and
+ * off, the user never decided about it, and this Mac's card was not dismissed with "Not now".
+ */
+internal fun showsNotificationCard(
+    pushConfigured: Boolean,
+    pushEnabled: Boolean,
+    decided: Boolean,
+    dismissed: Boolean,
+): Boolean = pushConfigured && !pushEnabled && !decided && !dismissed

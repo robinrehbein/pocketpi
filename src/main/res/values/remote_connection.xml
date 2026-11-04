@@ -1,0 +1,4 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_reconnecting">Reconnecting…</string>
+</resources>

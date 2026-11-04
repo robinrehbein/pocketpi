@@ -1,0 +1,691 @@
+{
+  "version": 1,
+  "capability": "remote.stream.v1",
+  "maxFocusSessions": 4,
+  "wireValid": [
+    {
+      "name": "focus-none",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-1",
+        "sessionIds": []
+      }
+    },
+    {
+      "name": "focus-one",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-2",
+        "sessionIds": [
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+        ]
+      }
+    },
+    {
+      "name": "focus-four",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-3",
+        "sessionIds": [
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6e",
+          "6f1c2b9e-0d3a-4e5f-8a7b-1c2d3e4f5a6b",
+          "session-history-4"
+        ]
+      }
+    },
+    {
+      "name": "focus-result-none",
+      "payload": {
+        "type": "result",
+        "requestId": "focus-1",
+        "ok": true,
+        "data": {
+          "kind": "session.focus",
+          "sessionIds": []
+        }
+      }
+    },
+    {
+      "name": "focus-result-one",
+      "payload": {
+        "type": "result",
+        "requestId": "focus-2",
+        "ok": true,
+        "data": {
+          "kind": "session.focus",
+          "sessionIds": [
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+          ]
+        }
+      }
+    },
+    {
+      "name": "focus-result-four",
+      "payload": {
+        "type": "result",
+        "requestId": "focus-3",
+        "ok": true,
+        "data": {
+          "kind": "session.focus",
+          "sessionIds": [
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6e",
+            "6f1c2b9e-0d3a-4e5f-8a7b-1c2d3e4f5a6b",
+            "session-history-4"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ping",
+      "payload": {
+        "type": "remote.ping",
+        "requestId": "ping-1"
+      }
+    },
+    {
+      "name": "pong",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-1",
+        "ok": true,
+        "data": {
+          "kind": "pong"
+        }
+      }
+    },
+    {
+      "name": "pong-with-relay-rtt",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-2",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": 42
+        }
+      }
+    },
+    {
+      "name": "pong-relay-rtt-zero",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-3",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": 0
+        }
+      }
+    },
+    {
+      "name": "pong-relay-rtt-max",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-4",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": 600000
+        }
+      }
+    },
+    {
+      "name": "ack",
+      "payload": {
+        "type": "remote.ack",
+        "seq": 17
+      }
+    },
+    {
+      "name": "ack-zero",
+      "payload": {
+        "type": "remote.ack",
+        "seq": 0
+      }
+    },
+    {
+      "name": "ack-max-sequence",
+      "payload": {
+        "type": "remote.ack",
+        "seq": 4294967295
+      }
+    },
+    {
+      "name": "upsert-after-coalesced",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "after": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "assistant-1700000000000",
+          "role": "assistant",
+          "text": "Hello wor",
+          "state": "streaming"
+        }
+      }
+    },
+    {
+      "name": "upsert-after-zero",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 3,
+        "after": 0,
+        "kind": "message.upsert",
+        "message": {
+          "id": "assistant-1700000000001",
+          "role": "assistant",
+          "text": "Grüße 👋",
+          "state": "complete"
+        }
+      }
+    },
+    {
+      "name": "status-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 15,
+        "after": 13,
+        "kind": "session.status",
+        "status": "idle"
+      }
+    },
+    {
+      "name": "advisor-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 16,
+        "after": 13,
+        "kind": "advisor.status",
+        "advisor": {
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "enabled": true,
+          "reasoning": "high",
+          "pending": false,
+          "contextShared": true,
+          "attempts": 1,
+          "maxAttempts": 3,
+          "remainingAttempts": 2
+        }
+      }
+    },
+    {
+      "name": "title-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 17,
+        "after": 15,
+        "kind": "session.title",
+        "title": "Fix the login flow"
+      }
+    },
+    {
+      "name": "question-open-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 18,
+        "after": 16,
+        "kind": "question.open",
+        "question": {
+          "id": "q-1",
+          "kind": "confirm",
+          "title": "Run the migration?",
+          "message": "It changes the schema."
+        }
+      }
+    },
+    {
+      "name": "question-closed-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 19,
+        "after": 17,
+        "kind": "question.closed",
+        "questionId": "q-1"
+      }
+    },
+    {
+      "name": "snapshot-required-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 20,
+        "after": 18,
+        "kind": "snapshot.required"
+      }
+    },
+    {
+      "name": "compaction-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 21,
+        "after": 19,
+        "kind": "session.compaction",
+        "state": "running",
+        "reason": "threshold"
+      }
+    },
+    {
+      "name": "notice-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 22,
+        "after": 20,
+        "kind": "session.notice",
+        "level": "info",
+        "message": "Context is almost full."
+      }
+    },
+    {
+      "name": "suggestion-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 23,
+        "after": 21,
+        "kind": "session.suggestion",
+        "suggestion": "Run the tests"
+      }
+    },
+    {
+      "name": "suggestion-cleared-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "after": 22,
+        "kind": "session.suggestion",
+        "suggestion": null
+      }
+    },
+    {
+      "name": "pull-request-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 25,
+        "after": 23,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 12,
+          "url": "https://github.com/acme/app/pull/12",
+          "draft": false,
+          "review": null,
+          "checks": {
+            "state": "running",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "command-status-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 26,
+        "after": 24,
+        "kind": "command.status",
+        "requestId": "cmd-1",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "follow-up-status-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 27,
+        "after": 25,
+        "kind": "follow_up.status",
+        "requestId": "prompt-1",
+        "status": "delivered"
+      }
+    },
+    {
+      "name": "steer-status-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 28,
+        "after": 26,
+        "kind": "steer.status",
+        "requestId": "prompt-2",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "upsert-without-after",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 29,
+        "kind": "message.upsert",
+        "message": {
+          "id": "assistant-1700000000000",
+          "role": "assistant",
+          "text": "Hello world",
+          "state": "complete"
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "focus-five-ids",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-4",
+        "sessionIds": [
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6e",
+          "6f1c2b9e-0d3a-4e5f-8a7b-1c2d3e4f5a6b",
+          "session-history-4",
+          "s5"
+        ]
+      }
+    },
+    {
+      "name": "focus-duplicate-ids",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-5",
+        "sessionIds": [
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+        ]
+      }
+    },
+    {
+      "name": "focus-extra-key",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-6",
+        "sessionIds": [
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+        ],
+        "mode": "upserts"
+      }
+    },
+    {
+      "name": "focus-not-array",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-7",
+        "sessionIds": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+      }
+    },
+    {
+      "name": "focus-missing-request-id",
+      "payload": {
+        "type": "session.focus",
+        "sessionIds": [
+          "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+        ]
+      }
+    },
+    {
+      "name": "focus-id-with-whitespace",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-8",
+        "sessionIds": [
+          "a b"
+        ]
+      }
+    },
+    {
+      "name": "focus-empty-id",
+      "payload": {
+        "type": "session.focus",
+        "requestId": "focus-9",
+        "sessionIds": [
+          ""
+        ]
+      }
+    },
+    {
+      "name": "focus-result-five-ids",
+      "payload": {
+        "type": "result",
+        "requestId": "focus-4",
+        "ok": true,
+        "data": {
+          "kind": "session.focus",
+          "sessionIds": [
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6e",
+            "6f1c2b9e-0d3a-4e5f-8a7b-1c2d3e4f5a6b",
+            "session-history-4",
+            "s5"
+          ]
+        }
+      }
+    },
+    {
+      "name": "focus-result-duplicate-ids",
+      "payload": {
+        "type": "result",
+        "requestId": "focus-5",
+        "ok": true,
+        "data": {
+          "kind": "session.focus",
+          "sessionIds": [
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+            "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+          ]
+        }
+      }
+    },
+    {
+      "name": "focus-result-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "focus-6",
+        "ok": true,
+        "data": {
+          "kind": "session.focus",
+          "sessionIds": [],
+          "stream": true
+        }
+      }
+    },
+    {
+      "name": "ping-extra-key",
+      "payload": {
+        "type": "remote.ping",
+        "requestId": "ping-5",
+        "at": 1700000000000
+      }
+    },
+    {
+      "name": "ping-missing-request-id",
+      "payload": {
+        "type": "remote.ping"
+      }
+    },
+    {
+      "name": "pong-negative-rtt",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-6",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": -1
+        }
+      }
+    },
+    {
+      "name": "pong-fractional-rtt",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-7",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": 1.5
+        }
+      }
+    },
+    {
+      "name": "pong-rtt-over-max",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-8",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "relayRttMs": 600001
+        }
+      }
+    },
+    {
+      "name": "pong-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "ping-9",
+        "ok": true,
+        "data": {
+          "kind": "pong",
+          "rttMs": 3
+        }
+      }
+    },
+    {
+      "name": "ack-with-request-id",
+      "payload": {
+        "type": "remote.ack",
+        "requestId": "ack-1",
+        "seq": 3
+      }
+    },
+    {
+      "name": "ack-negative-seq",
+      "payload": {
+        "type": "remote.ack",
+        "seq": -1
+      }
+    },
+    {
+      "name": "ack-fractional-seq",
+      "payload": {
+        "type": "remote.ack",
+        "seq": 2.5
+      }
+    },
+    {
+      "name": "ack-seq-over-max",
+      "payload": {
+        "type": "remote.ack",
+        "seq": 4294967296
+      }
+    },
+    {
+      "name": "ack-extra-key",
+      "payload": {
+        "type": "remote.ack",
+        "seq": 3,
+        "bytes": 1024
+      }
+    },
+    {
+      "name": "ack-missing-seq",
+      "payload": {
+        "type": "remote.ack"
+      }
+    },
+    {
+      "name": "event-after-equal-revision",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "after": 14,
+        "kind": "message.upsert",
+        "message": {
+          "id": "assistant-1",
+          "role": "assistant",
+          "text": "x",
+          "state": "streaming"
+        }
+      }
+    },
+    {
+      "name": "event-after-above-revision",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "after": 15,
+        "kind": "session.status",
+        "status": "idle"
+      }
+    },
+    {
+      "name": "event-after-negative",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "after": -1,
+        "kind": "session.status",
+        "status": "idle"
+      }
+    },
+    {
+      "name": "event-after-fractional",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "after": 12.5,
+        "kind": "session.status",
+        "status": "idle"
+      }
+    },
+    {
+      "name": "event-after-string",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "after": "12",
+        "kind": "session.title",
+        "title": "t"
+      }
+    },
+    {
+      "name": "event-after-null",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 14,
+        "kind": "snapshot.required",
+        "after": null
+      }
+    },
+    {
+      "name": "event-after-at-revision-zero",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 0,
+        "after": 0,
+        "kind": "session.status",
+        "status": "running"
+      }
+    }
+  ]
+}

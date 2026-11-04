@@ -8,6 +8,9 @@ internal const val STEER_CAPABILITY = "session.steer.v1"
 internal const val PROJECT_UNSHARE_CAPABILITY = "project.unshare.v1"
 internal const val TOOL_OUTPUT_CAPABILITY = "session.tool_output.v1"
 internal const val SESSION_FORK_CAPABILITY = "session.fork.v1"
+internal const val GIT_WRITE_CAPABILITY = "session.git.write.v1"
+internal const val GIT_PUSH_CAPABILITY = "session.git.push.v1"
+internal const val GIT_PUSH_STATUS_CAPABILITY = "session.git.push.status.v1"
 
 /** How `session.fork` continues: resend the message, or put it back into the composer. */
 enum class ForkMode(val wire: String) {
@@ -25,7 +28,8 @@ enum class ToolOutputFailure {
 
 /**
  * Progress of the one full tool output download for the selected session. [text] is non-null
- * only once every chunk arrived; [failure] is set when the download stopped early.
+ * only once every chunk arrived; [failure] is set when the download stopped early. While it runs,
+ * [preview] is the text of the chunks that arrived so far, so the output reads as it loads.
  */
 data class ToolOutputDownload(
     val toolCallId: String,
@@ -35,15 +39,18 @@ data class ToolOutputDownload(
     val truncated: Boolean,
     val isError: Boolean,
     val failure: ToolOutputFailure?,
+    val preview: String? = null,
 )
 
 internal fun canFollowUp(state: RemoteState): Boolean =
     (FOLLOW_UP_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
+        (state.session.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.FOLLOW_UP))) ||
+        childControlsAvailable(state)
 
 internal fun canSteer(state: RemoteState): Boolean =
     (STEER_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
+        (state.session.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.STEER))) ||
+        childControlsAvailable(state)
 
 data class RemoteSelection(
     val routeId: String? = null,
@@ -51,26 +58,126 @@ data class RemoteSelection(
     val sessionId: String? = null,
 )
 
+/**
+ * What a chat showed when it was last open, read while it opens again: a read-only preview, never
+ * the chat's selection. [messages] may be empty for a session known only from its list row.
+ */
+data class ChatPreview(
+    val session: JsonObject?,
+    val messages: List<JsonObject>,
+    val draft: String,
+)
+
 enum class ActivationMode {
     RESTORE,
     USER_OPEN,
 }
 
+/** Where a plain prompt stands between tapping send and the host's timeline having it. */
+enum class PendingSendState {
+    /**
+     * Typed while the connection was down: journaled and kept here until the reconnect shows that
+     * the chat did not move on, then sent. It has not left the phone.
+     */
+    QUEUED,
+
+    /** Journaled and on its way; the host has not answered yet. */
+    SENDING,
+
+    /** The host acknowledged it; the timeline may not show it yet. */
+    CONFIRMED,
+
+    /** The send failed or may not have left the phone. */
+    NOT_CONFIRMED,
+}
+
+/**
+ * A plain prompt the chat shows at its tail until the host's timeline has it. It lives in memory
+ * for this run only; after a restart the unresolved send is back in the composer instead.
+ * [afterMessageId] is the newest message the chat showed when the prompt was sent: only messages
+ * after it can be the host's copy of this prompt, so an identical earlier prompt never matches.
+ * [queuedAt] (repository clock) is set for a [PendingSendState.QUEUED] prompt, which expires.
+ */
+data class PendingSend(
+    val mutationId: String,
+    val text: String,
+    val quote: MessageQuote?,
+    val attachments: List<LocalAttachment>,
+    val state: PendingSendState,
+    val afterMessageId: String? = null,
+    val queuedAt: Long? = null,
+)
+
 data class RemoteState(
+    /** Changes when editor authority or a question incarnation changes, including identical replacements. */
+    val editorQuestionGeneration: Long = 0,
+    /** Changes whenever commit review authority or its selected target changes. */
+    val gitReviewGeneration: Long = 0,
+    val browser: BrowserView? = null,
+    val emulator: EmulatorView? = null,
+    val terminal: TerminalView? = null,
     val hosts: List<PairedHost> = emptyList(),
+    /**
+     * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
+     * placeholder instead of the first-run text, and nothing prunes state of Macs it lacks. Stays
+     * false when the read failed.
+     */
+    val hostsLoaded: Boolean = false,
+    /** Reading [hosts] from storage failed: no list is coming, though [hostsLoaded] stays false. */
+    val hostsUnreadable: Boolean = false,
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,
+    /**
+     * A chat destination shows [ChatPreview] content while its open runs: read-only, and only on
+     * that destination's own state, never the repository's.
+     */
+    val preview: Boolean = false,
+    /** Whether the requested chat's stored text is available for editing. */
+    val previewDraftAvailable: Boolean = false,
+    /** Text prepared for a source session that opened as a different session. */
+    val preparedText: String? = null,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
+    /**
+     * The shown questions, configuration, advisor, commands, status and capabilities are the
+     * last-known ones of a lost connection: kept on screen while the same Mac reconnects, until
+     * the activation after the reconnect has read them again. Actions stay gated on [connected].
+     */
+    val stale: Boolean = false,
+    /** Epoch millis of the loss that made the state [stale]; null while it is not. */
+    val staleSince: Long? = null,
     val error: Int? = null,
+    /** Epoch millis of the next automatic reconnect attempt, or null when none is scheduled. */
+    val reconnectAt: Long? = null,
+    /** The host whose device was denied (paused or revoked) by the current [error], if any. */
+    val deniedRouteId: String? = null,
+    /**
+     * When the pairing waiting for approval on the Mac expires, in
+     * [android.os.SystemClock.elapsedRealtime] millis (see [Diagnostics.now]); null unless the Mac
+     * is asking the user right now.
+     */
+    val pairingDeadline: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
+    /**
+     * Each project's sessions by project ID, for views across projects: every list the Mac sent
+     * for [host] on this or an earlier connection, kept fresh by live status events. Unlike
+     * [projectChats] it is not cut to the featured few.
+     */
+    val projectSessions: Map<String, ProjectSessions> = emptyMap(),
     val project: JsonObject? = null,
     val sessions: List<JsonObject> = emptyList(),
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */
     val sessionsFresh: Boolean = false,
+    /**
+     * With [sessionsFresh]: [sessions] was reused from an earlier read on the same, still live
+     * connection rather than fetched just now. Fine to show as current, but a row missing from it
+     * is no proof the session closed, so closure detection ignores such a list.
+     */
+    val sessionsReused: Boolean = false,
     val session: JsonObject? = null,
+    val tasks: SessionTasks = SessionTasks(),
     val messages: List<JsonObject> = emptyList(),
     val questions: List<JsonObject> = emptyList(),
     val status: String = "offline",
@@ -83,6 +190,8 @@ data class RemoteState(
     val sending: Boolean = false,
     val uncertain: Boolean = false,
     val followUps: List<PendingFollowUp> = emptyList(),
+    /** The plain prompt the chat shows at its tail until the timeline has it; null when none. */
+    val pendingSend: PendingSend? = null,
     /**
      * Phone stops and resumes of subagent children, by child session ID. Memory only on purpose:
      * "stopped by you" describes this app run; after a restart the host's status is the truth.
@@ -94,14 +203,30 @@ data class RemoteState(
      * changes.
      */
     val childControlUnsupported: Set<String> = emptySet(),
+    /**
+     * Controls the host refused for a session whose pi must reload its Remote extension first, by
+     * session ID. Learned again after the selection or connection changes: pi may have reloaded.
+     */
+    val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
     val answering: Set<String> = emptySet(),
+    internal val questionDetails: Map<String, QuestionDetailsView> = emptyMap(),
+    internal val pagedEditors: Map<String, PagedEditorView> = emptyMap(),
+    internal val pagedQuarantines: Set<String> = emptySet(),
+    internal val pagedStoragePending: Boolean = false,
+    internal val pagedStorageFailed: Boolean = false,
+    internal val pagedStorageRetryAvailable: Boolean = false,
+    /** Questions the user cannot answer from here right now, by question ID. */
+    val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
+    /** True once the connection's `projects.list` reply has added its route capabilities. */
+    val capabilitiesKnown: Boolean = false,
     val unavailableCapabilities: Set<String> = emptySet(),
     val configuration: SessionConfiguration? = null,
     val configurationLoading: Boolean = false,
     val configurationChanging: Boolean = false,
     val contextUsage: SessionContextUsage? = null,
     val contextLoading: Boolean = false,
+    val compactionRequesting: Boolean = false,
     val advisor: SessionAdvisor? = null,
     val advisorLoading: Boolean = false,
     val advisorChanging: Boolean = false,
@@ -109,19 +234,94 @@ data class RemoteState(
     val commandsLoading: Boolean = false,
     val commandsTruncated: Boolean = false,
     val commandNotice: Int? = null,
+    /** The latest extension notice of the selected session, until the chat has shown it. */
+    val notice: SessionNotice? = null,
     val compaction: SessionCompaction? = null,
+    /** The host's suggested next prompt for the selected session; untrusted plain text. */
+    val suggestion: String? = null,
+    /** The open pull request of the selected session's branch; null when there is none. */
+    val pullRequest: PullRequestStatus? = null,
     val toolOutput: ToolOutputDownload? = null,
     /** The changes view of the selected session; null while it is closed. */
     val changes: ChangesState? = null,
     /** The file browser of the selected session; null while it is closed. */
     val files: FilesState? = null,
+    /**
+     * Create, rename and delete in the file browser of the selected session; null where this client
+     * offers none (the watch) or before the browser opened.
+     */
+    val fileMutations: FileMutationsState? = null,
     /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
     val jobs: JobsState? = null,
+    /** The shell command run from this phone in the selected session (`session.bash.v1`), if any. */
+    val bash: BashRun? = null,
     val folders: FolderBrowserState = FolderBrowserState(),
+    /** The provider list and login flow of the host shown on the Providers screen. */
+    val providerAuth: ProviderAuthState = ProviderAuthState(),
+    /** Plane tickets of the shown Mac (`tickets.v1`); empty without the capability. */
+    val tickets: TicketsState = TicketsState(),
+    val previewBrowser: BrowserView? = null,
 )
 
+/** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
+internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
+
+/** How long a notification's request waits on the app's connection before it uses its own. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
+
+/**
+ * After an FCM push for the Mac the app is connected to, a backgrounded process may reconnect for
+ * this long, with the focus none; then it closes the socket again unless a live run needs it.
+ */
+internal const val PUSH_WAKE_WINDOW_MILLIS = 60_000L
+
+/** How long a push's upgrade worker waits for the connection the wake started before it opens its own. */
+internal const val PUSH_WAKE_WAIT_MILLIS = 3_000L
+
+/** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
+data class Picked(val uri: String, val photo: Boolean)
+
 interface RemoteRepository {
+    suspend fun loadEditorRecovery(): EditorRecoveryLoad = EditorRecoveryLoad.Unavailable
     val state: StateFlow<RemoteState>
+    fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit = {}
+    fun canOpenPreview(): Boolean = false
+    fun openPreview(port: Int): Boolean = false
+    fun closePreview() {}
+    fun acquirePreview(): Boolean = false
+    fun handoffPreview(ownerId: String): Boolean = false
+    fun newPreviewTab(url: String): Boolean = false
+    fun navigatePreview(url: String): Boolean = false
+    fun selectPreviewTab(tabId: String) {}
+    fun closePreviewTab(tabId: String): Boolean = false
+    fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
+    fun sendPreviewInput(input: BrowserInput): Boolean = false
+    fun refreshPreview(): Boolean = false
+    fun setPreviewVisible(visible: Boolean) {}
+
+    fun canOpenEmulator(): Boolean = false
+    fun openEmulator(): Boolean = false
+    fun selectEmulatorProfile(id: String): Boolean = false
+    fun closeEmulator() {}
+    fun acquireEmulator(): Boolean = false
+    fun handoffEmulator(id: String): Boolean = false
+    fun stopEmulator(): Boolean = false
+    fun sendEmulatorInput(input: EmulatorInput): Boolean = false
+    fun refreshEmulator(): Boolean = false
+    fun setEmulatorVisible(visible: Boolean) {}
+    fun canOpenBrowser(): Boolean = false
+    fun openBrowser(): Boolean = false
+    fun closeBrowser() {}
+    fun acquireBrowser(): Boolean = false
+    fun handoffBrowser(ownerId: String): Boolean = false
+    fun newBrowserTab(url: String): Boolean = false
+    fun navigateBrowser(url: String): Boolean = false
+    fun selectBrowserTab(tabId: String) {}
+    fun closeBrowserTab(tabId: String): Boolean = false
+    fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
+    fun sendBrowserInput(input: BrowserInput): Boolean = false
+    fun refreshBrowser(): Boolean = false
+    fun setBrowserVisible(visible: Boolean) {}
 
     suspend fun activate(
         selection: RemoteSelection,
@@ -133,6 +333,48 @@ interface RemoteRepository {
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
 
     /**
+     * The project of [sessionId] on the paired [routeId] as the app already knows it, from its
+     * caches and stores, without asking the Mac; null when only the Mac knows. A tapped
+     * notification shows its chat at once when this knows the project.
+     */
+    suspend fun notificationProject(routeId: String, sessionId: String): String? = null
+
+    /**
+     * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
+     * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null without running [block] when the connection is
+     * not known to be healthy, so the caller opens a connection of its own. A host error passes
+     * through as a [RemoteCommandException]. A plain [RemoteCommands.request] that was not sent,
+     * timed out or was lost also ends the call with null; a [MutationCommands.mutate] under the
+     * caller's mutation ID instead throws [MutationNotSentException] when nothing was sent, and the
+     * timeout or loss otherwise, so the caller decides whether to send it again. Any thread may
+     * call it. [onSent] runs as each request goes out, so a caller that falls back after a timeout
+     * knows the Mac may already have it.
+     */
+    suspend fun <T> withHealthyConnection(
+        routeId: String,
+        onSent: () -> Unit = {},
+        block: suspend (MutationCommands) -> T,
+    ): T? = null
+
+    /**
+     * An FCM push arrived for [routeId]. When this process already has that Mac active, is not
+     * connected, may reconnect and has a network, a reconnect starts in the background and a
+     * window of [PUSH_WAKE_WINDOW_MILLIS] opens, so the push's upgrade can use the main
+     * connection. Does nothing otherwise, on a cold process included. Call it on the main thread.
+     */
+    fun pushWake(routeId: String) {}
+
+    /**
+     * Waits up to [maxMillis] for the connection a [pushWake] for [routeId] started to be usable by
+     * [withHealthyConnection]. It first checks on the repository's own dispatcher, so a wake already
+     * posted there is seen; it then returns when no wake window is open or the connection is usable.
+     * [maxMillis] holds only while that dispatcher (the main thread in the app) is responsive, since
+     * the first check cannot finish before it runs there. Any thread may call it.
+     */
+    suspend fun awaitPushWake(routeId: String, maxMillis: Long = PUSH_WAKE_WAIT_MILLIS) {}
+
+    /**
      * Starts a new session that continues from just before the user message [messageId] of the
      * selected chat [source], through `session.fork` (only with `session.fork.v1`). Returns the
      * fork's selection, or [source] again when the host refused. An edit fork puts the message
@@ -141,17 +383,49 @@ interface RemoteRepository {
     suspend fun forkSession(source: RemoteSelection, messageId: String, mode: ForkMode): RemoteSelection =
         source
 
+    /**
+     * Starts a new session that continues from the tree node [nodeId] of the selected chat
+     * [source], through `session.tree.fork` (only with `session.tree.v1`). Returns the fork's
+     * selection, or [source] again when the host refused. A fork from a user message puts the
+     * message into the new chat's composer; any other node opens the fork as it is.
+     */
+    suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection = source
+
     fun cancelSelection()
 
+    /** The cached content of the chat [selection] for a preview while it opens, or null. */
+    fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
+
+    /** Local draft text, or null until storage and the paired host are available. */
+    fun peekDraftText(selection: RemoteSelection): String? = peekCachedChat(selection)?.draft
+
     suspend fun pair(text: String): RemoteSelection?
+
+    /** Gives up the pairing that is running, so [pair] returns without a host and loading ends. */
+    fun cancelPairing() {}
 
     fun remove(routeId: String)
 
     fun disconnect()
 
+    fun canAttachTerminal(): Boolean = false
+    fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long? = null): Boolean = false
+    fun detachTerminal() {}
+    fun takeTerminalOutput(): List<String> = emptyList()
+    fun sendTerminalInput(input: TerminalInput): Boolean = false
+    fun resizeTerminal(cols: Int, rows: Int): Boolean = false
+
     fun setForeground(foreground: Boolean) {}
 
-    fun setValidatedNetwork(identity: String?) {}
+    /** A validated default network, or none: [setNetwork] for callers that only see validation. */
+    fun setValidatedNetwork(identity: String?) = setNetwork(identity, validated = identity != null)
+
+    /**
+     * The default network once it can carry traffic, or null when there is none. [validated] says
+     * whether Android validated it; one that never validates still allows reconnects. [path]
+     * fingerprints its route, so a route that moves on the same network is probed, not torn down.
+     */
+    fun setNetwork(identity: String?, validated: Boolean, path: String? = null) {}
 
     fun refresh()
 
@@ -165,9 +439,33 @@ interface RemoteRepository {
 
     fun draft(text: String)
 
+    /**
+     * Sets the draft typed in [selection]. A composer pushes its text late (after a pause, on
+     * stop, when the chat changes), so a write for a chat that is no longer selected never lands
+     * in the current one: a repository that keeps drafts per chat files it under [selection],
+     * and this default drops it.
+     */
+    fun draft(selection: RemoteSelection, text: String) {
+        if (state.value.selection == selection) draft(text)
+    }
+
     fun quote(messageId: String?)
 
     fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {}
+
+    /**
+     * Imports a mixed [batch] of images and files into [selection]'s draft in one run, with the
+     * same limits as [importAttachments]. [onDone] runs exactly once, after the import read every
+     * URI or refused the batch, so a caller can then give back the URIs' read grants (a drop's
+     * permissions). This default suits a repository whose single import reads synchronously.
+     */
+    fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        try {
+            batch.groupBy { it.photo }.forEach { (photo, items) -> importAttachments(selection, items.map { it.uri }, photo) }
+        } finally {
+            onDone()
+        }
+    }
 
     fun removeAttachment(id: String) {}
 
@@ -176,6 +474,8 @@ interface RemoteRepository {
     fun refreshConfiguration() {}
 
     fun refreshContextUsage() {}
+
+    fun compactContext() {}
 
     fun refreshAdvisor() {}
 
@@ -186,11 +486,20 @@ interface RemoteRepository {
 
     fun setThinkingLevel(level: String) {}
 
+    /** Changes the given session settings; null leaves a setting as it is. */
+    fun changeSettings(autoCompaction: Boolean? = null, steeringMode: String? = null, followUpMode: String? = null) {}
+
     fun refreshCommands() {}
 
     fun selectCommand(command: RemoteCommand) {}
 
     fun prompt()
+
+    /**
+     * Takes back the plain prompt that waits for the connection ([PendingSendState.QUEUED]): its
+     * text returns to the composer and nothing is sent.
+     */
+    fun cancelQueuedPrompt() {}
 
     fun followUp() {}
 
@@ -209,6 +518,13 @@ interface RemoteRepository {
     fun abortSession(sessionId: String) {}
 
     fun refreshSessions() {}
+
+    /**
+     * Reads the lists on screen again behind what they show, for a pull to refresh: the projects,
+     * and the selected project's sessions or every project's featured chats. Without a connection
+     * it asks for one, as [refresh] does.
+     */
+    fun revalidateLists() {}
 
     fun loadToolOutput(toolCallId: String) {}
 
@@ -229,22 +545,81 @@ interface RemoteRepository {
     /** Stops [jobId] through `session.jobs.kill`; the caller confirmed it with the user. */
     fun stopJob(jobId: String) {}
 
+    /**
+     * Runs [command] in the selected session's folder (`session.bash`, only with
+     * [SESSION_BASH_CAPABILITY] and for host-owned sessions) and streams its output into
+     * [RemoteState.bash]. [excludeFromContext] keeps the output from pi, like `!!`. False when it
+     * did not start: refused locally, or another command still runs.
+     */
+    fun runBash(command: String, excludeFromContext: Boolean): Boolean = false
+
+    /** Asks pi to stop the running shell command (`session.bash.abort`); its result follows. */
+    fun abortBash() {}
+
+    /** Dismisses a finished shell command; a running one stays. */
+    fun closeBash() {}
+
+    fun loadQuestionDetails(questionId: String) {}
+    fun loadPagedEditor(question: JsonObject) {}
+    fun editPagedEditor(question: JsonObject, draft: String) {}
+    fun submitPagedEditor(question: JsonObject, draft: String) {}
+    fun retryPagedEditorStorage() {}
     fun answer(questionId: String, answer: JsonObject)
+
+    /**
+     * Commits explicitly selected paths from a confirmed HEAD snapshot. The caller owns the
+     * request ID and must retain the confirmed inputs for any intentional same-ID recovery.
+     * Unknown means the request may have been applied; it must not be automatically retried.
+     * If the coroutine is cancelled after [onDispatch], the outcome is likewise unknown.
+     */
+    suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Commit =
+        throw UnsupportedOperationException("Git writes are unavailable")
+
+    /** Fresh token-bound push preparation, including the exact HEAD to confirm. */
+    suspend fun gitPullRequestPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Pull request is unavailable")
+    suspend fun gitPullRequest(sessionId: String, writeId: String, base: String, title: String, body: String, draft: Boolean, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.PullRequest = throw UnsupportedOperationException("Pull request is unavailable")
+    suspend fun gitPullRequestStatus(sessionId: String, writeId: String): GitWriteResult.PullRequestStatus = throw UnsupportedOperationException("Pull request status is unavailable")
+    suspend fun gitPullRequestDraft(selection: RemoteSelection): GitPullRequestDraft? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPullRequestDraft(selection: RemoteSelection, draft: GitPullRequestDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
+    suspend fun gitPullRequestIntent(selection: RemoteSelection): GitPullRequestIntent? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPullRequestIntent(selection: RemoteSelection, intent: GitPullRequestIntent?) { throw UnsupportedOperationException("Git drafts are unavailable") }
+    suspend fun gitPushPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Git push is unavailable")
+    /** No automatic retry; cancellation after onDispatch leaves the outcome unknown. */
+    suspend fun gitPush(sessionId: String, writeId: String, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Push = throw UnsupportedOperationException("Git push is unavailable")
+    /** Explicit remote observation; this reports current state, not which attempt caused it. */
+    suspend fun gitPushStatus(sessionId: String, writeId: String): GitWriteResult.PushStatus = throw UnsupportedOperationException("Git push status is unavailable")
+
+    /** Reads an own-checkout HEAD snapshot specifically authorized for commit review. */
+    suspend fun gitCommitStatus(sessionId: String): GitStatus = throw UnsupportedOperationException("Git writes are unavailable")
+
+    /** Private per-session commit draft and outstanding intent, stored before dispatch. */
+    /** Durable push intent in the same private per-route/session draft journal. */
+    suspend fun gitPushIntent(selection: RemoteSelection): GitPushIntent? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPushIntent(selection: RemoteSelection, intent: GitPushIntent?) { throw UnsupportedOperationException("Git drafts are unavailable") }
+
+    suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitCommitDraft(selection: RemoteSelection, draft: GitCommitDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
 
     /** `session.git.status`; only with [GIT_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.git.diff` for a path of the snapshot's list. Throws [RemoteRequestException]. */
     suspend fun gitDiff(sessionId: String, snapshotId: String, path: String): GitDiff =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.git.log` for the snapshot's base. Throws [RemoteRequestException]. */
     suspend fun gitLog(sessionId: String, snapshotId: String): GitLog =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** Opens [RemoteState.changes] for the selected session, starting at session start. */
     fun openChanges() {}
+
+    /**
+     * Like [openChanges]; with [exclusive] false the files stay open beside the changes, as tabs
+     * of a side inspector do. Exclusive, as the phone shows one at a time, it closes them.
+     */
+    fun openChanges(exclusive: Boolean) = openChanges()
 
     fun closeChanges() {}
 
@@ -255,16 +630,177 @@ interface RemoteRepository {
     /** Shows the diff of [path], or the file list again for null. */
     fun openChangesFile(path: String?) {}
 
+    /** Shows the diff of [path] from the changes of the subagent session [sessionId]. */
+    fun openChangesSubagentFile(sessionId: String, path: String) {}
+
+    fun requestChangesPreview(path: String) {}
+
+    /** `tickets.projects`; only with [TICKETS_CAPABILITY]. Throws [RemoteRequestException]. */
+    suspend fun ticketProjects(): List<TicketProject> = throw RemoteRequestException.unsupported()
+
+    /** `tickets.list`: one page of the project's tickets, after [cursor] when given. */
+    suspend fun ticketsPage(projectId: String, cursor: String?): TicketsPage =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.get`: one ticket with its description and newest comments. */
+    suspend fun ticketDetail(projectId: String, ref: String): TicketDetail =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.reload`: asks the host to read Plane again; returns when its snapshot was taken. */
+    suspend fun reloadTickets(projectId: String): Long = throw RemoteRequestException.unsupported()
+
+    /**
+     * `tickets.comment`. A host error may carry the reason `outcome_unknown`, but an app-side timeout
+     * carries no reason: callers must treat any write timeout as outcome-unknown, as the comment may
+     * be posted.
+     */
+    suspend fun commentTicket(projectId: String, ref: String, text: String): Unit =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.move` to [state]; [comment] is required for Done and Cancelled. Returns whether nothing was written. */
+    suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?): Boolean =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.start`: begins the start job and returns its start ID. */
+    suspend fun startTicket(projectId: String, ref: String, note: String?): String =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.start.status` of a start job. */
+    suspend fun ticketStartStatus(startId: String): TicketStart = throw RemoteRequestException.unsupported()
+
+    /** Reads the tickets of the shown Mac; [force] has the host read Plane again first. */
+    fun refreshTickets(force: Boolean) {}
+
+    /** Reads one ticket with its description and comments into [TicketsState.detail]. */
+    fun openTicket(projectId: String, ref: String) {}
+
+    /** Accepts [ref] after a five-second undo window; see [undoAccept]. */
+    fun queueAccept(projectId: String, ref: String, comment: String) {}
+
+    /** Comments on [ref]; a read-only project sends nothing. */
+    fun commentOnTicket(projectId: String, ref: String, text: String) {}
+
+    /** Moves [ref] to [state]; [comment] is required for Done and Cancelled. */
+    fun moveTicketTo(projectId: String, ref: String, state: String, comment: String?) {}
+
+    /** Starts the start job of [ref] and follows it in [TicketsState.start]. */
+    fun startTicketJob(projectId: String, ref: String, note: String?) {}
+
+    /** Takes back the accept waiting in its undo window; nothing was sent. */
+    fun undoAccept() {}
+
+    /** Clears the failure or unknown outcome of the last ticket write after the user saw it. */
+    fun dismissTicketNotice() {}
+
+    suspend fun filesSearch(sessionId: String, query: String): FileSearchResult = throw RemoteRequestException.unsupported()
+
+    fun searchFiles(query: String) {}
+    fun openSearchHit(hit: FileSearchHit) {}
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.files.read` of one page; a later page carries the first page's version. */
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
+
+    /**
+     * `session.files.write`: replaces [path] with [content] when its version is still
+     * [baseVersion]; only with [FILES_WRITE_CAPABILITY]. Throws [RemoteRequestException], with
+     * code `conflict` when the file changed. A [requestId] sent before gets the host's first
+     * answer again, so a retry after a lost reply cannot write twice.
+     */
+    suspend fun filesWrite(
+        sessionId: String,
+        path: String,
+        baseVersion: String,
+        content: String,
+        requestId: String = Wire.random(),
+    ): FileWritten = throw RemoteRequestException.unsupported()
+
+    /**
+     * The bytes of an image this device sent in [sessionId]'s chat, from memory, from the encrypted
+     * disk copy ([MediaDiskCache]), or read from the host in chunks (`session.attachments.get`, only
+     * with [ATTACHMENT_READ_CAPABILITY]). A downloaded copy is kept on disk for its route.
+     */
+    suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
+        AttachmentReadResult.Unsupported
+
+    /**
+     * An image the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
+     * read from memory, from the encrypted disk copy ([MediaDiskCache]), or from the host in chunks
+     * (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). A downloaded copy is kept in memory
+     * and on disk for its route. [fresh] skips both copies and reads the file again, replacing them, so
+     * a share or save and the next view agree.
+     */
+    suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean = false): ProjectImageResult =
+        ProjectImageResult.Unsupported
+
+    /**
+     * An HTML file the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
+     * read like [readProjectImage] but only with [FILES_ARTIFACT_CAPABILITY]. The document stays in
+     * memory only; [fresh] reads the file again.
+     */
+    suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean = false): ProjectArtifactResult =
+        ProjectArtifactResult.UnsupportedHost
+
+    /**
+     * The HTML, SVG and Mermaid artifacts recorded for [sessionId] (`session.artifacts.list`, only
+     * with [ARTIFACTS_CAPABILITY]), newest first.
+     */
+    suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult =
+        SessionArtifactListResult.Unsupported
+
+    /**
+     * One artifact of [sessionId] (`session.artifacts.open`, then `session.files.media.get`, only
+     * with [ARTIFACTS_CAPABILITY]). [version] defaults to the latest; a version asked for is an
+     * immutable snapshot and stays in memory, the latest is read each time. [type] is the listed
+     * type: an answer of another type is [SessionArtifactOpenResult.NotAnArtifact] before any byte is
+     * read. [sha256] is the listed digest of that version: a kept copy with another digest is not used
+     * and is replaced.
+     */
+    suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int? = null,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult =
+        SessionArtifactOpenResult.Unsupported
+
+    /**
+     * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
+     * `session.export.get`, for sessions qualified by the host's export capabilities).
+     */
+    suspend fun exportSession(sessionId: String): ExportResult =
+        ExportResult.Failed(ExportFailure.UNSUPPORTED)
+
+    /**
+     * Reloads pi's extensions, skills, prompt templates, themes and context files in [sessionId]
+     * (`session.reload`, only with [RELOAD_CAPABILITY] and for host-owned sessions), then refreshes
+     * the chat and the command catalog.
+     */
+    suspend fun reloadSession(sessionId: String): ReloadResult =
+        ReloadResult.Failed(ReloadFailure.Unsupported)
+
+    /** Reads the tree of [sessionId] (`session.tree`, only with [SESSION_TREE_CAPABILITY]). */
+    suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
+        TreeLoadResult.Failed(TreeFailure.UNSUPPORTED)
+
+    /**
+     * Moves the leaf of [sessionId] to [nodeId] in place (`session.tree.navigate`). On success a
+     * returned text is already in the composer and the chat has been refreshed; on an unknown
+     * result the chat is refreshed too.
+     */
+    suspend fun navigateSessionTree(sessionId: String, nodeId: String, summarize: Boolean): TreeNavigateResult =
+        TreeNavigateResult.Failed(TreeFailure.UNSUPPORTED)
 
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
+
+    /** Like [openFiles]; with [exclusive] false the changes stay open beside the files. */
+    fun openFiles(exclusive: Boolean) = openFiles()
 
     fun closeFiles() {}
 
@@ -274,12 +810,106 @@ interface RemoteRepository {
     /** Shows the file [path], or the folder again for null. */
     fun openFilesFile(path: String?) {}
 
+    /**
+     * Opens Files at the folder of [path] (relative to the session folder) with the file open and
+     * [lines] picked and in view; [exclusive] as for [openFiles]. False, with nothing opened, for a
+     * path outside the session folder or while an open editor keeps the pane.
+     */
+    fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
+        if (!isSessionPath(path)) return false
+        openFiles(exclusive)
+        openFilesDir(parentPath(path))
+        openFilesFile(path)
+        selectFileLines(lines)
+        return true
+    }
+
     /** The next page of the open file, or of the shown folder. */
     fun loadMoreFiles() {}
 
     fun reloadFiles() {}
 
+    fun requestFilesPreview(path: String) {}
+
+    fun showFilesPeek(path: String, type: FileEntryType) {}
+
+    fun dismissFilesPeek() {}
+
     fun selectFileLines(selection: LineSelection?) {}
+
+    /** Opens the open file in the editor when [canEditFile] allows it. */
+    fun startFileEditing() {}
+
+    fun updateFileEditorText(text: String) {}
+
+    /** Saves the editor's text over the version it was read or last saved as. */
+    fun saveFileEditor() {}
+
+    fun restoreFileEditorDraft() {}
+
+    fun discardFileEditorDraft() {}
+
+    /** Leaves the editor and drops its text; a save still on its way is ignored. */
+    fun discardFileEditor() {}
+
+    /** After a conflict: drops the edit and reads the file again. */
+    fun reloadFileAfterConflict() {}
+
+    /**
+     * Asks for a new file's name in [folder] (`session.files.create`); only with
+     * [FILES_CREATE_CAPABILITY] on a client that journals mutations ([RemoteState.fileMutations]).
+     */
+    fun prepareFileCreate(folder: String) {}
+
+    /** Asks for a new name of [path] after reading it afresh; only with [FILES_RENAME_CAPABILITY]. */
+    fun prepareFileRename(path: String) {}
+
+    /** Asks to confirm deleting [path] after reading it afresh; only with [FILES_DELETE_CAPABILITY]. */
+    fun prepareFileDelete(path: String) {}
+
+    /** Sends the prompt's operation: [name] is the new file's or the new name, null for delete. */
+    fun confirmFileMutation(name: String?) {}
+
+    fun cancelFileMutation() {}
+
+    fun dismissFileMutationOutcome() {}
+
+    /** Acknowledges an unknown outcome (`session.files.mutation.acknowledge`); never retries it. */
+    fun acknowledgeFileMutation(operationId: String) {}
+
+    /** Asks the host again about a pending operation (`session.files.mutation.status`); never resends it. */
+    fun checkFileMutation(operationId: String) {}
+
+    /** Asks to confirm discarding an unreadable mutation journal. */
+    fun requestFileMutationReset() {}
+
+    /** Discards the unreadable journal and starts an empty one; nothing is sent for its operations. */
+    fun confirmFileMutationReset() {}
+
+    fun cancelFileMutationReset() {}
+
+    /** Offers creating the missing file a kept draft belongs to; its editor then offers the draft. */
+    fun openOrphanFileDraft(path: String) {}
+
+    /** Discards the kept draft of a missing file, after the user chose to. */
+    fun discardOrphanFileDraft(path: String) {}
+
+    /** Discards the draft asked about, if its file is still missing on a fresh read. */
+    fun confirmDiscardOrphanFileDraft() {}
+
+    fun cancelDiscardOrphanFileDraft() {}
+
+    /** Discards the unsaved edit and runs the action that waited for it ([FileEditor.leaveRequest]). */
+    fun confirmFileEditorLeave() {}
+
+    /** Keeps editing; the action that waited for the discard prompt is dropped. */
+    fun cancelFileEditorLeave() {}
+
+    /**
+     * The composer text that hands the edit to the agent as a diff, with [intro] (default
+     * [editorPromptIntro]) above it; null when nothing changed or no editor is open.
+     */
+    fun fileEditorPrompt(intro: String? = null): EditorPrompt? = null
 
     /**
      * Adds [comment], replacing one on the same line, and keeps it in the session's draft. Returns
@@ -323,6 +953,38 @@ interface RemoteRepository {
      * selection, or null when it asked or failed.
      */
     suspend fun openFolder(routeId: String, path: String, openId: Long): RemoteSelection? = null
+
+    /** Shows [routeId]'s providers; sends `provider.auth.list` only with [PROVIDER_AUTH_CAPABILITY]. */
+    fun browseProviders(routeId: String) {}
+
+    /** Re-reads the provider list, which also recovers the login flow after a reconnect. */
+    fun refreshProviders() {}
+
+    /**
+     * Starts a login for [providerId]. [replace] is set only after the user confirmed replacing a
+     * stored credential.
+     */
+    fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) {}
+
+    /**
+     * Answers the pending prompt [promptId] with [value]. The value may be a secret: it is sent and
+     * dropped, never stored or logged. Returns whether the answer was sent; on false the caller
+     * keeps what the user typed.
+     */
+    fun answerLogin(promptId: String, value: String): Boolean = false
+
+    fun cancelLogin() {}
+
+    /** Removes the stored credential of [providerId]; the caller confirmed it with the user. */
+    fun logoutProvider(providerId: String) {}
+
+    /** Hides the finished login's result. */
+    fun dismissLogin() {}
+
+    fun dismissProviderNotice() {}
+
+    /** Forgets the [SessionNotice] with [id] once the chat has shown it. */
+    fun dismissNotice(id: Long) {}
 
     fun dismissError()
 

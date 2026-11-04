@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_layout_title">Layout</string>
+    <string name="remote_layout_help">PocketPi merkt sich für jede Fenstergröße die Spaltenbreiten, die du gezogen hast, eine ausgeblendete Sitzungsliste und eine offen gelassene Projektspalte. Zurücksetzen stellt die Spalten und den Seitenbereich auf ihre Standardwerte.</string>
+    <string name="remote_layout_reset">Layout zurücksetzen</string>
+    <string name="remote_layout_reset_done">Layout zurückgesetzt</string>
+    <string name="remote_projects_expand">Projektspalte offen lassen</string>
+    <string name="remote_projects_collapse">Projektspalte einklappen</string>
+</resources>

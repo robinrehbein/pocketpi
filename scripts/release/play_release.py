@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish one PocketPi bundle to both Play testing tracks in one edit."""
+"""Publish one PocketPi bundle to configured Play testing tracks in one edit."""
 
 import argparse
 import os
@@ -8,9 +8,9 @@ import sys
 from pathlib import Path
 
 PACKAGE_NAME = "de.robinrehbein.pocketpi"
-INTERNAL_TRACK = "qa"
+INTERNAL_TRACK = "internal"
 MAX_VERSION_CODE = 2_100_000_000
-RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "alpha", "internal"})
+RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "qa"})
 CUSTOM_TRACK_ID = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
 
@@ -22,16 +22,22 @@ def required_env(name):
 
 
 def validate_closed_track(track):
-    # Form-factor tracks use a colon (for example wear:production). Only a
-    # plain custom closed-test identifier may reach the release update loop.
+    # Form-factor tracks use a colon (for example wear:production). Only the
+    # default alpha track or a plain custom closed-test identifier may reach
+    # the release update loop.
     if (not CUSTOM_TRACK_ID.fullmatch(track) or track in RESERVED_TRACKS
             or "production" in track):
-        raise ValueError("POCKETPI_CLOSED_TRACK must be the exact custom closed-test track ID")
+        raise ValueError("POCKETPI_CLOSED_TRACK must be alpha or an exact custom closed-test track ID")
     return track
 
 
 def closed_track():
-    return validate_closed_track(required_env("POCKETPI_CLOSED_TRACK"))
+    track = os.environ.get("POCKETPI_CLOSED_TRACK", "").strip()
+    return validate_closed_track(track) if track else None
+
+
+def target_tracks(closed):
+    return (INTERNAL_TRACK, validate_closed_track(closed)) if closed else (INTERNAL_TRACK,)
 
 
 def release_version_codes(tracks, bundles, apks):
@@ -45,11 +51,13 @@ def release_version_codes(tracks, bundles, apks):
 
 
 def track_map(tracks, closed):
-    validate_closed_track(closed)
     by_name = {track["track"]: track for track in tracks}
-    for name in (INTERNAL_TRACK, closed):
+    for name in target_tracks(closed):
         if name not in by_name:
-            raise ValueError(f"Required Play track {name!r} does not exist")
+            raise ValueError(
+                f"Required Play track {name!r} does not exist; "
+                f"available tracks: {', '.join(sorted(by_name))}"
+            )
     return by_name
 
 
@@ -89,11 +97,13 @@ def prepare(service, closed):
         service.edits().delete(packageName=PACKAGE_NAME, editId=edit_id).execute()
 
 
-def publish(service, closed, version, bundle):
+def publish(service, closed, version, bundle, mapping=None):
     from googleapiclient.http import MediaFileUpload
 
     if not bundle.is_file() or bundle.stat().st_size == 0:
         raise ValueError("Signed AAB is missing or empty")
+    if mapping is not None and (not mapping.is_file() or mapping.stat().st_size == 0):
+        raise ValueError("R8 mapping file is missing or empty")
     if version < 1 or version > MAX_VERSION_CODE:
         raise ValueError("Invalid versionCode")
     edit_id = new_edit(service)
@@ -110,12 +120,21 @@ def publish(service, closed, version, bundle):
         ).execute()
         if int(uploaded["versionCode"]) != version:
             raise ValueError("Uploaded AAB versionCode does not match the planned version")
+        if mapping is not None:
+            # R8's mapping, so Play's crash and ANR reports show readable stack traces.
+            service.edits().deobfuscationfiles().upload(
+                packageName=PACKAGE_NAME,
+                editId=edit_id,
+                apkVersionCode=version,
+                deobfuscationFileType="proguard",
+                media_body=MediaFileUpload(str(mapping), mimetype="application/octet-stream", resumable=True),
+            ).execute()
         release = {
             "name": f"PocketPi {version}",
             "versionCodes": [str(version)],
             "status": "completed",
         }
-        for track_name in (INTERNAL_TRACK, closed):
+        for track_name in target_tracks(closed):
             service.edits().tracks().update(
                 packageName=PACKAGE_NAME,
                 editId=edit_id,
@@ -136,7 +155,7 @@ def publish(service, closed, version, bundle):
     try:
         tracks, _, _ = snapshot(service, verify_id)
         current = track_map(tracks, closed)
-        for track_name in (INTERNAL_TRACK, closed):
+        for track_name in target_tracks(closed):
             if not any(
                 str(version) in release.get("versionCodes", []) and release.get("status") == "completed"
                 for release in current[track_name].get("releases", [])
@@ -154,17 +173,18 @@ def main():
     publish_command = subcommands.add_parser("publish")
     publish_command.add_argument("--version-code", type=int, required=True)
     publish_command.add_argument("--bundle", type=Path, required=True)
+    publish_command.add_argument("--mapping", type=Path)
     args = parser.parse_args()
     closed = closed_track()
     if args.command == "validate-track":
-        print(closed)
+        print(" and ".join(target_tracks(closed)))
         return
     service = play_api()
     if args.command == "prepare":
         print(prepare(service, closed))
     else:
-        publish(service, closed, args.version_code, args.bundle)
-        print(f"Committed versionCode {args.version_code} to {INTERNAL_TRACK} and {closed}")
+        publish(service, closed, args.version_code, args.bundle, args.mapping)
+        print(f"Committed versionCode {args.version_code} to {' and '.join(target_tracks(closed))}")
 
 
 if __name__ == "__main__":

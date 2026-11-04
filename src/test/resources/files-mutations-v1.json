@@ -1,0 +1,543 @@
+{
+  "version": 1,
+  "note": "session.files mutation wire examples (create, rename, delete, recovery). The app must see the operation's capability (session.files.create.v1, session.files.rename.v1, session.files.delete.v1) or session.files.mutation-recovery.v1 in the capabilities.v3 projects.list route before sending the matching command. operationId, epoch, after and nextAfter are canonical unpadded base64url of 16 bytes. epoch is the host's journal epoch from files.mutation.list; an operation sent with another epoch is refused with reason epoch and never runs. A reused operationId with different fields is answered with error code invalid_request. status and acknowledge of an operationId the host's current journal does not hold are answered with error code not_found. Paths the parser accepts may still be refused with reason invalid_path by the host.",
+  "valid": [
+    {
+      "name": "create-command",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/new.ts"
+      }
+    },
+    {
+      "name": "rename-command",
+      "payload": {
+        "type": "session.files.rename",
+        "requestId": "req-2",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/old.ts",
+        "destinationPath": "src/new.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "delete-command",
+      "payload": {
+        "type": "session.files.delete",
+        "requestId": "req-3",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/old.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "status-command",
+      "payload": {
+        "type": "session.files.mutation.status",
+        "requestId": "req-4",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ"
+      }
+    },
+    {
+      "name": "list-command",
+      "payload": {
+        "type": "session.files.mutation.list",
+        "requestId": "req-5",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+      }
+    },
+    {
+      "name": "list-command-after",
+      "payload": {
+        "type": "session.files.mutation.list",
+        "requestId": "req-6",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "after": "T3BlcmF0aW9uSWRBYmMxMg"
+      }
+    },
+    {
+      "name": "acknowledge-command",
+      "payload": {
+        "type": "session.files.mutation.acknowledge",
+        "requestId": "req-7",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ"
+      }
+    },
+    {
+      "name": "create-applied",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "create",
+          "path": "src/new.ts",
+          "state": "applied",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "rename-applied",
+      "payload": {
+        "type": "result",
+        "requestId": "req-2",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "rename",
+          "path": "src/old.ts",
+          "destinationPath": "src/new.ts",
+          "state": "applied",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "delete-refused-conflict",
+      "payload": {
+        "type": "result",
+        "requestId": "req-3",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "delete",
+          "path": "src/old.ts",
+          "state": "refused",
+          "reason": "conflict",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "create-refused-exists",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "create",
+          "path": "src/new.ts",
+          "state": "refused",
+          "reason": "exists",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "create-refused-epoch",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "create",
+          "path": "src/new.ts",
+          "state": "refused",
+          "reason": "epoch",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "status-pending",
+      "payload": {
+        "type": "result",
+        "requestId": "req-4",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "create",
+          "path": "src/new.ts",
+          "state": "pending",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "status-unknown",
+      "payload": {
+        "type": "result",
+        "requestId": "req-4",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "delete",
+          "path": "src/old.ts",
+          "state": "unknown",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "acknowledged-unknown",
+      "payload": {
+        "type": "result",
+        "requestId": "req-7",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "delete",
+          "path": "src/old.ts",
+          "state": "unknown",
+          "acknowledged": true
+        }
+      }
+    },
+    {
+      "name": "mutation-list",
+      "payload": {
+        "type": "result",
+        "requestId": "req-5",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+          "operations": [
+            {
+              "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+              "operation": "rename",
+              "path": "src/old.ts",
+              "destinationPath": "src/new.ts",
+              "state": "unknown",
+              "acknowledged": false
+            },
+            {
+              "operationId": "T3BlcmF0aW9uSWRYeXo5OA",
+              "operation": "create",
+              "path": "notes.txt",
+              "state": "pending",
+              "acknowledged": false
+            }
+          ],
+          "nextAfter": "T3BlcmF0aW9uSWRYeXo5OA"
+        }
+      }
+    },
+    {
+      "name": "mutation-list-empty",
+      "payload": {
+        "type": "result",
+        "requestId": "req-6",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+          "operations": []
+        }
+      }
+    },
+    {
+      "name": "mutation-mismatch-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": false,
+        "error": {
+          "code": "invalid_request",
+          "message": "Operation ID already used for a different request"
+        }
+      }
+    },
+    {
+      "name": "mutation-unsupported-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Creating files is not available on this Mac"
+        }
+      }
+    },
+    {
+      "name": "projects-files-mutation-capabilities",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v3:req-8",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.files.v1",
+            "session.files.write.v1",
+            "session.files.create.v1",
+            "session.files.rename.v1",
+            "session.files.delete.v1",
+            "session.files.mutation-recovery.v1"
+          ]
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "create-missing-epoch",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "path": "src/new.ts"
+      }
+    },
+    {
+      "name": "create-bad-epoch",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "AAAAAAAAAAAAAAAAAAAAAB",
+        "path": "src/new.ts"
+      }
+    },
+    {
+      "name": "create-bad-operation-id",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "short",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/new.ts"
+      }
+    },
+    {
+      "name": "create-with-content",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/new.ts",
+        "content": "x"
+      }
+    },
+    {
+      "name": "create-absolute-path",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "/etc/passwd"
+      }
+    },
+    {
+      "name": "create-traversal",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/../a.ts"
+      }
+    },
+    {
+      "name": "create-folder-path",
+      "payload": {
+        "type": "session.files.create",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/"
+      }
+    },
+    {
+      "name": "rename-other-folder",
+      "payload": {
+        "type": "session.files.rename",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/old.ts",
+        "destinationPath": "lib/new.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "rename-same-path",
+      "payload": {
+        "type": "session.files.rename",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/old.ts",
+        "destinationPath": "src/old.ts",
+        "baseVersion": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "delete-missing-base-version",
+      "payload": {
+        "type": "session.files.delete",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+        "path": "src/old.ts"
+      }
+    },
+    {
+      "name": "status-missing-epoch",
+      "payload": {
+        "type": "session.files.mutation.status",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "operationId": "T3BlcmF0aW9uSWRBYmMxMg"
+      }
+    },
+    {
+      "name": "list-with-epoch",
+      "payload": {
+        "type": "session.files.mutation.list",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "epoch": "RXBvY2hFcG9jaEVwb2NoMQ"
+      }
+    },
+    {
+      "name": "refused-without-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "create",
+          "path": "src/new.ts",
+          "state": "refused",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "applied-acknowledged",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "create",
+          "path": "src/new.ts",
+          "state": "applied",
+          "acknowledged": true
+        }
+      }
+    },
+    {
+      "name": "rename-result-missing-destination",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+          "operation": "rename",
+          "path": "src/a",
+          "state": "applied",
+          "acknowledged": false
+        }
+      }
+    },
+    {
+      "name": "list-missing-epoch",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "operations": []
+        }
+      }
+    },
+    {
+      "name": "list-applied-record",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+          "operations": [
+            {
+              "operationId": "T3BlcmF0aW9uSWRBYmMxMg",
+              "operation": "create",
+              "path": "a",
+              "state": "applied",
+              "acknowledged": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "list-bad-next-after",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "files.mutation.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "epoch": "RXBvY2hFcG9jaEVwb2NoMQ",
+          "operations": [],
+          "nextAfter": "AAAAAAAAAAAAAAAAAAAAAB"
+        }
+      }
+    }
+  ]
+}

@@ -5,6 +5,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProjectFilesTest {
+    @Test
+    fun sharedSearchFixtureResults() {
+        val fixture = Wire.json.parseToJsonElement(javaClass.getResource("/files-search-v1.json")!!.readText()).jsonObject
+        val valid = fixture.getValue("valid").jsonArray.map { it.jsonObject.obj("payload") }.filter { it.text("type") == "result" }
+        assertEquals(1, valid.size)
+        assertEquals(FileSearchHit("src/a.ts", 2, 4, "😀 needle here"), parseFilesSearch(valid.single().obj("data"), "s", "needle").matches.single())
+        val invalid = fixture.getValue("invalid").jsonArray.map { it.jsonObject.obj("payload") }.filter { it.text("type") == "result" }
+        assertEquals(2, invalid.size)
+        invalid.forEach { assertThrows(IllegalArgumentException::class.java) { parseFilesSearch(it.obj("data"), "s", "x") } }
+    }
+
+    @Test
+    fun searchResultRejectsWrongRequestAndInvalidHits() {
+        val data = Wire.json.parseToJsonElement("""{"kind":"files.search","sessionId":"s","query":"needle","matches":[{"path":"src/a.kt","line":2,"column":3,"snippet":"a needle"}],"truncated":false}""").jsonObject
+        assertEquals(FileSearchHit("src/a.kt", 2, 3, "a needle"), parseFilesSearch(data, "s", "needle").matches.single())
+        assertThrows(IllegalArgumentException::class.java) { parseFilesSearch(data, "s", "other") }
+        for (bad in listOf("../secret", "/absolute")) {
+            val invalid = Wire.json.parseToJsonElement("""{"kind":"files.search","sessionId":"s","query":"needle","matches":[{"path":"$bad","line":2,"column":3,"snippet":"needle"}],"truncated":false}""").jsonObject
+            assertThrows(IllegalArgumentException::class.java) { parseFilesSearch(invalid, "s", "needle") }
+        }
+        val multiline = Wire.json.parseToJsonElement("""{"kind":"files.search","sessionId":"s","query":"needle","matches":[{"path":"a","line":1,"column":1,"snippet":"needle\nother"}],"truncated":false}""").jsonObject
+        assertThrows(IllegalArgumentException::class.java) { parseFilesSearch(multiline, "s", "needle") }
+        val zero = Wire.json.parseToJsonElement("""{"kind":"files.search","sessionId":"s","query":"needle","matches":[{"path":"a","line":0,"column":1,"snippet":"needle"}],"truncated":false}""").jsonObject
+        assertThrows(IllegalArgumentException::class.java) { parseFilesSearch(zero, "s", "needle") }
+    }
     private val sessionId = "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
     private val version = "RmlsZVZlcnNpb25BYmMxMg"
 

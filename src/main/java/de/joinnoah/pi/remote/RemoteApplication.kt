@@ -1,9 +1,14 @@
 package de.joinnoah.pi.remote
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
+import android.system.OsConstants
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -13,11 +18,16 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import okhttp3.OkHttpClient
 
 class RemoteApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var validatedNetwork: String? = null
+
+    /** The process's stores; services, receivers and workers reach them through [Context.stores]. */
+    internal val stores by lazy { AppStores(this) }
+
     private lateinit var pushRegistration: PushRegistration
+    private lateinit var diagnosticsStore: DiagnosticsStore
     lateinit var repository: RemoteRepository
         private set
 
@@ -27,7 +37,14 @@ class RemoteApplication : Application() {
     internal lateinit var home: HomeSurfaces
         private set
 
+    /** The phone's pins and read marks of sessions; see [SessionMarksStore]. */
+    internal lateinit var sessionMarks: SessionMarksStore
+        private set
+
     internal lateinit var predictions: PromptPredictions
+        private set
+
+    internal lateinit var appLock: AppLock
         private set
 
     val pushConfigured: Boolean
@@ -42,27 +59,54 @@ class RemoteApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        scope.launch(Dispatchers.IO) {
+            // Exports hold chat content; none outlives the process that shared it.
+            runCatching { ExportStorage.clear(cacheDir) }
+            // Shared agent images are copies of project files; none outlives the process either.
+            runCatching { ImageStorage.clear(cacheDir) }
+            // Opened or shared artifacts are copies of project files too.
+            runCatching { ArtifactStorage.clear(cacheDir) }
+            // So are files dragged into other apps.
+            runCatching { DragStorage.clear(cacheDir) }
+            // Camera captures the import is done with are deleted then; this catches the rest.
+            runCatching { PhotoCapture.sweep(cacheDir) }
+        }
+        BitmapCaches.configure(getSystemService(ActivityManager::class.java).memoryClass)
         settings = DefaultSettingsRepository(this)
-        val attachments = AttachmentStore(this)
+        LiveRunSettings.preload(this)
+        appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
+        val attachments = stores.attachments
         val importer = AttachmentImporter(this, attachments)
+        diagnosticsStore =
+            DiagnosticsStore(java.io.File(noBackupFilesDir, "diagnostics-v1.json"), scope).also { it.start() }
         repository =
             DefaultRemoteRepository(
-                PairingStore(this),
-                DraftStore(this),
-                SecureRemoteTransport(scope),
+                stores.pairings,
+                stores.drafts,
+                remoteTransport(this, scope),
                 scope,
-                navigationStorage = NavigationSnapshotStore(this),
+                navigationStorage = stores.navigation,
+                fileDraftStorage = stores.fileDrafts,
+                fileMutationStorage = stores.fileMutations,
+                pagedEditorStorage = stores.pagedEditor,
+                nativePagedEditorEnabled = true,
+                nativePositiveOutcomeEnabled = true,
                 attachmentStorage = attachments,
                 attachmentImporter = { uri, photo ->
                     importer.import(android.net.Uri.parse(uri), photo)
                 },
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
+                projectHint = ::sessionProjectHint,
+                media = stores.media,
+                liveRunKept = { LiveRun.service != null },
             )
         observeRecovery()
-        predictions = PromptPredictions(this, scope, PairingStore(this))
-        home = HomeSurfaces(this, scope, PairingStore(this))
+        predictions = PromptPredictions(this, scope, stores.pairings)
+        home = HomeSurfaces(this, scope, stores.pairings)
         home.observe(repository.state)
+        sessionMarks = SessionMarksStore(this)
+        sessionMarks.observe(repository.state, scope)
         observeOpenedSession()
         RemoteNotifications.createChannel(this)
         RemoteNotifications.deleteSyncChannel(this)
@@ -87,12 +131,19 @@ class RemoteApplication : Application() {
                             .addOnFailureListener { failure() }
                     },
                     register = repository::setPushToken,
+                    unregister = { repository.setPushToken(null) },
+                    optedOut = { settings.state.value.pushOptedOut },
                 )
             if (settings.state.value.pushEnabled) {
                 FirebaseMessaging.getInstance().isAutoInitEnabled = true
-                pushRegistration.onStartup()
             }
+            pushRegistration.onStartup()
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        BitmapCaches.trim(level)
     }
 
     fun enablePush() {
@@ -102,17 +153,42 @@ class RemoteApplication : Application() {
         pushRegistration.onEnabled()
     }
 
+    /**
+     * Switches push off: no more pushes are posted, and the Mac is told to forget this phone's
+     * token (now if connected, otherwise on the next connection, including after a restart).
+     */
+    fun disablePush() {
+        if (!pushConfigured) return
+        settings.setPushEnabled(false)
+        FirebaseMessaging.getInstance().isAutoInitEnabled = false
+        pushRegistration.onDisabled()
+    }
+
     /** Forgets everything the home surfaces, suggestions and notifications knew about a host. */
     private fun onUnpaired(routeId: String) {
         home.forgetRoute(routeId)
         predictions.forgetRoute(routeId)
         QuestionUpgrades.forgetRoute(this, routeId)
+        CompletionUpgrades.names.forgetRoute(routeId)
         RemoteNotifications.cancelRoute(this, routeId)
     }
+
+    /**
+     * Where the home snapshot or the label worker last saw a session, for a tapped notification
+     * whose session the repository's caches do not hold.
+     */
+    private suspend fun sessionProjectHint(routeId: String, sessionId: String): String? =
+        home.load().sessions.find { it.routeId == routeId && it.sessionId == sessionId }?.projectId
+            ?: CompletionUpgrades.names.get(routeId, sessionId)?.projectId
 
     /** A push arrived for a paired host; called on the messaging worker thread. */
     internal fun onPushEvent(payload: PushPayload) {
         home.onPush(payload)
+    }
+
+    /** A push arrived for a paired host; wakes the main connection. Called on any thread. */
+    internal fun onPushWake(routeId: String) {
+        scope.launch { repository.pushWake(routeId) }
     }
 
     /** A notification action answered a question; called off the main thread. */
@@ -123,6 +199,11 @@ class RemoteApplication : Application() {
     ) {
         home.onAnswered(routeId, sessionId)
         if (isPlanApproval(answer)) predictions.recordPlanApproval(routeId, sessionId)
+    }
+
+    /** A notification reply started the session's next run; called off the main thread. */
+    internal fun onRepliedInBackground(routeId: String, sessionId: String) {
+        home.onAnswered(routeId, sessionId)
     }
 
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */
@@ -174,6 +255,7 @@ class RemoteApplication : Application() {
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     foreground = true
+                    diagnosticsStore.onForeground()
                     repository.state.value.let { state ->
                         val route = state.selection.routeId
                         val session = state.selection.sessionId
@@ -185,34 +267,141 @@ class RemoteApplication : Application() {
 
                 override fun onStop(owner: LifecycleOwner) {
                     foreground = false
+                    diagnosticsStore.flush()
                     repository.setForeground(false)
                 }
             }
         )
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
-                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Main thread only: each callback hops there before it touches the tracker.
+                private val tracker = NetworkTracker()
+
+                private fun report(change: () -> NetworkTracker.Report?) {
                     scope.launch {
-                        val identity = network.toString()
-                        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                            validatedNetwork = identity
-                            repository.setValidatedNetwork(identity)
-                        } else if (validatedNetwork == identity) {
-                            validatedNetwork = null
-                            repository.setValidatedNetwork(null)
-                        }
+                        val report = change() ?: return@launch
+                        repository.setNetwork(report.identity, report.validated, report.path)
                     }
                 }
 
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    val internet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    val running =
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+                    val checked = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    // A VPN carries the transports of the networks underneath it (the list of
+                    // those networks is no public API), so roaming between Wi-Fi and LTE keeps the
+                    // VPN's network and changes these.
+                    val under =
+                        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) null
+                        else VPN_UNDERLYING_TRANSPORTS.filter(capabilities::hasTransport).joinToString(",")
+                    val identity = network.toString()
+                    report { tracker.capabilities(identity, internet, running, checked, under) }
+                }
+
+                override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+                    // Temporary IPv6 addresses rotate on their own; they do not move the route.
+                    val addresses =
+                        properties.linkAddresses
+                            .filter { (it.flags and OsConstants.IFA_F_TEMPORARY) == 0 }
+                            .mapNotNull { it.address.hostAddress }
+                    val identity = network.toString()
+                    val name = properties.interfaceName
+                    report { tracker.links(identity, name, addresses) }
+                }
+
+                override fun onBlockedStatusChanged(network: Network, isBlocked: Boolean) {
+                    // Blocked is as good as lost; unblocked reports the network again.
+                    val identity = network.toString()
+                    report { tracker.blocked(identity, isBlocked) }
+                }
+
                 override fun onLost(network: Network) {
-                    scope.launch {
-                        if (validatedNetwork == network.toString()) {
-                            validatedNetwork = null
-                            repository.setValidatedNetwork(null)
-                        }
-                    }
+                    val identity = network.toString()
+                    report { tracker.lost(identity) }
                 }
             }
         )
     }
 }
+
+/**
+ * The process's one instance of each encrypted store, so that each file has one store, one lock
+ * and one cached key no matter how many parts of the app read it. Each store is made on first use.
+ */
+internal class AppStores(
+    /** The application; tests pass a context with its own files directory. */
+    private val app: Context,
+) {
+    /** The paired route IDs a push checks; [pairings] keeps them in step. */
+    val routes by lazy { PairedRouteCache(app) }
+
+    /** The pairing file itself; only a push's route check, which fills [routes], reads it directly. */
+    val pairingFile by lazy {
+        PairingStore(
+            app,
+            onReset = {
+                routes.onPairingsReset()
+                // Without the pairings no route is known, so no kept image is ever asked for again.
+                media.clear()
+            },
+        )
+    }
+
+    /** The pairings, with the route cache and the notifications' host names kept in step. */
+    val pairings: PairingStorage by lazy {
+        RouteCachingPairings(pairingFile, routes) { hosts -> hosts.forEach(RemoteNotifications::rememberHost) }
+    }
+
+    val drafts by lazy { DraftStore(app) }
+
+    val fileDrafts by lazy { FileDraftStore(app) }
+
+    /**
+     * File creates, renames and deletes, journaled before they are sent. Provisioned on first use:
+     * losing payload and marker together loses only this device's view of pending operations, which
+     * the host still lists for recovery; losing one of them fails closed.
+     */
+    val fileMutations by lazy { FileMutationStore(app, MAX_FILE_MUTATION_JOURNAL_ENTRIES, expectProvisioned = false) }
+
+    val pagedEditor by lazy { PagedEditorStore(app) }
+
+    val navigation by lazy { NavigationSnapshotStore(app) }
+
+    val attachments by lazy { AttachmentStore(app) }
+
+    /** Sent and project images kept on disk ([MediaDiskCache]); cleared with the pairings. */
+    val media by lazy { MediaDiskCache(java.io.File(app.noBackupFilesDir, "media-cache")) }
+
+    /** The widget's and shortcuts' snapshot ([HomeSurfaces]). */
+    val home by lazy { EncryptedFileStore(app, "home-sessions.enc", "pi-remote-home-v1") }
+
+    /** The prompt history ([PromptPredictions]). */
+    val prompts by lazy { EncryptedFileStore(app, "prompt-history.enc", "pi-remote-prompts-v1") }
+}
+
+/**
+ * The stores of this process: the phone app's own, or, in a process whose application is not
+ * [RemoteApplication] (the watch app, some tests), a new set that still shares each file's lock and
+ * key with any other.
+ */
+internal val Context.stores: AppStores
+    get() = (applicationContext as? RemoteApplication)?.stores ?: AppStores(applicationContext)
+
+/**
+ * The process's one OkHttp client. The relay sockets ([SecureRemoteTransport]'s default and
+ * [BackgroundRemoteClient]'s) and the artifact CDN derive their clients from it with
+ * `newBuilder()`, so they share its dispatcher, connection pool and threads and set only their own
+ * timeouts, ping interval and cache. Built on first use; the wear app uses it too.
+ */
+internal val baseHttpClient: OkHttpClient by lazy { OkHttpClient() }
+
+/** Transports a VPN's network takes over from the networks it runs on. */
+private val VPN_UNDERLYING_TRANSPORTS =
+    listOf(
+        NetworkCapabilities.TRANSPORT_CELLULAR,
+        NetworkCapabilities.TRANSPORT_WIFI,
+        NetworkCapabilities.TRANSPORT_ETHERNET,
+        NetworkCapabilities.TRANSPORT_BLUETOOTH,
+    )

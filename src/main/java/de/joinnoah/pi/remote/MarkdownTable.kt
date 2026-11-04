@@ -1,0 +1,192 @@
+package de.joinnoah.pi.remote
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.CollectionItemInfo
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.collectionItemInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+
+internal sealed interface MarkdownBlock {
+    data class Line(val text: String) : MarkdownBlock
+    /** An image of the session folder on a line of its own; [path] is relative (or POSIX absolute). */
+    data class Image(val alt: String, val path: String) : MarkdownBlock
+    /**
+     * A link to a local HTML file on a line of its own. [line] is the source line, so a surface that
+     * does not show artifacts renders it as the ordinary [Line] it is.
+     */
+    data class Artifact(val title: String, val path: String, val line: String) : MarkdownBlock
+    data class Table(val header: List<String>, val alignment: List<TextAlign>, val rows: List<List<String>>) : MarkdownBlock
+}
+
+/** Split only structural pipes; matched backtick runs protect code span contents. */
+internal fun tableCells(line: String): List<String>? {
+    val cells = mutableListOf<String>()
+    val cell = StringBuilder()
+    var index = 0
+    var pipes = 0
+    var leading = false
+    var trailing = false
+    while (index < line.length) {
+        val char = line[index]
+        when {
+            char == '\\' && index + 1 < line.length -> {
+                val next = line[index + 1]
+                if (next == '|') cell.append(next) else cell.append(char).append(next)
+                index += 2
+                trailing = false
+            }
+            char == '`' -> {
+                val start = index
+                while (index < line.length && line[index] == '`') index++
+                val run = line.substring(start, index)
+                var end = index
+                var close = -1
+                while (end < line.length) {
+                    if (line[end] != '`') { end++; continue }
+                    val runStart = end
+                    while (end < line.length && line[end] == '`') end++
+                    if (end - runStart == run.length) { close = runStart; break }
+                }
+                if (close >= 0) {
+                    cell.append(line.substring(start, close + run.length))
+                    index = close + run.length
+                } else cell.append(run)
+                trailing = false
+            }
+            char == '|' -> {
+                if (pipes == 0 && cell.isBlank()) leading = true
+                cells.add(cell.toString().trim())
+                cell.clear()
+                pipes++
+                trailing = true
+                index++
+            }
+            else -> {
+                cell.append(char)
+                if (!char.isWhitespace()) trailing = false
+                index++
+            }
+        }
+    }
+    if (pipes == 0) return null
+    cells.add(cell.toString().trim())
+    if (trailing) cells.removeAt(cells.lastIndex)
+    if (leading) cells.removeAt(0)
+    return cells.takeIf { it.isNotEmpty() }
+}
+
+/** Called only for non-fenced segments, leaving incomplete candidates as ordinary lines. */
+internal fun markdownBlocks(text: String): List<MarkdownBlock> {
+    val lines = text.lines()
+    val blocks = mutableListOf<MarkdownBlock>()
+    var index = 0
+    while (index < lines.size) {
+        val header = tableCells(lines[index])
+        val delimiter = lines.getOrNull(index + 1)?.let(::tableCells)
+        if (header != null && delimiter != null && header.size == delimiter.size &&
+            delimiter.all { it.matches(Regex(":?-{3,}:?")) }
+        ) {
+            val alignment = delimiter.map {
+                when {
+                    it.startsWith(':') && it.endsWith(':') -> TextAlign.Center
+                    it.endsWith(':') -> TextAlign.End
+                    else -> TextAlign.Start
+                }
+            }
+            index += 2
+            val rows = mutableListOf<List<String>>()
+            while (index < lines.size) {
+                val line = lines[index]
+                if (line.isBlank() || line.matches(Regex(" {0,3}(#{1,6} .*|>.*|[-+*] .*|[0-9]+[.)] .*|(?:-{3,}|\\*{3,}|_{3,})\\s*)"))) break
+                val row = tableCells(line) ?: listOf(line.trim())
+                rows.add(row)
+                index++
+            }
+            blocks.add(MarkdownBlock.Table(header, alignment, rows))
+        } else {
+            val images = imageOnlyLine(lines[index])
+            val artifact = if (images == null) artifactOnlyLine(lines[index]) else null
+            if (images != null) images.forEach { (alt, path) -> blocks.add(MarkdownBlock.Image(alt, path)) }
+            else if (artifact != null) blocks.add(MarkdownBlock.Artifact(artifact.first, artifact.second, lines[index]))
+            else blocks.add(MarkdownBlock.Line(lines[index]))
+            index++
+        }
+    }
+    return blocks
+}
+
+/**
+ * The grid lines of one cell, 1dp wide and drawn inside the cell's edges: the end and bottom
+ * always, the top and start only on the outer edge of the table. Every inner line is then drawn by
+ * exactly one cell, so it is 1dp and not 2dp. Start and end follow the layout direction, as the
+ * columns do, so a right-to-left table is closed on both sides too.
+ */
+private fun DrawScope.cellGridLines(color: Color, top: Boolean, start: Boolean) {
+    val stroke = 1.dp.toPx()
+    val half = stroke / 2
+    val rtl = layoutDirection == LayoutDirection.Rtl
+    val endX = if (rtl) half else size.width - half
+    val startX = if (rtl) size.width - half else half
+    drawLine(color, Offset(endX, 0f), Offset(endX, size.height), stroke)
+    drawLine(color, Offset(0f, size.height - half), Offset(size.width, size.height - half), stroke)
+    if (top) drawLine(color, Offset(0f, half), Offset(size.width, half), stroke)
+    if (start) drawLine(color, Offset(startX, 0f), Offset(startX, size.height), stroke)
+}
+
+@Composable
+internal fun MarkdownTable(table: MarkdownBlock.Table) {
+    val columns = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
+    // Links in an outgoing bubble keep the contrast of that bubble's text, as they do in prose.
+    val linkColor = LocalMarkdownLinkColor.current ?: MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+    val rows = listOf(table.header) + table.rows
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // Keep two columns readable on narrow phones; larger tables scroll as one grid.
+        val width = (maxWidth / columns).coerceIn(144.dp, 240.dp)
+        Column(
+            Modifier.horizontalScroll(rememberScrollState())
+                .semantics { collectionInfo = CollectionInfo(rowCount = rows.size, columnCount = columns) }
+        ) {
+            rows.forEachIndexed { rowIndex, row ->
+                Row(Modifier.height(IntrinsicSize.Min)) {
+                    repeat(columns) { column ->
+                        Text(
+                            inlineMarkdown(
+                                row.getOrElse(column) { "" },
+                                linkColor,
+                                codeBackground = codeBackground,
+                            ),
+                            modifier = Modifier.width(width).fillMaxHeight()
+                                .background(if (rowIndex == 0) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface)
+                                .drawBehind { cellGridLines(outline, top = rowIndex == 0, start = column == 0) }
+                                .padding(12.dp)
+                                .semantics {
+                                    collectionItemInfo = CollectionItemInfo(rowIndex, 1, column, 1)
+                                },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (rowIndex == 0) FontWeight.SemiBold else FontWeight.Normal,
+                            textAlign = table.alignment.getOrElse(column) { TextAlign.Start },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

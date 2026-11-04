@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Der Seitenkopf der Listenseiten, des Ordnerfensters und der Anbieter (PageHeader.kt). -->
+    <string name="remote_page_close">Schließen</string>
+    <!-- Die Fußzeile der Modell- und Berater-Auswahl (SessionControls.kt, AdvisorPickerSheet.kt). -->
+    <string name="remote_page_manage_providers">Anbieter verwalten</string>
+</resources>

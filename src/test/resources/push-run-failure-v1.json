@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "capability": "push.run_failure.v1",
+  "failures": ["agent_error", "worker_exited"],
+  "hostValid": [
+    {
+      "name": "complete-agent-error",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "en",
+        "event": "complete",
+        "target": "session-1",
+        "failure": "agent_error",
+        "eventId": "event-1",
+        "deviceId": "device-1"
+      },
+      "data": {
+        "routeId": "route-1",
+        "target": "session-1",
+        "eventId": "event-1",
+        "event": "complete",
+        "failure": "agent_error"
+      }
+    },
+    {
+      "name": "complete-worker-exited",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "de",
+        "event": "complete",
+        "target": "session-1",
+        "failure": "worker_exited",
+        "eventId": "event-2",
+        "deviceId": "device-1"
+      },
+      "data": {
+        "routeId": "route-1",
+        "target": "session-1",
+        "eventId": "event-2",
+        "event": "complete",
+        "failure": "worker_exited"
+      }
+    },
+    {
+      "name": "complete-plain",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "en",
+        "event": "complete",
+        "target": "session-1",
+        "eventId": "event-3",
+        "deviceId": "device-1"
+      },
+      "data": {
+        "routeId": "route-1",
+        "target": "session-1",
+        "eventId": "event-3",
+        "event": "complete"
+      }
+    }
+  ],
+  "hostInvalid": [
+    {
+      "name": "failure-on-question",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "en",
+        "event": "question",
+        "target": "session-1",
+        "failure": "agent_error",
+        "eventId": "event-4",
+        "deviceId": "device-1"
+      }
+    },
+    {
+      "name": "unknown-failure",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "en",
+        "event": "complete",
+        "target": "session-1",
+        "failure": "provider said: 401 for /Users/robin/key",
+        "eventId": "event-5",
+        "deviceId": "device-1"
+      }
+    },
+    {
+      "name": "failure-not-a-string",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "en",
+        "event": "complete",
+        "target": "session-1",
+        "failure": 1,
+        "eventId": "event-6",
+        "deviceId": "device-1"
+      }
+    },
+    {
+      "name": "failure-in-an-array",
+      "send": {
+        "type": "push.send",
+        "token": "fcm-token",
+        "locale": "en",
+        "event": "complete",
+        "target": "session-1",
+        "failure": ["agent_error"],
+        "eventId": "event-8",
+        "deviceId": "device-1"
+      }
+    }
+  ],
+  "phoneLater": [
+    {
+      "name": "newer-failure-category",
+      "data": {
+        "routeId": "route-1",
+        "target": "session-1",
+        "eventId": "event-7",
+        "event": "complete",
+        "failure": "a_later_category"
+      }
+    }
+  ]
+}

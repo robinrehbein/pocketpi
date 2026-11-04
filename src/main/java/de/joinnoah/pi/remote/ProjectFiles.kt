@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import java.text.Normalizer
+import java.util.Locale
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -8,9 +10,17 @@ import kotlinx.serialization.json.JsonPrimitive
  * (protocol README, "Project files"). Advertised only through the `projects.list` route.
  */
 internal const val FILES_CAPABILITY = "session.files.v1"
+internal const val FILES_SEARCH_CAPABILITY = "session.files.search.v1"
+
+/**
+ * The host replaces an existing text file with `session.files.write`, checked against the version
+ * the app last read or wrote. Advertised only through the `capabilities.v2` route, and only when
+ * the host runs with `PI_REMOTE_FILE_WRITES=1`.
+ */
+internal const val FILES_WRITE_CAPABILITY = "session.files.write.v1"
 
 private const val MAX_FILES_LIST_ENTRIES = 500
-private const val MAX_FILES_CONTENT_JSON_BYTES = 192 * 1024
+internal const val MAX_FILES_CONTENT_JSON_BYTES = 192 * 1024
 private const val MAX_FILES_PATH_BYTES = 4096
 private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
 
@@ -55,6 +65,12 @@ data class FileChunk(
     val tooLarge: Boolean = false,
 )
 
+data class FileSearchHit(val path: String, val line: Int, val column: Int, val snippet: String)
+data class FileSearchResult(val matches: List<FileSearchHit>, val truncated: Boolean)
+data class FileSearchState(val query: String = "", val loading: Boolean = false, val failure: FilesFailure? = null, val result: FileSearchResult? = null)
+
+internal fun validSearchQuery(query: String): Boolean = query.isNotEmpty() && query.encodeToByteArray().size <= 256 && query.none { it == '\u0000' || it == '\r' || it == '\n' }
+
 /** Why the file browser shows no data. */
 enum class FilesFailure {
     UNSUPPORTED,
@@ -63,8 +79,16 @@ enum class FilesFailure {
     INVALID_PATH,
     FORBIDDEN,
     BUSY,
+    /** A save found the file changed since it was read (`conflict`). */
+    CONFLICT,
+    /** The edited text is over [MAX_FILES_CONTENT_JSON_BYTES], so a save would not fit one frame. */
+    TOO_LARGE,
     FAILED,
+    STORAGE,
 }
+
+/** One `files.written` result: the saved file's new [version] and [size] in bytes. */
+data class FileWritten(val path: String, val version: String, val size: Long)
 
 /** Lines picked in the file view, 1-based: [anchor] alone until a second tap sets [end]. */
 data class LineSelection(val anchor: Int, val end: Int? = null) {
@@ -109,7 +133,68 @@ data class OpenFile(
     /** The file changed while its next page loaded, so it was read again from the start. */
     val reopened: Boolean = false,
     val selection: LineSelection? = null,
+    /** The line the view scrolls to once it is loaded: the file was opened at it from the chat. */
+    val revealLine: Int? = null,
 )
+
+/**
+ * The open file while it is edited. [original] is the text of [baseVersion], the last version
+ * read or saved; [text] is the editor's text as the UI last handed it over, and [latestText]
+ * what the field shows right now.
+ */
+data class FileEditor(
+    val path: String,
+    val baseVersion: String,
+    val original: String,
+    val text: String = original,
+    val saving: Boolean = false,
+    /** Why the last save failed; the edit stays. */
+    val saveFailure: FilesFailure? = null,
+    /** The last save found a newer file on the host; a later save or other failure clears it. */
+    val conflict: Boolean = false,
+    /** Counts successful saves, so the UI can confirm each one. */
+    val savedAt: Long = 0,
+    /** Where the cursor starts: the start of the first line picked in the file view, else 0. */
+    val cursor: Int = 0,
+    /** The last save the host never answered; a retry of the same text resends its request ID. */
+    val unconfirmed: PendingWrite? = null,
+    /**
+     * Earlier unanswered saves of other text, oldest first, that a newer save replaced as
+     * [unconfirmed]. When the newer save meets a conflict and the host holds one of these, the
+     * host's file is this editor's own write: it becomes the new base and the newer text is sent
+     * again once.
+     */
+    val superseded: List<PendingWrite> = emptyList(),
+    /** What waits for the user to discard the unsaved edit; the editor asks first. */
+    val leaveRequest: EditorLeave? = null,
+    val recovery: StoredFileDraft? = null,
+    val recoveryLoading: Boolean = false,
+    val buffer: EditorBuffer = EditorBuffer(),
+) {
+    /** The field's text when the UI has one, else [text]. Not observable; read it on demand. */
+    val latestText: String get() = buffer.text() ?: text
+
+    val changed: Boolean get() = latestText != original
+}
+
+/**
+ * A `session.files.write` whose reply was lost. The host answers a repeated [requestId] from its
+ * ledger, so resending it cannot write twice or conflict with itself.
+ */
+data class PendingWrite(val requestId: String, val baseVersion: String, val content: String)
+
+/** An action that would drop an unsaved edit and so waits for the discard prompt. */
+enum class EditorLeave {
+    /** Opening the changes pane, which takes the files pane's place. */
+    CHANGES,
+    SEARCH,
+}
+
+/** Whether [content] fits a `session.files.write` frame: at most [MAX_FILES_CONTENT_JSON_BYTES] as a JSON string. */
+internal fun filesContentFits(content: String): Boolean =
+    content.length <= MAX_FILES_CONTENT_JSON_BYTES &&
+        Wire.json.encodeToString(JsonPrimitive.serializer(), JsonPrimitive(content)).encodeToByteArray().size <=
+        MAX_FILES_CONTENT_JSON_BYTES
 
 /**
  * The file browser of the selected session. Like [ChangesState] it lives in [RemoteState], so
@@ -127,11 +212,77 @@ data class FilesState(
     val moreLoading: Boolean = false,
     val moreFailure: FilesFailure? = null,
     val file: OpenFile? = null,
+    val previews: Map<String, FileTilePreview> = emptyMap(),
+    val peek: FilesPeek? = null,
+    /** The open file in the editor; null while it is shown read-only. */
+    val editor: FileEditor? = null,
+    val search: FileSearchState = FileSearchState(),
+    val searchEnabled: Boolean = false,
 )
 
 internal fun canBrowseFiles(state: RemoteState): Boolean =
     FILES_CAPABILITY in state.capabilities && FILES_CAPABILITY !in state.unavailableCapabilities &&
         state.selection.sessionId != null
+
+internal fun canWriteFiles(state: RemoteState): Boolean =
+    canBrowseFiles(state) && FILES_WRITE_CAPABILITY in state.capabilities &&
+        FILES_WRITE_CAPABILITY !in state.unavailableCapabilities
+
+/**
+ * Whether the open file can be edited: the host saves files, and the file is text read whole in
+ * one page.
+ */
+internal fun canEditFile(state: RemoteState): Boolean {
+    val file = state.files?.file ?: return false
+    return canWriteFiles(state) && !file.loading && file.failure == null && file.version != null &&
+        !file.binary && !file.tooLarge && file.nextOffset == null && !writeDeniedPath(file.path) &&
+        !fileMutationHolds(state, file.path)
+}
+
+/** Folders whose files a tool runs on its own; the host refuses to write anywhere below them. */
+private val WRITE_DENIED_SEGMENTS = setOf(
+    ".pi", ".claude", ".cursor", ".gemini", ".codex", ".husky", ".githooks", ".lefthook", ".mise", ".vscode", ".idea",
+)
+
+/** Files a tool runs or loads on its own, wherever they are. */
+private val WRITE_DENIED_NAMES = setOf(
+    ".envrc", ".mcp.json", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml",
+    "mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml",
+)
+
+/** Folders denied anywhere in a path, though not as a file name (mise's `mise/`, `.config/mise/`). */
+private val WRITE_DENIED_FOLDER_NAMES = setOf("mise")
+
+/** File names denied inside a `.config` folder: mise reads `.config/mise.toml` and its local file. */
+private val WRITE_DENIED_CONFIG_NAMES = setOf("mise.toml", "mise.local.toml")
+
+/** mise's per-environment configuration (`mise.<env>.toml`, `.mise.<env>.toml`), after folding. */
+private val WRITE_DENIED_PATTERN = Regex("""^\.?mise\.[^/]+\.toml$""")
+
+/**
+ * Whether the host refuses to save [path] as auto-executed configuration: any segment is one of
+ * [WRITE_DENIED_SEGMENTS], the path passes through a `mise` folder, or the file name is one of
+ * [WRITE_DENIED_NAMES], a `mise.<env>.toml` or `.mise.<env>.toml`, or `mise.toml` or
+ * `mise.local.toml` inside a `.config` folder. Segments compare like the host's folding (NFKC, then
+ * upper- and lower-cased). The host also refuses paths the app cannot judge (such as git's
+ * `core.hooksPath`); this list only hides Edit.
+ */
+internal fun writeDeniedPath(path: String): Boolean {
+    val segments = path.split('/').map { foldSegment(it) }
+    val last = segments.last()
+    val parent = segments.getOrNull(segments.size - 2)
+    return segments.any { it in WRITE_DENIED_SEGMENTS } ||
+        segments.dropLast(1).any { it in WRITE_DENIED_FOLDER_NAMES } ||
+        last in WRITE_DENIED_NAMES ||
+        WRITE_DENIED_PATTERN.matches(last) ||
+        (parent == ".config" && last in WRITE_DENIED_CONFIG_NAMES)
+}
+
+/** The host's segment folding: NFKC, then upper- and lower-cased, then NFC. */
+private fun foldSegment(segment: String): String {
+    val compatible = Normalizer.normalize(segment, Normalizer.Form.NFKC)
+    return Normalizer.normalize(compatible.uppercase(Locale.ROOT).lowercase(Locale.ROOT), Normalizer.Form.NFC)
+}
 
 /** The folder above [path]; `""` for a top-level entry. */
 internal fun parentPath(path: String): String = path.substringBeforeLast('/', "")
@@ -165,6 +316,34 @@ private fun fileEntry(value: JsonObject): FileEntry {
     val type = requireNotNull(FileEntryType.entries.firstOrNull { it.wire == value.text("type") })
     val size = if (value.containsKey("size")) value.count("size").also { require(type == FileEntryType.FILE) } else null
     return FileEntry(name, type, size)
+}
+
+private fun searchDeniedPath(path: String): Boolean {
+    val names = setOf(".git", ".ssh", ".aws", ".gnupg", ".docker", ".kube", ".npmrc", ".netrc", ".pgpass", ".git-credentials", ".pypirc", ".dockercfg", "credentials.json", "local.properties", "kubeconfig")
+    val prefixes = listOf(".env", "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa", "secrets.")
+    val suffixes = listOf(".pem", ".key", ".jks", ".keystore", ".p12", ".pfx", ".bks", ".p8", ".ppk", ".mobileprovision", ".kdbx", ".tfvars", ".tfstate", ".tfstate.backup")
+    return path.split('/').map(::foldSegment).any { segment ->
+        segment in names || prefixes.any(segment::startsWith) || suffixes.any(segment::endsWith) ||
+            (segment.startsWith("service-account") && segment.endsWith(".json"))
+    }
+}
+
+internal fun parseFilesSearch(data: JsonObject, sessionId: String, query: String): FileSearchResult {
+    require(validSearchQuery(query))
+    data.onlyKeys(setOf("kind", "sessionId", "query", "matches", "truncated"))
+    require(data.text("kind") == "files.search" && data.text("sessionId") == sessionId && data.text("query") == query)
+    require(data.toString().encodeToByteArray().size <= 128 * 1024)
+    val entries = data.array("matches")
+    require(entries.size <= 100)
+    val matches = entries.map { hit ->
+        hit.onlyKeys(setOf("path", "line", "column", "snippet"))
+        val path = hit.text("path").also { require(validPath(it) && isSessionPath(it) && '\\' !in it && !searchDeniedPath(it)) }
+        val line = hit.count("line", Int.MAX_VALUE.toLong()).toInt().also { require(it > 0) }
+        val column = hit.count("column", Int.MAX_VALUE.toLong()).toInt().also { require(it > 0) }
+        val snippet = hit.text("snippet").also { require(it.encodeToByteArray().size <= 1024 && query in it && it.none { c -> c == '\u0000' || c == '\r' || c == '\n' }) }
+        FileSearchHit(path, line, column, snippet)
+    }
+    return FileSearchResult(matches, data.flag("truncated"))
 }
 
 /** Validates one `files.list` page against the request that produced it. */
@@ -214,6 +393,16 @@ internal fun parseFilesRead(data: JsonObject, sessionId: String, path: String, o
     return FileChunk(path, chunkVersion, size, offset, content, binary, nextOffset, tooLarge)
 }
 
+/** Validates a `files.written` result against the write that produced it. */
+internal fun parseFilesWritten(data: JsonObject, sessionId: String, path: String): FileWritten {
+    require(data.text("kind") == "files.written")
+    data.onlyKeys(setOf("kind", "sessionId", "path", "version", "size"))
+    require(data.text("sessionId") == sessionId && data.text("path") == path)
+    val version = data.text("version")
+    require(version.length <= 22 && runCatching { Wire.decode(version, 16) }.isSuccess)
+    return FileWritten(path, version, data.count("size"))
+}
+
 // ---- Quote ---------------------------------------------------------------------------------
 
 /** A Markdown fence longer than any backtick run in [text], and at least three long. */
@@ -236,4 +425,34 @@ internal fun fileQuotePrompt(intro: String, reference: String, text: String, lan
     if (text.encodeToByteArray().size > MAX_FILE_QUOTE_BYTES) return reference
     val fence = codeFence(text)
     return "$intro\n\n$fence${language?.tag.orEmpty()}\n$text\n$fence"
+}
+
+/** What "Send to agent" puts into the composer for an edit. */
+sealed interface EditorPrompt {
+    data class Ready(val text: String) : EditorPrompt
+
+    /** The diff is over [MAX_FILE_QUOTE_BYTES] or too long to compute; nothing goes to the composer. */
+    data object TooLarge : EditorPrompt
+}
+
+/** The English intro of [editorPrompt], from the spec; the UI may pass a translated one. */
+internal fun editorPromptIntro(path: String): String =
+    "Here is a suggested change to `$path`. Apply it, adapting it if needed, and say what you changed."
+
+/**
+ * [intro] and the diff of [original] to [edited] in a `diff` fence, or null when nothing changed.
+ * A diff above [MAX_FILE_QUOTE_BYTES], or one too long to compute ([MAX_DIFF_EDITS]), is
+ * [EditorPrompt.TooLarge].
+ */
+internal fun editorPrompt(path: String, original: String, edited: String, intro: String = editorPromptIntro(path)): EditorPrompt? {
+    val diff =
+        when (val result = boundedUnifiedDiff(path, original, edited)) {
+            LineDiff.Same -> return null
+            LineDiff.TooLarge -> return EditorPrompt.TooLarge
+            is LineDiff.Text -> result.text
+        }
+    if (diff.encodeToByteArray().size > MAX_FILE_QUOTE_BYTES) return EditorPrompt.TooLarge
+    val body = diff.removeSuffix("\n")
+    val fence = codeFence(body)
+    return EditorPrompt.Ready("$intro\n\n${fence}diff\n$body\n$fence")
 }

@@ -32,5 +32,84 @@
       "name": "wrong-version",
       "text": "[PocketPi attachments v2]\n[{\"id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"name\":\"Grüße 😀.txt\",\"kind\":\"file\",\"mimeType\":\"text/plain\",\"size\":0,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expiresAt\":604801000,\"path\":\"/fixture/attachments/content\"}]\n[/PocketPi attachments]\n\n[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"Earlier answer\"}\n[/PocketPi quote]\n\nRead the file."
     }
+  ],
+  "wireValid": [
+    {
+      "name": "get",
+      "payload": {
+        "type": "session.attachments.get",
+        "requestId": "read:1",
+        "sessionId": "history-session",
+        "attachmentId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 0
+      }
+    },
+    {
+      "name": "empty-content",
+      "payload": {
+        "type": "result",
+        "requestId": "read:1",
+        "ok": true,
+        "data": {
+          "kind": "attachment.content",
+          "sessionId": "history-session",
+          "attachmentId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "data": ""
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "extra-request-key",
+      "payload": {
+        "type": "session.attachments.get",
+        "requestId": "read:1",
+        "sessionId": "history-session",
+        "attachmentId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 0,
+        "path": "/private"
+      }
+    },
+    {
+      "name": "padded-id",
+      "payload": {
+        "type": "session.attachments.get",
+        "requestId": "read:1",
+        "sessionId": "history-session",
+        "attachmentId": "AAAAAAAAAAAAAAAAAAAAAA==",
+        "offset": 0
+      }
+    },
+    {
+      "name": "negative-offset",
+      "payload": {
+        "type": "session.attachments.get",
+        "requestId": "read:1",
+        "sessionId": "history-session",
+        "attachmentId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": -1
+      }
+    },
+    {
+      "name": "bad-empty-digest",
+      "payload": {
+        "type": "result",
+        "requestId": "read:1",
+        "ok": true,
+        "data": {
+          "kind": "attachment.content",
+          "sessionId": "history-session",
+          "attachmentId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 0,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": ""
+        }
+      }
+    }
   ]
 }

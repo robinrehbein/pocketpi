@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Kompakte Oberfläche bei wenig Höhe im Chat: die Status-Aktion, der Editor und das Sheet für neue Sitzungen. -->
+    <string name="remote_chat_status">Status</string>
+    <string name="remote_chat_actions_more_status">Weitere Aktionen, Statusmeldungen</string>
+    <string name="remote_editor_expand">Editor vergrößern</string>
+    <string name="remote_editor_collapse">Editor verkleinern</string>
+    <string name="remote_new_session_project">In %1$s</string>
+    <string name="remote_new_session_model">Modell</string>
+    <string name="remote_new_session_model_default">Standardmodell</string>
+    <string name="remote_new_session_prompt">Erste Nachricht (optional)</string>
+    <string name="remote_new_session_start">Sitzung starten</string>
+    <string name="remote_new_session_start_send">Starten und senden</string>
+    <string name="remote_new_session_prompt_command">Befehle mit / funktionieren nur innerhalb einer Sitzung.</string>
+    <string name="remote_new_session_prompt_long">Diese Nachricht ist zu lang zum Senden.</string>
+</resources>

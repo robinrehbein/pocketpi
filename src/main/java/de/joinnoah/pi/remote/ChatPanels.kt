@@ -2,68 +2,53 @@ package de.joinnoah.pi.remote
 
 import android.text.format.DateFormat
 import android.text.format.DateUtils
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.ScrollableDefaults
-import androidx.compose.foundation.gestures.ScrollableState
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.QuestionMark
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import java.util.Date
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 // Standalone chat panels. The chat screen decides where each one goes; every panel hides itself
 // when it has nothing to show.
@@ -71,15 +56,19 @@ import kotlin.math.roundToInt
 // ---- Touched files ------------------------------------------------------------------------
 
 /**
- * Git-style summary beside the composer: how many files the chat touched and, when its edits
- * carry diffs, the lines they added (green) and removed (red).
+ * Git-style summary beside the composer: how many files the chat changed (or, when it changed none,
+ * read) and, when its edits carry diffs, the lines they added (green) and removed (red).
  */
 @Composable
 internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?, onClick: () -> Unit) {
     if (files.total == 0) return
+    val changed = files.changed.size
+    val read = files.read.size
     val description =
         listOfNotNull(
-                pluralStringResource(R.plurals.remote_panel_files_touched, files.total, files.total),
+                if (changed > 0) pluralStringResource(R.plurals.remote_panel_files_changed_description, changed, changed)
+                else null,
+                if (read > 0) pluralStringResource(R.plurals.remote_panel_files_read_description, read, read) else null,
                 lines?.let { pluralStringResource(R.plurals.remote_panel_lines_added, it.added, it.added) },
                 lines?.let { pluralStringResource(R.plurals.remote_panel_lines_removed, it.removed, it.removed) },
             )
@@ -100,8 +89,10 @@ internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
+            // Changed files lead; a chat that only read files says so instead of looking like edits.
             Text(
-                pluralStringResource(R.plurals.remote_panel_files_count, files.total, files.total),
+                if (changed > 0) pluralStringResource(R.plurals.remote_panel_files_changed, changed, changed)
+                else pluralStringResource(R.plurals.remote_panel_files_read, read, read),
                 style = MaterialTheme.typography.labelLarge,
             )
             if (lines != null) {
@@ -129,57 +120,90 @@ internal fun middleEllipsis(text: String, maxChars: Int = 40): String {
 }
 
 @Composable
-internal fun TouchedFilesSheet(files: TouchedFiles, onDismiss: () -> Unit, onOpen: (itemId: String) -> Unit) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        LazyColumn(
-            Modifier.fillMaxWidth().testTag("touchedFilesSheet").navigationBarsPadding(),
-            contentPadding = PaddingValues(bottom = 16.dp),
-        ) {
-            item {
-                Text(
-                    stringResource(R.string.remote_panel_files_title),
-                    Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.titleLarge,
-                )
+internal fun TouchedFilesSheet(
+    files: TouchedFiles,
+    onDismiss: () -> Unit,
+    onOpen: (itemId: String) -> Unit,
+    onViewChanges: (() -> Unit)? = null,
+) {
+    InsightSheet(title = stringResource(R.string.remote_panel_files_title), onDismiss = onDismiss) {
+        if (onViewChanges != null) {
+            TextButton(onClick = { onDismiss(); onViewChanges() }, modifier = Modifier.padding(horizontal = 16.dp)) {
+                Text(stringResource(R.string.insight_files_view_changes))
             }
-            for ((title, list) in
-                listOf(
-                    R.string.remote_panel_files_changed to files.changed,
-                    R.string.remote_panel_files_read to files.read,
-                )) {
-                if (list.isEmpty()) continue
-                item(key = "header-$title") {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(title),
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            list.size.toString(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+        }
+        TouchedFilesList(
+            files,
+            onOpen = { onOpen(it); onDismiss() },
+            Modifier.fillMaxWidth().heightIn(max = 600.dp).testTag("touchedFilesSheet"),
+            onOpenedInFiles = onDismiss,
+            showTitle = false,
+        )
+    }
+}
+
+/** The touched files as an inspector tab beside the chat; a row jumps to its card and stays. */
+@Composable
+internal fun TouchedFilesPane(files: TouchedFiles, onOpen: (itemId: String) -> Unit, onClose: () -> Unit) {
+    PaneBackHandler(onBack = onClose)
+    Surface(Modifier.fillMaxSize()) {
+        TouchedFilesList(
+            files,
+            onOpen,
+            Modifier.fillMaxSize().testTag("touchedFilesPane").windowInsetsPadding(WindowInsets.safeDrawing),
+        )
+    }
+}
+
+@Composable
+private fun TouchedFilesList(
+    files: TouchedFiles,
+    onOpen: (itemId: String) -> Unit,
+    modifier: Modifier,
+    onOpenedInFiles: () -> Unit = {},
+    showTitle: Boolean = true,
+) {
+    LazyColumn(modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
+        if (showTitle) item {
+            Text(
+                stringResource(R.string.remote_panel_files_title),
+                Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+        }
+        for ((title, list) in
+            listOf(
+                R.string.remote_panel_files_changed to files.changed,
+                R.string.remote_panel_files_read to files.read,
+            )) {
+            if (list.isEmpty()) continue
+            item(key = "header-$title") {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(title),
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        list.size.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                items(list, key = { "$title-${it.path}" }) { file ->
-                    TouchedFileRow(file) {
-                        onOpen(file.latestItemId)
-                        onDismiss()
-                    }
-                }
+            }
+            items(list, key = { "$title-${it.path}" }) { file ->
+                TouchedFileRow(file, onOpenedInFiles) { onOpen(file.latestItemId) }
             }
         }
     }
 }
 
 @Composable
-private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
+private fun TouchedFileRow(file: TouchedFile, onOpenedInFiles: () -> Unit, onClick: () -> Unit) {
     val trimmed = file.path.trimEnd('/')
     val name = trimmed.substringAfterLast('/').ifEmpty { file.path }
     val parent = trimmed.substringBeforeLast('/', missingDelimiterValue = "")
@@ -220,6 +244,8 @@ private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         }
+        // The row jumps to the message; the icon opens the file itself.
+        OpenInFilesButton(file.path, null, onDone = onOpenedInFiles)
     }
 }
 
@@ -227,11 +253,39 @@ private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
 
 internal fun subagentStateLabel(state: String): Int =
     when (state) {
+        "waiting" -> R.string.remote_status_waiting
         "queued" -> R.string.remote_subagent_queued
         "running" -> R.string.remote_subagent_running
         "succeeded" -> R.string.remote_subagent_succeeded
         "failed" -> R.string.remote_subagent_failed
-        else -> R.string.remote_subagent_cancelled
+        "ended" -> R.string.remote_subagent_ended
+        "offline" -> R.string.remote_status_offline
+        "cancelled" -> R.string.remote_subagent_cancelled
+        // An unknown state claims nothing about the outcome.
+        else -> R.string.remote_subagent_ended
+    }
+
+/** Glyph per subagent state, or null for a neutral dot (ended, offline, unknown). */
+internal fun subagentStateGlyph(state: String): StatusGlyphKind? =
+    when (state) {
+        "waiting" -> StatusGlyphKind.NEEDS_INPUT
+        "running" -> StatusGlyphKind.SESSION_RUNNING
+        "queued" -> StatusGlyphKind.WAITING
+        "succeeded" -> StatusGlyphKind.DONE
+        "failed" -> StatusGlyphKind.FAILED
+        "cancelled" -> StatusGlyphKind.STOPPED
+        else -> null
+    }
+
+@Composable
+internal fun subagentStateColor(state: String): Color =
+    when (state) {
+        "waiting" -> waitingColor()
+        "running" -> sessionStatusColor(SessionAvailability.RUNNING)
+        "succeeded" -> idleColor()
+        "failed" -> MaterialTheme.colorScheme.error
+        "offline" -> sessionStatusColor(SessionAvailability.OFFLINE)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
 @Composable
@@ -240,62 +294,196 @@ internal fun SubagentStrip(
     canAbort: (SubagentStripEntry) -> Boolean,
     onOpen: (SubagentStripEntry) -> Unit,
     onAbort: (SubagentStripEntry) -> Unit,
+    sessionId: String? = null,
+    expandedState: MutableState<Boolean> = rememberSaveable(sessionId) { mutableStateOf(false) },
+    onOpenSummary: (() -> Unit)? = null,
 ) {
-    if (strip.entries.isEmpty()) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    var expanded by expandedState
+    if (!subagentChipShown(strip, expanded)) return
+    val counts = subagentChipCounts(strip)
+    val needsYou = stringResource(R.string.remote_status_waiting)
+    val running = pluralStringResource(R.plurals.remote_panel_subagents_running, counts.running, counts.running)
+    val cachedRunning =
+        pluralStringResource(R.plurals.remote_panel_subagents_running, counts.cachedRunning, counts.cachedRunning)
     val summary =
-        if (strip.running > 0)
-            pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
-        else pluralStringResource(R.plurals.remote_panel_subagents_queued, strip.entries.size, strip.entries.size)
-    Box {
-        FloatingSurface(shape = CircleShape) {
-            Row(
-                Modifier.clickable(role = Role.Button) { expanded = !expanded }
-                    .testTag("subagentStrip")
-                    .minimumInteractiveComponentSize()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StatusDot(
-                    sessionStatusColor(
-                        if (strip.running > 0) SessionAvailability.RUNNING else SessionAvailability.IDLE
-                    )
+        when {
+            // Needing input leads; a running count beside it stays true and is kept.
+            counts.waiting > 0 -> if (counts.running > 0) "$needsYou · $running" else needsYou
+            counts.running > 0 -> running
+            counts.queued > 0 -> pluralStringResource(R.plurals.remote_panel_subagents_queued, counts.queued, counts.queued)
+            // Only cached states: say so, never as a current request for input.
+            counts.cachedWaiting > 0 -> stringResource(R.string.remote_status_last_known, needsYou)
+            counts.cachedRunning > 0 -> stringResource(R.string.remote_status_last_known, cachedRunning)
+            counts.cachedQueued > 0 ->
+                stringResource(
+                    R.string.remote_status_last_known,
+                    pluralStringResource(R.plurals.remote_panel_subagents_queued, counts.cachedQueued, counts.cachedQueued),
                 )
-                Text(
-                    summary,
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
-                )
-                Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription =
-                        stringResource(
-                            if (expanded) R.string.remote_panel_subagents_collapse
-                            else R.string.remote_panel_subagents_expand
-                        ),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            else -> stringResource(R.string.remote_subagent_popover_title)
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.widthIn(min = 240.dp, max = 320.dp).heightIn(max = 280.dp),
-        ) {
-            for (entry in strip.entries)
-                SubagentStripRow(
-                    entry,
-                    canAbort(entry),
-                    onOpen = onOpen,
-                    onAbort = onAbort,
-                )
+    StatusPopover(
+        summary = summary,
+        icon = Icons.Outlined.SmartToy,
+        expanded = if (onOpenSummary == null) expanded else false,
+        onExpandedChange = { if (onOpenSummary != null) onOpenSummary() else expanded = it },
+        expandDescription = stringResource(R.string.remote_panel_subagents_expand),
+        collapseDescription = stringResource(R.string.remote_panel_subagents_collapse),
+        title = stringResource(R.string.remote_subagent_popover_title),
+        closeDescription = stringResource(R.string.remote_subagent_popover_close),
+        chipTag = "subagentStrip",
+        popoverTag = "subagentPopover",
+    ) {
+        LazyColumn(Modifier.heightIn(max = 320.dp)) {
+            items(strip.entries) { entry ->
+                SubagentStripRow(entry, canAbort(entry),
+                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
+            }
         }
     }
 }
 
 @Composable
-private fun StatusDot(color: Color) {
+internal fun SubagentInsightSheet(
+    strip: SubagentStrip,
+    canAbort: (SubagentStripEntry) -> Boolean,
+    onOpen: (SubagentStripEntry) -> Unit,
+    onAbort: (SubagentStripEntry) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    InsightSheet(title = stringResource(R.string.remote_subagent_popover_title), onDismiss = onDismiss) {
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 600.dp).testTag("subagentInsightSheet")) {
+            items(strip.entries) { entry ->
+                SubagentStripRow(entry, canAbort(entry), onOpen = { onDismiss(); onOpen(it) }, onAbort = onAbort)
+            }
+        }
+    }
+}
+
+/**
+ * The subagent chip shows while an agent runs or waits; an open overview stays until closed, even
+ * once they all finish.
+ */
+internal fun subagentChipShown(strip: SubagentStrip, expanded: Boolean): Boolean =
+    strip.entries.isNotEmpty() && (expanded || strip.running > 0 ||
+        strip.entries.any { it.state == "queued" || it.state == "waiting" || (it.lastKnown && it.state == "running") })
+
+internal data class SubagentChipCounts(
+    val waiting: Int,
+    val running: Int,
+    val queued: Int,
+    val cachedWaiting: Int,
+    val cachedRunning: Int,
+    val cachedQueued: Int = 0,
+)
+
+/** Current counts exclude last-known entries; those are counted apart and labelled as such. */
+internal fun subagentChipCounts(strip: SubagentStrip): SubagentChipCounts {
+    fun count(state: String, lastKnown: Boolean) = strip.entries.count { it.state == state && it.lastKnown == lastKnown }
+    return SubagentChipCounts(
+        waiting = count("waiting", false),
+        running = strip.running,
+        queued = count("queued", false),
+        cachedWaiting = count("waiting", true),
+        cachedRunning = count("running", true),
+        cachedQueued = count("queued", true),
+    )
+}
+
+/**
+ * Shared status chip and anchored, dismissible overview used above the composer, in the touched
+ * files pill's style.
+ */
+@Composable
+internal fun StatusPopover(
+    summary: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    expandDescription: String,
+    collapseDescription: String,
+    title: String,
+    closeDescription: String,
+    chipTag: String,
+    popoverTag: String,
+    actions: @Composable RowScope.() -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    Box {
+        FloatingSurface(
+            shape = CircleShape,
+            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        ) {
+            Row(
+                Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }
+                    .testTag(chipTag)
+                    .minimumInteractiveComponentSize()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Expanded, the icons take the container's content color like the text.
+                val iconTint = if (expanded) LocalContentColor.current else MaterialTheme.colorScheme.onSurfaceVariant
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    summary,
+                    // A weighted child gets zero width in the horizontally scrolling insights row.
+                    modifier = Modifier.widthIn(max = 200.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription =
+                        if (expanded) collapseDescription else expandDescription,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        val backdrop = rememberAppBackdrop(expanded)
+        if (expanded) {
+            val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
+            Popup(
+                popupPositionProvider = remember(margin) { SubagentPopoverPosition(margin) },
+                onDismissRequest = { onExpandedChange(false) },
+                properties = PopupProperties(focusable = true),
+            ) {
+                val scheme = MaterialTheme.colorScheme
+                val shape = MaterialTheme.shapes.medium
+                Surface(
+                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag(popoverTag),
+                    shape = shape,
+                    color = Color.Transparent,
+                    contentColor = scheme.onSurface,
+                    shadowElevation = 8.dp,
+                    border = androidx.compose.foundation.BorderStroke(GLASS_RIM_WIDTH, glassRimColor(scheme)),
+                ) {
+                    Box(Modifier.snapshotBackdrop(backdrop, scheme.surfaceContainerHigh.copy(alpha = GLASS_TINT_ALPHA), scheme.surfaceContainerHigh)) {
+                    Column {
+                        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            actions()
+                            IconButton(onClick = { onExpandedChange(false) }) {
+                                Icon(Icons.Default.Close, closeDescription)
+                            }
+                        }
+                        content()
+                    }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun StatusDot(color: Color) {
     Box(Modifier.size(8.dp).clip(CircleShape).background(color))
 }
 
@@ -307,234 +495,61 @@ private fun SubagentStripRow(
     onAbort: (SubagentStripEntry) -> Unit,
 ) {
     val openable = entry.openable && entry.sessionId != null
-    Row(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .then(if (openable) Modifier.clickable(role = Role.Button) { onOpen(entry) } else Modifier)
-            .testTag("subagentStripEntry")
-            .padding(start = 28.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    entry.agent ?: entry.title,
-                    Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    stringResource(subagentStateLabel(entry.state)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // The same glass π avatar as the sessions and the chat's subagent card.
+            // Decorative: the name beside it says which agent it is.
+            GlassAvatar(size = 44.dp, modifier = Modifier.clearAndSetSemantics {}) {
+                Text("π", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             }
-            entry.activity?.takeIf(String::isNotBlank)?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (entry.abortable && allowAbort)
-            IconButton(onClick = { onAbort(entry) }) {
-                Icon(
-                    Icons.Default.Stop,
-                    contentDescription = stringResource(R.string.remote_panel_subagent_abort),
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
-    }
-}
-
-// ---- Timeline rail ------------------------------------------------------------------------
-
-private val RAIL_INSET = 8.dp
-
-/** How far from a marker a tap on the rail still jumps to it. */
-private val RAIL_TAP_SLOP = 24.dp
-
-/** With fewer markers the rail says nothing a glance at the list would not. */
-internal const val MIN_TIMELINE_MARKERS = 2
-
-internal fun timelineRailVisible(markers: List<TimelineMarker>): Boolean = markers.size >= MIN_TIMELINE_MARKERS
-
-/** The marker closest to [fraction] (0..1 along the rail). */
-internal fun nearestMarker(markers: List<TimelineMarker>, fraction: Float): TimelineMarker? =
-    markers.minByOrNull { abs(it.position - fraction) }
-
-internal fun timelineMarkerLabel(kind: TimelineMarkerKind): Int =
-    when (kind) {
-        TimelineMarkerKind.ERROR -> R.string.remote_panel_marker_error
-        TimelineMarkerKind.QUESTION -> R.string.remote_panel_marker_question
-        TimelineMarkerKind.EDIT -> R.string.remote_panel_marker_edit
-        TimelineMarkerKind.PLAN -> R.string.remote_panel_marker_plan
-    }
-
-private fun timelineMarkerIcon(kind: TimelineMarkerKind): ImageVector =
-    when (kind) {
-        TimelineMarkerKind.ERROR -> Icons.Default.Warning
-        TimelineMarkerKind.QUESTION -> Icons.Default.QuestionMark
-        TimelineMarkerKind.EDIT -> Icons.Default.Edit
-        TimelineMarkerKind.PLAN -> Icons.AutoMirrored.Filled.FormatListBulleted
-    }
-
-/** A marker's badge: the kind's icon on its colour, so the kinds differ by more than colour. */
-@Composable
-private fun TimelineMarkerBadge(kind: TimelineMarkerKind, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val (container, content) =
-        when (kind) {
-            TimelineMarkerKind.ERROR -> colors.error to colors.onError
-            TimelineMarkerKind.QUESTION -> colors.tertiary to colors.onTertiary
-            TimelineMarkerKind.EDIT -> colors.primary to colors.onPrimary
-            TimelineMarkerKind.PLAN -> colors.secondary to colors.onSecondary
-        }
-    Box(modifier.size(16.dp).clip(CircleShape).background(container), contentAlignment = Alignment.Center) {
-        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(11.dp))
-    }
-}
-
-@Composable
-internal fun TimelineRail(
-    markers: List<TimelineMarker>,
-    onJump: (itemId: String) -> Unit,
-    modifier: Modifier = Modifier,
-    scrollState: ScrollableState? = null,
-    reverseLayout: Boolean = false,
-) {
-    if (!timelineRailVisible(markers)) return
-    val trackColor = MaterialTheme.colorScheme.outlineVariant
-    val jumpLabels =
-        mapOf(
-            TimelineMarkerKind.ERROR to stringResource(R.string.remote_panel_jump_error),
-            TimelineMarkerKind.QUESTION to stringResource(R.string.remote_panel_jump_question),
-            TimelineMarkerKind.EDIT to stringResource(R.string.remote_panel_jump_edit),
-            TimelineMarkerKind.PLAN to stringResource(R.string.remote_panel_jump_plan),
-        )
-    val markerLabels = TimelineMarkerKind.entries.associateWith { stringResource(timelineMarkerLabel(it)) }
-    val railDescription = stringResource(R.string.remote_panel_timeline)
-    val latest = TimelineMarkerKind.entries.mapNotNull { kind -> markers.lastOrNull { it.kind == kind } }
-    val currentMarkers by rememberUpdatedState(markers)
-    val currentJump by rememberUpdatedState(onJump)
-    val inset = with(LocalDensity.current) { RAIL_INSET.toPx() }
-    val tapSlop = with(LocalDensity.current) { RAIL_TAP_SLOP.toPx() }
-    val reverse = ScrollableDefaults.reverseDirection(LocalLayoutDirection.current, Orientation.Vertical, reverseLayout)
-    // Where a long press opened the legend, or null while it is closed.
-    var legendAt by remember { mutableStateOf<Float?>(null) }
-    Box(
-        modifier
-            .width(48.dp)
-            .testTag("timelineRail")
-            .semantics {
-                contentDescription = railDescription
-                customActions =
-                    latest.map { marker ->
-                        CustomAccessibilityAction(jumpLabels.getValue(marker.kind)) {
-                            currentJump(marker.itemId)
-                            true
-                        }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // A last-known state is muted and named as such, like the session list.
+                    val color =
+                        if (entry.lastKnown) MaterialTheme.colorScheme.outline else subagentStateColor(entry.state)
+                    val glyph = if (entry.lastKnown) null else subagentStateGlyph(entry.state)
+                    if (glyph != null) {
+                        // Only live state reaches here (last-known entries show a muted dot), so a running
+                        // agent may animate. The label beside it carries the meaning; the shape does not rely on color.
+                        StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp).testTag("subagentGlyph_$glyph"))
+                    } else {
+                        StatusDot(color)
                     }
-            }
-            // The rail lies over the list's right edge: a drag there scrolls the list, only a
-            // tap close to a marker jumps to it, and a long press explains the markers.
-            .then(
-                if (scrollState != null)
-                    Modifier.scrollable(scrollState, Orientation.Vertical, reverseDirection = reverse)
-                else Modifier
-            )
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = { offset -> legendAt = offset.y },
-                    onTap = { offset ->
-                        val span = (size.height - 2 * inset).coerceAtLeast(0f)
-                        val fraction = if (span <= 0f) 0f else ((offset.y - inset) / span).coerceIn(0f, 1f)
-                        val marker = nearestMarker(currentMarkers, fraction) ?: return@detectTapGestures
-                        val y = inset + marker.position.coerceIn(0f, 1f) * span
-                        if (abs(offset.y - y) <= tapSlop) currentJump(marker.itemId)
-                    },
-                )
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.width(12.dp).fillMaxHeight()) {
-            val trackWidth = 2.dp.toPx()
-            drawRoundRect(
-                trackColor,
-                topLeft = Offset((size.width - trackWidth) / 2, inset),
-                size = Size(trackWidth, (size.height - 2 * inset).coerceAtLeast(0f)),
-                cornerRadius = CornerRadius(trackWidth / 2),
-            )
-        }
-        Layout(
-            content = {
-                for (marker in markers) {
-                    val label = markerLabels.getValue(marker.kind)
-                    TimelineMarkerBadge(
-                        marker.kind,
-                        Modifier.testTag("timelineMarker").semantics {
-                            contentDescription = label
-                            onClick(label = jumpLabels.getValue(marker.kind)) {
-                                currentJump(marker.itemId)
-                                true
-                            }
-                        },
+                    val label = stringResource(subagentStateLabel(entry.state))
+                    Text(
+                        if (entry.lastKnown) stringResource(R.string.remote_status_last_known, label) else label,
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 }
-            },
-            modifier = Modifier.matchParentSize(),
-        ) { measurables, constraints ->
-            val placeables = measurables.map { it.measure(Constraints()) }
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                val span = (constraints.maxHeight - 2 * inset).coerceAtLeast(0f)
-                placeables.forEachIndexed { index, placeable ->
-                    val y = inset + markers[index].position.coerceIn(0f, 1f) * span
-                    placeable.place(
-                        (constraints.maxWidth - placeable.width) / 2,
-                        (y - placeable.height / 2f).roundToInt(),
-                    )
+                entry.activity?.takeIf(String::isNotBlank)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
-        legendAt?.let { y ->
-            TimelineLegend(
-                offset = IntOffset(-with(LocalDensity.current) { 48.dp.roundToPx() }, y.roundToInt()),
-                labels = markerLabels,
-                onDismiss = { legendAt = null },
-            )
-        }
-    }
-}
-
-/** The four marker kinds, opened beside the rail by a long press. */
-@Composable
-private fun TimelineLegend(offset: IntOffset, labels: Map<TimelineMarkerKind, String>, onDismiss: () -> Unit) {
-    Popup(
-        alignment = Alignment.TopEnd,
-        offset = offset,
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
-    ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 3.dp,
-            modifier = Modifier.testTag("timelineLegend").clickable(onClick = onDismiss),
-        ) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.remote_panel_timeline_legend),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-                for (kind in TimelineMarkerKind.entries)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TimelineMarkerBadge(kind)
-                        Text(labels.getValue(kind), style = MaterialTheme.typography.bodyMedium)
+        if (openable || (entry.abortable && allowAbort)) {
+            // Glass pills under the text, as the sheets' other actions, instead of a divided button row.
+            FlowRow(
+                Modifier.fillMaxWidth().padding(start = 56.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (openable) FloatingSurface(shape = CircleShape, blur = false) {
+                    TextButton(onClick = { onOpen(entry) }, Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.remote_subagent_open_details))
                     }
+                }
+                if (entry.abortable && allowAbort) FloatingSurface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    blur = false,
+                ) {
+                    TextButton(onClick = { onAbort(entry) }, Modifier.heightIn(min = 48.dp)) {
+                        Icon(Icons.Default.Stop, stringResource(R.string.remote_panel_subagent_abort), tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.remote_subagent_stop_label), color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
             }
         }
     }
@@ -547,7 +562,7 @@ internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit
     if (count == 0 && !selected) return
     FloatingSurface(
         shape = CircleShape,
-        color = if (selected) MaterialTheme.colorScheme.errorContainer else floatingHeaderColor(),
+        color = if (selected) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(
             Modifier.selectable(selected = selected, role = Role.Button, onClick = onToggle)
@@ -574,7 +589,7 @@ internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit
 // ---- Compaction ---------------------------------------------------------------------------
 
 @Composable
-internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
+internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, floating: Boolean = true) {
     if (compaction == null || !compactionVisible(compaction, nowMillis)) return
     val reason =
         when (compaction.reason) {
@@ -583,9 +598,9 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
             "overflow" -> R.string.remote_panel_compaction_overflow
             else -> null
         }
-    Surface(
+    BannerSurface(
+        floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("compactionBanner").semantics { liveRegion = LiveRegionMode.Polite },
-        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
@@ -594,11 +609,9 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircularProgressIndicator(
-                Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
+            // Pi core's dotted compaction loader. Decorative: the text says it.
+            // StatusGlyph holds a static frame while system animations are off.
+            CompactionGlyph(MaterialTheme.colorScheme.onSecondaryContainer)
             Column {
                 Text(stringResource(R.string.remote_panel_compacting), style = MaterialTheme.typography.labelLarge)
                 reason?.let {
@@ -608,6 +621,25 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
         }
     }
 }
+
+/**
+ * The compaction activity mark, shared by the banner and the compact status chip: pi's braille loader
+ * at a dimmed but still legible alpha of [base], 16dp, without semantics of its own.
+ */
+@Composable
+internal fun CompactionGlyph(base: Color, modifier: Modifier = Modifier) {
+    StatusGlyph(
+        kind = StatusGlyphKind.COMPACTING,
+        color = base.copy(alpha = COMPACTION_GLYPH_ALPHA),
+        modifier = modifier.size(16.dp).testTag("compactionGlyph"),
+    )
+}
+
+/**
+ * Muted compaction color. ChatPanelsTest checks 3:1 against the opaque containers of the
+ * built-in schemes; over translucent glass the result depends on the content behind it.
+ */
+internal const val COMPACTION_GLYPH_ALPHA = 0.78f
 
 // ---- Child session picker -----------------------------------------------------------------
 
@@ -619,26 +651,19 @@ internal fun ChildSessionPickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    GlassSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         LazyColumn(
             Modifier.fillMaxWidth().testTag("childSessionPicker").navigationBarsPadding(),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
             item {
-                Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) {
-                    Text(
-                        stringResource(R.string.remote_panel_child_picker_title),
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Text(
-                        stringResource(R.string.remote_panel_child_picker_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                SheetHeader(
+                    stringResource(R.string.remote_panel_child_picker_title),
+                    subtitle = stringResource(R.string.remote_panel_child_picker_hint),
+                )
             }
-            items(candidates, key = { it.id }) { session ->
-                val status =
+            itemsIndexed(candidates, key = { _, candidate -> candidate.id }) { index, session ->
+                val reported =
                     stringResource(
                         when (session.availability) {
                             SessionAvailability.IDLE -> R.string.remote_status_idle
@@ -647,18 +672,37 @@ internal fun ChildSessionPickerSheet(
                             SessionAvailability.OFFLINE -> R.string.remote_status_offline
                         }
                     )
+                val status =
+                    if (session.lastKnown) stringResource(R.string.remote_status_last_known, reported) else reported
                 val updated =
                     session.updatedAt?.let {
                         (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
                             else DateFormat.getDateFormat(context))
                             .format(Date(it))
                     }
+                SheetGroupRow(first = index == 0, last = index == candidates.lastIndex) {
                 ListItem(
+                    colors = sheetListItemColors(),
                     headlineContent = { Text(session.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     supportingContent = {
                         Text(listOfNotNull(status, updated).joinToString(" · "), maxLines = 1)
                     },
-                    leadingContent = { StatusDot(sessionStatusColor(session.availability)) },
+                    leadingContent = {
+                        // Same rule as the session list: only a fresh report gets a glyph.
+                        val glyph = sessionBadgeGlyph(session.availability, session.lastKnown)
+                        val color =
+                            if (session.lastKnown) MaterialTheme.colorScheme.outline
+                            else sessionStatusColor(session.availability)
+                        if (glyph != null) {
+                            StatusGlyph(
+                                kind = glyph,
+                                color = color,
+                                modifier = Modifier.size(16.dp).testTag("candidateGlyph_$glyph"),
+                            )
+                        } else {
+                            StatusDot(color)
+                        }
+                    },
                     modifier =
                         Modifier.clickable(role = Role.Button) {
                                 onPick(session.id)
@@ -666,6 +710,7 @@ internal fun ChildSessionPickerSheet(
                             }
                             .testTag("childSessionCandidate"),
                 )
+                }
             }
         }
     }
@@ -697,5 +742,21 @@ internal fun UsageSummary(totals: SessionUsageTotals) {
                 )
                 Text(value, style = MaterialTheme.typography.bodyMedium)
             }
+    }
+}
+
+
+/** Anchors the panel above the pill, clamped inside the visible window. */
+internal class SubagentPopoverPosition(private val margin: Int) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val desiredX = if (layoutDirection == LayoutDirection.Ltr) anchorBounds.right - popupContentSize.width else anchorBounds.left
+        val maxX = (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin)
+        val maxY = (windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin)
+        return IntOffset(desiredX.coerceIn(margin, maxX), (anchorBounds.top - popupContentSize.height - margin).coerceIn(margin, maxY))
     }
 }

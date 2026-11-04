@@ -1,0 +1,409 @@
+package de.joinnoah.pi.remote
+
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.util.AtomicFile
+import androidx.test.core.app.ApplicationProvider
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.security.KeyStore
+import java.security.UnrecoverableKeyException
+import java.util.UUID
+import javax.crypto.SecretKey
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * An encrypted store that can never be read again is reset to empty instead of failing on every
+ * use; a transient failure is not. The in-memory Keystore stands in for the AndroidKeyStore; the
+ * instrumented EncryptedStoresTest covers the real one.
+ */
+@RunWith(RobolectricTestRunner::class)
+// Store tests own their files and cache; app startup must not rebuild that cache concurrently.
+@Config(sdk = [35], application = android.app.Application::class)
+class StoreRecoveryTest {
+    private val application = ApplicationProvider.getApplicationContext<Context>()
+    private val directory = File(application.cacheDir, "store-recovery-${UUID.randomUUID()}")
+    private val preferenceNames = mutableSetOf<String>()
+    /**
+     * Its own files and preferences. Robolectric starts RemoteApplication for every test, whose
+     * repository loads the pairings on Dispatchers.IO and writes the app's route cache meanwhile;
+     * sharing those preferences, a test could read the app's empty route list in place of its own.
+     */
+    private val context =
+        object : ContextWrapper(application) {
+            override fun getNoBackupFilesDir() = directory
+
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+                val own = "${directory.name}-$name"
+                preferenceNames += own
+                return application.getSharedPreferences(own, mode)
+            }
+        }
+    private val alias = "store-recovery-${UUID.randomUUID()}"
+    private val originalLoadKey = EncryptedFileStore.loadKey
+    private var loads = 0
+
+    @Before
+    fun setUp() {
+        FakeAndroidKeyStore.install()
+        directory.mkdirs()
+        EncryptedFileStore.loadKey = { loads++; originalLoadKey(it) }
+    }
+
+    @After
+    fun tearDown() {
+        EncryptedFileStore.loadKey = originalLoadKey
+        directory.deleteRecursively()
+        preferenceNames.forEach { application.deleteSharedPreferences(it) }
+        keystore().deleteEntry(alias)
+    }
+
+    private fun keystore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+
+    private fun storedKey() = keystore().getKey(alias, null) as SecretKey?
+
+    private fun file(name: String) = File(directory, name)
+
+    /** Flips the last byte, which belongs to the GCM tag. */
+    private fun corrupt(name: String) {
+        val bytes = file(name).readBytes()
+        bytes[bytes.size - 1] = (bytes[bytes.size - 1].toInt() xor 1).toByte()
+        file(name).writeBytes(bytes)
+    }
+
+    private fun truncate(name: String) {
+        file(name).writeBytes(file(name).readBytes().copyOf(20))
+    }
+
+    private val host = PairedHost("route", "https://relay.test", "device", "secret", "Mac")
+
+    @Test
+    fun legacyBackupOnlyRestoresUnresolvedJournal() {
+        val store = EncryptedFileStore(context, "journal.enc", alias, preserveUnreadable = true)
+        val journal = "unresolved mutation".toByteArray()
+        store.write(journal)
+        assertTrue(file("journal.enc").renameTo(file("journal.enc.bak")))
+
+        assertArrayEquals(journal, store.read())
+        assertFalse(store.takeReset())
+    }
+
+    @Test
+    fun silentlyFailedAtomicCommitIsReportedAndPreservesPreviousValue() {
+        val store = EncryptedFileStore(context, "journal.enc", alias, preserveUnreadable = true)
+        val previous = "unresolved mutation".toByteArray()
+        store.write(previous)
+        val oldCiphertext = file("journal.enc").readBytes()
+
+        // AtomicFile.finishWrite can return normally after its rename fails. Simulate that
+        // outcome while retaining the actual startWrite and readFully behavior.
+        val atomic = object : AtomicFile(file("journal.enc")) {
+            override fun finishWrite(stream: FileOutputStream) {
+                stream.close()
+            }
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply {
+            isAccessible = true
+            set(store, atomic)
+        }
+
+        assertThrows(IOException::class.java) { store.write("replacement".toByteArray()) }
+        assertArrayEquals(oldCiphertext, file("journal.enc").readBytes())
+        assertArrayEquals(previous, store.read())
+    }
+
+    @Test
+    fun unresolvedLegacyBackupMakesReadFailClosed() {
+        val base = file("journal.enc")
+        val backup = file("journal.enc.bak")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        store.write("old journal".toByteArray())
+        val oldBytes = base.readBytes()
+        store.write("new journal".toByteArray())
+        backup.writeBytes(oldBytes)
+        // Emulate AtomicFile.openRead's logged-and-swallowed legacy rename failure.
+        val atomic = object : AtomicFile(base) {
+            override fun readFully(): ByteArray = base.readBytes()
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply { isAccessible = true; set(store, atomic) }
+
+        assertThrows(IOException::class.java) { store.read() }
+        assertArrayEquals(oldBytes, backup.readBytes())
+    }
+
+    @Test
+    fun unresolvedLegacyBackupMakesCommitFailEvenWhenNewBytesMatch() {
+        val base = file("journal.enc")
+        val backup = file("journal.enc.bak")
+        val store = EncryptedFileStore(context, base.name, alias, preserveUnreadable = true)
+        store.write("old journal".toByteArray())
+        val oldBytes = base.readBytes()
+        val atomic = object : AtomicFile(base) {
+            override fun finishWrite(stream: FileOutputStream) {
+                super.finishWrite(stream)
+                // Model an unresolved legacy backup left after a failed restoration.
+                backup.writeBytes(oldBytes)
+            }
+            override fun readFully(): ByteArray = base.readBytes()
+        }
+        EncryptedFileStore::class.java.getDeclaredField("file").apply { isAccessible = true; set(store, atomic) }
+
+        assertThrows(IOException::class.java) { store.write("new journal".toByteArray()) }
+        assertArrayEquals(oldBytes, backup.readBytes())
+    }
+
+    @Test
+    fun theKeyIsLoadedOncePerAliasAcrossStores() {
+        EncryptedFileStore(context, "a.enc", alias).write("a".toByteArray())
+        EncryptedFileStore(context, "b.enc", alias).write("b".toByteArray())
+        assertEquals("a", EncryptedFileStore(context, "a.enc", alias).read()!!.decodeToString())
+        assertEquals("b", EncryptedFileStore(context, "b.enc", alias).read()!!.decodeToString())
+        assertEquals(1, loads)
+    }
+
+    @Test
+    fun anInvalidatedKeyResetsTheStoreAndIsDropped() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        val old = storedKey()
+        EncryptedFileStore.forgetCachedKeys()
+        EncryptedFileStore.loadKey = { throw KeyPermanentlyInvalidatedException() }
+        assertNull(store.read())
+        assertTrue(store.takeReset())
+        assertFalse(store.takeReset())
+        assertFalse(file("a.enc").exists())
+        assertNull(storedKey())
+
+        loads = 0
+        EncryptedFileStore.loadKey = { loads++; originalLoadKey(it) }
+        store.write("again".toByteArray())
+        assertEquals("again", store.read()!!.decodeToString())
+        assertEquals(1, loads)
+        assertNotEquals(old, storedKey())
+    }
+
+    @Test
+    fun anUnrecoverableKeyResetsTheStoreAndIsDropped() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        EncryptedFileStore.forgetCachedKeys()
+        EncryptedFileStore.loadKey = { throw UnrecoverableKeyException("gone") }
+        assertNull(store.read())
+        assertTrue(store.takeReset())
+        assertNull(storedKey())
+    }
+
+    @Test
+    fun aWriteWithAnInvalidatedKeyMakesANewKey() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        EncryptedFileStore.forgetCachedKeys()
+        var failed = false
+        EncryptedFileStore.loadKey = {
+            if (!failed) {
+                failed = true
+                throw KeyPermanentlyInvalidatedException()
+            }
+            originalLoadKey(it)
+        }
+        store.write("b".toByteArray())
+        assertEquals("b", store.read()!!.decodeToString())
+        assertFalse(store.takeReset())
+    }
+
+    @Test
+    fun oneBadFileIsQuarantinedAloneAndTheSharedKeySurvives() {
+        val bad = EncryptedFileStore(context, "attachment-bad.enc", alias)
+        val good = EncryptedFileStore(context, "attachment-good.enc", alias)
+        bad.write(byteArrayOf(1, 2, 3))
+        good.write(byteArrayOf(4, 5, 6))
+        val key = storedKey()
+        corrupt("attachment-bad.enc")
+        assertNull(bad.read())
+        assertTrue(bad.takeReset())
+        assertFalse(file("attachment-bad.enc").exists())
+        assertEquals(key, storedKey())
+        assertArrayEquals(byteArrayOf(4, 5, 6), good.read())
+        assertFalse(good.takeReset())
+    }
+
+    @Test
+    fun aTruncatedFileIsQuarantinedWithoutTheKey() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        truncate("a.enc")
+        assertNull(store.read())
+        assertTrue(store.takeReset())
+        assertFalse(file("a.enc").exists())
+        assertNotNull(storedKey())
+    }
+
+    @Test
+    fun anIOExceptionNeverQuarantines() {
+        // A directory where the file belongs cannot be opened for reading.
+        file("a.enc").mkdirs()
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        assertThrows(IOException::class.java) { store.read() }
+        assertFalse(store.takeReset())
+        assertTrue(file("a.enc").isDirectory)
+    }
+
+    @Test
+    fun anotherKeystoreFailureNeverQuarantines() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        EncryptedFileStore.forgetCachedKeys()
+        EncryptedFileStore.loadKey = { throw java.security.KeyStoreException("busy") }
+        assertThrows(java.security.KeyStoreException::class.java) { store.read() }
+        assertFalse(store.takeReset())
+        assertTrue(file("a.enc").exists())
+        assertNotNull(storedKey())
+    }
+
+    @Test
+    fun everyStoreLoadsEmptyAfterAResetAndWritesAgain() {
+        val pairings = PairingStore(context, alias = alias)
+        pairings.save(listOf(host))
+        corrupt("paired-hosts.enc")
+        assertEquals(emptyList<PairedHost>(), pairings.load())
+        assertTrue(pairings.takeReset())
+        pairings.save(listOf(host))
+        assertEquals(listOf(host), pairings.load())
+
+        val drafts = DraftStore(context, alias = alias)
+        drafts.save(mapOf(DraftKey("route", "session") to StoredDraft("text")))
+        truncate("session-drafts.enc")
+        assertEquals(emptyMap<DraftKey, StoredDraft>(), drafts.load())
+        assertTrue(drafts.takeReset())
+        drafts.save(mapOf(DraftKey("route", "session") to StoredDraft("again")))
+        assertEquals("again", drafts.load().values.single().text)
+
+        val navigation = NavigationSnapshotStore(context)
+        navigation.save(mapOf("route" to NavigationSnapshot("route", emptyList())))
+        corrupt("navigation-snapshots.enc")
+        assertEquals(emptyMap<String, NavigationSnapshot>(), navigation.load())
+        navigation.save(mapOf("route" to NavigationSnapshot("route", emptyList())))
+        assertEquals(setOf("route"), navigation.load().keys)
+    }
+
+    @Test
+    fun theResetHookRunsBeforeTheFileIsDeleted() {
+        var existed: Boolean? = null
+        val store = EncryptedFileStore(context, "a.enc", alias, onReset = { existed = file("a.enc").exists() })
+        store.write("a".toByteArray())
+        corrupt("a.enc")
+        assertNull(store.read())
+        assertEquals(true, existed)
+    }
+
+    @Test
+    fun theAppsOwnRouteCacheWriteDoesNotReachTheTestsStores() {
+        val stores = AppStores(context)
+        stores.pairings.save(listOf(host))
+        // What RemoteApplication's startup load writes when it lands after the save.
+        PairedRouteCache(application).write(emptyList())
+        assertEquals(setOf("route"), stores.routes.routes())
+    }
+
+    @Test
+    fun aPairingResetClearsTheRouteCache() {
+        val stores = AppStores(context)
+        stores.pairings.save(listOf(host))
+        assertEquals(setOf("route"), stores.routes.routes())
+        corrupt("paired-hosts.enc")
+        // A push whose route is not cached reads the file itself and finds it unreadable.
+        stores.routes.clear()
+        assertEquals(emptySet<String>(), stores.routes.routes { stores.pairingFile.load() })
+        // Reading the file directly leaves no route cached either.
+        stores.pairings.save(listOf(host))
+        corrupt("paired-hosts.enc")
+        assertEquals(emptyList<PairedHost>(), stores.pairingFile.load())
+        assertNull(stores.routes.routes())
+        // The app's own load then says so once and caches that no route is paired.
+        assertEquals(emptyList<PairedHost>(), stores.pairings.load())
+        assertTrue(stores.pairings.takeReset())
+        assertFalse(stores.pairings.takeReset())
+        assertEquals(emptySet<String>(), stores.routes.routes())
+    }
+
+    @Test
+    fun aPairingResetClearsTheKeptImages() {
+        val stores = AppStores(context)
+        stores.pairings.save(listOf(host))
+        val bytes = "kept image".toByteArray()
+        val digest = AttachmentImportRules.sha256(bytes)
+        stores.media.put("route", digest, bytes)
+        assertArrayEquals(bytes, stores.media.get("route", digest))
+        corrupt("paired-hosts.enc")
+        // The load finds the pairings unreadable and resets them; the kept images go with them.
+        assertEquals(emptyList<PairedHost>(), stores.pairings.load())
+        assertNull(stores.media.get("route", digest))
+    }
+
+    @Test
+    fun oneUnreadableAttachmentReadsAsMissingAndTheOthersStayReadable() {
+        val attachments = AttachmentStore(context, alias)
+        fun attachment(id: String, bytes: ByteArray) =
+            LocalAttachment(id, "notes.txt", "file", "text/plain", bytes.size.toLong(), AttachmentImportRules.sha256(bytes))
+        val bad = attachment("A".repeat(22), "bad".toByteArray())
+        val good = attachment("B".repeat(22), "good".toByteArray())
+        attachments.write(bad, "bad".toByteArray())
+        attachments.write(good, "good".toByteArray())
+        corrupt("attachment-${bad.id}.v2")
+        assertThrows(IllegalArgumentException::class.java) { attachments.read(bad) }
+        assertFalse(file("attachment-${bad.id}.v2").exists())
+        assertEquals("good", attachments.read(good).decodeToString())
+        assertNotNull(storedKey())
+    }
+
+    @Test
+    fun aKeyThatFailsOnceIsLoadedAgainBeforeAnythingIsDeleted() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        EncryptedFileStore.forgetCachedKeys()
+        var failed = false
+        EncryptedFileStore.loadKey = {
+            if (!failed) {
+                failed = true
+                throw UnrecoverableKeyException("keystore not ready")
+            }
+            originalLoadKey(it)
+        }
+        assertEquals("a", store.read()!!.decodeToString())
+        assertFalse(store.takeReset())
+        assertTrue(file("a.enc").exists())
+        assertNotNull(storedKey())
+    }
+
+    @Test
+    fun theAppStoresHandOutOneInstancePerFile() {
+        val stores = AppStores(context)
+        assertSame(stores.pairings, stores.pairings)
+        assertSame(stores.pairingFile, stores.pairingFile)
+        assertSame(stores.routes, stores.routes)
+        assertSame(stores.drafts, stores.drafts)
+        assertSame(stores.home, stores.home)
+        assertSame(stores.prompts, stores.prompts)
+        stores.pairings.save(listOf(host))
+        corrupt("paired-hosts.enc")
+        // The reset is reported once, whichever caller loads the shared store first.
+        assertEquals(emptyList<PairedHost>(), stores.pairings.load())
+        assertTrue(stores.pairingFile.takeReset())
+    }
+
+    @Test
+    fun aPairedHostNeverPrintsItsSecret() {
+        val printed = PairedHost("route", "https://relay.test", "device", "s3cr3t-value", "Mac").toString()
+        assertFalse(printed.contains("s3cr3t-value"))
+        assertTrue(printed.contains("route"))
+    }
+}

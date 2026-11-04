@@ -1,0 +1,36 @@
+package de.joinnoah.pi.remote
+
+/** Main-thread confined LRU cache. Reads promote entries; eviction never affects active state. */
+internal class NavigationMemoryCache<K, V>(private val capacity: Int) {
+    init { require(capacity > 0) }
+    private val entries = LinkedHashMap<K, V>()
+
+    operator fun get(key: K): V? {
+        val value = entries.remove(key) ?: return null
+        entries[key] = value
+        return value
+    }
+
+    operator fun set(key: K, value: V) {
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > capacity) entries.remove(entries.keys.first())
+    }
+
+    /** Update cached metadata without changing access order. */
+    fun transformValues(transform: (V) -> V) {
+        entries.replaceAll { _, value -> transform(value) }
+    }
+
+    /** Replaces the value of a cached [key] without changing access order; adds nothing. */
+    fun replace(key: K, value: V) {
+        if (key in entries) entries[key] = value
+    }
+
+    fun remove(key: K): V? = entries.remove(key)
+
+    /** The cached entries, least recently used first, without changing access order. */
+    fun entries(): List<Pair<K, V>> = entries.map { (key, value) -> key to value }
+
+    fun clear() = entries.clear()
+}

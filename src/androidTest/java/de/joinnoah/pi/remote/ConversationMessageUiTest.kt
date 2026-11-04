@@ -1,6 +1,21 @@
 package de.joinnoah.pi.remote
 
+import android.content.ClipboardManager
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -56,20 +71,36 @@ class ConversationMessageUiTest {
         onOpenTool: ((ConversationItem.Activity) -> Unit)? = null,
         onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)? = null,
         onAskToFix: ((String) -> Unit)? = null,
+        copyButton: Boolean = false,
     ) {
         compose.setContent {
             MaterialTheme {
                 ConversationMessage(
                     item,
-                    thinkingDisplay = "text",
+                    thinkingDisplay = ThinkingDisplay.TEXT,
                     thinkingActive = false,
                     onQuote = {},
                     onOpenTool = onOpenTool,
                     onOpenAgent = onOpenAgent,
                     onAskToFix = onAskToFix,
+                    copyButton = copyButton,
                 )
             }
         }
+    }
+
+    @Test
+    fun interruptedPartialShowsNeutralLabelAndCanBeCopied() {
+        val message = Wire.objectOf("id" to "interrupted", "role" to "assistant", "text" to "Partial reply",
+            "state" to "error", "terminalOutcome" to "interrupted")
+        show(conversationItems(listOf(message)).single(), copyButton = true)
+        compose.onNodeWithText("Partial reply").assertExists()
+        compose.onNodeWithText(text(R.string.remote_message_interrupted)).assertExists()
+        compose.onNodeWithContentDescription(text(R.string.remote_copy_message)).performClick()
+        compose.waitForIdle()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        assertEquals("Partial reply", clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString())
     }
 
     @Test
@@ -86,7 +117,9 @@ class ConversationMessageUiTest {
         // The expand icon still toggles the inline preview on its own.
         compose.onNodeWithTag("toolCardToggle").performClick()
         compose.onNodeWithContentDescription(text(R.string.remote_hide_output)).assertExists()
-        compose.onNodeWithTag("toolCardArguments").assertExists()
+        // Named arguments read as labelled fields, not as raw JSON.
+        compose.onNodeWithTag("toolCardFields").assertExists()
+        compose.onNode(hasText("ls -la") and hasAnyAncestor(hasTestTag("toolCardFields"))).assertExists()
         assertEquals(1, opened.size)
     }
 
@@ -103,6 +136,25 @@ class ConversationMessageUiTest {
         val opened = mutableListOf<ConversationItem.Activity>()
         show(
             activity("submit_plan", """{"plan":"Step one of the plan"}""", output = null),
+            onOpenTool = { opened += it },
+        )
+        // A plan starts expanded, exactly as before.
+        compose.onNodeWithContentDescription(text(R.string.remote_hide_output)).assertExists()
+        compose.onNodeWithText("Step one of the plan", substring = true).assertExists()
+        compose.onNodeWithTag("toolCardToggle").assertDoesNotExist()
+        compose.onNodeWithTag("toolCardHeader").performClick()
+        compose.onNodeWithContentDescription(text(R.string.remote_show_output)).assertExists()
+        compose.onNodeWithText("Step one of the plan", substring = true).assertDoesNotExist()
+        compose.onNodeWithTag("toolCardHeader").performClick()
+        compose.onNodeWithText("Step one of the plan", substring = true).assertExists()
+        assertTrue(opened.isEmpty())
+    }
+
+    @Test
+    fun planCardHeaderTapStillTogglesInlineForTheClaudeCodeName() {
+        val opened = mutableListOf<ConversationItem.Activity>()
+        show(
+            activity("ExitPlanMode", """{"plan":"Step one of the plan"}""", output = null),
             onOpenTool = { opened += it },
         )
         // A plan starts expanded, exactly as before.
@@ -224,5 +276,56 @@ class ConversationMessageUiTest {
             )
         )
         compose.onNodeWithTag("messageUsage").assertDoesNotExist()
+    }
+
+    @Test
+    fun expandRowsAre48dpButtonsThatSayWhetherTheyAreOpen() {
+        show(activity("bash", """{"command":"ls -la"}"""))
+        val header = compose.onNodeWithTag("toolCardHeader")
+        header.assertHeightIsAtLeast(48.dp)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, text(R.string.remote_chat_a11y_collapsed)))
+        header.performClick()
+        header.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, text(R.string.remote_chat_a11y_expanded)))
+    }
+
+    @Test
+    fun rightToLeftQuoteSwipeGoesRight() {
+        val quoted = mutableListOf<String>()
+        compose.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                MaterialTheme {
+                    ConversationMessage(
+                        ConversationItem.Bubble(
+                            id = "rtl",
+                            sourceId = "message-rtl",
+                            role = "assistant",
+                            author = "model",
+                            text = "A reply that is long enough to swipe across",
+                            quote = null,
+                            truncated = false,
+                            timestamp = null,
+                        ),
+                        thinkingDisplay = ThinkingDisplay.TEXT,
+                        thinkingActive = false,
+                        onQuote = { quoted += it },
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("messageBubble-rtl").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        assertEquals(listOf("message-rtl"), quoted)
+    }
+
+    @Test
+    fun rightToLeftBubbleTailAndChevronsMirror() {
+        val size = Size(200f, 100f)
+        val outline = BubbleShape(true).createOutline(size, LayoutDirection.Rtl, Density(1f)) as Outline.Generic
+        val bottomLeft = Path().apply { addRect(Rect(0f, 96f, 4f, 100f)) }
+        val bottomRight = Path().apply { addRect(Rect(196f, 96f, 200f, 100f)) }
+        assertTrue(!Path.combine(PathOperation.Intersect, outline.path, bottomLeft).isEmpty)
+        assertTrue(Path.combine(PathOperation.Intersect, outline.path, bottomRight).isEmpty)
+        assertTrue(Icons.AutoMirrored.Filled.NavigateNext.autoMirror)
     }
 }

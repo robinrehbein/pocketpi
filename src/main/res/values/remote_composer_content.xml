@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Offered above the composer after a paste too long for the field (ComposerContent.kt). -->
+    <string name="remote_long_paste_body">This paste is long. Attach it as a text file?</string>
+    <!-- Turns the long paste into a .txt attachment, which the import reads as a file. -->
+    <string name="remote_long_paste_attach">Attach as text file</string>
+    <!-- Puts the long paste into the field as text, as a paste without the offer would. -->
+    <string name="remote_long_paste_insert">Paste as text</string>
+</resources>
