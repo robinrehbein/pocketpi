@@ -425,6 +425,8 @@ internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutatin
         // Attachability is owned by the repository (route offer, capability revision, worker
         // session), which RemoteState cannot safely tell; only the header's gate offers it.
         ChatAction.TERMINAL -> false
+        // Render recording is a local diagnostics flag RemoteState does not carry; only the header offers it.
+        ChatAction.RENDER_CAPTURE -> false
     }
 
 private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteItem> {

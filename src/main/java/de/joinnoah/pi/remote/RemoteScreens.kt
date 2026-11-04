@@ -304,8 +304,22 @@ internal fun RemoteScreen(
     val routeMarks = remember(sessionMarkMap, state.host?.routeId) { sessionMarksById(sessionMarkMap, state.host?.routeId) }
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
+    val hasCompactionList = key is RemoteNavKey.Sessions || (key is RemoteNavKey.Projects && !projectSelected)
+    // Expiry is independent of animation settings, including reduced motion.
+    val sessionCompactionNow by produceState(
+        System.currentTimeMillis(), state.sessionCompactions, hasCompactionList,
+    ) {
+        value = System.currentTimeMillis()
+        while (hasCompactionList) {
+            val nextExpiry = state.sessionCompactions.values
+                .filter { compactionVisible(it, value) }
+                .minOfOrNull { it.startedAtMillis + COMPACTION_VISIBLE_MILLIS } ?: break
+            delay((nextExpiry - value).coerceAtLeast(1L))
+            value = System.currentTimeMillis()
+        }
+    }
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities) {
+        remember(state.sessions, state.connected, state.loading, state.stale, state.sessionsFresh, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities, state.sessionCompactions, sessionCompactionNow) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -317,6 +331,8 @@ internal fun RemoteScreen(
                 marks = routeMarks,
                 openSessionId = shownSessionId,
                 ticketRef = { ticketRefForSession(state, it) },
+                compactions = state.sessionCompactions,
+                nowMillis = sessionCompactionNow,
             )
         }
     val listedSessions =
@@ -517,6 +533,14 @@ internal fun RemoteScreen(
         mutableStateOf(savedViewport?.following == false)
     }
     val listState = rememberLazyListState()
+    val renderOptions by ChatRenderingDiagnostics.options.collectAsStateWithLifecycle()
+    val renderRecorder = remember(key) { ChatRenderRecorder() }
+    DisposableEffect(renderRecorder) { onDispose { renderRecorder.clear() } }
+    var renderSnapshot by remember(key) { mutableStateOf<String?>(null) }
+    LaunchedEffect(renderOptions) { renderRecorder.clear() }
+    renderSnapshot?.let { snapshot ->
+        ChatRenderingSnapshotDialog(snapshot) { renderSnapshot = null }
+    }
     // The large page title leaves the list for the header's back pill once it scrolls under the header.
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val titleInPill by remember(listState) { derivedStateOf { pageTitleScrolledAway(listState.layoutInfo, headerSize.height) } }
@@ -1430,6 +1454,9 @@ internal fun RemoteScreen(
             ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.TERMINAL -> openInspector(InspectorTab.TERMINAL)
+            ChatAction.RENDER_CAPTURE ->
+                renderSnapshot = renderRecorder.export(Build.MODEL, Build.VERSION.SDK_INT, BuildConfig.VERSION_CODE,
+                    density.density, density.fontScale, renderOptions)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), displayTitle(session.text("title")).text) }
             ChatAction.NEW_SESSION -> newSessionOpen = true
@@ -1541,6 +1568,25 @@ internal fun RemoteScreen(
     // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
     var runningShowAll by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
+    // Keep this captured value stable: recreating it on chat recomposition invalidates the lazy
+    // content, whose layoutInfo observation would otherwise trigger another measurement.
+    val projectQuickChats = remember(
+        key, projectSelected, state.projectChats, state.connected, runningShowAll, recentShowAll,
+    ) {
+        quickChats(
+            if (key is RemoteNavKey.Projects && !projectSelected) mainSessionChats(state.projectChats) else emptyList(),
+            state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
+        )
+    }
+    val compactionFrame = rememberBrailleSpinnerFrame(
+        (key is RemoteNavKey.Sessions && listedSessions.any { it.compacting }) ||
+            (projectQuickChats.waiting + projectQuickChats.running + projectQuickChats.recent).any { chat ->
+                sessionListItem(
+                    chat.session, state.connected && chat.verified, loading = false, confirmed = chat.verified,
+                    compaction = state.sessionCompactions[chat.session.text("id")], nowMillis = sessionCompactionNow,
+                ).compacting
+            }
+    )
     // The home accept sheet: the project id and ref of the ticket it is about.
     var acceptTarget by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
     val title =
@@ -1592,6 +1638,8 @@ internal fun RemoteScreen(
                         if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
                         if (state.emulator != null || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
                         if (chatModel?.canAttachTerminal() == true) add(ChatAction.TERMINAL)
+                        // Render capture is local diagnostics, offered only while recording is on.
+                        if (renderOptions.recording) add(ChatAction.RENDER_CAPTURE)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -2535,7 +2583,10 @@ internal fun RemoteScreen(
         val list: @Composable () -> Unit = {
             LazyColumn(
                 if (key is RemoteNavKey.Chat)
-                    Modifier.fillMaxSize().testTag("conversationList").glassSource().then(underlay)
+                    Modifier.fillMaxSize().testTag("conversationList")
+                        .chatRenderFrames(renderRecorder, renderOptions.recording, { listState.layoutInfo }, { autoFollow }, thinkingDisplay == ThinkingDisplay.TEXT,
+                            { listState.isScrollInProgress }, { listState.canScrollForward })
+                        .glassSource().then(underlay)
                         .nestedScroll(headerScroll)
                         .onFocusChanged { conversationFocused = it.hasFocus }
                 else Modifier.fillMaxSize().then(listRegion).glassSource(),
@@ -3112,13 +3163,7 @@ internal fun RemoteScreen(
                             // Main sessions only: a busy subagent shows as the session it works for.
                             val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
                             val closableIds = closableProjectChatIds(state, mainChats)
-                            val quick =
-                                quickChats(
-                                    mainChats,
-                                    state.connected,
-                                    showRunningAll = runningShowAll,
-                                    showRecentAll = recentShowAll,
-                                )
+                            val quick = projectQuickChats
                             val waitingChats = quick.waiting
                             val runningChats = quick.running
                             val recentChats = quick.recent
@@ -3130,6 +3175,9 @@ internal fun RemoteScreen(
                                     marks = routeMarks,
                                     connected = state.connected,
                                     ticketRef = homeTicketRef,
+                                    compactions = state.sessionCompactions,
+                                    nowMillis = sessionCompactionNow,
+                                    compactionFrame = compactionFrame,
                                     closable = { (it.projectId to it.session.text("id")) in closableIds },
                                     swipe =
                                         (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
@@ -3327,6 +3375,7 @@ internal fun RemoteScreen(
                                 Box(Modifier.itemMotion(this).testTag("sessionRow-${session.id}")) {
                                     SessionListRow(
                                         item = session,
+                                        compactionFrame = compactionFrame,
                                         selected = session.id == listPane?.selectedSessionId,
                                         onTogglePin = {
                                             sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
@@ -3423,7 +3472,8 @@ internal fun RemoteScreen(
                                 val highlighted = item.id == highlightedId
                                 ConversationItemColumn(
                                     item,
-                                    Modifier.conversationItemMotion(this).then(
+                                    Modifier.conversationItemMotion(this, enabled = !renderOptions.disableMotion)
+                        .chatRenderRow(renderRecorder, pendingKeys.keyOf(item), renderOptions.recording).then(
                                         if (highlighted)
                                             Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
                                         else Modifier
@@ -4677,6 +4727,9 @@ private class ProjectChatRowContext(
     val marks: Map<String, SessionMark>,
     val connected: Boolean,
     val ticketRef: (String) -> String?,
+    val compactions: Map<String, SessionCompaction>,
+    val nowMillis: Long,
+    val compactionFrame: State<Int>,
     /** Whether the row offers Close; see [closableProjectChat]. */
     val closable: (ProjectChatSummary) -> Boolean,
     /** The end-to-start and start-to-end swipe actions, as the user set them. */
@@ -4697,7 +4750,10 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
     val id = chat.session.optionalText("id")
     val mark = id?.let(context.marks::get)
     val item =
-        sessionListItem(chat.session, context.connected && chat.verified, loading = false, confirmed = chat.verified).let {
+        sessionListItem(
+            chat.session, context.connected && chat.verified, loading = false, confirmed = chat.verified,
+            compaction = id?.let(context.compactions::get), nowMillis = context.nowMillis,
+        ).let {
             it.copy(
                 pinned = mark?.pinned == true,
                 unread = sessionUnread(mark, it.updatedAt, open = false),
@@ -4712,6 +4768,7 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
         )
         SessionListRow(
             item = item,
+            compactionFrame = context.compactionFrame,
             enabled = true,
             closeAvailable = context.closable(chat),
             onClick = { context.onOpen(chat) },

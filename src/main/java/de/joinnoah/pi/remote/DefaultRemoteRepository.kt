@@ -387,6 +387,7 @@ class DefaultRemoteRepository(
             // Only on capability routes v2 and later; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
+            SESSION_COMPACTION_LIST_CAPABILITY,
             // Browser commands additionally require a successfully negotiated v3 route.
             SESSION_PREVIEW_CAPABILITY,
             SESSION_EMULATOR_CAPABILITY,
@@ -1066,6 +1067,7 @@ class DefaultRemoteRepository(
      */
     private val closedProjectChats = HashMap<String, Long>()
     private val unsharingProjects = mutableSetOf<String>()
+    private val sessionCompactions = SessionCompactions()
     private val sessionStatusRevisions = linkedMapOf<String, Long>()
     private val sessionStatusOverrides = mutableMapOf<String, String>()
     private val sessionTitleRevisions = linkedMapOf<String, Long>()
@@ -1829,9 +1831,15 @@ class DefaultRemoteRepository(
     /** Reads [project]'s list on [connection] and keeps it; returns its rows, or null when it went. */
     private suspend fun readProjectList(routeId: String, project: JsonObject, connection: Long): List<JsonObject>? {
         if (connection != generation || activeHost?.routeId != routeId) return null
-        val sessions = connectionRequest("sessions.list", "projectId" to project.text("id")).array("items")
+        val includeCompaction = SESSION_COMPACTION_LIST_CAPABILITY in state.value.capabilities
+        val compactionWatermark = sessionCompactions.watermark()
+        val sessions = connectionRequest("sessions.list", *sessionListFields(project.text("id"), includeCompaction)).array("items")
         // A reply to a connection that is gone, or to another Mac, says nothing about this one.
         if (connection != generation || activeHost?.routeId != routeId) return null
+        if (includeCompaction) {
+            sessionCompactions.list(sessions, compactionWatermark)
+            update { it.copy(sessionCompactions = sessionCompactions.values) }
+        }
         val rows = sessions.map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
         applyProjectList(routeId, project, rows, connection)
         return rows
@@ -2444,6 +2452,8 @@ class DefaultRemoteRepository(
         sessionTitleRevisions.clear()
         sessionTitleOverrides.clear()
         sessionListEpochs.clear()
+        sessionCompactions.clear()
+        update { it.copy(sessionCompactions = emptyMap()) }
         ready?.cancel()
         // A reconnect to the Mac on screen keeps its last-known state; another Mac starts empty.
         val keep = state.value.stale && showsRoute(host.routeId)
@@ -3098,6 +3108,10 @@ class DefaultRemoteRepository(
      */
     private fun eventEffects(payload: JsonObject) {
         if (payload.text("kind") == "session.status") updateSessionStatus(payload)
+        if (payload.text("kind") == "session.compaction" && eventEpochApplies(payload)) {
+            sessionCompactions.event(payload)
+            update { it.copy(sessionCompactions = sessionCompactions.values) }
+        }
         selectedChatHints(payload)
         if (payload.text("kind") == "advisor.status") {
             val sessionId = payload.text("sessionId")
@@ -3393,12 +3407,13 @@ class DefaultRemoteRepository(
     }
 
     /**
-     * Forgets the revisions of [sessionId]'s last status and title events, so the events of a new
+     * Forgets [sessionId]'s status, title and compaction revisions, so the events of a new
      * journal epoch, which count from the start again, reach the lists.
      */
     private fun forgetListRevisions(sessionId: String) {
         sessionStatusRevisions.remove(sessionId)
         sessionTitleRevisions.remove(sessionId)
+        sessionCompactions.forgetRevision(sessionId)
     }
 
     /** How [seeListEpoch] placed an epoch against what the lists knew of the session. */
@@ -3467,7 +3482,7 @@ class DefaultRemoteRepository(
     }
 
     /**
-     * Whether a well-formed `session.status` or `session.title` [event] reaches the lists, after
+     * Whether a status, title or compaction [event] reaches the lists, after
      * what it says about its journal epoch (`epoch`, from newer hosts). A new epoch, also for a
      * session only a list shows, starts the session's revisions over first; unknown counts as new,
      * since the revisions seen so far came without an epoch. An epoch the session already left
@@ -3557,6 +3572,8 @@ class DefaultRemoteRepository(
                 ?: state.value.sessions.firstOrNull { it.optionalText("id") == id }?.optionalText("status")
         sessionStatusRevisions[id] = revision
         sessionStatusOverrides[id] = status
+        sessionCompactions.status(event)
+        update { it.copy(sessionCompactions = sessionCompactions.values) }
         sessionStatusEffects(id, status, known)
         trimListRevisions()
         publishSessionStatus(id, status, known)
@@ -3623,10 +3640,20 @@ class DefaultRemoteRepository(
     private suspend fun listSessions(projectId: String, epoch: Long): List<JsonObject> {
         sessionStatusOverrides.clear()
         sessionTitleOverrides.clear()
-        return request("sessions.list", epoch, "projectId" to projectId)
-            .array("items")
-            .map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
+        val includeCompaction = SESSION_COMPACTION_LIST_CAPABILITY in state.value.capabilities
+        val compactionWatermark = sessionCompactions.watermark()
+        val items = request("sessions.list", epoch, *sessionListFields(projectId, includeCompaction)).array("items")
+        checkEpoch(epoch)
+        if (includeCompaction) {
+            sessionCompactions.list(items, compactionWatermark)
+            update { it.copy(sessionCompactions = sessionCompactions.values) }
+        }
+        return items.map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
     }
+
+    private fun sessionListFields(projectId: String, includeCompaction: Boolean): Array<Pair<String, Any?>> =
+        if (includeCompaction) arrayOf("projectId" to projectId, "includeCompaction" to true)
+        else arrayOf("projectId" to projectId)
 
     /**
      * [persist]: the chat's structure changed (a snapshot), so the navigation snapshot is written
@@ -3824,6 +3851,7 @@ class DefaultRemoteRepository(
                     if (accepted) current.journalEpoch?.let {
                         pageEpoch(current.sessionId, it, current.revision, current.status)
                     }
+                    if (accepted) publishTimelineCompaction(current)
                     replaced = accepted
                     val sameSession = data.optionalText("sessionId") == current.sessionId
                     // The same epoch's snapshot at a lower revision: one from another epoch starts over.
@@ -3934,6 +3962,12 @@ class DefaultRemoteRepository(
      * status) that the reads the activation started already replaced with newer, so only the
      * re-reads and hints run here.
      */
+    private fun publishTimelineCompaction(current: Timeline) {
+        if (current !== timeline || current.sessionId != state.value.selection.sessionId) return
+        sessionCompactions.acceptedTimeline(current.sessionId, current.revision, current.compaction)
+        update { it.copy(sessionCompactions = sessionCompactions.values) }
+    }
+
     private fun drainedEffects(current: Timeline) {
         for (event in current.takeDrained()) unheardHints(event)
     }
@@ -3989,6 +4023,7 @@ class DefaultRemoteRepository(
         if (advisorReplayed && current.sessionId == state.value.selection.sessionId) refreshAdvisor()
         drainedEffects(current)
         if (result.fits) {
+            publishTimelineCompaction(current)
             recheckFollowUps(current.sessionId)
             val shown = state.value.tasks.freshness
             if (current.tasksKnown && (shown == TaskFreshness.LIVE || shown == TaskFreshness.STALE)) {
@@ -5042,6 +5077,7 @@ class DefaultRemoteRepository(
                         // connect() above cancelled any download; the snapshot re-derives compaction.
                         toolOutput = null,
                         compaction = null,
+                        sessionCompactions = sessionCompactions.values,
                         suggestion = null,
                         pullRequest = null,
                     )
@@ -5178,6 +5214,7 @@ class DefaultRemoteRepository(
     }
 
     override fun disconnect() {
+        sessionCompactions.clear()
         reconnectEnabled = false
         endPushWake(close = false)
         offlineSince = null
@@ -5304,6 +5341,8 @@ class DefaultRemoteRepository(
         broken: Boolean = false,
         cause: FailureCause = FailureCause.LOST,
     ) {
+        sessionCompactions.clear()
+        update { it.copy(sessionCompactions = emptyMap()) }
         Diagnostics.record(
             Diagnostics.Kind.FAILURE,
             "connection." + if (state.value.connected) "lost" else "attempt",

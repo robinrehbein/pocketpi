@@ -26,6 +26,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.buildJsonObject
@@ -34,6 +35,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -419,6 +421,71 @@ class ChatActionsUiTest {
             )
         assertFalse(chatActionAvailable(ChatAction.TERMINAL, everything))
         assertFalse(ChatAction.TERMINAL in DEFAULT_CHAT_ACTIONS.filter { chatActionAvailable(it, everything) })
+    }
+
+    @After
+    fun stopRenderRecording() {
+        ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options())
+    }
+
+    @Test
+    fun thePaletteNeverListsRenderCapture() {
+        val everything = repository.state.value.copy(selection = RemoteSelection("host", "project", "s1"))
+        assertFalse(chatActionAvailable(ChatAction.RENDER_CAPTURE, everything))
+        assertFalse(ChatAction.RENDER_CAPTURE in DEFAULT_CHAT_ACTIONS.filter { chatActionAvailable(it, everything) })
+    }
+
+    @Test
+    fun renderCaptureIsOfferedInTheMenuOnlyWhileRecording() {
+        render()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionMenu_render_capture").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.runOnIdle { ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options(recording = true)) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("captureChatRender").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_render_capture").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_render_capture").performScrollTo().assertIsDisplayed()
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test
+    @Config(qualifiers = "w360dp-h740dp")
+    fun recordingKeepsTheTwoControlHeaderAndCaptureOpensTheExportFromTheMenu() {
+        ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options(recording = true))
+        repository.terminalAttachable = true
+        withLongTitle()
+        render()
+        assertTwoControlHeader(sameRow = true)
+        compose.onNodeWithTag("captureChatRender").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatActionMenu_render_capture").performScrollTo().assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("shareRenderSnapshot").assertIsDisplayed()
+        compose.onNodeWithTag("copyRenderSnapshot").assertIsDisplayed()
+        assertEquals(listOf(ChatAction.RENDER_CAPTURE), settings.recordedActions)
+    }
+
+    @Test
+    fun aUsedRenderCaptureBecomesTheShortcutAndFallsBackWhenRecordingStops() {
+        ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options(recording = true))
+        settings.usage[ChatAction.SETTINGS] = ActionUsage(1.0, 10)
+        settings.usage[ChatAction.RENDER_CAPTURE] = ActionUsage(1.0, 20)
+        render()
+        compose.onNodeWithTag("chatAction_render_capture").assertIsDisplayed()
+        val quick = compose.onNodeWithTag("chatAction_render_capture").getUnclippedBoundsInRoot()
+        val more = compose.onNodeWithTag("chatActionsMore").getUnclippedBoundsInRoot()
+        assertEquals(96f, (more.right - quick.left).value, 0.5f)
+        compose.runOnIdle { ChatRenderingDiagnostics.update(ChatRenderingDiagnostics.Options()) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatAction_render_capture").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_settings").assertIsDisplayed()
     }
 
     private val longTitle = "glassy-frosted-header-session-" + "with-a-very-long-title-".repeat(8)

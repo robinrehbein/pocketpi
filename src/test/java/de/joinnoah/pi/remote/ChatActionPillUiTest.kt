@@ -22,6 +22,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -94,10 +95,12 @@ class ChatActionPillUiTest {
             MaterialTheme { ChatActionPill(layout, Color.DarkGray, {}) }
         }
         compose.onNodeWithTag("chatActionsMore").performClick()
-        val tops = layout.menu.map { action -> menuItem(action).fetchSemanticsNode().boundsInWindow.top }
+        // Measure the full content order, including rows initially below the scroll viewport.
+        val tops = layout.menu.map { action -> menuItem(action).fetchSemanticsNode().positionInRoot.y }
         assertEquals(tops.sorted(), tops)
         // The full menu also contains the action that was visible as the shortcut.
         menuItem(ChatAction.CHANGES).assertIsDisplayed()
+        menuItem(ChatAction.CLOSE).performScrollTo().assertIsDisplayed()
     }
 
     @Test

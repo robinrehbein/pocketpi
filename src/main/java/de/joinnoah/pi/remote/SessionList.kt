@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +66,7 @@ internal fun SessionListRow(
     onTogglePin: (() -> Unit)? = null,
     /** Marks the session read; the menu offers it only on an unread row. */
     onMarkRead: (() -> Unit)? = null,
+    compactionFrame: State<Int>? = null,
 ) {
     fun available(action: SwipeAction): SwipeAction =
         when (action) {
@@ -79,7 +81,8 @@ internal fun SessionListRow(
     val subagentLabel = stringResource(R.string.remote_subagent)
     val reported =
         stringResource(
-            when (item.availability) {
+            if (item.compacting) R.string.remote_status_compacting
+            else when (item.availability) {
                 SessionAvailability.IDLE -> R.string.remote_status_idle
                 SessionAvailability.RUNNING -> R.string.remote_status_running
                 SessionAvailability.WAITING -> R.string.remote_status_waiting
@@ -318,7 +321,16 @@ internal fun SessionListRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        SessionStatusLabel(
+                        if (item.compacting) {
+                            BrailleSpinner(compactionFrame, statusColor)
+                            Text(
+                                status,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = statusColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        } else SessionStatusLabel(
                             status,
                             if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
                             statusColor,

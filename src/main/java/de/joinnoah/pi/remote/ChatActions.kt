@@ -35,6 +35,8 @@ enum class ChatAction {
     EMULATOR,
     /** The session's shared terminal, offered only while the repository can attach it. */
     TERMINAL,
+    /** Exports the local chat render diagnostics; offered only while recording is on. */
+    RENDER_CAPTURE,
     /** Closes the session on the Mac after a confirmation; only ever in the menu, see [withClose]. */
     CLOSE,
 }
@@ -54,7 +56,7 @@ internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
         ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS,
         ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.HISTORY, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR,
-        ChatAction.TERMINAL)
+        ChatAction.TERMINAL, ChatAction.RENDER_CAPTURE)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())

@@ -65,7 +65,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.NEW_SESSION -> Icons.Default.Add
         ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
         ChatAction.HISTORY -> Icons.AutoMirrored.Filled.List
-        ChatAction.STATUS -> Icons.Outlined.Info
+        ChatAction.STATUS, ChatAction.RENDER_CAPTURE -> Icons.Outlined.Info
         ChatAction.CLOSE -> Icons.Default.DeleteOutline
     }
 
@@ -82,7 +82,7 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.HISTORY -> Shortcut.HISTORY
         ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD,
         ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE, ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR,
-        ChatAction.TERMINAL -> null
+        ChatAction.TERMINAL, ChatAction.RENDER_CAPTURE -> null
     }
 
 internal fun ChatAction.label(): Int =
@@ -106,6 +106,7 @@ internal fun ChatAction.label(): Int =
         ChatAction.HISTORY -> R.string.remote_chat_history
         ChatAction.STATUS -> R.string.remote_chat_status
         ChatAction.CLOSE -> R.string.remote_session_close
+        ChatAction.RENDER_CAPTURE -> R.string.remote_render_capture
     }
 
 /**
