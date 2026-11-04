@@ -65,6 +65,10 @@ internal fun SessionListRow(
     onTogglePin: (() -> Unit)? = null,
     /** Marks the session read; the menu offers it only on an unread row. */
     onMarkRead: (() -> Unit)? = null,
+    /** When set, the time label reads as the age relative to this time ("5 minutes ago") instead of a clock time or date. */
+    now: Long? = null,
+    /** Marks a ready chat that has been idle for a day or more with an "Old" chip. */
+    old: Boolean = false,
 ) {
     fun available(action: SwipeAction): SwipeAction =
         when (action) {
@@ -99,6 +103,7 @@ internal fun SessionListRow(
     val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
     val pinnedLabel = stringResource(R.string.remote_activity_pinned)
     val unreadLabel = stringResource(R.string.remote_activity_unread)
+    val oldLabel = stringResource(R.string.remote_session_old)
     // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
     // rename and close stay reachable with swipe actions turned off or a mouse in hand.
     val menuAnchor = rememberMenuAnchor()
@@ -145,6 +150,7 @@ internal fun SessionListRow(
             workerLabel.takeIf { item.hostWorker },
             pinnedLabel.takeIf { item.pinned },
             unreadLabel.takeIf { item.unread },
+            oldLabel.takeIf { old },
             item.preview,
             status,
         ).joinToString(", ")
@@ -297,9 +303,16 @@ internal fun SessionListRow(
                         item.updatedAt?.let {
                             val context = LocalContext.current
                             Text(
-                                (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
-                                    else DateFormat.getDateFormat(context))
-                                    .format(Date(it)),
+                                if (now != null)
+                                    DateUtils.getRelativeTimeSpanString(
+                                        minOf(it, now),
+                                        now,
+                                        DateUtils.MINUTE_IN_MILLIS,
+                                    ).toString()
+                                else
+                                    (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
+                                        else DateFormat.getDateFormat(context))
+                                        .format(Date(it)),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -323,6 +336,13 @@ internal fun SessionListRow(
                             if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
                             statusColor,
                         )
+                        if (old)
+                            ProjectCountBadge(
+                                oldLabel,
+                                MaterialTheme.colorScheme.surfaceContainerHighest,
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                "sessionOld-${item.id}",
+                            )
                         if (metaLabels.isNotEmpty() || item.ticketRef != null)
                             Text(
                                 (listOfNotNull(item.ticketRef) + metaLabels).joinToString(separator = " · ", prefix = "· "),

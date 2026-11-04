@@ -15,4 +15,10 @@
         <item quantity="one">%d working</item>
         <item quantity="other">%d working</item>
     </plurals>
+    <plurals name="remote_mac_ready_count">
+        <item quantity="one">%d ready</item>
+        <item quantity="other">%d ready</item>
+    </plurals>
+    <!-- A ready chat on the Projects page that has been idle for a day or more. -->
+    <string name="remote_session_old">Old</string>
 </resources>

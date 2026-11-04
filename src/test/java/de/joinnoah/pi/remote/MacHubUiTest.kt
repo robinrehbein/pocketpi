@@ -18,6 +18,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
@@ -65,16 +68,23 @@ class MacHubUiTest {
         put("name", name)
     }
 
-    private fun session(id: String, status: String) = buildJsonObject {
+    // updatedAt = 1 is long ago: a ready row with it reads as old. Tests of fresh rows pass a recent time.
+    private fun session(id: String, status: String, updatedAt: Long = 1L) = buildJsonObject {
         put("id", id)
         put("title", "Session $id")
         put("status", status)
         put("origin", "pi")
-        put("updatedAt", 1L)
+        put("updatedAt", updatedAt)
     }
 
-    private fun chat(projectId: String, projectName: String, id: String, status: String, verified: Boolean = true) =
-        ProjectChatSummary(projectId, projectName, session(id, status), verified)
+    private fun chat(
+        projectId: String,
+        projectName: String,
+        id: String,
+        status: String,
+        verified: Boolean = true,
+        updatedAt: Long = 1L,
+    ) = ProjectChatSummary(projectId, projectName, session(id, status, updatedAt), verified)
 
     private fun render(
         projects: List<JsonObject>,
@@ -85,6 +95,7 @@ class MacHubUiTest {
         connection: Int? = null,
         capabilities: Set<String> = emptySet(),
         tickets: TicketsState = TicketsState(),
+        fontScale: Float? = null,
     ) {
         repository.state.value =
             RemoteState(
@@ -101,8 +112,13 @@ class MacHubUiTest {
                 tickets = tickets,
             )
         compose.setContent {
-            androidx.compose.material3.MaterialTheme {
-                RemoteNavigation(repository, settings, false, {})
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides if (fontScale != null) Density(density.density, fontScale) else density
+            ) {
+                androidx.compose.material3.MaterialTheme {
+                    RemoteNavigation(repository, settings, false, {})
+                }
             }
         }
         compose.waitForIdle()
@@ -168,21 +184,28 @@ class MacHubUiTest {
     }
 
     @Test
-    fun waitingChatsLeadThenWorkingChatsThenSharedProjectsThenRecentChats() {
+    fun needsYouLeadsThenReadyThenWorkingThenProjectsThenRecent() {
         render(
             listOf(project("p1", "Alpha"), project("p2", "Beta")),
             chats =
                 listOf(
-                    chat("p2", "Beta", "recent", "idle"),
+                    chat("p2", "Beta", "recent", "idle", verified = false),
+                    chat("p2", "Beta", "done", "idle"),
                     chat("p1", "Alpha", "working", "running"),
                     chat("p1", "Alpha", "waiting", "waiting"),
                 ),
         )
 
         val needsYou = label(R.string.remote_status_needs_you)
+        val ready = label(R.string.remote_status_ready)
         val working = label(R.string.remote_status_working)
         val shared = label(R.string.remote_projects_shared)
         val quick = label(R.string.remote_projects_quick_chats)
+        assertTrue(headingTop(needsYou) < headingTop(ready))
+        assertTrue(headingTop(ready) < headingTop(working))
+        // The unverified idle chat sits under Recent, the verified one under Ready.
+        assertTrue(headingTop(quick) < compose.onNodeWithText("Session recent").fetchSemanticsNode().positionInRoot.y)
+        assertTrue(compose.onNodeWithText("Session done").fetchSemanticsNode().positionInRoot.y < headingTop(working))
         assertTrue(headingTop(needsYou) < headingTop(working))
         assertTrue(headingTop(working) < headingTop(shared))
         assertTrue(headingTop(shared) < headingTop(quick))
@@ -199,7 +222,89 @@ class MacHubUiTest {
         compose.onNode(hasText(label(R.string.remote_status_needs_you)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             .assertIsDisplayed()
         compose.onAllNodesWithText(label(R.string.remote_status_working)).assertCountEquals(0)
+        compose.onAllNodesWithText(label(R.string.remote_status_ready)).assertCountEquals(0)
         compose.onAllNodesWithText(label(R.string.remote_projects_quick_chats)).assertCountEquals(0)
+    }
+
+    private fun readyHeading() =
+        hasText(label(R.string.remote_status_ready)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+
+    @Test
+    fun anOfflineMacShowsItsChatsUnderRecentNotReady() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "done", "idle", updatedAt = System.currentTimeMillis())),
+            connected = false,
+        )
+
+        compose.onAllNodes(readyHeading()).assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_projects_quick_chats)).assertIsDisplayed()
+        compose.onNodeWithText("Session done").assertIsDisplayed()
+    }
+
+    @Test
+    fun aReadyRowOlderThanADayShowsTheOldChip() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "stale", "idle", updatedAt = System.currentTimeMillis() - 2 * OLD_READY_MILLIS),
+                    chat("p1", "Alpha", "fresh", "idle", updatedAt = System.currentTimeMillis()),
+                ),
+        )
+
+        compose.onNodeWithTag("sessionOld-stale").assertIsDisplayed()
+        compose.onAllNodesWithTag("sessionOld-fresh").assertCountEquals(0)
+    }
+
+    @Test
+    fun aFreshReadyRowShowsItsRelativeAge() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "done", "idle", updatedAt = System.currentTimeMillis() - 5 * 60_000L)),
+        )
+
+        compose.onNodeWithText("5 minutes ago").assertIsDisplayed()
+    }
+
+    @Test
+    fun aProjectRowShowsItsReadyCount() {
+        render(
+            listOf(project("p1", "Alpha")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions("p1", "Alpha", emptyList(), verified = true, counts = SessionCounts(running = 1, ready = 3)),
+                ),
+        )
+
+        compose.onNodeWithText("3 ready").assertIsDisplayed()
+        compose.onNodeWithTag("projectBadgeReady-p1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Alpha, 1 working, 3 ready").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "de-w411dp-h1600dp")
+    fun threeBadgesKeepTheProjectNameVisibleAtLargeFont() {
+        render(
+            fontScale = 2f,
+            projects = listOf(project("p1", "Alpha")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            emptyList(),
+                            verified = true,
+                            counts = SessionCounts(waiting = 2, running = 1, ready = 3),
+                        ),
+                ),
+        )
+
+        val name = compose.onNode(hasText("Alpha") and hasAnyAncestor(hasTestTag("projectRow-p1")), useUnmergedTree = true)
+        name.assertIsDisplayed()
+        assertTrue(name.fetchSemanticsNode().size.width >= 48 * compose.activity.resources.displayMetrics.density)
     }
 
     @Test
