@@ -103,6 +103,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -1075,6 +1076,7 @@ internal fun RemoteScreen(
     val hideScope = rememberCoroutineScope()
     val hiddenMessage = stringResource(R.string.remote_session_hidden_snackbar)
     val undoLabel = stringResource(R.string.remote_undo)
+    val hideResources = LocalResources.current
     val hideSession: (String, String, Long?) -> Unit = hide@{ sessionId, title, updatedAt ->
         val store = sessionMarkStore ?: return@hide
         val route = state.host?.routeId ?: return@hide
@@ -1086,7 +1088,7 @@ internal fun RemoteScreen(
                 snackbar.showSnackbar(
                     DescribedSnackbarVisuals(
                         message = hiddenMessage,
-                        description = context.getString(R.string.remote_session_hidden_snackbar_a11y, title),
+                        description = hideResources.getString(R.string.remote_session_hidden_snackbar_a11y, title),
                         actionLabel = undoLabel,
                         duration = SnackbarDuration.Long,
                     )
