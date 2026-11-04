@@ -858,4 +858,15 @@
     <string name="remote_app_icon_black_white">Schwarz · Weiß</string>
     <string name="remote_app_icon_color_white">Pi-Farben · Weiß</string>
     <string name="remote_app_icon_error">Das App-Icon konnte nicht geändert werden. Bitte versuche es erneut.</string>
+    <string name="remote_chat_activity_thinking">Pi denkt nach</string>
+    <string name="remote_chat_activity_writing">Pi schreibt</string>
+    <plurals name="remote_chat_activity_more_tools">
+        <item quantity="one">+%d weiteres</item>
+        <item quantity="other">+%d weitere</item>
+    </plurals>
+    <string name="remote_chat_activity_more_tools_many">+%1$d+ weitere</string>
+    <string name="remote_subagent_phase_pending">Startet</string>
+    <string name="remote_subagent_phase_thinking">Denkt nach</string>
+    <string name="remote_subagent_phase_writing">Schreibt</string>
+    <string name="remote_subagent_phase_tool">Nutzt ein Werkzeug</string>
 </resources>

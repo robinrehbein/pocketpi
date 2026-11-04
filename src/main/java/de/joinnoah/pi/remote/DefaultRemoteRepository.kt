@@ -66,7 +66,15 @@ private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
 private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
-private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1:"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+$SESSION_ACTIVITY_CAPABILITY:"
+
+/** Fresh snapshots that activity events may ask for per [ACTIVITY_SNAPSHOT_WINDOW_MILLIS]. */
+private const val MAX_ACTIVITY_SNAPSHOT_REQUESTS = 4
+private const val ACTIVITY_SNAPSHOT_WINDOW_MILLIS = 10_000L
+/** Reasons (session, clock and epoch, or actor card) remembered as already asked. */
+private const val MAX_ACTIVITY_SNAPSHOT_REASONS = 64
+/** Session activity views kept per connection. */
+private const val MAX_ACTIVITY_SESSIONS = 256
 
 private fun capabilityRevision(route: String): Int = when {
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
@@ -337,6 +345,8 @@ class DefaultRemoteRepository(
         setOf(
             STEER_CAPABILITY,
             PROMPT_DELIVERY_CAPABILITY,
+            // Granted per connection and on route v3 only; see [executionActivityGranted].
+            SESSION_ACTIVITY_CAPABILITY,
             QUESTION_DETAILS_CAPABILITY,
             QUESTION_EDITOR_CAPABILITY,
             NATIVE_EDITOR_CAPABILITY,
@@ -727,6 +737,32 @@ class DefaultRemoteRepository(
     }
     private var selectionEpoch = 0L
     private var generation = 0L
+    /** The [generation] whose `projects.list` answer granted `session_activity.v1`; sticky for it. */
+    private var activityGeneration: Long? = null
+    /** Grows per authoritative activity request on a connection; see [ActivityRequestToken]. */
+    private var activityRequestSeq = 0L
+    /** The newest request whose first page set the actors; older pages never replace them. */
+    private var actorBaselineSeq = -1L
+    /** Per session, the journal revision of the newest live or replayed subagent tool message. */
+    private val actorLiveRevisions = mutableMapOf<String, Pair<String?, Long>>()
+    /** Fresh snapshots activity asked for on this connection; see [MAX_ACTIVITY_SNAPSHOT_REQUESTS]. */
+    private var activitySnapshotRequests = 0
+    private var activitySnapshotWindowStart = Long.MIN_VALUE / 2
+    /** The [activityRequestSeq] whose answer last switched the activity clock. */
+    private var activityClockSeq = -1L
+    /** Sessions, clocks and epochs a fresh snapshot was already asked for, so events cannot loop. */
+    private val activitySnapshotAsked = LinkedHashSet<String>()
+    /** A fresh snapshot wanted while a page was in flight; see [drainActivityRecovery]. */
+    private class ActivityRecovery(val sessionId: String, val reason: String, val satisfied: (ExecutionActivityState) -> Boolean)
+    private val activityPendingRecovery = ArrayDeque<ActivityRecovery>()
+    /** Per session, the newest authoritative request whose answer was applied for it. */
+    private val sessionAnsweredSeq = LinkedHashMap<String, Long>()
+    /** Per actor, the journal epoch and revision of the newest message observation applied. */
+    private val actorSourceRevisions = LinkedHashMap<ActivityActorKey, Pair<String?, Long>>()
+    /** Per session, the journal epoch and revision of the accepted page that last set its actors. */
+    private val actorPageSources = LinkedHashMap<String, Pair<String?, Long>>()
+    /** First pages answered on this connection, by identity, until the Timeline accepts one. */
+    private val activitySnapshotTokens = java.util.IdentityHashMap<JsonObject, ActivityRequestToken>()
     // Connection-scoped attempts and UI owners start at the send tap.
     private val promptAttempts = mutableMapOf<DraftKey, Any>()
     private val promptOwners = mutableMapOf<DraftKey, Any>()
@@ -2362,6 +2398,7 @@ class DefaultRemoteRepository(
         nativePresenceJob = null
         nativePresenceSession = null
         generation++
+        resetExecutionActivity()
         clearLateAcknowledgements()
         failConnectionRequests()
         cloneStatusJob?.cancel()
@@ -2458,12 +2495,14 @@ class DefaultRemoteRepository(
         var ended: Long? = null
         val connection = generation
         var inboundAtSend = -1L
+        var activityToken: ActivityRequestToken? = null
         try {
             transport.sendGuarded(payload) {
                 checkEpoch(epoch)
                 check(state.value.connected && connection == generation)
                 validateBeforeSend?.invoke()
                 inboundAtSend = inboundFrames
+                activityToken = activityRequestToken(payload)
                 // Set immediately before a possible write: a send that throws may have reached the host.
                 onSent?.invoke()
             }
@@ -2519,6 +2558,7 @@ class DefaultRemoteRepository(
                 }
                 if (connection == generation) {
                     promptDeliveryGeneration = if (revision == 3 && PROMPT_DELIVERY_CAPABILITY in advertised) connection else null
+                    if (revision == 3 && SESSION_ACTIVITY_CAPABILITY in advertised && activityOptedIn(id)) executionActivityGranted(connection)
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 // Fixture capabilities keep their historical behavior; production requires the
@@ -2527,7 +2567,7 @@ class DefaultRemoteRepository(
                     (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
                 val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
                     update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
@@ -2558,6 +2598,7 @@ class DefaultRemoteRepository(
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
                 if (TICKETS_CAPABILITY in merged && !hadTickets) ticketsLoader.refresh(force = false)
             }
+            activityToken?.let { activityAnswer(it, result) }
             return result
         } catch (e: Throwable) {
             if (outcome != "timeout") outcome = requestOutcome(e)
@@ -2790,7 +2831,8 @@ class DefaultRemoteRepository(
         val sent = Diagnostics.now()
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                val relayRtt = pongResult(awaitConnectionReply(payload, PING_TIMEOUT_MILLIS, record = true))
+                // Its activity clock was taken in awaitConnectionReply(); the pong parser knows no such field.
+                val relayRtt = pongResult(JsonObject(awaitConnectionReply(payload, PING_TIMEOUT_MILLIS, record = true) - "activityClock"))
                 Diagnostics.rtt(Diagnostics.now() - sent, relayRtt)
             } catch (_: CancellationException) {
             } catch (e: RemoteRequestException) {
@@ -3029,7 +3071,326 @@ class DefaultRemoteRepository(
      * The parts of an event outside the timeline: statuses, titles, receipts, notices and the
      * context usage a finished compaction changed.
      */
+    // ---- session_activity.v1 ---------------------------------------------------------------
+
+    /** Forgets every activity grant, clock, view and request of the previous connection. */
+    private fun resetExecutionActivity() {
+        activityGeneration = null
+        activityRequestSeq = 0L
+        activityClockSeq = -1L
+        activitySnapshotAsked.clear()
+        activitySnapshotTokens.clear()
+        activityPendingRecovery.clear()
+        sessionAnsweredSeq.clear()
+        actorSourceRevisions.clear()
+        actorPageSources.clear()
+        activitySnapshotRequests = 0
+        activitySnapshotWindowStart = Long.MIN_VALUE / 2
+        actorBaselineSeq = -1L
+        actorLiveRevisions.clear()
+        update { it.copy(executionActivity = ExecutionActivityState(connectionId = generation.toString())) }
+    }
+
+    /** Whether the capability request [id] named `session_activity.v1` in its v3 opt-in. */
+    private fun activityOptedIn(id: String): Boolean =
+        capabilityRevision(id) == 3 &&
+            id.removePrefix(CAPABILITIES_V3_ROUTE).takeIf { it.startsWith("optin=") }
+                ?.removePrefix("optin=")?.substringBefore(':')?.split('+')?.contains(SESSION_ACTIVITY_CAPABILITY) == true
+
+    /** The grant arrived on [connection]: it holds until that connection ends. */
+    private fun executionActivityGranted(connection: Long) {
+        if (connection != generation || activityGeneration == connection) return
+        activityGeneration = connection
+        update { it.copy(executionActivity = it.executionActivity.copy(connectionId = connection.toString(), negotiated = true)) }
+        // A page the chat already accepted before the grant set no view: read one now.
+        val selected = state.value.selection.sessionId
+        if (selected != null && selected !in state.value.executionActivity.sessions) activitySnapshotNeeded(selected, "grant") { selected in it.sessions }
+    }
+
+    /**
+     * Read right before [payload] goes out: a token for an authoritative activity read (a first-page
+     * snapshot, a session list or a ping) on this connection, else null.
+     */
+    private fun activityRequestToken(payload: JsonObject): ActivityRequestToken? {
+        // Only after the grant: a legacy connection never reads the clock. A page read before it
+        // is followed by a fresh one (see [executionActivityGranted] and the end of snapshot()).
+        if (activityGeneration != generation) return null
+        val type = payload.optionalText("type")
+        val authoritative = type == "sessions.list" || type == "remote.ping" ||
+            (type == "session.snapshot" && !payload.containsKey("cursor"))
+        if (!authoritative) return null
+        return beginActivityRequest(generation.toString(), ++activityRequestSeq, terminalNow())
+    }
+
+    /**
+     * Folds the activity of a successful reply to the request [token] was taken for. Clocks of any
+     * authoritative answer refine the baseline; only a first-page snapshot or a session list sets a
+     * session's view. A reply of another connection, or one with malformed activity, changes nothing.
+     */
+    private fun activityAnswer(token: ActivityRequestToken, result: JsonObject) {
+        if (token.connectionId != generation.toString()) return
+        if (activityGeneration == generation && result.optionalText("kind") == "snapshot") {
+            // Only its clock counts now; the views follow once the Timeline accepted the page.
+            activitySnapshotTokens[result] = token
+            while (activitySnapshotTokens.size > 16) activitySnapshotTokens.remove(activitySnapshotTokens.keys.first())
+            applyActivityAnswer(token, result, acceptedSnapshot = false)
+        } else applyActivityAnswer(token, result, acceptedSnapshot = false)
+    }
+
+    /** The Timeline accepted first page [data]: its activity and actors become the baseline. */
+    private fun activityAcceptedSnapshot(data: JsonObject) {
+        val token = activitySnapshotTokens.remove(data) ?: return
+        applyActivityAnswer(token, data, acceptedSnapshot = true)
+    }
+
+    private fun applyActivityAnswer(token: ActivityRequestToken, result: JsonObject, acceptedSnapshot: Boolean) {
+        val current = generation.toString()
+        if (token.connectionId != current) return
+        // Tokens exist only after this connection's grant, which holds until the connection ends.
+        if (activityGeneration != generation) return
+        val answer = try {
+            parseActivityAnswer(result)
+        } catch (malformed: Exception) {
+            Diagnostics.caught("repo.activity.answer", malformed)
+            null
+        } ?: return
+        val kind = result.optionalText("kind")
+        // A snapshot of a retired journal epoch is the Timeline's to reject; it sets nothing here.
+        val snapshotSession = result.optionalText("sessionId")
+        val retired = kind == "snapshot" && snapshotSession != null &&
+            result.optionalText("epoch")?.let { it in (sessionListEpochs[snapshotSession]?.retired ?: emptyList<String>()) } == true
+        val baselines = (kind == "sessions" || (kind == "snapshot" && acceptedSnapshot)) && !retired
+        val acceptedAt = terminalNow()
+        // Sessions this answer is authoritative for, with or without activity.
+        val answered: List<String> = when {
+            !baselines -> emptyList()
+            kind == "snapshot" -> listOfNotNull(snapshotSession)
+            else -> (result["items"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.optionalText("id") }
+        }
+        update { state ->
+            val activity = state.executionActivity
+            var clock = activity.clock
+            answer.clock?.let { sample ->
+                // An older request's sample of another clock does not undo a newer clock.
+                if (clock == null || clock.clockId == sample.clockId || token.requestSeq >= activityClockSeq) {
+                    val next = observeActivityClock(clock, token, current, sample)
+                    if (next?.clockId != clock?.clockId) activityClockSeq = token.requestSeq
+                    clock = next
+                }
+            }
+            var sessions = activity.sessions
+            var observed = activity.sessionObservedUntil
+            // Per session, an answer older than one already applied for it changes nothing, even
+            // where that newer answer left no view (it omitted the activity).
+            val stale = (answered + answer.activities.keys).filter { token.requestSeq < (sessionAnsweredSeq[it] ?: -1L) }.toSet()
+            if (baselines) for (sessionId in answered + answer.activities.keys) if (sessionId !in stale) {
+                sessionAnsweredSeq.remove(sessionId)
+                sessionAnsweredSeq[sessionId] = token.requestSeq
+            }
+            while (sessionAnsweredSeq.size > MAX_ACTIVITY_SESSIONS) {
+                val oldest = sessionAnsweredSeq.keys.firstOrNull { it != state.selection.sessionId } ?: break
+                sessionAnsweredSeq.remove(oldest)
+            }
+            if (baselines) for ((sessionId, snapshot) in answer.activities) if (sessionId !in stale) {
+                val applied = applyActivityBaseline(sessions[sessionId], token, current, snapshot)
+                if (applied.outcome == ActivityApplyOutcome.Applied) {
+                    activitySnapshotAsked.removeAll { it.startsWith("$current|$sessionId|") && !it.startsWith("$current|$sessionId|actor|") }
+                    observed = observed + (sessionId to activityObservationDeadline(snapshot, clock, acceptedAt))
+                }
+                applied.view?.let { sessions = (sessions - sessionId) + (sessionId to it) }
+            }
+            // A row the host answered for without activity: what it showed is no longer confirmed,
+            // so it stops animating, without turning idle. An older answer leaves a newer view.
+            for (sessionId in answered) if (sessionId !in answer.activities && sessionId !in stale) {
+                val view = sessions[sessionId] ?: continue
+                if (token.requestSeq >= view.baselineRequestSeq)
+                    sessions = sessions + (sessionId to view.unknown().copy(baselineRequestSeq = token.requestSeq))
+            }
+            if (sessions.size > MAX_ACTIVITY_SESSIONS) {
+                // The oldest go, never the chat on screen.
+                val keep = state.selection.sessionId
+                val drop = sessions.keys.filter { it != keep }.take(sessions.size - MAX_ACTIVITY_SESSIONS).toSet()
+                sessions = sessions - drop
+                observed = observed - drop
+            }
+            var actors = activity.actors
+            if (kind == "snapshot" && baselines && timeline?.sessionId == snapshotSession) {
+                val sessionId = snapshotSession
+                val messages = (result["messages"] as? JsonArray)?.mapNotNull { it as? JsonObject }
+                val revision = (result["revision"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
+                // Fenced twice: by request order, and by the journal revision of the newest live
+                // actor change, so a delayed page cannot bring back an actor a later upsert ended.
+                val live = actorLiveRevisions[sessionId]
+                val pageEpoch = result.optionalText("epoch")
+                // Revisions compare only within one journal epoch.
+                val behindLive = live != null && live.first == pageEpoch && revision != null && revision < live.second
+                if (sessionId != null && messages != null && revision != null && sessionId == state.selection.sessionId &&
+                    token.requestSeq > actorBaselineSeq && !behindLive) {
+                    actorBaselineSeq = token.requestSeq
+                    val earlier = actors.keys.filter { it.sessionId == sessionId }
+                    actors = baselineActors(actors, sessionId, messages, token, current, acceptedAt, clock)
+                    // The page is the source of every actor it names or drops: an older message
+                    // cannot revive or change any of them, nor one it never named.
+                    actorPageSources.remove(sessionId)
+                    actorPageSources[sessionId] = pageEpoch to revision
+                    while (actorPageSources.size > MAX_ACTIVITY_SESSIONS) {
+                        val oldest = actorPageSources.keys.firstOrNull { it != state.selection.sessionId } ?: break
+                        actorPageSources.remove(oldest)
+                    }
+                    val named = messages.flatMap { actorKeysNamed(sessionId, it) }
+                    for (key in (earlier + named + actors.keys).toSet()) recordActorSource(key, pageEpoch, revision)
+                    // A later card or instance may ask for its own snapshot again.
+                    activitySnapshotAsked.removeAll { it.startsWith("$current|$sessionId|actor|") }
+                }
+            }
+            state.copy(executionActivity = activity.copy(clock = clock, sessions = sessions, actors = actors, sessionObservedUntil = observed - (observed.keys - sessions.keys)))
+        }
+    }
+
+    /**
+     * A `session.activity` event, live or replayed: it can only advance its own session's view on
+     * the same epoch and clock. Without one, the selected chat reads one fresh snapshot.
+     */
+    private fun sessionActivityEvent(payload: JsonObject) {
+        if (activityGeneration != generation) return
+        // Strict wire validation: an unknown key, the envelope `epoch` included, drops the event.
+        val event = parseSessionActivityEvent(payload) ?: return
+        val current = generation.toString()
+        val applied = applyActivityEvent(state.value.executionActivity.sessions[event.sessionId], current, event.activity)
+        when (applied.outcome) {
+            ActivityApplyOutcome.Applied -> applied.view?.let { view ->
+                val until = activityObservationDeadline(view.snapshot, state.value.executionActivity.clock, terminalNow())
+                update {
+                    val activity = it.executionActivity
+                    it.copy(executionActivity = activity.copy(
+                        sessions = activity.sessions + (event.sessionId to view),
+                        sessionObservedUntil = activity.sessionObservedUntil + (event.sessionId to until),
+                    ))
+                }
+            }
+            ActivityApplyOutcome.NeedsSnapshot -> {
+                // The view stops animating until a baseline of the new epoch or clock.
+                applied.view?.let { view ->
+                    update { it.copy(executionActivity = it.executionActivity.copy(sessions = it.executionActivity.sessions + (event.sessionId to view.unknown()))) }
+                }
+                val wanted = event.activity
+                activitySnapshotNeeded(event.sessionId, "${wanted.clockId}|${wanted.epoch}") { state ->
+                    state.sessions[event.sessionId]?.snapshot?.let { it.clockId == wanted.clockId && it.epoch == wanted.epoch && it !is ActivitySnapshot.Unknown } == true
+                }
+            }
+            ActivityApplyOutcome.Ignored -> Unit
+        }
+    }
+
+    /** A live or replayed tool message of the selected chat may advance its running subagents. */
+    private fun actorActivityEvent(payload: JsonObject) {
+        if (activityGeneration != generation) return
+        val sessionId = payload.optionalText("sessionId") ?: return
+        if (sessionId != state.value.selection.sessionId) return
+        val message = payload["message"] as? JsonObject ?: return
+        if (actorHints(sessionId, message).toolCallId == null) return
+        (payload["revision"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.let { revision ->
+            val epoch = timeline?.takeIf { it.sessionId == sessionId }?.journalEpoch
+            val known = actorLiveRevisions[sessionId]
+            actorLiveRevisions[sessionId] = if (known != null && known.first == epoch) epoch to maxOf(known.second, revision) else epoch to revision
+        }
+        val revision = (payload["revision"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
+        val epoch = timeline?.takeIf { it.sessionId == sessionId }?.journalEpoch
+        // Fenced by the newest source applied for this exact actor, else by the accepted page that
+        // set the session's actors. An equal revision is the same observation. Only a journal epoch
+        // the Timeline has accepted since counts as newer than a revision of another epoch.
+        fun newer(key: ActivityActorKey): Boolean {
+            if (revision == null) return false
+            val known = actorSourceRevisions[key] ?: actorPageSources[sessionId] ?: return true
+            if (known.first == epoch) return revision > known.second
+            return epoch != null
+        }
+        val hints = actorHints(sessionId, message)
+        // Every actor this message speaks for: those it lists running, and the known ones of its
+        // card that it may end.
+        val concerned = actorKeysNamed(sessionId, message) +
+            state.value.executionActivity.actors.keys.filter { it.sessionId == sessionId && it.spawnToolCallId == hints.toolCallId }
+        val newerKeys = concerned.filter(::newer).toSet()
+        val result = applyActorMessage(
+            state.value.executionActivity.actors, sessionId, message, generation.toString(), terminalNow(),
+            state.value.executionActivity.clock, sourceNewer = { it in newerKeys },
+        )
+        // Kept for removed actors too, so an older message cannot bring one back.
+        if (revision != null) for (key in newerKeys) recordActorSource(key, epoch, revision)
+        if (result.actors != state.value.executionActivity.actors)
+            update { it.copy(executionActivity = it.executionActivity.copy(actors = result.actors)) }
+        // One reason per exact actor, clock and epoch; JSON-encoded so no ID can collide with another.
+        for (hint in result.needsSnapshot) activitySnapshotNeeded(
+            sessionId,
+            "actor|" + JsonArray(listOf(hint.key.spawnToolCallId, hint.key.instanceId, hint.snapshot.clockId, hint.snapshot.epoch).map(::JsonPrimitive)),
+        ) { state ->
+            state.actors[hint.key]?.view?.snapshot?.let { it.clockId == hint.snapshot.clockId && it.epoch == hint.snapshot.epoch && it !is ActivitySnapshot.Unknown } == true
+        }
+    }
+
+    /** At most one fresh snapshot per connection, session, clock and epoch; only for the chat on screen. */
+    private fun activitySnapshotNeeded(sessionId: String, reason: String, satisfied: (ExecutionActivityState) -> Boolean) {
+        val current = timeline
+        if (state.value.selection.sessionId != sessionId) return
+        // A page already on its way may or may not satisfy this; it is checked once that page ends.
+        if (current == null || current.sessionId != sessionId || current.detached ||
+            heldSnapshot?.sessionId == sessionId || resynchronizing || snapshotPending === current) {
+            activityPendingRecovery.removeAll { it.sessionId == sessionId && it.reason == reason }
+            activityPendingRecovery.addLast(ActivityRecovery(sessionId, reason, satisfied))
+            while (activityPendingRecovery.size > MAX_ACTIVITY_SNAPSHOT_REASONS) activityPendingRecovery.removeFirst()
+            return
+        }
+        if (!activitySnapshotAllowed(sessionId, reason)) return
+        snapshotAsync(intent = SnapshotIntent.FRESH)
+    }
+
+    /**
+     * After a first page of [sessionId] ended: whether a recovery that arrived while it ran is
+     * still unmet and may ask one more page (deduplicated and throttled like any other). Recoveries
+     * of other chats are dropped.
+     */
+    private fun drainActivityRecovery(sessionId: String): Boolean {
+        val due = activityPendingRecovery.filter { it.sessionId == sessionId }
+        activityPendingRecovery.clear()
+        val activity = state.value.executionActivity
+        val open = due.firstOrNull { !it.satisfied(activity) && activitySnapshotAllowed(sessionId, it.reason) }
+        return open != null
+    }
+
+    private fun recordActorSource(key: ActivityActorKey, epoch: String?, revision: Long) {
+        actorSourceRevisions.remove(key)
+        actorSourceRevisions[key] = epoch to revision
+        // Eviction takes the oldest tombstones first and never a current actor (at most
+        // MAX_ACTIVITY_ACTORS): an evicted key falls back to its session's older page source, which
+        // is less strict, so only keys without a live actor may lose their own watermark. A
+        // brand-new message for an evicted tombstone then has no view and needs a snapshot.
+        val live = state.value.executionActivity.actors.keys
+        while (actorSourceRevisions.size > MAX_ACTIVITY_ACTORS * 4) {
+            val oldest = actorSourceRevisions.keys.firstOrNull { it !in live && it != key } ?: break
+            actorSourceRevisions.remove(oldest)
+        }
+    }
+
+    /** Records a fresh snapshot for [reason] unless it was asked already or the window is full. */
+    private fun activitySnapshotAllowed(sessionId: String, reason: String): Boolean {
+        val key = "$generation|$sessionId|$reason"
+        // Each reason asks once per connection, and at most a few times per window, so no stream
+        // of events turns into a stream of reads; a later window asks again for a new reason.
+        val at = terminalNow()
+        if (at - activitySnapshotWindowStart >= ACTIVITY_SNAPSHOT_WINDOW_MILLIS || at < activitySnapshotWindowStart) {
+            activitySnapshotWindowStart = at
+            activitySnapshotRequests = 0
+        }
+        if (activitySnapshotRequests >= MAX_ACTIVITY_SNAPSHOT_REQUESTS || key in activitySnapshotAsked) return false
+        activitySnapshotAsked.add(key)
+        while (activitySnapshotAsked.size > MAX_ACTIVITY_SNAPSHOT_REASONS) activitySnapshotAsked.remove(activitySnapshotAsked.first())
+        activitySnapshotRequests++
+        return true
+    }
+
     private fun eventEffects(payload: JsonObject) {
+        if (payload.text("kind") == "session.activity") sessionActivityEvent(payload)
+        if (payload.text("kind") == "message.upsert") actorActivityEvent(payload)
         if (payload.text("kind") == "session.status") updateSessionStatus(payload)
         selectedChatHints(payload)
         if (payload.text("kind") == "advisor.status") {
@@ -3725,7 +4086,8 @@ class DefaultRemoteRepository(
                 // A host answers a replay only to a request that named a base.
                 checkNotNull(base)
                 Diagnostics.count(Diagnostics.Counter.RESUMES_REPLAYED)
-                val reply = sessionEventsReply(data)
+                // Its activity clock was taken in request(); the replay parser knows no such field.
+                val reply = sessionEventsReply(JsonObject(data - "activityClock"))
                 if (reply.epoch in (sessionListEpochs[current.sessionId]?.retired ?: emptyList<String>())) {
                     rejectedPage = true
                     if (awaited) current.discardAwaiting()
@@ -3751,6 +4113,7 @@ class DefaultRemoteRepository(
                     if (refetch) epochRefreshRetryUsed = true
                 } else {
                     val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
+                    if (accepted) activityAcceptedSnapshot(data) else activitySnapshotTokens.remove(data)
                     closeTimelineQuestions(current)
                     drainedEffects(current)
                     if (accepted && pendingEpoch) epochRefreshPending = null
@@ -3836,6 +4199,12 @@ class DefaultRemoteRepository(
             }
             if (refetch || current.needsSnapshot && !rejectedPage) {
                 taskRefreshPending = false
+                snapshotAsync()
+            } else if (!older && current === timeline && activityGeneration == generation && (
+                    (!rejectedPage && current.sessionId !in state.value.executionActivity.sessions && activitySnapshotAllowed(current.sessionId, "baseline")) ||
+                        drainActivityRecovery(current.sessionId))) {
+                // A replay never sets activity: once per connection, a page that can. A recovery
+                // that came while this page ran and is still unmet asks once more.
                 snapshotAsync()
             } else if (owedResume) snapshotAsync(intent = SnapshotIntent.RESUME)
             else drainTaskRefresh()
@@ -5135,6 +5504,7 @@ class DefaultRemoteRepository(
         nativePresenceJob = null
         nativePresenceSession = null
         generation++
+        resetExecutionActivity()
         clearLateAcknowledgements()
         transport.close()
         ready?.cancel()
@@ -5243,6 +5613,8 @@ class DefaultRemoteRepository(
             outcome = errorName(error) + "." + cause.name.lowercase() + if (reconnect) ".retry" else ".stop",
         )
         if (offlineSince == null && activeHost != null) offlineSince = Diagnostics.now()
+        // Nothing of the lost connection's activity stays live or authorized.
+        resetExecutionActivity()
         // A connection that came up and failed before proving itself counts like a failed attempt;
         // one that lived longer ends a run of short-lived ones.
         val hadConnection = readyAt != null
@@ -5266,6 +5638,7 @@ class DefaultRemoteRepository(
         nativePresenceJob = null
         nativePresenceSession = null
         generation++
+        resetExecutionActivity()
         clearLateAcknowledgements()
         folderVersion++
         folderSession++
@@ -8135,10 +8508,12 @@ class DefaultRemoteRepository(
         val route = activeHost?.routeId
         var inboundAtSend = -1L
         var outcome = "failed"
+        var activityToken: ActivityRequestToken? = null
         try {
             transport.sendGuarded(payload) {
                 if (!state.value.connected || connection != generation || activeHost?.routeId != route) throw MutationNotSentException()
                 inboundAtSend = inboundFrames
+                activityToken = activityRequestToken(payload)
                 onSent?.invoke()
             }
             val result =
@@ -8151,6 +8526,7 @@ class DefaultRemoteRepository(
                     }
             outcome = "ok"
             if (record) connectionProven()
+            activityToken?.let { activityAnswer(it, result) }
             return result
         } catch (e: Throwable) {
             if (outcome != "timeout") outcome = requestOutcome(e)

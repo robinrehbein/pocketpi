@@ -108,6 +108,49 @@ data class PendingSend(
     val queuedAt: Long? = null,
 )
 
+/**
+ * `session_activity.v1` receiver state of one transport connection. [negotiated] is true only once
+ * a v3 `projects.list` answer to a request carrying the opt-in granted it on this connection.
+ * [clock] maps host deadlines to the client's monotonic clock
+ * ([android.os.SystemClock.elapsedRealtime]); [sessions] holds each session's own view, set only by
+ * a first-page snapshot or a session list and advanced by that session's live or replayed events.
+ * Freshness is [activityFreshness] at a monotonic `now`; expiry freezes a view, never idles it.
+ */
+data class ExecutionActivityState(
+    val connectionId: String = "",
+    val negotiated: Boolean = false,
+    val clock: ActivityClockBaseline? = null,
+    val sessions: Map<String, ActivityView> = emptyMap(),
+    /**
+     * Running subagents of the selected parent session, at most [MAX_ACTIVITY_ACTORS], each keyed
+     * by its exact parent session, spawning tool call and instance. Queued or finished agents are
+     * never here; see ActorExecutionActivity.kt.
+     */
+    val actors: Map<ActivityActorKey, ActivityActorView> = emptyMap(),
+    /**
+     * Per session in [sessions], the client monotonic time after which it never animates: the
+     * moment its current seq was accepted plus [MAX_ACTIVITY_REMAINING_MS]. A duplicate seq, an
+     * ignored baseline or a better clock offset never moves it.
+     */
+    val sessionObservedUntil: Map<String, Long> = emptyMap(),
+) {
+    fun freshness(sessionId: String, now: Long): ActivityFreshness =
+        if (!negotiated) ActivityFreshness(false, 0)
+        else pinned(activityFreshness(sessions[sessionId], clock, connectionId, now), sessionObservedUntil[sessionId], now)
+
+    /** An actor animates only on the parent connection's clock baseline, before its own deadlines. */
+    fun actorFreshness(key: ActivityActorKey, now: Long): ActivityFreshness {
+        if (!negotiated) return ActivityFreshness(false, 0)
+        val actor = actors[key] ?: return ActivityFreshness(false, 0)
+        return pinned(activityFreshness(actor.view, clock, connectionId, now), actor.observedUntil, now)
+    }
+
+    private fun pinned(fresh: ActivityFreshness, until: Long?, now: Long): ActivityFreshness {
+        if (!fresh.live || until == null || now >= until) return ActivityFreshness(false, 0)
+        return ActivityFreshness(true, minOf(fresh.remainingMs, until - now))
+    }
+}
+
 data class RemoteState(
     /** Changes when editor authority or a question incarnation changes, including identical replacements. */
     val editorQuestionGeneration: Long = 0,
@@ -139,6 +182,11 @@ data class RemoteState(
     val preparedText: String? = null,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
+    /**
+     * Structured session activity (`session_activity.v1`) of the current connection. Every new
+     * mode behaviour gates on [ExecutionActivityState.negotiated]; a connection change resets it.
+     */
+    val executionActivity: ExecutionActivityState = ExecutionActivityState(),
     /**
      * The shown questions, configuration, advisor, commands, status and capabilities are the
      * last-known ones of a lost connection: kept on screen while the same Mac reconnects, until

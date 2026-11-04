@@ -47,8 +47,24 @@ internal fun chatHeaderState(state: RemoteState): RemoteState =
  * rendered ([destination]), so a status read on the current connection for that session, not kept
  * from a lost one, not an open in progress, not a cached preview and with no open question.
  */
-internal fun chatStatusLive(state: RemoteState, destination: RemoteSelection?): Boolean =
-    chatStatusShape(state) == ChatStatusShape.RUNNING && sessionActivityAllowed(state, destination)
+internal fun chatStatusLive(
+    state: RemoteState,
+    destination: RemoteSelection?,
+    now: Long = android.os.SystemClock.elapsedRealtime(),
+): Boolean = chatStatusPhase(state, destination, now) != null ||
+    (state.executionActivity.negotiated.not() &&
+        chatStatusShape(state) == ChatStatusShape.RUNNING && sessionActivityAllowed(state, destination))
+
+/**
+ * The typed phase the header's RUNNING mark animates in, on a connection that negotiated
+ * `session_activity.v1`: only a fresh typed view with the RUNNING shape and the legacy gates; the
+ * shape itself (offline, waiting, ready) still follows the session status. Null otherwise, also
+ * for a legacy connection, whose mark keeps animating the plain snake.
+ */
+internal fun chatStatusPhase(state: RemoteState, destination: RemoteSelection?, now: Long): ActivitySnapshot.Active? {
+    if (chatStatusShape(state) != ChatStatusShape.RUNNING || !sessionActivityAllowed(state, destination)) return null
+    return (typedSessionActivity(state, destination?.sessionId, now) as? TypedActivity.Live)?.snapshot
+}
 
 /** Whether a status mark animates; tests read it. */
 internal val ChatStatusLiveKey = SemanticsPropertyKey<Boolean>("ChatStatusLive")
@@ -72,6 +88,8 @@ internal fun ChatStatusMark(
     label: String,
     modifier: Modifier = Modifier,
     live: Boolean = false,
+    /** The typed phase of a live mark: its glyph and colour replace the plain snake. */
+    phase: ActivitySnapshot.Active? = null,
 ) {
     val animated = live && shape == ChatStatusShape.RUNNING
     val markModifier =
@@ -84,7 +102,9 @@ internal fun ChatStatusMark(
     if (animated) {
         // The size sits in markModifier, so the glyph never falls back to its own default size;
         // the label lives there too, so the glyph gets no description of its own.
-        StatusGlyph(StatusGlyphKind.SESSION_RUNNING, color, markModifier)
+        if (phase != null)
+            StatusGlyph(activityGlyphKind(phase.phase), activityPhaseColor(phase.phase, phase.thinkingLevel), markModifier)
+        else StatusGlyph(StatusGlyphKind.SESSION_RUNNING, color, markModifier)
         return
     }
     Canvas(markModifier) {

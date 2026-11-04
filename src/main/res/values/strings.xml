@@ -859,4 +859,15 @@
     <string name="remote_app_icon_black_white">Black · White</string>
     <string name="remote_app_icon_color_white">Pi colors · White</string>
     <string name="remote_app_icon_error">Could not change the app icon. Please try again.</string>
+    <string name="remote_chat_activity_thinking">Pi is thinking</string>
+    <string name="remote_chat_activity_writing">Pi is writing</string>
+    <plurals name="remote_chat_activity_more_tools">
+        <item quantity="one">+%d more</item>
+        <item quantity="other">+%d more</item>
+    </plurals>
+    <string name="remote_chat_activity_more_tools_many">+%1$d+ more</string>
+    <string name="remote_subagent_phase_pending">Starting</string>
+    <string name="remote_subagent_phase_thinking">Thinking</string>
+    <string name="remote_subagent_phase_writing">Writing</string>
+    <string name="remote_subagent_phase_tool">Running a tool</string>
 </resources>

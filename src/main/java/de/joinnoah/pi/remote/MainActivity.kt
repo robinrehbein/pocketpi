@@ -331,7 +331,11 @@ internal fun RemoteApp(
         onDispose {}
     }
     SystemBarsAppearance(dark)
-    CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+    CompositionLocalProvider(
+        LocalUriHandler provides uriHandler,
+        // The palette the scheme below actually draws, for the activity glyph colours.
+        LocalThemePalette provides effectiveThemePalette(preferences.theme, android.os.Build.VERSION.SDK_INT),
+    ) {
         MaterialTheme(
             colorScheme = colors,
             typography = RemoteTypography,
