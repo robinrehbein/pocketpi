@@ -3,6 +3,8 @@ package de.joinnoah.pi.remote
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.getAndUpdate
@@ -220,9 +222,25 @@ internal class HostsViewModel(repository: RemoteRepository) :
 internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey.Activity) :
     DestinationViewModel(repository, key)
 
-internal class ProjectsViewModel(repository: RemoteRepository, key: RemoteNavKey.Projects) :
-    DestinationViewModel(repository, key) {
+internal class ProjectsViewModel(
+    repository: RemoteRepository,
+    key: RemoteNavKey.Projects,
+    settings: SettingsRepository,
+) : DestinationViewModel(repository, key) {
+    /** The swipe actions of the featured chats' rows follow these, as the Sessions page's do. */
+    val preferences = settings.state
+
     fun unshare(projectId: String) = active { repository.unshareProject(projectId) }
+
+    /** Whether the close was handed to the repository, which still refuses what is no longer closable. */
+    fun closeChat(projectId: String, sessionId: String): Boolean {
+        var forwarded = false
+        active {
+            repository.closeProjectChat(projectId, sessionId)
+            forwarded = true
+        }
+        return forwarded
+    }
 
     fun queueAccept(projectId: String, ref: String, comment: String) =
         active { repository.queueAccept(projectId, ref, comment) }
@@ -392,7 +410,17 @@ internal class ChatViewModel(
     fun terminalViewNow(): TerminalView? = repository.state.value.let { if (matches(it) && !cleared) it.terminal else null }
     fun resizeTerminal(cols: Int, rows: Int) = repository.resizeTerminal(cols, rows)
 
-    fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
+    private val mutableChatActionUsage = MutableStateFlow(settings.chatActionUsage())
+    val chatActionUsage: StateFlow<Map<ChatAction, ActionUsage>> = mutableChatActionUsage.asStateFlow()
+
+    /** Re-read on route entry/resume, including uses recorded by another cached chat model. */
+    fun refreshChatActionUsage() { mutableChatActionUsage.value = settings.chatActionUsage() }
+
+    fun recordChatAction(action: ChatAction) {
+        if (action == ChatAction.CLOSE) return
+        settings.recordChatAction(action)
+        refreshChatActionUsage()
+    }
 
     /** A picked, dropped or pasted batch waiting for its chat; identity matters, so not a data class. */
     private class PickerResult(

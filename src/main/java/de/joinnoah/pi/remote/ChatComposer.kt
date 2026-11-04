@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,7 +14,6 @@ import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardTab
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.OpenInFull
@@ -390,6 +388,8 @@ internal fun ChatComposer(
     onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
+    /** Keeps floating composer chrome reachable while recognition is listening or finishing. */
+    onVoiceActiveChanged: (Boolean) -> Unit = {},
     focusRequester: FocusRequester? = null,
     /** A hardware keyboard is attached; only then do Enter and Ctrl+Enter send. */
     hardwareKeyboard: Boolean = false,
@@ -546,7 +546,6 @@ internal fun ChatComposer(
         val project = state.selection.projectId
         if (route != null && project != null && recordsPrompt(state)) predictions?.record(route, project, state.draft)
     }
-    var addMenu by remember { mutableStateOf(false) }
     val clipboardEmpty = stringResource(R.string.remote_drop_clipboard_empty)
     var preferredBusyAction by remember(state.selection.sessionId) {
         mutableStateOf(BusyComposerAction.Steer)
@@ -571,6 +570,10 @@ internal fun ChatComposer(
     val send: () -> Unit = if (childResume) onResumeChild else onSend
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
+    val voiceActive = voiceInput.state is VoiceInputState.Listening || voiceInput.state is VoiceInputState.Finishing
+    val voiceActivityCallback by rememberUpdatedState(onVoiceActiveChanged)
+    LaunchedEffect(voiceActive) { voiceActivityCallback(voiceActive) }
+    DisposableEffect(Unit) { onDispose { voiceActivityCallback(false) } }
     SideEffect {
         draft.onTyped = voiceInput::userEdited
         draft.canOfferLongPaste = onPasteAttachments != null
@@ -675,65 +678,19 @@ internal fun ChatComposer(
         state.importingAttachments || state.attachmentProgress != null
     val attachmentControl: @Composable () -> Unit = {
         if (ATTACHMENTS_CAPABILITY in state.capabilities)
-            Box {
-                ShortcutTooltip(stringResource(R.string.remote_add_attachment)) {
-                    IconButton(
-                        onClick = { addMenu = true },
-                        modifier = Modifier.size(48.dp),
-                        enabled =
-                            !state.loading &&
-                                !state.sending &&
-                                !state.importingAttachments &&
-                                state.attachments.size < 5,
-                    ) {
-                        FloatingSurface(
-                            Modifier.size(32.dp),
-                            shape = CircleShape,
-                            contentColor = LocalContentColor.current,
-                            blur = false,
-                        ) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))
-                            }
-                        }
-                    }
-                }
-                GlassDropdownMenu(addMenu, onDismissRequest = { addMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.remote_pick_photos)) },
-                        onClick = {
-                            addMenu = false
-                            onPickPhotos()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.remote_pick_files)) },
-                        onClick = {
-                            addMenu = false
-                            onPickFiles()
-                        },
-                    )
-                    if (onTakePhoto != null)
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.remote_take_photo)) },
-                            onClick = {
-                                addMenu = false
-                                onTakePhoto()
-                            },
-                            modifier = Modifier.testTag("takePhoto"),
-                        )
-                    if (onPasteAttachments != null)
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.remote_drop_paste_image)) },
-                            onClick = {
-                                addMenu = false
-                                val pasted = clipboardIntake(context)
-                                if (pasted != null) onPasteAttachments(pasted.attachments) {}
-                                else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.testTag("pasteAttachment"),
-                        )
-                }
+            key(state.selection) {
+                AttachmentMorphMenu(
+                    enabled = !state.loading && !state.sending && !state.importingAttachments &&
+                        state.attachments.size < 5,
+                    onPickPhotos = onPickPhotos,
+                    onPickFiles = onPickFiles,
+                    onTakePhoto = onTakePhoto,
+                    onPaste = if (onPasteAttachments == null) null else ({
+                        val pasted = clipboardIntake(context)
+                        if (pasted != null) onPasteAttachments(pasted.attachments) {}
+                        else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
+                    }),
+                )
             }
     }
     FloatingSurface(modifier = Modifier.fillMaxWidth()) {

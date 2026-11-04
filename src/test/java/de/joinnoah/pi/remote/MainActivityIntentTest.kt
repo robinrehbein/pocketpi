@@ -32,7 +32,7 @@ class MainActivityIntentTest {
             .putExtra(RemoteNotifications.EXTRA_ROUTE, route)
             .putExtra(RemoteNotifications.EXTRA_TARGET, session)
 
-    private fun exported() = Intent(context, MainActivity::class.java)
+    private fun exported() = Intent(context, RemoteActivity::class.java)
 
     private fun alias() = Intent().setComponent(ComponentName(context.packageName, LaunchIntents.ALIAS))
 
@@ -41,7 +41,7 @@ class MainActivityIntentTest {
 
     /** What MainActivity would open after starting with [intent], as it saves it for a restart. */
     private fun pendingAfterStart(intent: Intent): Pair<String, String>? {
-        val controller = Robolectric.buildActivity(MainActivity::class.java, intent).create()
+        val controller = Robolectric.buildActivity(RemoteActivity::class.java, intent).create()
         val state = Bundle()
         controller.saveInstanceState(state)
         val route = state.getString("pendingRouteId") ?: return null
@@ -75,7 +75,7 @@ class MainActivityIntentTest {
 
     @Test
     fun anAliasLaunchIntoTheRunningActivityOpensItsSession() {
-        val controller = Robolectric.buildActivity(MainActivity::class.java, exported()).create()
+        val controller = Robolectric.buildActivity(RemoteActivity::class.java, exported()).create()
         controller.newIntent(LaunchIntents.session(context, "route", "later"))
         val state = Bundle()
         controller.saveInstanceState(state)

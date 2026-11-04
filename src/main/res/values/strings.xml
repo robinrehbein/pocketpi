@@ -331,6 +331,9 @@
     <string name="remote_attachment_uploading">Uploading attachments…</string>
     <string name="remote_cancel_attachment_work">Cancel attachment transfer</string>
     <string name="remote_add_attachment">Add attachment</string>
+    <string name="remote_attachment_menu_close">Close attachment options</string>
+    <string name="remote_menu_expanded">Expanded</string>
+    <string name="remote_menu_collapsed">Collapsed</string>
     <string name="remote_pick_photos">Choose photos</string>
     <string name="remote_pick_files">Choose files</string>
     <string name="remote_attachment_expires">Available until %1$s</string>
@@ -850,4 +853,19 @@
     <string name="remote_files_mutation_create_draft">A kept draft exists for this file. It opens once the file is created.</string>
     <string name="remote_files_mutation_orphan_discard_title">Discard this draft?</string>
     <string name="remote_files_mutation_orphan_discard_text">This discards your unsaved edits of %1$s on this phone. The file is read once more first; if it exists again, the draft is kept.</string>
+    <string name="remote_app_icon">App icon</string>
+    <string name="remote_app_icon_help">Choose a background and symbol. Your launcher may take a moment to update or remove the old home screen icon. Themed icons follow your Android wallpaper settings instead.</string>
+    <string name="remote_app_icon_white_color">White · Pi colors</string>
+    <string name="remote_app_icon_white_black">White · Black</string>
+    <string name="remote_app_icon_black_white">Black · White</string>
+    <string name="remote_app_icon_color_white">Pi colors · White</string>
+    <string name="remote_app_icon_error">Could not change the app icon. Please try again.</string>
+    <string name="remote_render_diagnostics_title">Chat rendering diagnostics</string>
+    <string name="remote_render_diagnostics_help">Temporary tests, reset when the app restarts. Enable recording, return to the chat, and take a screenshot when the problem appears. Then tap the diagnostic button in the chat header. Only layout numbers and device information are recorded, never message text or screenshots. Test glass and animations separately.</string>
+    <string name="remote_render_record">Record recent chat layout</string>
+    <string name="remote_render_no_glass">Disable glass effects app-wide temporarily</string>
+    <string name="remote_render_no_motion">Disable chat row animations temporarily</string>
+    <string name="remote_render_capture">Capture chat layout report</string>
+    <string name="remote_render_snapshot_help">This report contains recent layout positions, device information and diagnostic options. It contains no message text, IDs or screenshots. Share it together with your separately taken screenshot. Opening this sheet or changing diagnostic options may redraw the chat.</string>
+    <string name="remote_render_share">Share layout report</string>
 </resources>

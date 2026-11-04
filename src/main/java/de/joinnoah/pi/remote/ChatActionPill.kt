@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +46,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 
 private fun ChatAction.icon(): ImageVector =
     when (this) {
@@ -103,8 +107,8 @@ internal fun ChatAction.label(): Int =
     }
 
 /**
- * The chat header pill: the first actions as buttons, the rest in a menu behind a chevron. The menu
- * names every entry next to its icon and opens under the chevron wherever the pill sits.
+ * A fixed 96dp shortcut and chevron. The popup hands off the painted surface without changing the
+ * header layout. Toolbar controls remain pinned to the trailing edge above the labelled menu.
  */
 @Composable
 internal fun ChatActionPill(
@@ -113,68 +117,61 @@ internal fun ChatActionPill(
     onAction: (ChatAction) -> Unit,
     /** A dot on the menu button: the menu holds an entry that has news, such as the status banners. */
     badge: Boolean = false,
+    usage: Map<ChatAction, ActionUsage> = emptyMap(),
+    sessionIdentity: Any? = null,
 ) {
-    FloatingSurface(shape = CircleShape, color = color) {
+    val actions = (layout.shown + layout.menu).distinct().sortedBy { it.ordinal }
+    // A menu selection is immediate even if its persistence callback updates usage later.
+    // Any subsequent store emission supersedes this optimistic selection, including palette uses.
+    var pending by remember(sessionIdentity) { mutableStateOf<Pair<ChatAction, Map<ChatAction, ActionUsage>>?>(null) }
+    LaunchedEffect(usage) { if (pending?.second != usage) pending = null }
+    val quick = pending?.takeIf { it.second == usage }?.first
+        ?.takeIf { it in actions && it != ChatAction.CLOSE }
+        ?: initialChatQuickAction(actions.toSet(), usage)
+    val state = rememberMorphMenuState()
+    LaunchedEffect(sessionIdentity) { state.dismiss() }
+    fun select(action: ChatAction) {
+        if (action != ChatAction.CLOSE) pending = action to usage
+        state.dismiss()
+        onAction(action)
+    }
+    val controls: @Composable () -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            for (action in layout.shown)
-                ShortcutTooltip(stringResource(action.label()), action.shortcut()) {
-                    IconButton(
-                        onClick = { onAction(action) },
-                        modifier = Modifier.size(48.dp).testTag("chatAction_${action.name.lowercase()}"),
-                    ) {
-                        Icon(action.icon(), stringResource(action.label()))
-                    }
+            if (quick != null) ShortcutTooltip(stringResource(quick.label()), quick.shortcut()) {
+                IconButton(onClick = { if (state.expanded || !state.anchorHidden) select(quick) }, modifier = Modifier.size(48.dp).testTag("chatAction_${quick.name.lowercase()}")) {
+                    Icon(quick.icon(), stringResource(quick.label()))
                 }
-            if (layout.menu.isNotEmpty()) {
-                var open by remember { mutableStateOf(false) }
-                Box {
-                    val moreLabel =
-                        stringResource(
-                            when {
-                                open -> R.string.remote_chat_actions_close
-                                badge -> R.string.remote_chat_actions_more_status
-                                else -> R.string.remote_chat_actions_more
-                            }
-                        )
-                    ShortcutTooltip(moreLabel) {
-                        IconButton(
-                            onClick = { open = !open },
-                            modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
-                        ) {
-                            if (badge && !open)
-                                BadgedBox(badge = { Badge() }) { Icon(Icons.Default.ExpandMore, moreLabel) }
-                            else Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, moreLabel)
-                        }
-                    }
-                    ChatActionMenu(
-                        layout.menu,
-                        open = open,
-                        badge = badge,
-                        onDismiss = { open = false },
-                        onAction = { action ->
-                            open = false
-                            onAction(action)
-                        },
-                    )
+            }
+            val label = stringResource(if (state.expanded) R.string.remote_chat_actions_close else if (badge) R.string.remote_chat_actions_more_status else R.string.remote_chat_actions_more)
+            val description = stringResource(if (state.expanded) R.string.remote_menu_expanded else R.string.remote_menu_collapsed)
+            ShortcutTooltip(label) {
+                IconButton(onClick = { state.expanded = !state.expanded }, modifier = Modifier.size(48.dp).testTag("chatActionsMore").semantics { stateDescription = description }) {
+                    if (badge && !state.expanded) BadgedBox(badge = { Badge() }) { Icon(Icons.Default.ExpandMore, label) }
+                    else Icon(if (state.expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, label)
                 }
+            }
+        }
+    }
+    // Keep the popup's zero-size host out of the caller's spaced Row child list.
+    Box {
+        FloatingSurface(Modifier.morphMenuAnchor(state), shape = CircleShape, color = color) { controls() }
+        MorphingMenu(state, MorphMenuDirection.DownFromEnd, modifier = Modifier.testTag("chatActionsMenu"), color = color, controls = controls) {
+            ChatActionMenu(actions, badge, enabled = state.contentInteractive) { action ->
+                if (state.contentInteractive) select(action)
             }
         }
     }
 }
 
-/**
- * The pill's menu: one labelled row per action, in [ChatAction] order. Close, the only destructive
- * entry, sits apart at the end in the error colour; the status entry carries the chevron's [badge].
- */
+/** Every available action with a leading icon, and Close separated at the end. */
 @Composable
 private fun ChatActionMenu(
     actions: List<ChatAction>,
-    open: Boolean,
     badge: Boolean,
-    onDismiss: () -> Unit,
+    enabled: Boolean,
     onAction: (ChatAction) -> Unit,
 ) {
-    GlassDropdownMenu(expanded = open, onDismissRequest = onDismiss, modifier = Modifier.testTag("chatActionsMenu")) {
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth()) {
         for (action in actions) {
             val destructive = action == ChatAction.CLOSE
             if (destructive && actions.size > 1) HorizontalDivider()
@@ -182,12 +179,15 @@ private fun ChatActionMenu(
             DropdownMenuItem(
                 text = { Text(stringResource(action.label())) },
                 onClick = { onAction(action) },
-                leadingIcon = { Icon(action.icon(), contentDescription = null) },
-                trailingIcon = if (badge && action == ChatAction.STATUS) ({ Badge() }) else null,
+                enabled = enabled,
+                leadingIcon = {
+                    if (badge && action == ChatAction.STATUS) BadgedBox(badge = { Badge() }) { Icon(action.icon(), null) }
+                    else Icon(action.icon(), null)
+                },
                 colors =
                     if (destructive) MenuDefaults.itemColors(textColor = error, leadingIconColor = error)
                     else MenuDefaults.itemColors(),
-                modifier = Modifier.testTag("chatActionMenu_${action.name.lowercase()}"),
+                modifier = Modifier.fillMaxWidth().testTag("chatActionMenu_${action.name.lowercase()}"),
             )
         }
     }

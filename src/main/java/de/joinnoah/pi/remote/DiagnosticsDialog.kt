@@ -39,6 +39,7 @@ internal fun DiagnosticsDialog(onDismiss: () -> Unit) {
         ) {
             SheetHeader(stringResource(R.string.remote_diagnostics_title))
             SheetSection { DiagnosticsReport(report, Modifier.padding(16.dp)) }
+            SheetSection { Column(Modifier.padding(16.dp)) { ChatRenderingDiagnosticsControls() } }
             SheetPrimaryButton(
                 onClick = { copy(Diagnostics.export()) },
                 modifier = Modifier.testTag("copyDiagnostics"),

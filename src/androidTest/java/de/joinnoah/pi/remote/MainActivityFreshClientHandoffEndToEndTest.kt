@@ -113,9 +113,9 @@ class MainActivityFreshClientHandoffEndToEndTest {
         val repository = app.repository
         val lifecycle = fixture.getJSONObject("nativeLifecycle")
         val launch = if (phase == "prepare") LaunchIntents.session(app, route, session)
-            else Intent(app, MainActivity::class.java)
+            else Intent(app, RemoteActivity::class.java)
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        ActivityScenario.launch<MainActivity>(launch).use {
+        ActivityScenario.launch<RemoteActivity>(launch).use {
             if (phase == "prepare") {
                 waitFor("session open") { repository.state.value.selection == RemoteSelection(route, project, session) && repository.state.value.connected && !repository.state.value.loading }
                 tag("composerField")

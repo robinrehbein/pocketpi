@@ -2,6 +2,16 @@ package de.joinnoah.pi.remote
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -62,6 +72,8 @@ class ChatActionPillUiTest {
 
         menuItem(ChatAction.REFRESH).performClick()
         assertEquals(listOf(ChatAction.REFRESH), selected)
+        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_changes").assertDoesNotExist()
         menuItem(ChatAction.RENAME).assertDoesNotExist()
         compose.onNodeWithTag("chatActionsMore").performClick()
         menuItem(ChatAction.SETTINGS).assertIsDisplayed()
@@ -71,7 +83,7 @@ class ChatActionPillUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
-    fun menuOpensBelowTheChevronInAFixedOrder() {
+    fun menuMorphsFromTheChevronEdgeInAFixedOrder() {
         val offered = ChatAction.entries.toSet() - ChatAction.STATUS - ChatAction.CLOSE
         val layout = chatActionLayout(DEFAULT_CHAT_ACTIONS, offered).withClose()
         // Export, Tree, Artifacts and Reload join the menu, in [ChatAction] order with Close last.
@@ -84,11 +96,104 @@ class ChatActionPillUiTest {
         compose.onNodeWithTag("chatActionsMore").performClick()
         val tops = layout.menu.map { action -> menuItem(action).fetchSemanticsNode().boundsInWindow.top }
         assertEquals(tops.sorted(), tops)
-        // The menu opens under the chevron, not at an offset of its own.
-        val chevron = compose.onNodeWithTag("chatActionsMore").fetchSemanticsNode()
-        val chevronBottom = chevron.positionOnScreen.y + chevron.size.height
-        val menuTop = menuItem(layout.menu.first()).fetchSemanticsNode().positionOnScreen.y
-        assertTrue("menu starts at $menuTop, chevron ends at $chevronBottom", menuTop >= chevronBottom)
+        // The full menu also contains the action that was visible as the shortcut.
+        menuItem(ChatAction.CHANGES).assertIsDisplayed()
+    }
+
+    @Test
+    fun externalUsageUpdateSupersedesTheOptimisticMenuSelection() {
+        val usage = mutableStateOf(mapOf(ChatAction.CHANGES to ActionUsage(100.0, 10)))
+        compose.setContent {
+            MaterialTheme {
+                ChatActionPill(
+                    ChatActionLayout(listOf(ChatAction.CHANGES), listOf(ChatAction.FILES, ChatAction.REFRESH)),
+                    Color.DarkGray, {}, usage = usage.value,
+                )
+            }
+        }
+        compose.onNodeWithTag("chatAction_changes").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        menuItem(ChatAction.REFRESH).performClick()
+        // No store callback: the local selection still updates immediately.
+        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.runOnIdle {
+            usage.value = usage.value + (ChatAction.FILES to ActionUsage(1.0, 20))
+        }
+        compose.onNodeWithTag("chatAction_files").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_refresh").assertDoesNotExist()
+    }
+
+    @Test
+    fun callbacksAlreadyDispatchedDuringExitCannotRunAnActionTwice() {
+        val selected = mutableListOf<ChatAction>()
+        compose.setContent {
+            MaterialTheme {
+                ChatActionPill(ChatActionLayout(listOf(ChatAction.CHANGES), listOf(ChatAction.REFRESH)), Color.DarkGray, selected::add)
+            }
+        }
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
+        val rowClick = menuItem(ChatAction.REFRESH).fetchSemanticsNode().config[SemanticsActions.OnClick].action!!
+        val quickClick = compose.onNodeWithTag("chatAction_changes").fetchSemanticsNode().config[SemanticsActions.OnClick].action!!
+        compose.mainClock.autoAdvance = false
+        compose.runOnIdle {
+            rowClick()
+            // Simulate callbacks already dispatched before pointer/semantics removal recomposes.
+            rowClick()
+            quickClick()
+            assertEquals(listOf(ChatAction.REFRESH), selected)
+        }
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatAction_refresh").performClick()
+        assertEquals(listOf(ChatAction.REFRESH, ChatAction.REFRESH), selected)
+    }
+
+    @Test
+    fun popupHostNeverAddsASpacedRowChildDuringTheTransition() {
+        compose.setContent {
+            MaterialTheme {
+                Row(Modifier.testTag("spacedHeader"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Before", Modifier.testTag("beforePill"))
+                    ChatActionPill(ChatActionLayout(listOf(ChatAction.CHANGES), listOf(ChatAction.REFRESH)), Color.DarkGray, {})
+                    Text("After", Modifier.testTag("afterPill"))
+                }
+            }
+        }
+        val tags = listOf("spacedHeader", "beforePill", "afterPill")
+        fun bounds() = tags.map { compose.onNodeWithTag(it).getUnclippedBoundsInRoot() }
+        val closed = bounds()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.mainClock.advanceTimeBy(80)
+        assertEquals(closed, bounds())
+        compose.mainClock.advanceTimeBy(400)
+        menuItem(ChatAction.REFRESH).assertIsDisplayed()
+        assertEquals(closed, bounds())
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.mainClock.advanceTimeBy(80)
+        assertEquals(closed, bounds())
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertEquals(closed, bounds())
+    }
+
+    @Test
+    fun openingAndClosingDoesNotChangeTheHeaderLayoutSlot() {
+        compose.setContent {
+            MaterialTheme {
+                Column {
+                    ChatActionPill(chatActionLayout(DEFAULT_CHAT_ACTIONS, ChatAction.entries.toSet()).withClose(), Color.DarkGray, {})
+                    Text("Content below header", Modifier.testTag("belowHeader"))
+                }
+            }
+        }
+        val before = compose.onNodeWithTag("belowHeader").getUnclippedBoundsInRoot()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        menuItem(ChatAction.CHANGES).assertIsDisplayed()
+        assertEquals(before, compose.onNodeWithTag("belowHeader").getUnclippedBoundsInRoot())
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        assertEquals(before, compose.onNodeWithTag("belowHeader").getUnclippedBoundsInRoot())
     }
 
     @Test
@@ -108,5 +213,7 @@ class ChatActionPillUiTest {
         compose.onNodeWithText(label(R.string.remote_session_close)).assertIsDisplayed()
         menuItem(ChatAction.CLOSE).performClick()
         assertEquals(listOf(ChatAction.CLOSE), selected)
+        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_close").assertDoesNotExist()
     }
 }

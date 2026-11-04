@@ -312,16 +312,32 @@ class ChatActionsUiTest {
     }
 
     @Test
-    fun storedUsageDoesNotMoveActionsIntoThePill() {
-        val now = System.currentTimeMillis()
-        settings.usage[ChatAction.SETTINGS] = ActionUsage(500.0, now)
-        settings.usage[ChatAction.FILES] = ActionUsage(400.0, now)
+    fun closedPillUsesMostRecentAvailableStoredActionNotMostFrequent() {
+        settings.usage[ChatAction.SETTINGS] = ActionUsage(500.0, 10)
+        settings.usage[ChatAction.FILES] = ActionUsage(1.0, 20)
+        settings.usage[ChatAction.JOBS] = ActionUsage(1.0, 30)
+        settings.usage[ChatAction.CLOSE] = ActionUsage(1.0, 40)
         repository.state.value =
             repository.state.value.copy(capabilities = repository.state.value.capabilities + GIT_CAPABILITY + FILES_CAPABILITY)
         render()
-        compose.onNodeWithTag("chatAction_changes").assertIsDisplayed()
-        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_changes").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_refresh").assertDoesNotExist()
         compose.onNodeWithTag("chatAction_settings").assertDoesNotExist()
-        compose.onNodeWithTag("chatAction_files").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_files").assertIsDisplayed()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(capabilities = repository.state.value.capabilities - FILES_CAPABILITY)
+        }
+        compose.onNodeWithTag("chatAction_settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun selectedShortcutSurvivesLeavingAndReenteringTheChat() {
+        render()
+        runFromMenu(ChatAction.SETTINGS)
+        compose.onNodeWithTag("chatActionsMore").assertDoesNotExist()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatAction_settings").assertIsDisplayed()
+        assertEquals(listOf(ChatAction.SETTINGS), settings.recordedActions)
     }
 }

@@ -27,8 +27,21 @@ class StatusGlyphTest {
     }
 
     @Test
+    fun compactionUsesPiCoreBrailleFramesEvery80Milliseconds() {
+        val frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".map { it.code - 0x2800 }
+        frames.forEachIndexed { index, cells ->
+            assertEquals(cells, compactionDotCells(index))
+            assertEquals(index, statusGlyphFrame(StatusGlyphKind.COMPACTING, index * 80L))
+            assertEquals(index, statusGlyphFrame(StatusGlyphKind.COMPACTING, index * 80L + 79))
+        }
+        assertEquals(0, statusGlyphFrame(StatusGlyphKind.COMPACTING, 800))
+        assertEquals(0, statusGlyphFrame(StatusGlyphKind.COMPACTING, -1))
+        assertEquals(frames.first(), compactionDotCells(10))
+    }
+
+    @Test
     fun staticGlyphsNeverAdvance() {
-        for (kind in StatusGlyphKind.entries - setOf(StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING, StatusGlyphKind.SESSION_RUNNING)) {
+        for (kind in StatusGlyphKind.entries - setOf(StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING, StatusGlyphKind.SESSION_RUNNING, StatusGlyphKind.COMPACTING)) {
             assertEquals(0, statusGlyphFrame(kind, 12345))
         }
     }

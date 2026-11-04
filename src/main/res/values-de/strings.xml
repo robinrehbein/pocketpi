@@ -331,6 +331,9 @@
     <string name="remote_attachment_uploading">Anhänge werden hochgeladen…</string>
     <string name="remote_cancel_attachment_work">Anhangübertragung abbrechen</string>
     <string name="remote_add_attachment">Anhang hinzufügen</string>
+    <string name="remote_attachment_menu_close">Anhang-Auswahl schließen</string>
+    <string name="remote_menu_expanded">Ausgeklappt</string>
+    <string name="remote_menu_collapsed">Eingeklappt</string>
     <string name="remote_pick_photos">Fotos auswählen</string>
     <string name="remote_pick_files">Dateien auswählen</string>
     <string name="remote_attachment_expires">Verfügbar bis %1$s</string>
@@ -849,4 +852,19 @@
     <string name="remote_files_mutation_create_draft">Für diese Datei gibt es einen aufbewahrten Entwurf. Er öffnet sich, sobald die Datei angelegt ist.</string>
     <string name="remote_files_mutation_orphan_discard_title">Diesen Entwurf verwerfen?</string>
     <string name="remote_files_mutation_orphan_discard_text">Damit werden deine ungespeicherten Änderungen an %1$s auf diesem Gerät verworfen. Die Datei wird vorher noch einmal gelesen; gibt es sie wieder, bleibt der Entwurf erhalten.</string>
+    <string name="remote_app_icon">App-Icon</string>
+    <string name="remote_app_icon_help">Wähle Hintergrund und Symbol. Dein Launcher zeigt die Änderung möglicherweise verzögert an oder entfernt das alte Icon vom Startbildschirm. Bei aktivierten Design-Icons gelten stattdessen deine Android-Hintergrundeinstellungen.</string>
+    <string name="remote_app_icon_white_color">Weiß · Pi-Farben</string>
+    <string name="remote_app_icon_white_black">Weiß · Schwarz</string>
+    <string name="remote_app_icon_black_white">Schwarz · Weiß</string>
+    <string name="remote_app_icon_color_white">Pi-Farben · Weiß</string>
+    <string name="remote_app_icon_error">Das App-Icon konnte nicht geändert werden. Bitte versuche es erneut.</string>
+    <string name="remote_render_diagnostics_title">Chat-Darstellung untersuchen</string>
+    <string name="remote_render_diagnostics_help">Temporäre Tests; sie werden beim Neustart der App zurückgesetzt. Aktiviere die Aufzeichnung, gehe zurück zum Chat und mache beim Auftreten einen Screenshot. Tippe danach auf den Diagnoseknopf im Chat-Kopf. Es werden nur Layoutzahlen und Geräteinformationen erfasst, niemals Nachrichtentexte oder Screenshots. Teste Glas und Animationen getrennt.</string>
+    <string name="remote_render_record">Letzte Chat-Layoutzustände aufzeichnen</string>
+    <string name="remote_render_no_glass">Glaseffekte appweit vorübergehend ausschalten</string>
+    <string name="remote_render_no_motion">Chat-Zeilenanimationen vorübergehend ausschalten</string>
+    <string name="remote_render_capture">Chat-Layoutbericht erfassen</string>
+    <string name="remote_render_snapshot_help">Dieser Bericht enthält letzte Layoutpositionen, Geräteinformationen und Diagnoseoptionen. Er enthält keine Nachrichtentexte, IDs oder Screenshots. Teile ihn zusammen mit deinem separat aufgenommenen Screenshot. Das Öffnen dieser Ansicht oder das Ändern der Diagnoseoptionen kann den Chat neu zeichnen.</string>
+    <string name="remote_render_share">Layoutbericht teilen</string>
 </resources>

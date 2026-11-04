@@ -142,7 +142,7 @@ class MainActivityLiveRunEndToEndTest {
         }
         val settings = LiveRunSettings(app)
         val originalEnabled = settings.enabled.value
-        var scenario: ActivityScenario<MainActivity>? = null
+        var scenario: ActivityScenario<RemoteActivity>? = null
         var completed = false
         try {
             saveProof("bootstrap")

@@ -82,6 +82,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -273,9 +275,11 @@ internal fun RemoteScreen(
     val theme = preferences?.theme ?: ThemePalette.BRAND
     val chatPreferences =
         (model as? ChatViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
+    // The Projects page reads them for its rows' swipe actions only.
     val sessionPreferences =
-        (model as? SessionsViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
-    val hideOfflineSessions = sessionPreferences?.hideOfflineSessions ?: false
+        ((model as? SessionsViewModel)?.preferences ?: (model as? ProjectsViewModel)?.preferences)
+            ?.collectAsStateWithLifecycle()?.value
+    val hideOfflineSessions = key is RemoteNavKey.Sessions && sessionPreferences?.hideOfflineSessions == true
     // Two-pane roles: the session list on the left, the chat on the right. Both null/false in the
     // phone layout, which then renders exactly as before.
     val paneLayout = LocalPaneLayout.current
@@ -371,6 +375,9 @@ internal fun RemoteScreen(
         sessionActivityLine(state, presentation.items, chatKey?.selection())
     }
     val chatModel = model as? ChatViewModel
+    val chatActionUsage = chatModel?.chatActionUsage?.collectAsStateWithLifecycle()?.value.orEmpty()
+    LaunchedEffect(chatModel) { chatModel?.refreshChatActionUsage() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { chatModel?.refreshChatActionUsage() }
     val commitReview = chatModel?.commitReview?.state?.collectAsStateWithLifecycle()?.value
     val pushReview = chatModel?.pushReview?.state?.collectAsStateWithLifecycle()?.value
     val pullRequestReview = chatModel?.pullRequestReview?.state?.collectAsStateWithLifecycle()?.value
@@ -513,6 +520,14 @@ internal fun RemoteScreen(
         mutableStateOf(savedViewport?.following == false)
     }
     val listState = rememberLazyListState()
+    val renderOptions by ChatRenderingDiagnostics.options.collectAsStateWithLifecycle()
+    val renderRecorder = remember(key) { ChatRenderRecorder() }
+    DisposableEffect(renderRecorder) { onDispose { renderRecorder.clear() } }
+    var renderSnapshot by remember(key) { mutableStateOf<String?>(null) }
+    LaunchedEffect(renderOptions) { renderRecorder.clear() }
+    renderSnapshot?.let { snapshot ->
+        ChatRenderingSnapshotDialog(snapshot) { renderSnapshot = null }
+    }
     // The large page title leaves the list for the header's back pill once it scrolls under the header.
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val titleInPill by remember(listState) { derivedStateOf { pageTitleScrolledAway(listState.layoutInfo, headerSize.height) } }
@@ -533,6 +548,12 @@ internal fun RemoteScreen(
         sessionQuery = ""
     }
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
+    var composerHidden by remember(key) { mutableStateOf(false) }
+    var composerDragging by remember(key) { mutableStateOf(false) }
+    var composerDragOffset by remember(key) { mutableStateOf(0f) }
+    var composerRestingTop by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
+    var composerFocused by remember(key) { mutableStateOf(false) }
+    var composerVoiceActive by remember(key) { mutableStateOf(false) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
     // The conversation list's after-padding: its last item can scroll to just above the composer.
     val conversationEndPadding = composerHeight + 24.dp
@@ -559,12 +580,15 @@ internal fun RemoteScreen(
     val touchExploring = rememberTouchExploring()
     // Keyed on compactState too: a new layout or keyboard state makes a new one, which the old
     // connection would no longer read.
+    var historyScrollRevision by remember(key) { mutableLongStateOf(0L) }
+    var scrollingProgrammatically by remember { mutableStateOf(false) }
     val headerScroll = remember(listState, compactState) {
         HeaderHideConnection(
             position = { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset },
             active = { compactState.value && !touchExploring.value },
             hidden = { headerHidden },
             setHidden = { headerHidden = it },
+            onUserScroll = { if (!scrollingProgrammatically) historyScrollRevision++ },
         )
     }
     LaunchedEffect(compact, touchExploring.value) { if (!compact || touchExploring.value) headerHidden = false }
@@ -574,8 +598,50 @@ internal fun RemoteScreen(
         if (compact && headerHidden) -(headerSize.height + headerTopInset) else 0,
         label = "headerLift",
     )
+    // Keep the measured composer and list padding fixed; only its drawing moves.
+    val composerTravel by rememberUpdatedState(composerSize.height + WindowInsets.safeDrawing.getBottom(density))
+    val composerHideAllowed: () -> Boolean = {
+        isChat && !wideLayout && !touchExploring.value && imeInsets.getBottom(density) == 0 &&
+            !composerFocused && !composerVoiceActive && state.questions.isEmpty() && state.error == null &&
+            composerDraft?.text.isNullOrBlank() && state.draft.isBlank() && state.quote == null &&
+            state.attachments.isEmpty() && !state.importingAttachments && !state.sending &&
+            !state.uncertain && state.connected && state.preparedText.isNullOrEmpty() &&
+            state.bash == null && commitReview == null && pushReview == null && pullRequestReview == null
+    }
+    val currentComposerHideAllowed by rememberUpdatedState(composerHideAllowed)
+    val composerSettledLift = animateIntAsState(
+        when {
+            composerDragging -> if (composerHideAllowed()) composerDragOffset.toInt() else 0
+            composerHidden -> if (composerHideAllowed()) composerTravel else 0
+            else -> 0
+        },
+        animationSpec = if (composerDragging) androidx.compose.animation.core.snap() else androidx.compose.animation.core.spring(),
+        label = "composerLift",
+    )
+    val composerLift: () -> Float = {
+        if (!composerHideAllowed()) 0f else if (composerDragging) composerDragOffset else composerSettledLift.value.toFloat()
+    }
+    // Observe draft/focus/voice gates outside composition: typing must not recompose the chat.
+    LaunchedEffect(key) {
+        snapshotFlow { currentComposerHideAllowed() }.collect { allowed ->
+            if (!allowed) {
+                composerHidden = false
+                composerDragging = false
+                composerDragOffset = 0f
+            }
+        }
+    }
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
+    LaunchedEffect(key, listState) {
+        snapshotFlow { autoFollow || !listState.canScrollForward }.collect { atBottom ->
+            if (atBottom) {
+                composerHidden = false
+                composerDragging = false
+                composerDragOffset = 0f
+            }
+        }
+    }
     // The chat counts as read once it shows its end; a newer update after that is unread again.
     // The chat is only the selected one once the repository confirmed it; a chat opened from a
     // list, a notification or a restore first shows cached content with an empty selection.
@@ -597,7 +663,6 @@ internal fun RemoteScreen(
             onPauseOrDispose { sessionMarkStore.chatHidden(chatKey.routeId, chatKey.sessionId) }
         }
     var tuiInfoOpen by remember { mutableStateOf(false) }
-    var scrollingProgrammatically by remember { mutableStateOf(false) }
     var waitingForOutput by remember { mutableStateOf(false) }
     LaunchedEffect(sessionActive, state.status, state.questions, conversation) {
         waitingForOutput = false
@@ -634,6 +699,20 @@ internal fun RemoteScreen(
         }
     }
     val leadingItems = remember { LeadingItems() }
+    AutoLoadChatHistory(
+        chat = chatKey,
+        list = listState,
+        cursor = state.nextCursor,
+        enabled = chatSelected && state.connected && !state.loading &&
+            !viewportRestorePending && !onlyErrorsShown,
+        programmatic = { scrollingProgrammatically },
+        messageKeys = remember(shownItems, pendingKeys) { shownItems.map(pendingKeys::keyOf) },
+        messageStartIndex = { leadingItems.count },
+        userScrollRevision = { historyScrollRevision },
+        load = model::older,
+        stopFollowing = { autoFollow = false },
+        setProgrammatic = { scrollingProgrammatically = it },
+    )
     LaunchedEffect(key, state.loading, shownItems, viewportHeight, composerHeight, headerHeight,
         viewportRestorePending, onlyErrorsShown, savedViewport) {
         val position = savedViewport ?: return@LaunchedEffect
@@ -1188,7 +1267,7 @@ internal fun RemoteScreen(
     val firstRun = key == RemoteNavKey.Hosts && state.hosts.isEmpty() && state.hostsLoaded
     var removing by remember { mutableStateOf<PairedHost?>(null) }
     var unsharing by remember(key) { mutableStateOf<Pair<String, String>?>(null) }
-    var closing by remember { mutableStateOf<SessionListItem?>(null) }
+    var closing by remember { mutableStateOf<ClosingSession?>(null) }
     var filterSheet by rememberSaveable { mutableStateOf(false) }
     var renameSessionId by rememberSaveable(key) { mutableStateOf<String?>(null) }
     var renameDraft by
@@ -1313,7 +1392,7 @@ internal fun RemoteScreen(
                 else showFeedback(artifactsUnavailableNotice(state))
             LocalCommand.NAME -> {
                 val session = state.session ?: return
-                if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
+                if (argument.isEmpty()) startRename(session.text("id"), displayTitle(session.text("title")).text)
                 else model.renameSession(session.text("id"), argument)
             }
         }
@@ -1362,7 +1441,7 @@ internal fun RemoteScreen(
             ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.RENAME ->
-                state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
+                state.session?.let { session -> startRename(session.text("id"), displayTitle(session.text("title")).text) }
             ChatAction.NEW_SESSION -> newSessionOpen = true
             ChatAction.STATUS -> statusSheet = true
             ChatAction.REFRESH -> model.refresh()
@@ -1548,7 +1627,7 @@ internal fun RemoteScreen(
                 ).let { if (withHistory) it.withHistory() else it }
                     .let { if (closableSession != null) it.withClose() else it }
             fun runAction(action: ChatAction) {
-                if (action == ChatAction.CLOSE) closing = closableSession
+                if (action == ChatAction.CLOSE) closing = closableSession?.let { ClosingSession(it) }
                 else runChatAction(action)
             }
             // Not ::runAction: references to one local function compare equal whatever they captured,
@@ -1567,7 +1646,14 @@ internal fun RemoteScreen(
                     if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
                         Text(stringResource(R.string.remote_terminal_title))
                     }
-                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = { currentRunAction(it) })
+                    if (renderOptions.recording) IconButton(
+                        onClick = {
+                            renderSnapshot = renderRecorder.export(Build.MODEL, Build.VERSION.SDK_INT, BuildConfig.VERSION_CODE,
+                                density.density, density.fontScale, renderOptions)
+                        },
+                        modifier = Modifier.size(48.dp).testTag("captureChatRender"),
+                    ) { Icon(Icons.Outlined.Info, stringResource(R.string.remote_render_capture)) }
+                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, usage = chatActionUsage, sessionIdentity = key, onAction = { currentRunAction(it) })
                 }
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1577,8 +1663,8 @@ internal fun RemoteScreen(
                 // Compact, the banners' entry joins the menu while they show; see the status sheet.
                 val actionLayout = actionLayout(!standaloneHistory).let { if (compact) it.withStatus(bannersShown) else it }
                 val actionsWidth =
-                    48.dp * (actionLayout.shown.size + if (actionLayout.menu.isEmpty()) 0 else 1) +
-                        if (standaloneHistory) 56.dp else 0.dp
+                    96.dp +
+                        (if (standaloneHistory) 56.dp else 0.dp) + (if (renderOptions.recording) 56.dp else 0.dp)
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
@@ -1635,6 +1721,7 @@ internal fun RemoteScreen(
                                     // Only the title opens the switcher, so the TUI info button stays a target of its own.
                                     Text(
                                         state.session?.optionalText("title")?.takeIf(String::isNotBlank)
+                                            ?.let { rawSessionTitleLabel(it) }
                                             ?: title,
                                         modifier =
                                             Modifier.widthIn(max = maxTitleWidth)
@@ -2131,7 +2218,7 @@ internal fun RemoteScreen(
             }
             Shortcut.RENAME -> {
                 val session = state.session?.takeIf { canRenameSession(state) } ?: return false
-                startRename(session.text("id"), session.text("title"))
+                startRename(session.text("id"), displayTitle(session.text("title")).text)
                 true
             }
             Shortcut.FORK -> {
@@ -2444,6 +2531,27 @@ internal fun RemoteScreen(
                 Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()
                     .onSizeChanged { chatHeight = with(density) { it.height.toDp() } }
                     .then(chatDrop)
+                    .observeComposerDrag(
+                        key = key,
+                        allowed = composerHideAllowed,
+                        restingTop = { composerRestingTop },
+                        travel = { composerTravel },
+                        hidden = { composerHidden },
+                        dragging = { composerDragging },
+                        onDrag = { progress ->
+                            composerDragging = true
+                            composerDragOffset = progress
+                        },
+                        onReveal = {
+                            composerHidden = false
+                            composerDragging = false
+                            composerDragOffset = 0f
+                        },
+                        onSettle = {
+                            composerHidden = composerHideAllowed() && composerShouldSettleHidden(composerDragOffset, composerTravel.toFloat())
+                            composerDragging = false
+                        },
+                    )
             // A list page pads its list's bottom instead (see listBottomInset), so the list scrolls on
             // under the floating bottom pill.
             else Modifier.fillMaxSize().padding(insets.withoutBottom()).consumeWindowInsets(insets)
@@ -2469,7 +2577,10 @@ internal fun RemoteScreen(
         val list: @Composable () -> Unit = {
             LazyColumn(
                 if (key is RemoteNavKey.Chat)
-                    Modifier.fillMaxSize().testTag("conversationList").glassSource().then(underlay)
+                    Modifier.fillMaxSize().testTag("conversationList")
+                        .chatRenderFrames(renderRecorder, renderOptions.recording, { listState.layoutInfo }, { autoFollow }, thinkingDisplay == ThinkingDisplay.TEXT,
+                            { listState.isScrollInProgress }, { listState.canScrollForward })
+                        .glassSource().then(underlay)
                         .nestedScroll(headerScroll)
                         .onFocusChanged { conversationFocused = it.hasFocus }
                 else Modifier.fillMaxSize().then(listRegion).glassSource(),
@@ -2847,6 +2958,7 @@ internal fun RemoteScreen(
                             }
                         }
                     }
+                    item(key = "settings-app-icon") { AppIconSettingsSection() }
                     // Only the wide layout has widths and columns to reset.
                     twoPane?.let { item(key = "settings-layout") { LayoutSettingsSection(it) } }
                     item(key = SETTINGS_GROUP_KEY_PREFIX + "chat") {
@@ -3041,11 +3153,14 @@ internal fun RemoteScreen(
                             // the ready ones, then the running ones. Then the shared projects, then the recent
                             // chats. Beside an open project the chats hide, as before.
                             // Every featured waiting chat shows (the featured chats are bounded, see
-                            // sortedProjectChats); ready, running and recent chats are capped at three each until their "Show all" (see quickChats).
+                            // sortedProjectChats); ready, running and recent chats are capped at three each until
+                            // their "Show all" (see quickChats).
+                            // Main sessions only: a busy subagent shows as the session it works for.
+                            val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
+                            val closableIds = closableProjectChatIds(state, mainChats)
                             val quick =
                                 quickChats(
-                                    // Main sessions only: a busy subagent shows as the session it works for.
-                                    if (projectSelected) emptyList() else mainSessionChats(state.projectChats),
+                                    mainChats,
                                     state.connected,
                                     showRunningAll = runningShowAll,
                                     showRecentAll = recentShowAll,
@@ -3057,6 +3172,23 @@ internal fun RemoteScreen(
                             val runningChats = quick.running
                             val recentChats = quick.recent
                             val homeTicketRef: (String) -> String? = { ticketRefForSession(state, it) }
+                            // Every group may pass it: only live, finished, top-level chats the host
+                            // runs pass closableProjectChat.
+                            val chatRowContext =
+                                ProjectChatRowContext(
+                                    marks = routeMarks,
+                                    connected = state.connected,
+                                    ticketRef = homeTicketRef,
+                                    now = projectsNow,
+                                    closable = { (it.projectId to it.session.text("id")) in closableIds },
+                                    swipe =
+                                        (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
+                                            (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
+                                    onOpen = { chat ->
+                                        navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
+                                    },
+                                    onClose = { chat, item -> closing = ClosingSession(item, chat.projectId) },
+                                )
                             // The result of the last accept, which may have left the "To accept" section already.
                             if (!projectSelected && canUseTickets(state) && state.tickets.routeId == key.routeId &&
                                 hasWriteNotice(state.tickets)
@@ -3089,17 +3221,13 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
-                                projectChatRows(waitingChats, routeMarks, state.connected, homeTicketRef, projectsNow) { chat ->
-                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
-                                }
+                                projectChatRows(waitingChats, chatRowContext)
                             }
                             if (readyChats.isNotEmpty()) {
                                 item(key = "project_chats_ready_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_ready))
                                 }
-                                projectChatRows(readyChats, routeMarks, state.connected, homeTicketRef, projectsNow, ready = true) { chat ->
-                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
-                                }
+                                projectChatRows(readyChats, chatRowContext, ready = true)
                                 if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
                                     QuickChatsShowAll(
                                         expanded = readyShowAll,
@@ -3112,9 +3240,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_running_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_working))
                                 }
-                                projectChatRows(runningChats, routeMarks, state.connected, homeTicketRef, projectsNow) { chat ->
-                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
-                                }
+                                projectChatRows(runningChats, chatRowContext)
                                 // Directly under the group it expands, so it is not far down the page.
                                 if (quick.runningExpandable) item(key = "project_chats_running_show_all") {
                                     QuickChatsShowAll(
@@ -3186,9 +3312,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                projectChatRows(recentChats, routeMarks, state.connected, homeTicketRef, projectsNow) { chat ->
-                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
-                                }
+                                projectChatRows(recentChats, chatRowContext)
                                 if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
                                     QuickChatsShowAll(
                                         expanded = recentShowAll,
@@ -3309,7 +3433,7 @@ internal fun RemoteScreen(
                                                     startRename(session.id, session.title)
                                                 }
                                             } else null,
-                                        onClose = { closing = session },
+                                        onClose = { closing = ClosingSession(session) },
                                         onForkLatest =
                                             if (
                                                 state.connected && !state.loading && !navigator.mutating &&
@@ -3366,7 +3490,8 @@ internal fun RemoteScreen(
                                 val highlighted = item.id == highlightedId
                                 ConversationItemColumn(
                                     item,
-                                    Modifier.conversationItemMotion(this).then(
+                                    Modifier.conversationItemMotion(this, enabled = !renderOptions.disableMotion)
+                        .chatRenderRow(renderRecorder, pendingKeys.keyOf(item), renderOptions.recording).then(
                                         if (highlighted)
                                             Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
                                         else Modifier
@@ -3575,6 +3700,7 @@ internal fun RemoteScreen(
             Box(
                 Modifier.align(Alignment.BottomEnd)
                     .padding(end = ((maxWidth - (PROSE_READING_WIDTH + 32.dp)).coerceAtLeast(0.dp) / 2) + 12.dp, bottom = composerHeight + 8.dp)
+                    .graphicsLayer { translationY = composerLift().coerceAtMost(composerSize.height.toFloat()) }
                     .then(underlay),
             ) {
                 ScrollToLatestSlot(!autoFollow, ::scrollToLatestItem)
@@ -3584,10 +3710,21 @@ internal fun RemoteScreen(
             // chat's content lambda, that method grew past what R8 compiles correctly, and ART
             // rejected the class (a VerifyError in the minified app).
             val floatingComposer: @Composable BoxWithConstraintsScope.() -> Unit = {
+            // Measure an untranslated parent: the child's drawing never changes this edge.
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onGloballyPositioned { composerRestingTop = it.positionInRoot().y }) {
             Box(
-                Modifier.align(Alignment.BottomCenter)
-                    .fillMaxWidth()
+                Modifier.fillMaxWidth()
                     .onSizeChanged { composerSize = it }.testTag("floatingComposer")
+                    .onFocusChanged {
+                        composerFocused = it.hasFocus
+                        if (it.hasFocus) {
+                            composerHidden = false
+                            composerDragging = false
+                        }
+                    }
+                    .graphicsLayer { translationY = composerLift() }
+                    .then(if (composerHidden || composerDragging && composerDragOffset > 0f) Modifier.clearAndSetSemantics {} else Modifier)
                     .then(underlay)
                     .padding(bottom = 16.dp)
             ) {
@@ -3777,6 +3914,7 @@ internal fun RemoteScreen(
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
+                        onVoiceActiveChanged = { composerVoiceActive = it },
                         presenceOwner = model,
                         presenceSelection = chatKey?.selection()?.takeUnless { composerCovered },
                         acquirePresence = model::acquireNativeEditorPresence,
@@ -3896,6 +4034,7 @@ internal fun RemoteScreen(
                     )
                     }
                 }
+            }
             }
             }
             floatingComposer()
@@ -4040,7 +4179,7 @@ internal fun RemoteScreen(
                 }
             }, onDismiss = { insightSheet = null })
             InsightSheetKind.TASKS -> TaskInsightSheet(
-                state.tasks, state.session?.optionalText("title")?.takeIf(String::isNotBlank),
+                state.tasks, state.session?.optionalText("title")?.let { displayTitle(it).text }?.takeIf(String::isNotBlank),
                 onDismiss = { insightSheet = null },
             )
             InsightSheetKind.JOBS -> sheetJobs?.let { jobs ->
@@ -4094,7 +4233,7 @@ internal fun RemoteScreen(
                 Text(
                     stringResource(
                         R.string.remote_insights_abort_child_body,
-                        entry.agent ?: entry.title,
+                        entry.agent ?: sessionTitleLabel(entry.title, entry.titleAttachment),
                     )
                 )
             },
@@ -4275,7 +4414,17 @@ internal fun RemoteScreen(
             },
         )
     }
-    closing?.let { session ->
+    // A chat closed from Projects that left the page (closed elsewhere, or no longer featured)
+    // takes its dialog along.
+    LaunchedEffect(closing?.projectId, state.projectChats) {
+        val shown = closing ?: return@LaunchedEffect
+        val projectId = shown.projectId ?: return@LaunchedEffect
+        if (state.projectChats.none { it.projectId == projectId && it.session.optionalText("id") == shown.item.id })
+            closing = null
+    }
+    closing?.let { shown ->
+        val session = shown.item
+        val projectId = shown.projectId
         AlertDialog(
             onDismissRequest = { closing = null },
             title = { Text(stringResource(R.string.remote_session_close)) },
@@ -4286,16 +4435,27 @@ internal fun RemoteScreen(
                         when (model) {
                             is SessionsViewModel -> model.close(session.id)
                             is ChatViewModel -> model.closeSession(session.id)
+                            is ProjectsViewModel ->
+                                if (projectId != null) {
+                                    // Only a close that was sent marks the chat read, so a history row the Mac
+                                    // may list for it later starts read.
+                                    if (model.closeChat(projectId, session.id)) state.selection.routeId?.let {
+                                        sessionMarkStore?.markSeen(it, session.id, session.updatedAt, System.currentTimeMillis())
+                                    }
+                                }
                             else -> Unit
                         }
                         closing = null
                     },
-                    enabled = canCloseSession(
-                        session,
-                        state.connected,
-                        state.loading,
-                        state.capabilities,
-                    ),
+                    // Read live, so a chat that started running again meanwhile is not closed.
+                    enabled =
+                        if (projectId != null) closableProjectChat(state, projectId, session.id)
+                        else canCloseSession(
+                            session,
+                            state.connected,
+                            state.loading,
+                            state.capabilities,
+                        ),
                 ) {
                     Text(stringResource(R.string.remote_session_close))
                 }
@@ -4308,6 +4468,9 @@ internal fun RemoteScreen(
         )
     }
 }
+
+/** The session the close dialog asks about; [projectId] when it was chosen on the Projects page. */
+private data class ClosingSession(val item: SessionListItem, val projectId: String? = null)
 
 @Composable
 private fun SwipeActionChoice(
@@ -4577,61 +4740,60 @@ private fun ProjectsSectionHeading(text: String) {
     )
 }
 
+/** What every featured chat row of the Projects page shares; see [projectChatRows]. */
+private class ProjectChatRowContext(
+    val marks: Map<String, SessionMark>,
+    val connected: Boolean,
+    val ticketRef: (String) -> String?,
+    /** The minute clock the relative ages and the "Old" chip read. */
+    val now: State<Long>,
+    /** Whether the row offers Close; see [closableProjectChat]. */
+    val closable: (ProjectChatSummary) -> Boolean,
+    /** The end-to-start and start-to-end swipe actions, as the user set them. */
+    val swipe: Pair<SwipeAction, SwipeAction>,
+    val onOpen: (ProjectChatSummary) -> Unit,
+    val onClose: (ProjectChatSummary, SessionListItem) -> Unit,
+)
+
 /** One row per featured chat of a Projects section, in the order given. */
 private fun LazyListScope.projectChatRows(
     chats: List<ProjectChatSummary>,
-    marks: Map<String, SessionMark>,
-    connected: Boolean,
-    ticketRef: (String) -> String?,
-    now: State<Long>,
+    context: ProjectChatRowContext,
     /** The chats are the Ready group, so a long-idle one wears the "Old" chip. */
     ready: Boolean = false,
-    onOpen: (ProjectChatSummary) -> Unit,
 ) {
     items(chats, key = { "chat:${it.projectId}:${it.session.text("id")}" }) { chat ->
-        ProjectChatRow(
-            chat = chat,
-            connected = connected,
-            mark = chat.session.optionalText("id")?.let(marks::get),
-            ticketRef = chat.session.optionalText("id")?.let(ticketRef),
-            now = now,
-            ready = ready,
-            onClick = { onOpen(chat) },
-        )
+        ProjectChatRow(chat, context, ready)
     }
 }
 
 @Composable
-private fun ProjectChatRow(
-    chat: ProjectChatSummary,
-    connected: Boolean,
-    mark: SessionMark?,
-    ticketRef: String?,
-    now: State<Long>,
-    ready: Boolean,
-    onClick: () -> Unit,
-) {
+private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowContext, ready: Boolean) {
     // Read here, not by the caller, so the minute tick recomposes the rows only.
-    val nowMillis = now.value
-    Column {
+    val nowMillis = context.now.value
+    val id = chat.session.optionalText("id")
+    val mark = id?.let(context.marks::get)
+    val item =
+        sessionListItem(chat.session, context.connected && chat.verified, loading = false, confirmed = chat.verified).let {
+            it.copy(
+                pinned = mark?.pinned == true,
+                unread = sessionUnread(mark, it.updatedAt, open = false),
+                ticketRef = id?.let(context.ticketRef),
+            )
+        }
+    Column(Modifier.testTag("projectChatRow-${chat.projectId}-${id.orEmpty()}")) {
         Text(
             chat.projectName,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SessionListRow(
-            item =
-                sessionListItem(chat.session, connected && chat.verified, loading = false, confirmed = chat.verified).let {
-                    it.copy(
-                        pinned = mark?.pinned == true,
-                        unread = sessionUnread(mark, it.updatedAt, open = false),
-                        ticketRef = ticketRef,
-                    )
-                },
+            item = item,
             enabled = true,
-            closeAvailable = false,
-            onClick = onClick,
-            onClose = {},
+            closeAvailable = context.closable(chat),
+            onClick = { context.onOpen(chat) },
+            onClose = { context.onClose(chat, item) },
+            swipe = context.swipe,
             now = nowMillis,
             old = ready && readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),
         )
@@ -4865,7 +5027,7 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
 
 /**
  * The compact chat's status in one line, at the start of the insights row while a banner waits in
- * the status sheet: what runs (compaction shows the dimmed snake, other [running] work a spinner) or
+ * the status sheet: what runs (compaction shows the dotted braille loader, other [running] work a spinner) or
  * what is done. A tap opens the sheet; the line is
  * read out as it changes.
  */
@@ -4881,7 +5043,7 @@ internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Compaction shows the TUI's dimmed snake (static when animations are off), dimmed from
+            // Compaction shows pi core's dotted loader (static when animations are off), dimmed from
             // the chip's own content color like the text beside it; export keeps its spinner.
             if (line == R.string.remote_panel_compacting)
                 CompactionGlyph(LocalContentColor.current)
@@ -4948,6 +5110,7 @@ internal class HeaderHideConnection(
     private val active: () -> Boolean,
     private val hidden: () -> Boolean,
     private val setHidden: (Boolean) -> Unit,
+    private val onUserScroll: () -> Unit = {},
 ) : NestedScrollConnection {
     private var before = 0 to 0
 
@@ -4958,6 +5121,9 @@ internal class HeaderHideConnection(
 
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
         val current = position()
+        // Fling frames use SideEffect, but are still reader movement. Layout-only prepends do
+        // not dispatch consumed scroll; callers exclude their own programmatic movement.
+        if (consumed.y != 0f && current != before) onUserScroll()
         if (current == 0 to 0) setHidden(false)
         else if (source == NestedScrollSource.UserInput && active()) setHidden(headerHiddenAfterScroll(hidden(), before, current))
         return Offset.Zero

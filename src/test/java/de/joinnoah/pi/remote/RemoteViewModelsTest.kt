@@ -26,6 +26,32 @@ class RemoteViewModelsTest {
     }
 
     @Test
+    fun chatActionUsagePublishesStoredRecencyAndCentralUpdatesSurviveRecreation() = runTest {
+        val settings = FakeSettingsRepository()
+        settings.usage[ChatAction.CHANGES] = ActionUsage(500.0, 10)
+        settings.usage[ChatAction.FILES] = ActionUsage(1.0, 20)
+        val repository = NavigationFakeRepository()
+        val key = RemoteNavKey.Chat("host", "project", "session")
+        val model = ChatViewModel(repository, key, settings)
+        val available = setOf(ChatAction.CHANGES, ChatAction.FILES, ChatAction.REFRESH, ChatAction.CLOSE)
+        assertEquals(ChatAction.FILES, initialChatQuickAction(available, model.chatActionUsage.value))
+        // Palette and header share this model path; consumers observe the new store readback.
+        model.recordChatAction(ChatAction.REFRESH)
+        assertEquals(settings.chatActionUsage(), model.chatActionUsage.value)
+        assertEquals(ChatAction.REFRESH, initialChatQuickAction(available, model.chatActionUsage.value))
+        val reopened = ChatViewModel(repository, key, settings)
+        assertEquals(ChatAction.REFRESH, initialChatQuickAction(available, reopened.chatActionUsage.value))
+        val beforeClose = model.chatActionUsage.value
+        model.recordChatAction(ChatAction.CLOSE)
+        assertEquals(beforeClose, model.chatActionUsage.value)
+        assertEquals(listOf(ChatAction.REFRESH), settings.recordedActions)
+        settings.recordChatAction(ChatAction.FILES, System.currentTimeMillis() + 1_000)
+        reopened.refreshChatActionUsage()
+        assertEquals(ChatAction.FILES, initialChatQuickAction(available, reopened.chatActionUsage.value))
+        ViewModelStore().apply { put("first", model); put("reopened", reopened); clear() }
+    }
+
+    @Test
     fun localPagedStorageRetryRunsWhileItsChatReconnectsButNotForAnotherChat() = runTest {
         val backing = NavigationFakeRepository()
         var retries = 0
@@ -369,7 +395,7 @@ class RemoteViewModelsTest {
                 draft = "secret draft",
                 messages = listOf(buildJsonObject { put("id", "message") }),
             )
-        val model = ProjectsViewModel(repository, RemoteNavKey.Projects("host"))
+        val model = ProjectsViewModel(repository, RemoteNavKey.Projects("host"), FakeSettingsRepository())
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.state.collect() }
         runCurrent()
         assertEquals("", model.state.value.draft)
@@ -454,6 +480,21 @@ class RemoteViewModelsTest {
         model.loadToolOutput("call")
         assertEquals(1, repository.abortedSessions.size)
         assertEquals(1, repository.toolOutputRequests.size)
+    }
+
+    @Test
+    fun projectsCloseChatForwardsWhileActive() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.state.value = RemoteState(selection = RemoteSelection("host"))
+        val model = ProjectsViewModel(repository, RemoteNavKey.Projects("host"), FakeSettingsRepository())
+        assertTrue(model.closeChat("p2", "two"))
+        assertEquals(listOf("p2" to "two"), repository.closedChats)
+        // Loading, or another Mac on screen, drops it.
+        repository.state.value = RemoteState(selection = RemoteSelection("host"), loading = true)
+        assertFalse(model.closeChat("p2", "two"))
+        repository.state.value = RemoteState(selection = RemoteSelection("other"))
+        assertFalse(model.closeChat("p2", "two"))
+        assertEquals(1, repository.closedChats.size)
     }
 
     @Test
