@@ -497,7 +497,7 @@ internal data class FailedReply(val questionId: String, val text: String)
  * It reuses the running activity instead of stacking a second one on top.
  */
 internal fun sessionIntent(context: Context, routeId: String, sessionId: String): Intent =
-    Intent(context, MainActivity::class.java)
+    Intent(context, RemoteActivity::class.java)
         .setAction(Intent.ACTION_VIEW)
         .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         .setData(
@@ -530,7 +530,7 @@ internal fun notificationIntent(context: Context, target: NotificationTarget): I
 
 /** Opens the app without choosing a session; reuses the running activity. */
 internal fun appIntent(context: Context): Intent =
-    Intent(context, MainActivity::class.java)
+    Intent(context, RemoteActivity::class.java)
         .setAction(Intent.ACTION_MAIN)
         .addCategory(Intent.CATEGORY_LAUNCHER)
         .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)

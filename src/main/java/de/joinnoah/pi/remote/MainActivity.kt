@@ -20,7 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class RemoteActivity : ComponentActivity() {
     private val app
         get() = application as RemoteApplication
 

@@ -1026,6 +1026,9 @@ internal fun RemoteScreen(
                     }
                 }
                 item {
+                    AppIconSettingsSection()
+                }
+                item {
                     Section(stringResource(R.string.remote_swipe_title)) {
                         Text(
                             stringResource(R.string.remote_swipe_help),

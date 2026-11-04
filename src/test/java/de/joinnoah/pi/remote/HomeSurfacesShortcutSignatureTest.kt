@@ -46,6 +46,19 @@ class HomeSurfacesShortcutSignatureTest {
     }
 
     @Test
+    fun iconChangeInvalidatesSignatureEvenWithUnchangedSessions() {
+        val manager = AppIconManager(context)
+        val sessions = listOf("session:r:a|Title|Project")
+        val before = launcherShortcutSignature(manager.selectedComponent().flattenToString(), sessions)
+        manager.setIcon(AppIcon.BLACK_WHITE)
+        val after = launcherShortcutSignature(manager.selectedComponent().flattenToString(), sessions)
+        org.junit.Assert.assertNotEquals(before, after)
+        assertEquals(sessions, after.drop(1))
+        persist(after)
+        assertEquals(after, publishedSignature(surfaces()))
+    }
+
+    @Test
     fun withNothingPersistedYetTheSignatureStartsUnknown() {
         // The very first run of all: nothing to compare against, so the guard must not skip.
         assertNull(publishedSignature(surfaces()))

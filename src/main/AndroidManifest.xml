@@ -14,12 +14,26 @@
     <application android:name=".RemoteApplication" android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="false"
         android:label="@string/remote_app_name" android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
         android:localeConfig="@xml/locales_config" android:supportsRtl="true" android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:configChanges="keyboard|keyboardHidden">
+        <activity android:name=".RemoteActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:configChanges="keyboard|keyboardHidden" />
+        <!-- Keep the original launcher component identity for existing installations. -->
+        <activity-alias android:name=".MainActivity" android:targetActivity=".RemoteActivity"
+            android:enabled="true" android:exported="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias android:name=".WhiteBlackLauncher" android:targetActivity=".RemoteActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_white_black" android:roundIcon="@mipmap/ic_launcher_white_black">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".BlackWhiteLauncher" android:targetActivity=".RemoteActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_black_white" android:roundIcon="@mipmap/ic_launcher_black_white">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".ColorWhiteLauncher" android:targetActivity=".RemoteActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_color_white" android:roundIcon="@mipmap/ic_launcher_color_white">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity-alias>
         <service android:name=".RemoteMessagingService" android:exported="false">
             <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
         </service>

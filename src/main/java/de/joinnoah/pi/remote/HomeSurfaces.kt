@@ -57,6 +57,17 @@ internal class HomeSurfaces(
     /** The first publish after start always runs, to reconcile shortcuts with the pairings. */
     @Volatile private var reconciled = false
 
+    /** Reassign dynamic shortcuts after changing the enabled launcher alias. */
+    fun refreshLauncherShortcuts() {
+        scope.launch {
+            try {
+                update(force = true) { it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {}
+        }
+    }
+
     fun isForgotten(routeId: String): Boolean = routeId in forgotten
     private val mutable = MutableStateFlow(HomeSnapshot())
     val snapshot: StateFlow<HomeSnapshot> = mutable.asStateFlow()
@@ -210,12 +221,14 @@ internal class HomeSurfaces(
                 val present = snapshot.sessions.map { shortcutId(it.routeId, it.sessionId) }.toSet()
                 val plan = shortcutPlan(chosenIds, existing, present, closed, routes - forgotten)
                 val localized = RemoteNotifications.localized(context)
+                val launcher = AppIconManager(context).selectedComponent()
                 fun info(session: HomeSession, rank: Int) =
                     run {
                         val title = session.title.ifBlank {
                             localized.getString(R.string.remote_widget_untitled)
                         }
                         ShortcutInfoCompat.Builder(context, shortcutId(session.routeId, session.sessionId))
+                            .setActivity(launcher)
                             .setShortLabel(title.take(24))
                             .setLongLabel(
                                 if (session.projectName.isBlank()) title.take(48)
@@ -237,7 +250,8 @@ internal class HomeSurfaces(
                 }
                 // Title changes matter; status changes don't, since it isn't shown.
                 val signature =
-                    chosen.map { shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName) }
+                    launcherShortcutSignature(launcher.flattenToString(),
+                        chosen.map { shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName) })
                 if (signature != publishedShortcuts || plan.enable.isNotEmpty()) {
                     if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)) {
                         publishedShortcuts = signature
@@ -269,6 +283,9 @@ internal class HomeSurfaces(
         }
 
 }
+
+internal fun launcherShortcutSignature(launcher: String, sessions: List<String>): List<String> =
+    listOf(launcher) + sessions
 
 internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
 internal const val PUBLISHED_SHORTCUTS_KEY = "signature"
