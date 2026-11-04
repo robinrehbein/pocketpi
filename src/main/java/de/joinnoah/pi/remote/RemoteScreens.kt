@@ -1656,6 +1656,9 @@ internal fun RemoteScreen(
             marks = routeMarks, showReadyAll = readyShowAll,
         )
     }
+    // The group folds again once it is gone, so the next running chat starts folded.
+    val noRunning = projectQuickChats.runningTotal == 0
+    LaunchedEffect(noRunning) { if (noRunning) runningExpanded = false }
     val compactionFrame = rememberBrailleSpinnerFrame(
         (key is RemoteNavKey.Sessions && listedSessions.any { it.compacting }) ||
             (projectQuickChats.waiting + projectQuickChats.ready + projectQuickChats.running + projectQuickChats.recent).any { chat ->
@@ -4837,6 +4840,7 @@ private fun RunningSummary(total: Int, projects: List<String>, expanded: Boolean
     val text =
         if (projects.size == 1) stringResource(R.string.remote_projects_running_in_one, chats, projects.single())
         else pluralStringResource(R.plurals.remote_projects_running_in_many, projects.size, chats, projects.size)
+    val description = stringResource(R.string.remote_projects_running_description, text)
     val state = stringResource(if (expanded) R.string.remote_menu_expanded else R.string.remote_menu_collapsed)
     val action = stringResource(if (expanded) R.string.remote_projects_running_hide else R.string.remote_projects_running_show)
     Row(
@@ -4844,7 +4848,7 @@ private fun RunningSummary(total: Int, projects: List<String>, expanded: Boolean
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .clickable(role = Role.Button, onClickLabel = action, onClick = onToggle)
-            .semantics { stateDescription = state }
+            .semantics { stateDescription = state; contentDescription = description }
             .testTag("quickChatsRunningSummary"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),

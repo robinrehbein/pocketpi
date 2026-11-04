@@ -31,6 +31,7 @@
         <item quantity="one">%1$s in %2$d project</item>
         <item quantity="other">%1$s in %2$d projects</item>
     </plurals>
+    <string name="remote_projects_running_description">Working: %1$s</string>
     <string name="remote_projects_running_show">Show working chats</string>
     <string name="remote_projects_running_hide">Hide working chats</string>
 </resources>

@@ -39,8 +39,8 @@ internal const val FIXTURE_PROJECT_ROW = "projectRow-project-pocketpi"
 
 /**
  * The Projects page row of the project tagged [rowTag], scrolled into view if needed. The project's
- * name alone is no selector: the featured chats above the projects (Ready, Working) each repeat
- * their project's name as a label. Needs the tags exposed as resource IDs, as both activities do.
+ * name alone is no selector: the featured chats above the projects repeat it (Needs you rows
+ * as a label, Ready, Working and Recently used as a group heading). Needs the tags exposed as resource IDs, as both activities do.
  */
 private fun UiDevice.projectRow(rowTag: String): UiObject2? {
     val row = By.res(rowTag)
