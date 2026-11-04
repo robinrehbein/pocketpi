@@ -681,7 +681,7 @@ class SessionListPresentationTest {
 
         assertEquals(
             listOf("unreadNew", "unreadOld", "newest", "middle"),
-            ids(quickChats(chats, true, false, false, marks).ready),
+            ids(quickChats(chats, true, false, false, marks, showReadyAll = true).ready),
         )
     }
 
