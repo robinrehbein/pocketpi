@@ -54,7 +54,7 @@ internal fun compactChrome(phone: Boolean, imeVisible: Boolean, height: Dp): Boo
 @Composable
 private fun LoadingControlPill(width: Dp) {
     FloatingSurface(
-        modifier = Modifier.width(width).height(32.dp),
+        modifier = Modifier.width(width).height(if (LocalComposerPillSize.current == PillSize.SMALL) 32.dp else 48.dp),
         shape = CircleShape,
         blur = false,
         shadowElevation = 0.dp,
@@ -93,7 +93,8 @@ internal fun ComposerControlPill(
                 ProvideTextStyle(MaterialTheme.typography.labelLarge) {
                     Row(
                         // Keep the state layer inside the glass shape, not the larger touch target.
-                        modifier = Modifier.defaultMinSize(minHeight = 32.dp)
+                        modifier = Modifier.defaultMinSize(minHeight = if (LocalComposerPillSize.current == PillSize.SMALL) 32.dp else 48.dp)
+                            .testTag("composerPillSurface")
                             .indication(interactionSource, ripple(bounded = false))
                             .padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),

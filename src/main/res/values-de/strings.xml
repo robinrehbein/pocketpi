@@ -888,4 +888,9 @@
     <string name="remote_render_capture">Chat-Layoutbericht erfassen</string>
     <string name="remote_render_snapshot_help">Dieser Bericht enthält letzte Layoutpositionen, Geräteinformationen und Diagnoseoptionen. Er enthält keine Nachrichtentexte, IDs oder Screenshots. Teile ihn zusammen mit deinem separat aufgenommenen Screenshot. Das Öffnen dieser Ansicht oder das Ändern der Diagnoseoptionen kann den Chat neu zeichnen.</string>
     <string name="remote_render_share">Layoutbericht teilen</string>
+    <string name="remote_pill_sizes">Pillengrößen</string>
+    <string name="remote_composer_pill_size">Steuerelemente im Eingabefeld</string>
+    <string name="remote_insight_pill_size">Übersichten über dem Eingabefeld</string>
+    <string name="remote_pill_small">Klein</string>
+    <string name="remote_pill_large">Groß</string>
 </resources>

@@ -40,16 +40,10 @@ internal fun TaskInsightPill(tasks: SessionTasks, onClick: () -> Unit) {
     val stale = tasks.freshness == TaskFreshness.STALE
     val description = stringResource(R.string.task_insight_description, completed, tasks.items.size, active) +
         if (stale) ", " + stringResource(R.string.task_insight_stale) else ""
-    FloatingSurface(shape = CircleShape) {
-        Row(
-            Modifier.clickable(role = Role.Button, onClick = onClick)
-                .testTag("taskInsightPill")
-                .semantics { contentDescription = description }
-                .minimumInteractiveComponentSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    InsightPillRow(
+        Modifier.testTag("taskInsightPill").semantics { contentDescription = description },
+        onClick = onClick,
+    ) {
             Icon(
                 taskInsightStatusIcon(stale, active, completed, tasks.items.size),
                 contentDescription = null,
@@ -60,7 +54,6 @@ internal fun TaskInsightPill(tasks: SessionTasks, onClick: () -> Unit) {
                 stringResource(R.string.task_insight_count, completed, tasks.items.size),
                 style = MaterialTheme.typography.labelLarge,
             )
-        }
     }
 }
 

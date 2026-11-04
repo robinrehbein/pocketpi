@@ -3076,6 +3076,16 @@ internal fun RemoteScreen(
                             }
                         }
                     }
+                    item(key = "settings-pill-sizes") {
+                        Section(stringResource(R.string.remote_pill_sizes)) {
+                            PillSizeChoice(stringResource(R.string.remote_composer_pill_size), preferences?.composerPillSize ?: PillSize.SMALL, "composerPillSize") {
+                                (model as SettingsViewModel).setComposerPillSize(it)
+                            }
+                            PillSizeChoice(stringResource(R.string.remote_insight_pill_size), preferences?.insightPillSize ?: PillSize.LARGE, "insightPillSize") {
+                                (model as SettingsViewModel).setInsightPillSize(it)
+                            }
+                        }
+                    }
                     item(key = "settings-predictions") { PredictionSettingsSection() }
                     // Only where a keyboard can be in use: one is attached, or the wide layout of a
                     // tablet, which usually has one nearby.
@@ -3937,6 +3947,7 @@ internal fun RemoteScreen(
                             ChatCurrentActivity(currentActivity)
                         }
                     if (insightsShown || statusChipLine != null)
+                        CompositionLocalProvider(LocalInsightPillSize provides (chatPreferences?.insightPillSize ?: PillSize.LARGE)) {
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState())
                                 .padding(horizontal = 16.dp),
@@ -3948,6 +3959,7 @@ internal fun RemoteScreen(
                                 ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
                             }
                             if (insightsShown) insightChips()
+                        }
                         }
                     Column(
                         Modifier.align(Alignment.CenterHorizontally).widthIn(max = PROSE_READING_WIDTH + 32.dp)
@@ -4057,6 +4069,7 @@ internal fun RemoteScreen(
                         onRetryPagedEditorStorage = model::retryPagedEditorStorage,
                         suggestions = { attachmentControl ->
                             val typed = composer.text
+                            CompositionLocalProvider(LocalComposerPillSize provides (chatPreferences?.composerPillSize ?: PillSize.SMALL)) {
                             SessionControls(
                                 remember(state, typed) { state.copy(draft = typed) },
                                 model::refreshConfiguration,
@@ -4110,6 +4123,7 @@ internal fun RemoteScreen(
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                                 leadingControl = attachmentControl,
                             )
+                            }
                         },
                         onRemoveAttachment = model::removeAttachment,
                         onCancelAttachments = model::cancelAttachmentWork,
@@ -5163,16 +5177,10 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
  */
 @Composable
 internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
-    FloatingSurface(shape = CircleShape) {
-        Row(
-            Modifier.clickable(role = Role.Button, onClick = onClick)
-                .testTag("chatStatusChip")
-                .semantics { liveRegion = LiveRegionMode.Polite }
-                .minimumInteractiveComponentSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    InsightPillRow(
+        Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
+        onClick = onClick,
+    ) {
             // Compaction shows pi core's dotted loader (static when animations are off), dimmed from
             // the chip's own content color like the text beside it; export keeps its spinner.
             if (line == R.string.remote_panel_compacting)
@@ -5186,7 +5194,6 @@ internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () 
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(stringResource(line), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
     }
 }
 
