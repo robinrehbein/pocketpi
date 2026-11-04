@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A session whose first prompt was only an attachment is named after it (sessionTitleLabel in SessionList.kt). -->
+    <string name="remote_session_title_image">Image: %1$s</string>
+    <string name="remote_session_title_file">File: %1$s</string>
+    <string name="remote_session_title_attachment">Attachment</string>
+</resources>
