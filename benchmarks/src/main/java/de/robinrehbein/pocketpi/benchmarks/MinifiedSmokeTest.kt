@@ -175,7 +175,7 @@ class MinifiedSmokeTest {
     }
 
     private fun openChat(chat: String, tail: String) {
-        device.tapUntil(PROJECT, By.text(chat), "The session list did not load")
+        device.openProjectUntil(By.text(chat), "The session list did not load")
         device.tapUntil(chat, By.text(tail), "$chat did not open", timeoutMs = 30_000)
     }
 }

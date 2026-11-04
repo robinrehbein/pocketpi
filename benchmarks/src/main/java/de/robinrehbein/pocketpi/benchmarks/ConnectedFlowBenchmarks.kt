@@ -128,7 +128,7 @@ class ConnectedFlowBenchmarks {
         killProcess()
         startActivityAndWait(connectedFlow())
         waitForProjects()
-        checkNotNull(device.findObject(By.text(PROJECT))).click()
+        device.openProjectUntil(By.text(chat), "The session list did not load")
         waitSettled("sessions")
         check(device.wait(Until.hasObject(By.text(chat)), 10_000))
         device.waitForIdle(1_000)
