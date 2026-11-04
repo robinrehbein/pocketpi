@@ -83,6 +83,12 @@ internal class NavigationFakeRepository : RemoteRepository {
         ticketOpens += projectId to ref
     }
 
+    val closedChats = mutableListOf<Pair<String, String>>()
+
+    override fun closeProjectChat(projectId: String, sessionId: String) {
+        closedChats += projectId to sessionId
+    }
+
     val ticketAccepts = mutableListOf<Triple<String, String, String>>()
     var ticketUndos = 0
     var ticketNoticeDismissals = 0
