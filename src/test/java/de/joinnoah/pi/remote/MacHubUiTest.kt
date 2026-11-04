@@ -765,11 +765,18 @@ class MacHubUiTest {
         compose.waitForIdle()
     }
 
+    /** The card's primary button ignores taps for a moment after it shows; let that pass. */
+    private fun armCard() {
+        compose.mainClock.advanceTimeBy(READY_REVIEW_ARM_MILLIS + 50)
+        compose.waitForIdle()
+    }
+
     private fun reviewCardShows(title: String) =
         compose.onNode(hasTestTag("readyReviewCard") and hasContentDescription(title, substring = true)).assertExists()
 
     @Test
     fun reviewAllWalksTheReadyChatsAndClosesThroughTheProjectsPath() {
+        val marks = unreadMarks("studio", "one", "two")
         render(
             listOf(project("p1", "Alpha"), project("p2", "Beta")),
             chats =
@@ -778,6 +785,7 @@ class MacHubUiTest {
                     chat("p2", "Beta", "two", "idle", origin = "rpc", updatedAt = 10L),
                 ),
             capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
         )
         compose.onNodeWithText(compose.activity.getString(R.string.remote_ready_review_all, 2)).assertExists()
         startReview()
@@ -785,11 +793,14 @@ class MacHubUiTest {
         reviewCardShows("Session one")
         compose.onNodeWithText(compose.activity.getString(R.string.remote_ready_review_progress, 1, 2)).assertExists()
         // A chat the host runs closes at once: the review itself was the choice.
+        armCard()
         compose.onNodeWithTag("readyReviewClose").assertIsEnabled().performClick()
         compose.waitForIdle()
         assertEquals(listOf("p1" to "one"), repository.closedChats)
+        assertTrue(!sessionUnread(marks.mark("studio", "one"), 20L, open = false))
 
         reviewCardShows("Session two")
+        armCard()
         compose.onNodeWithTag("readyReviewClose").performClick()
         compose.waitForIdle()
         assertEquals(listOf("p1" to "one", "p2" to "two"), repository.closedChats)
@@ -887,11 +898,13 @@ class MacHubUiTest {
         )
         startReview()
 
+        armCard()
         compose.onNodeWithTag("readyReviewClose").performClick()
         compose.waitForIdle()
         assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
         compose.onNodeWithText(label(R.string.remote_session_close_terminal_confirmation)).assertExists()
 
+        armCard()
         compose.onNodeWithTag("readyReviewConfirmClose").performClick()
         compose.waitForIdle()
         assertEquals(listOf("p1" to "tui"), repository.closedChats)
@@ -931,8 +944,10 @@ class MacHubUiTest {
         startReview()
         compose.onAllNodesWithTag("readyReviewClose").assertCountEquals(0)
 
+        armCard()
         compose.onNodeWithTag("readyReviewHide").performClick()
         compose.waitForIdle()
+        armCard()
         compose.onNodeWithTag("readyReviewHide").performClick()
         compose.waitForIdle()
         assertTrue(marks.mark("studio", "one")?.hiddenAt != null)
@@ -968,5 +983,57 @@ class MacHubUiTest {
 
         compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
         assertTrue(repository.activations.any { it.first.projectId == "p1" && it.first.sessionId == "one" })
+    }
+
+    @Test
+    fun aQuickDoubleTapOnCloseDoesNotCloseTheNextChatUnseen() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(listOf("p1" to "one"), repository.closedChats)
+
+        compose.mainClock.advanceTimeBy(READY_REVIEW_ARM_MILLIS + 50)
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "one", "p1" to "two"), repository.closedChats)
+    }
+
+    @Test
+    fun aHideMadeInTheReviewGetsTheUndoSnackbarWhenTheSheetIsDismissed() {
+        val marks = SessionMarksStore(compose.activity)
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "pi", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "pi", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        startReview()
+        armCard()
+        compose.onNodeWithTag("readyReviewHide").performClick()
+        compose.waitForIdle()
+
+        androidx.test.espresso.Espresso.pressBack()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_undo)).assertExists()
     }
 }

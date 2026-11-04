@@ -134,4 +134,11 @@ class ReadyReviewTest {
         val mac = chat("mac", origin = "pi")
         assertEquals(ReadyReviewVerb.NONE, readyReviewVerb(state(mac), mac, item(mac, pinned = true)))
     }
+
+    @Test
+    fun aHostWithoutCloseSupportNeverOffersClose() {
+        val rpc = chat("rpc", origin = "rpc")
+        val verb = readyReviewVerb(state(rpc, capabilities = emptySet()), rpc, item(rpc))
+        assertEquals(false, verb == ReadyReviewVerb.CLOSE)
+    }
 }

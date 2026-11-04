@@ -4591,87 +4591,20 @@ internal fun RemoteScreen(
         Box(Modifier.size(1.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = message })
     }
     readyReview?.let { review ->
-        val page = key as? RemoteNavKey.Projects
-        val projectsModel = model as? ProjectsViewModel
-        val step =
-            if (page == null || projectsModel == null || projectSelected) null
-            else readyReviewStep(
-                review.queue, review.position, mainSessionChats(state.projectChats), state.connected, routeMarks,
-                state.closingSessions,
-            )
-        fun endReview() {
-            readyReview = null
-            // The sheet's Undo goes with it, so the page's snackbar offers the last hide once more.
-            val last = review.hides.lastOrNull() ?: return
-            val store = sessionMarkStore ?: return
-            val route = state.host?.routeId ?: return
-            showHideUndo(store, route, last.entry.sessionId, last.title, last.previous, last.applied)
-        }
-        // Nothing left to review (or the connection dropped, which takes every chat out of Ready).
-        LaunchedEffect(step == null) { if (step == null) endReview() }
-        if (step != null && page != null && projectsModel != null) {
-            val chat = step.chat
-            val sessionId = step.chat.session.text("id")
-            val nowMillis = projectsNow.value
-            val item = projectChatItem(
-                chat, routeMarks, state.connected, state.sessionCompactions, sessionCompactionNow,
-                { ticketRefForSession(state, it) },
-            )
-            val itemTitle = sessionTitleLabel(item)
-            val next = { readyReview = review.copy(position = step.index + 1) }
-            ReadyReviewSheet(
-                item = item,
-                projectName = chat.projectName,
-                index = step.index,
-                total = review.queue.size,
-                now = nowMillis,
-                old = readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),
-                verb = readyReviewVerb(state, chat, item),
-                // Read live, as the close dialog does, so a chat that started running is not closed.
-                closeEnabled = closableProjectChat(state, chat.projectId, sessionId),
-                terminal = item.liveMacTui && !item.hostWorker,
-                lastHidden = review.hides.lastOrNull()?.title,
-                error = state.error?.takeIf { it != review.errorAtStart }?.let { stringResource(it) },
-                onClose = {
-                    // Only a close that was sent marks the chat read and moves on; otherwise the card
-                    // stays, with Close disabled until the page can close again.
-                    if (projectsModel.closeChat(chat.projectId, sessionId)) {
-                        state.host?.routeId?.let {
-                            sessionMarkStore?.markSeen(it, sessionId, item.updatedAt, System.currentTimeMillis())
-                        }
-                        next()
-                    }
-                },
-                onHide = hide@{
-                    val store = sessionMarkStore ?: return@hide
-                    val route = state.host?.routeId ?: return@hide
-                    val previous = store.hide(route, sessionId, sessionUpdatedAt(chat.session), System.currentTimeMillis())
-                    val hide = ReadyReviewHide(
-                        ReadyReviewEntry(chat.projectId, sessionId), itemTitle, previous,
-                        store.mark(route, sessionId),
-                    )
-                    readyReview = review.copy(position = step.index + 1, hides = review.hides + hide)
-                },
-                onKeep = {
-                    state.host?.routeId?.let {
-                        sessionMarkStore?.markSeen(it, sessionId, item.updatedAt, System.currentTimeMillis())
-                    }
-                    next()
-                },
-                onOpen = {
-                    readyReview = null
-                    navigator.open(RemoteNavKey.Chat(page.routeId, chat.projectId, sessionId))
-                },
-                onUndoHide = undo@{
-                    val last = review.hides.lastOrNull() ?: return@undo
-                    val route = state.host?.routeId ?: return@undo
-                    // The chat is back on the page; the review goes on from the card it shows.
-                    sessionMarkStore?.undoHide(route, last.entry.sessionId, last.previous, last.applied)
-                    readyReview = review.copy(hides = review.hides.dropLast(1))
-                },
-                onDismiss = { endReview() },
-            )
-        }
+        ReadyReviewHost(
+            review = review,
+            onReviewChange = { readyReview = it },
+            key = key,
+            model = model,
+            state = state,
+            projectSelected = projectSelected,
+            routeMarks = routeMarks,
+            sessionMarkStore = sessionMarkStore,
+            sessionCompactionNow = sessionCompactionNow,
+            projectsNow = projectsNow,
+            navigator = navigator,
+            showHideUndo = ::showHideUndo,
+        )
     }
     // A chat closed from Projects that left the page (closed elsewhere, or no longer featured)
     // takes its dialog along.
@@ -5061,7 +4994,7 @@ private fun LazyListScope.projectChatRows(
  * The list row of a featured chat of the Projects page, with its marks: what its row shows and what
  * the review card offers, so both offer the same verbs.
  */
-private fun projectChatItem(
+internal fun projectChatItem(
     chat: ProjectChatSummary,
     marks: Map<String, SessionMark>,
     connected: Boolean,

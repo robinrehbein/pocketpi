@@ -8,4 +8,6 @@
     <string name="remote_ready_review_close">Close</string>
     <string name="remote_ready_review_keep">Keep</string>
     <string name="remote_ready_review_open">Open</string>
+    <!-- A refused close, naming the chat it was about: title, then the reason. -->
+    <string name="remote_ready_review_close_error">Could not close \"%1$s\": %2$s</string>
 </resources>
