@@ -191,6 +191,37 @@ class ChatPanelsUiTest {
     }
 
     @Test
+    fun contextOfferBannerShowsFloatingAndInlineWithItsTalkBackActions() {
+        val offer = ContextOffer(CONTEXT_OFFER_REOFFER_PERCENT, 93, setOf(ContextOfferAction.COMPACT))
+        var compacts = 0
+        var dismissals = 0
+        compose.setContent {
+            MaterialTheme {
+                androidx.compose.foundation.layout.Column {
+                    ContextOfferBanner(offer, announce = true, onCompact = { compacts++ }, onDismiss = { dismissals++ })
+                    ContextOfferBanner(offer, announce = false, onCompact = { compacts++ }, onDismiss = { dismissals++ }, floating = false)
+                }
+            }
+        }
+        compose.onAllNodesWithTag("contextOfferBanner").assertCountEquals(2)
+        compose.onAllNodesWithText(resources.getString(R.string.remote_context_full_title, 93), useUnmergedTree = true)
+            .assertCountEquals(2)
+        val compactButtons = compose.onAllNodesWithContentDescription(resources.getString(R.string.remote_compact_now_description, 93))
+        compactButtons.assertCountEquals(2)
+        compactButtons[0].assertHeightIsAtLeast(48.dp).performClick()
+        compose.onAllNodesWithTag("contextOfferDismiss")[1].assertHeightIsAtLeast(48.dp).performClick()
+        val text = compose.onAllNodesWithTag("contextOfferText")[0]
+            .assert(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Heading))
+        compose.runOnIdle {
+            text.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single().action()
+        }
+        compose.runOnIdle {
+            assertEquals(1, compacts)
+            assertEquals(2, dismissals)
+        }
+    }
+
+    @Test
     fun compactionBannerIsHiddenWhenStale() {
         val now = 100_000_000L
         var compaction by mutableStateOf<SessionCompaction?>(SessionCompaction("threshold", now - 1_000))

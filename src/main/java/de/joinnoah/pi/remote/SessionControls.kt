@@ -238,12 +238,7 @@ internal fun SessionControls(
     ) {
         if (state.connected && state.selection.sessionId != null) refreshContextUsage()
     }
-    val usage = state.contextUsage?.takeIf { context ->
-        context.sessionId == state.selection.sessionId &&
-            (confirmed?.model == null || context.modelProvider == null ||
-                (context.modelProvider == confirmed.model.provider &&
-                    context.modelId == confirmed.model.id))
-    }
+    val usage = selectedContextUsage(state)
     val contextPercent = usage?.percent
     val contextDescription = stringResource(
         R.string.remote_context_indicator,

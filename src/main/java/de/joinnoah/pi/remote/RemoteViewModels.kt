@@ -365,6 +365,8 @@ internal class ChatViewModel(
     fun openPushReview() = active { commitReview.close(); pullRequestReview.close(); pushReview.prepare() }
     fun openPullRequestReview() = active { commitReview.close(); pushReview.close(); pullRequestReview.prepare() }
     val preferences = settings.state
+    /** The "Context full" offer's dismissals and announcements; in memory only, for this chat's lifetime. */
+    val contextOffers = ContextOfferMemory()
     fun canOpenPreview() = repository.canOpenPreview()
     fun openPreview(port: Int) = repository.openPreview(port)
     fun closePreview() = repository.closePreview()

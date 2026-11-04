@@ -6610,6 +6610,9 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch) {
                     if (e.isUnsupported)
                         update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
+                    // pi started compacting on its own meanwhile (the host refuses a second one as
+                    // busy); the compaction banner already shows that, so the refusal says nothing.
+                    else if (e.hostCode == "busy" && compactionVisible(state.value.compaction, now())) return@launch
                     reportError(R.string.remote_compact_error)
                 }
             } finally {

@@ -7331,6 +7331,49 @@ class RemoteRepositoryTest {
         assertFalse(repository.state.value.compactionRequesting)
     }
 
+    @Test
+    fun aBusyCompactRefusalIsQuietOnlyWhileACompactionShows() = runTest {
+        val running = insight("compaction-running")
+        val sessionId = running.text("sessionId")
+        for (compacting in listOf(false, true)) {
+            val transport = Transport()
+            configure(transport, sessions = listOf(session(sessionId)), opened = session(sessionId))
+            transport.capabilities = setOf(COMPACT_CAPABILITY)
+            val original = transport.response
+            transport.response = { request ->
+                when {
+                    request.text("type") == "session.compact" -> null
+                    request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId ->
+                        JsonObject(original(request)!! + ("revision" to JsonPrimitive(14)))
+                    else -> original(request)
+                }
+            }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", sessionId))
+            runCurrent()
+            repository.compactContext()
+            runCurrent()
+            // pi's own threshold compaction starts before the phone's request reaches it.
+            if (compacting) {
+                transport.deliver(running)
+                runCurrent()
+                assertNotNull(repository.state.value.compaction)
+            }
+            val compact = transport.sent.last { it.text("type") == "session.compact" }
+            transport.deliver(
+                Wire.objectOf(
+                    "type" to "result",
+                    "requestId" to compact.text("requestId"),
+                    "ok" to false,
+                    "error" to Wire.objectOf("code" to "busy", "message" to "Session is busy"),
+                )
+            )
+            runCurrent()
+            assertFalse(repository.state.value.compactionRequesting)
+            assertEquals(if (compacting) null else R.string.remote_compact_error, repository.state.value.error)
+        }
+    }
+
     private fun forking(
         transport: Transport,
         result: (JsonObject) -> JsonObject? = { request ->
