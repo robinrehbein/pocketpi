@@ -57,7 +57,7 @@ options change and when that chat screen is disposed.
 
 ### Controlled A/B tests
 
-The same Diagnostics screen offers **Disable glass effects temporarily** and
+The same Diagnostics screen offers **Disable glass effects app-wide temporarily** and
 **Disable chat row animations temporarily**. Both are default off and reset when
 the app process restarts. Test one at a time with the same chat/scrolling pattern:
 
@@ -73,9 +73,11 @@ not zero-sized rows. These switches are diagnostic controls, not a
 verified production fix. Compose geometry does not expose the complete GPU layer
 or draw tree; clean bounds alone do not prove the absence of duplicate rendering.
 
-## Optional developer capture with adb
+## Optional developer capture with adb (emulator or other connected devices)
 
-This is not required for the phone-only workflow above.
+Never require this workflow from Robin: he cannot connect his S25. This is only an
+optional developer tool for emulators or other devices. It is not required for the
+phone-only workflow above.
 Use an authorized USB or wireless adb connection from the Mac. Leave the faulty
 screen open; do not restart the app or change visual settings first.
 
