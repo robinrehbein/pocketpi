@@ -90,6 +90,7 @@ internal fun SessionControls(
     slashSuggestions: Boolean = true,
     /** Opens the host's providers from the model and advisor pickers; shown when the host manages them. */
     onManageProviders: (() -> Unit)? = null,
+    leadingControl: @Composable () -> Unit = {},
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
@@ -228,6 +229,7 @@ internal fun SessionControls(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            leadingControl()
             if (loadingConfiguration) {
                 LoadingControlPill(160.dp)
                 LoadingControlPill(96.dp)
