@@ -98,13 +98,14 @@ class HideSessionsUiTest {
     }
 
     @Test
-    fun swipingAProjectsPageRowDoesNotHideIt() {
+    fun swipingAProjectsPageRowThatCannotBeClosedHidesIt() {
+        // Close swipes stand in for Hide on a row the phone cannot close (a terminal session).
         renderProjects(listOf(terminalChat("s1", 100)))
         compose.onNodeWithText("Session s1").performTouchInput { swipeLeft() }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Session s1").assertIsDisplayed()
-        assertNull(store.mark("studio", "s1")?.hiddenUpdatedAt)
+        compose.onNodeWithText("Session s1").assertDoesNotExist()
+        assertEquals(100L, store.mark("studio", "s1")?.hiddenUpdatedAt)
     }
 
     @Test

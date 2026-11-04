@@ -3237,19 +3237,6 @@ internal fun RemoteScreen(
                             // project the chats hide, as before.
                             // Every waiting chat leads, since the heading promises all of them; running and recent
                             // chats are capped at three each until their "Show all" (see quickChats).
-                            val quick =
-                                quickChats(
-                                    // Main sessions only: a busy subagent shows as the session it works for.
-                                    if (projectSelected) emptyList()
-                                    else mainSessionChats(state.projectChats).filterNot { projectChatHidden(it, routeMarks) },
-                                    state.connected,
-                                    showRunningAll = runningShowAll,
-                                    showRecentAll = recentShowAll,
-                                )
-                            // Hide on the Projects page is a menu entry only; the capabilities decide who gets it.
-                            val projectHide: (ProjectChatSummary) -> Unit = { chat ->
-                                hideSession(chat.session.text("id"), chat.session.text("title"), sessionUpdatedAt(chat.session))
-                            }
                             // Main sessions only: a busy subagent shows as the session it works for.
                             val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
                             val closableIds = closableProjectChatIds(state, mainChats)
