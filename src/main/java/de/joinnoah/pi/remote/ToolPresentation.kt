@@ -612,8 +612,6 @@ internal data class SubagentStripEntry(
     val sessionId: String?,
     val agent: String?,
     val title: String,
-    /** What the child session's first prompt attached, when [title] is empty because it carried only that. */
-    val titleAttachment: TitleAttachment? = null,
     val state: String,
     val activity: String?,
     val abortable: Boolean,
@@ -626,6 +624,8 @@ internal data class SubagentStripEntry(
      * Mac still reports them. Their terminal states stay as recorded.
      */
     val lastKnown: Boolean = false,
+    /** What the child session's first prompt attached, when [title] is empty because it carried only that. */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 internal data class SubagentStrip(

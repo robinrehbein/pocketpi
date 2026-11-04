@@ -96,12 +96,12 @@ internal data class ActivityCard(
     val sessionId: String,
     val title: String,
     val preview: String?,
-    /** What the first prompt attached, when [title] is empty because it carried only that. */
-    val titleAttachment: TitleAttachment? = null,
     val status: String,
     val updatedAt: Long?,
     val pinned: Boolean,
     val unread: Boolean,
+    /** What the first prompt attached, when [title] is empty because it carried only that. */
+    val titleAttachment: TitleAttachment? = null,
 )
 
 /**
