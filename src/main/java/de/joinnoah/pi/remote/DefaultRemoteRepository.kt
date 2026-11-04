@@ -363,6 +363,8 @@ class DefaultRemoteRepository(
             SUBAGENT_CONTROL_CAPABILITY,
             PROJECT_OPEN_CAPABILITY,
             SESSION_FORK_CAPABILITY,
+            // Only on capability route v3, never at authentication.
+            SESSION_CLOSE_TERMINAL_CAPABILITY,
             GIT_CAPABILITY,
             GIT_WRITE_CAPABILITY,
             GIT_PUSH_CAPABILITY,
@@ -1358,7 +1360,7 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - setOf(PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY),
+                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -2078,7 +2080,7 @@ class DefaultRemoteRepository(
         return true
     }
 
-    override fun closeSession(sessionId: String) {
+    override fun closeSession(sessionId: String, allowTerminal: Boolean) {
         val selection = state.value.selection
         val projectId = selection.projectId ?: return
         val session = state.value.sessions.find { it.text("id") == sessionId }
@@ -2087,14 +2089,14 @@ class DefaultRemoteRepository(
                 sessionId.length > 256 ||
                 sessionId in closingSessions ||
                 session == null ||
-                !hostOwned(state.value, session) ||
-                session.text("status") !in setOf("idle", "running", "waiting") ||
+                !(hostOwned(state.value, session) && session.text("status") in setOf("idle", "running", "waiting") ||
+                    allowTerminal && terminalClosable(state.value, session) && session.text("status") == "idle") ||
                 !state.value.connected ||
                 SESSION_CLOSE_CAPABILITY !in state.value.capabilities
         )
             return
         val epoch = selectionEpoch
-        closingSessions += sessionId
+        markClosing(sessionId, true)
         scope.launch {
             try {
                 val result =
@@ -2119,10 +2121,30 @@ class DefaultRemoteRepository(
                 throw CancellationException()
             } catch (swallowed: Exception) {
                 Diagnostics.caught("repo.closeSession", swallowed)
-                if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
+                handleCloseFailure(swallowed, sessionId, projectId, selection.routeId, epoch == selectionEpoch)
             } finally {
-                closingSessions -= sessionId
+                markClosing(sessionId, false)
             }
+        }
+    }
+
+    /** Tracks [sessionId] as being closed and publishes it as [RemoteState.closingSessions]. */
+    private fun markClosing(sessionId: String, closing: Boolean) {
+        if (closing) closingSessions += sessionId else closingSessions -= sessionId
+        update { it.copy(closingSessions = closingSessions.toSet()) }
+    }
+
+    /**
+     * A refused close: says why. A terminal session whose pi predates the close is remembered, so Close
+     * hides; an unreachable one or one whose exit pi did not confirm is read again.
+     */
+    private fun handleCloseFailure(e: Exception, sessionId: String, projectId: String, routeId: String?, current: Boolean) {
+        if (!current) return
+        if (e.isExtensionControlRefusal) markSessionControlUnsupported(sessionId, ExtensionControl.CLOSE)
+        reportError(closeRefusal(e))
+        if (closeNeedsRefresh(e) && routeId != null) {
+            invalidateProjectList(routeId, projectId)
+            if (state.value.selection.projectId == projectId) refresh()
         }
     }
 
@@ -2136,7 +2158,7 @@ class DefaultRemoteRepository(
                 !closableProjectChat(state.value, projectId, sessionId)
         )
             return
-        closingSessions += sessionId
+        markClosing(sessionId, true)
         val connection = generation
         // Bound to the connection, not the selection: opening a chat meanwhile must not drop the
         // reply and leave the closed chat on the page.
@@ -2173,9 +2195,20 @@ class DefaultRemoteRepository(
                 throw e
             } catch (swallowed: Exception) {
                 Diagnostics.caught("repo.closeProjectChat", swallowed)
-                if (activeHost?.routeId == routeId) reportError(R.string.remote_request_error)
+                handleCloseFailure(swallowed, sessionId, projectId, routeId, activeHost?.routeId == routeId)
+                // On the Projects page nothing else re-reads the project: pi may have exited, so the
+                // featured chat is read again here, as after a successful close.
+                if (closeNeedsRefresh(swallowed) && connection == generation && activeHost?.routeId == routeId) {
+                    try {
+                        state.value.projects.find { it.text("id") == projectId }?.let { readProjectList(routeId, it, connection) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (readFailure: Exception) {
+                        Diagnostics.caught("repo.closeProjectChat.refresh", readFailure)
+                    }
+                }
             } finally {
-                closingSessions -= sessionId
+                markClosing(sessionId, false)
             }
         }
     }
@@ -2646,10 +2679,10 @@ class DefaultRemoteRepository(
                     (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
                 val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
-                    update { it.copy(capabilities = it.capabilities - setOf(QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
+                    update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2658,10 +2691,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 // A snapshot can arrive while capability discovery is still in flight.
                 if (promptDeliveryGeneration == generation) timeline?.let { current ->

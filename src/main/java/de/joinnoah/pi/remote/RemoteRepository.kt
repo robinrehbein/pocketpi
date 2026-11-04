@@ -258,6 +258,8 @@ data class RemoteState(
      * session ID. Learned again after the selection or connection changes: pi may have reloaded.
      */
     val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
+    /** Sessions a close request is in flight for; they show "Closing…" and offer no Close. */
+    val closingSessions: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
     internal val questionDetails: Map<String, QuestionDetailsView> = emptyMap(),
     internal val pagedEditors: Map<String, PagedEditorView> = emptyMap(),
@@ -483,7 +485,11 @@ interface RemoteRepository {
 
     fun renameSession(sessionId: String, title: String) {}
 
-    fun closeSession(sessionId: String) {}
+    /**
+     * Closes [sessionId] of the open project. [allowTerminal]: also a terminal session started by hand
+     * (idle only; see [terminalClosable]); the watch leaves it off.
+     */
+    fun closeSession(sessionId: String, allowTerminal: Boolean = false) {}
 
     /**
      * Closes [sessionId] of [projectId] from the Projects page, while no project is open; see
