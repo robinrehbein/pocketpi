@@ -238,7 +238,7 @@ Use JDK 25 and Android SDK platform 37, as for the phone:
 ```sh
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug \
-  :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug
+  :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:assembleDebugAndroidTest
 
 adb -s PHONE_SERIAL install build/outputs/apk/debug/pocketpi-debug.apk
 adb -s WATCH_SERIAL install wear/build/outputs/apk/debug/wear-debug.apk
@@ -247,6 +247,34 @@ adb -s WATCH_SERIAL install wear/build/outputs/apk/debug/wear-debug.apk
 CI includes watch unit/UI tests, debug assembly and Lint alongside the phone checks.
 Watch UI tests use a 240dp round Robolectric configuration on API 35. Existing phone
 API 36 instrumentation tests remain in CI; no real-watch acceptance is implied.
+
+### Emulator smoke test
+
+CI only compiles the watch's emulator tests (`wear/src/androidTest`); run them by hand on a
+Wear OS emulator (system image `android-36;android-wear-signed`). `WearNotificationsDeviceTest`
+posts a question, a completion and both failed-run notices and reads them back from the system:
+
+```sh
+ANDROID_SERIAL=WATCH_SERIAL ./gradlew :wear:connectedDebugAndroidTest
+```
+
+Gradle uninstalls the app afterwards. To look at the cards, install both APKs and keep the notices in the stream:
+
+```sh
+./gradlew :wear:assembleDebug :wear:assembleDebugAndroidTest
+adb install -r wear/build/outputs/apk/debug/wear-debug.apk
+adb install -r wear/build/outputs/apk/androidTest/debug/wear-debug-androidTest.apk
+adb shell am instrument -w -e keepNotifications true \
+  -e class de.joinnoah.pi.remote.WearNotificationsDeviceTest \
+  de.robinrehbein.pocketpi.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+`adb shell cmd locale set-app-locales de.robinrehbein.pocketpi --locales de-DE` and
+`adb shell settings put system font_scale 1.3` check German and large text. The status tile is
+added with `adb shell am broadcast -a com.google.android.wearable.app.DEBUG_SURFACE --es operation
+add-tile --ecn component de.robinrehbein.pocketpi/de.joinnoah.pi.remote.WatchTileService` and
+shown by swiping left from the watch face; the complication is picked in a watch face's editor
+(Utility has short-text slots). The emulator does not replace the Galaxy Watch Ultra checks below.
 
 ## Release boundaries
 
