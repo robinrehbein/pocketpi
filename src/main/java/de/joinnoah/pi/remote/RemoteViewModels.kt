@@ -220,9 +220,17 @@ internal class HostsViewModel(repository: RemoteRepository) :
 internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey.Activity) :
     DestinationViewModel(repository, key)
 
-internal class ProjectsViewModel(repository: RemoteRepository, key: RemoteNavKey.Projects) :
-    DestinationViewModel(repository, key) {
+internal class ProjectsViewModel(
+    repository: RemoteRepository,
+    key: RemoteNavKey.Projects,
+    settings: SettingsRepository,
+) : DestinationViewModel(repository, key) {
+    /** The swipe actions of the featured chats' rows follow these, as the Sessions page's do. */
+    val preferences = settings.state
+
     fun unshare(projectId: String) = active { repository.unshareProject(projectId) }
+
+    fun closeChat(projectId: String, sessionId: String) = active { repository.closeProjectChat(projectId, sessionId) }
 
     fun queueAccept(projectId: String, ref: String, comment: String) =
         active { repository.queueAccept(projectId, ref, comment) }

@@ -273,9 +273,11 @@ internal fun RemoteScreen(
     val theme = preferences?.theme ?: ThemePalette.BRAND
     val chatPreferences =
         (model as? ChatViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
+    // The Projects page reads them for its rows' swipe actions only.
     val sessionPreferences =
-        (model as? SessionsViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
-    val hideOfflineSessions = sessionPreferences?.hideOfflineSessions ?: false
+        ((model as? SessionsViewModel)?.preferences ?: (model as? ProjectsViewModel)?.preferences)
+            ?.collectAsStateWithLifecycle()?.value
+    val hideOfflineSessions = key is RemoteNavKey.Sessions && sessionPreferences?.hideOfflineSessions == true
     // Two-pane roles: the session list on the left, the chat on the right. Both null/false in the
     // phone layout, which then renders exactly as before.
     val paneLayout = LocalPaneLayout.current

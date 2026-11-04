@@ -369,7 +369,7 @@ class RemoteViewModelsTest {
                 draft = "secret draft",
                 messages = listOf(buildJsonObject { put("id", "message") }),
             )
-        val model = ProjectsViewModel(repository, RemoteNavKey.Projects("host"))
+        val model = ProjectsViewModel(repository, RemoteNavKey.Projects("host"), FakeSettingsRepository())
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.state.collect() }
         runCurrent()
         assertEquals("", model.state.value.draft)
@@ -454,6 +454,21 @@ class RemoteViewModelsTest {
         model.loadToolOutput("call")
         assertEquals(1, repository.abortedSessions.size)
         assertEquals(1, repository.toolOutputRequests.size)
+    }
+
+    @Test
+    fun projectsCloseChatForwardsWhileActive() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.state.value = RemoteState(selection = RemoteSelection("host"))
+        val model = ProjectsViewModel(repository, RemoteNavKey.Projects("host"), FakeSettingsRepository())
+        model.closeChat("p2", "two")
+        assertEquals(listOf("p2" to "two"), repository.closedChats)
+        // Loading, or another Mac on screen, drops it.
+        repository.state.value = RemoteState(selection = RemoteSelection("host"), loading = true)
+        model.closeChat("p2", "two")
+        repository.state.value = RemoteState(selection = RemoteSelection("other"))
+        model.closeChat("p2", "two")
+        assertEquals(1, repository.closedChats.size)
     }
 
     @Test

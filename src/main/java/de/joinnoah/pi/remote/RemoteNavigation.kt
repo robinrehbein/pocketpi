@@ -1590,7 +1590,7 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     // Each page blurs only its own lists, also beside or behind another one.
                     ProvideGlass {
-                        val model = viewModel { ProjectsViewModel(repository, key) }
+                        val model = viewModel { ProjectsViewModel(repository, key, settings) }
                         val column = LocalProjectsColumn.current
                         if (column == null)
                             CenteredPage {
