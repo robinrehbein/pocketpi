@@ -355,7 +355,7 @@ class SessionListPresentationTest {
 
         val verified = projectSessions("p", "Project", rows, verified = true)
         assertEquals(rows, verified.sessions)
-        assertEquals(SessionCounts(waiting = 1, running = 2), verified.counts)
+        assertEquals(SessionCounts(waiting = 1, running = 2, ready = 1), verified.counts)
         assertFalse(verified.truncated)
 
         val cached = projectSessions("p", "Project", rows, verified = false)
@@ -377,7 +377,7 @@ class SessionListPresentationTest {
         assertTrue("idle${idle.size - 1}" in kept)
         assertFalse("idle0" in kept)
         // The counts cover the whole list, not only the kept rows.
-        assertEquals(SessionCounts(waiting = 1, running = 1), entry.counts)
+        assertEquals(SessionCounts(waiting = 1, running = 1, ready = idle.size), entry.counts)
     }
 
     @Test
@@ -389,7 +389,7 @@ class SessionListPresentationTest {
         val running = entry.patched(status("b", "running"))
         assertEquals(SessionCounts(waiting = 1, running = 1), running.counts)
         val answered = running.patched(status("a", "idle"))
-        assertEquals(SessionCounts(running = 1), answered.counts)
+        assertEquals(SessionCounts(running = 1, ready = 1), answered.counts)
         // A row the patch leaves alone keeps the same entry.
         assertSame(answered, answered.patched { it })
         // A list without counts stays without them.
@@ -572,14 +572,35 @@ class SessionListPresentationTest {
         assertFalse(read.single().unread)
     }
 
-    private fun quickChat(id: String, status: String, verified: Boolean = true) =
-        ProjectChatSummary("p1", "Alpha", Wire.objectOf("id" to id, "title" to id, "status" to status), verified)
+    private fun quickChat(
+        id: String,
+        status: String,
+        verified: Boolean = true,
+        updatedAt: Long = 0L,
+        origin: String = "rpc",
+        parent: String? = null,
+    ) =
+        ProjectChatSummary(
+            "p1",
+            "Alpha",
+            Wire.objectOf(
+                "id" to id,
+                "title" to id,
+                "status" to status,
+                "origin" to origin,
+                "updatedAt" to updatedAt,
+                "parentSessionId" to parent,
+            ),
+            verified,
+        )
+
+    private fun ids(chats: List<ProjectChatSummary>) = chats.map { it.session.text("id") }
 
     @Test
     fun quickAccessShowsThreeRunningAndThreeRecentChatsUntilShowAll() {
         val chats =
             (1..4).map { quickChat("running$it", "running") } +
-                (1..5).map { quickChat("recent$it", "idle") }
+                (1..5).map { quickChat("recent$it", "idle", verified = false) }
 
         val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
         assertEquals(3, folded.running.size)
@@ -594,7 +615,7 @@ class SessionListPresentationTest {
 
     @Test
     fun eachGroupExpandsOnItsOwn() {
-        val chats = (1..4).map { quickChat("running$it", "running") } + (1..2).map { quickChat("recent$it", "idle") }
+        val chats = (1..4).map { quickChat("running$it", "running") } + (1..2).map { quickChat("recent$it", "idle", verified = false) }
 
         val runningOnly = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = false)
         assertEquals(4, runningOnly.running.size)
@@ -605,7 +626,7 @@ class SessionListPresentationTest {
 
     @Test
     fun quickAccessHasNoShowAllWhileEveryGroupFitsThree() {
-        val chats = (1..3).map { quickChat("running$it", "running") } + quickChat("recent", "idle")
+        val chats = (1..3).map { quickChat("running$it", "running") } + quickChat("recent", "idle", verified = false)
 
         val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
         assertFalse(folded.runningExpandable)
@@ -613,18 +634,114 @@ class SessionListPresentationTest {
     }
 
     @Test
-    fun waitingChatsAreNeverCutAndNeedTheConnectionAndAVerifiedList() {
+    fun waitingChatsAreNeverCutAndNeedTheConnectionAndAVerifiedListAndOfflineOrUnverifiedIdleChatsAreRecentNotReady() {
         val chats =
             (1..5).map { quickChat("waiting$it", "waiting") } +
-                quickChat("unverified", "waiting", verified = false)
+                quickChat("unverified", "waiting", verified = false) +
+                quickChat("unverifiedIdle", "idle", verified = false) +
+                quickChat("idle", "idle")
 
         val online = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
         assertEquals(5, online.waiting.size)
-        assertEquals(listOf("unverified"), online.recent.map { it.session.text("id") })
+        assertEquals(listOf("idle"), ids(online.ready))
+        assertEquals(listOf("unverified", "unverifiedIdle"), ids(online.recent))
 
         val offline = quickChats(chats, connected = false, showRunningAll = true, showRecentAll = true)
         assertTrue(offline.waiting.isEmpty())
-        assertEquals(6, offline.recent.size)
+        assertTrue(offline.ready.isEmpty())
+        assertEquals(8, offline.recent.size)
+    }
+
+    @Test
+    fun aHistoryRowIsNeverReady() {
+        val quick = quickChats(listOf(quickChat("closed", "idle", origin = "history")), true, false, false)
+
+        assertTrue(quick.ready.isEmpty())
+        assertEquals(listOf("closed"), ids(quick.recent))
+    }
+
+    @Test
+    fun anOrphanIdleSubagentIsRecentNotReady() {
+        val quick = quickChats(listOf(quickChat("sub", "idle", parent = "gone")), true, false, false)
+
+        assertTrue(quick.ready.isEmpty())
+        assertEquals(listOf("sub"), ids(quick.recent))
+    }
+
+    @Test
+    fun unreadReadyChatsLeadThenTheNewest() {
+        val chats =
+            listOf(
+                quickChat("newest", "idle", updatedAt = 300),
+                quickChat("unreadOld", "idle", updatedAt = 100),
+                quickChat("middle", "idle", updatedAt = 200),
+                quickChat("unreadNew", "idle", updatedAt = 250),
+            )
+        val marks = mapOf("unreadOld" to SessionMark(finishedAt = 90), "unreadNew" to SessionMark(finishedAt = 240))
+
+        assertEquals(
+            listOf("unreadNew", "unreadOld", "newest", "middle"),
+            ids(quickChats(chats, true, false, false, marks).ready),
+        )
+    }
+
+    @Test
+    fun aReadyChatWithoutAMarkReadsAsRead() {
+        val chats = listOf(quickChat("a", "idle", updatedAt = 100), quickChat("b", "idle", updatedAt = 200))
+
+        assertEquals(listOf("b", "a"), ids(quickChats(chats, true, false, false, emptyMap()).ready))
+    }
+
+    @Test
+    fun readyIsNeverCut() {
+        val chats = (1..8).map { quickChat("ready$it", "idle", updatedAt = it.toLong()) }
+
+        val quick = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(8, quick.ready.size)
+        assertTrue(quick.recent.isEmpty())
+    }
+
+    @Test
+    fun openChatsKeepTheirPlaceAmongTheTwelveBeforeHistory() {
+        val history = (1..12).map { quickChat("history$it", "idle", origin = "history", updatedAt = 1000L + it) }
+        val open = (1..3).map { quickChat("open$it", "idle", updatedAt = it.toLong()) }
+
+        val kept = ids(sortedProjectChats(history + open))
+
+        assertEquals(12, kept.size)
+        assertTrue(kept.containsAll(listOf("open1", "open2", "open3")))
+    }
+
+    @Test
+    fun aReadyChatIsOldAfterADay() {
+        val now = 10 * OLD_READY_MILLIS
+
+        assertFalse(readyIsOld(now - OLD_READY_MILLIS + 1, now))
+        assertTrue(readyIsOld(now - OLD_READY_MILLIS, now))
+        assertFalse(readyIsOld(now + 1, now))
+        assertFalse(readyIsOld(null, now))
+    }
+
+    @Test
+    fun sessionCountsCountOpenIdleTopLevelSessionsAsReady() {
+        val rows =
+            listOf(
+                row("open"),
+                Wire.objectOf("id" to "closed", "status" to "idle", "origin" to "history"),
+                Wire.objectOf("id" to "sub", "status" to "idle", "origin" to "rpc", "parentSessionId" to "open"),
+                row("busy", "running"),
+            )
+
+        assertEquals(SessionCounts(running = 1, ready = 1), sessionCounts(rows))
+    }
+
+    @Test
+    fun patchedCountsFollowReady() {
+        val entry = projectSessions("p", "Project", listOf(row("a", "running"), row("b")), verified = true)
+        assertEquals(SessionCounts(running = 1, ready = 1), entry.counts)
+
+        val finished = entry.patched { if (it.text("id") == "a") row("a", "idle") else it }
+        assertEquals(SessionCounts(ready = 2), finished.counts)
     }
 
     @Test
