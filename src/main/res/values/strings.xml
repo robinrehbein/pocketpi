@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_questionnaire_earlier_title">Answer to earlier question</string>
+    <string name="remote_questionnaire_pending">Pending</string>
+    <string name="remote_questionnaire_answered">Answered</string>
+    <string name="remote_questionnaire_cancelled">Cancelled</string>
+    <string name="remote_questionnaire_skipped">Skipped</string>
+    <string name="remote_questionnaire_missing">No answer available</string>
+    <string name="remote_questionnaire_show_more">Show more</string>
+    <string name="remote_questionnaire_show_less">Show less</string>
     <string name="remote_palette_quick_access">Quick access</string>
     <string name="remote_palette_search">Search</string>
     <string name="remote_palette_search_compact">Search · &gt; / # @</string>
@@ -856,4 +864,5 @@
     <string name="remote_app_icon_black_white">Black · White</string>
     <string name="remote_app_icon_color_white">Pi colors · White</string>
     <string name="remote_app_icon_error">Could not change the app icon. Please try again.</string>
+    <string name="remote_questionnaire_answer_sent">Answer submitted · Go to question</string>
 </resources>

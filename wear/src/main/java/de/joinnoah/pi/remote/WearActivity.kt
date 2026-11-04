@@ -186,8 +186,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 val message = messages.find { it.id == route.detailId }
                 if (message != null) {
                     val content = if (message is ConversationItem.Thinking && preferences.thinkingDisplay != ThinkingDisplay.TEXT) ""
-                        else if (message is ConversationItem.Activity) state.toolOutput?.takeIf { it.toolCallId == message.toolCallId }?.text ?: watchMessageText(message)
-                        else watchMessageText(message)
+                        else watchMessageReaderContent(message, state.toolOutput) { context.getString(it) }
                     val truncated = when (message) {
                         is ConversationItem.Bubble -> message.truncated
                         is ConversationItem.Activity -> message.truncated || message.argumentsTruncated
@@ -379,10 +378,48 @@ private fun watchMessageLabel(item: ConversationItem): String = when (item) {
     is ConversationItem.Activity -> item.name ?: stringResource(R.string.wear_tool)
     is ConversationItem.Subagent -> stringResource(R.string.wear_subagent)
     is ConversationItem.Thinking -> stringResource(R.string.wear_thinking_status)
+    is ConversationItem.QuestionnaireAnswer -> stringResource(
+        if (item.targetId == null) R.string.remote_questionnaire_earlier_title else R.string.remote_questionnaire_answered
+    )
 }
-private fun watchMessageText(item: ConversationItem): String = when (item) {
+
+@Composable
+private fun watchMessageText(item: ConversationItem, output: ToolOutputDownload? = null): String {
+    val context = LocalContext.current
+    return watchMessageReaderContent(item, output) { context.getString(it) }
+}
+
+/** An explicitly downloaded full output stays readable, including for a questionnaire card. */
+internal fun watchMessageReaderContent(item: ConversationItem, output: ToolOutputDownload?, text: (Int) -> String): String =
+    if (item is ConversationItem.Activity && item.toolCallId != null)
+        output?.takeIf { it.toolCallId == item.toolCallId }?.text ?: watchMessageContent(item, text)
+    else watchMessageContent(item, text)
+
+internal fun watchMessageContent(item: ConversationItem, text: (Int) -> String): String = when (item) {
     is ConversationItem.Bubble -> item.text
-    is ConversationItem.Activity -> listOfNotNull(item.arguments, item.output).joinToString("\n\n")
+    is ConversationItem.Activity -> item.questionnaire?.let { watchQuestionnaireSummary(it, text) }
+        ?: listOfNotNull(item.arguments, item.output).joinToString("\n\n")
     is ConversationItem.Subagent -> item.output ?: item.agents.joinToString("\n") { it.name + ": " + (it.preview ?: it.state) }
     is ConversationItem.Thinking -> item.text
+    is ConversationItem.QuestionnaireAnswer -> if (item.targetId == null) watchQuestionnaireSummary(item.presentation, text)
+        else text(R.string.remote_questionnaire_answered)
 }
+
+internal fun watchQuestionnaireSummary(presentation: QuestionnairePresentation, text: (Int) -> String): String = buildList {
+    add(text(when (presentation.state) {
+        QuestionnaireState.PENDING -> R.string.remote_questionnaire_pending
+        QuestionnaireState.ANSWERED -> R.string.remote_questionnaire_answered
+        QuestionnaireState.CANCELLED -> R.string.remote_questionnaire_cancelled
+    }))
+    presentation.questions.forEach { question ->
+        add(question.prompt)
+        if (presentation.state == QuestionnaireState.ANSWERED) {
+            add(when {
+                question.skipped -> text(R.string.remote_questionnaire_skipped)
+                question.answers.isEmpty() -> text(R.string.remote_questionnaire_missing)
+                else -> question.answers.joinToString(", ")
+            })
+            question.note?.takeIf { it.isNotBlank() }?.let(::add)
+        }
+    }
+}.joinToString("\n")
