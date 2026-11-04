@@ -18,7 +18,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -65,16 +69,24 @@ class MacHubUiTest {
         put("name", name)
     }
 
-    private fun session(id: String, status: String) = buildJsonObject {
+    private fun session(id: String, status: String, origin: String = "pi", parent: String? = null) = buildJsonObject {
         put("id", id)
         put("title", "Session $id")
         put("status", status)
-        put("origin", "pi")
+        put("origin", origin)
         put("updatedAt", 1L)
+        if (parent != null) put("parentSessionId", parent)
     }
 
-    private fun chat(projectId: String, projectName: String, id: String, status: String, verified: Boolean = true) =
-        ProjectChatSummary(projectId, projectName, session(id, status), verified)
+    private fun chat(
+        projectId: String,
+        projectName: String,
+        id: String,
+        status: String,
+        verified: Boolean = true,
+        origin: String = "pi",
+        parent: String? = null,
+    ) = ProjectChatSummary(projectId, projectName, session(id, status, origin, parent), verified)
 
     private fun render(
         projects: List<JsonObject>,
@@ -85,6 +97,7 @@ class MacHubUiTest {
         connection: Int? = null,
         capabilities: Set<String> = emptySet(),
         tickets: TicketsState = TicketsState(),
+        pointerMenu: Boolean = false,
     ) {
         repository.state.value =
             RemoteState(
@@ -102,7 +115,8 @@ class MacHubUiTest {
             )
         compose.setContent {
             androidx.compose.material3.MaterialTheme {
-                RemoteNavigation(repository, settings, false, {})
+                if (pointerMenu) PointerMenuHost { RemoteNavigation(repository, settings, false, {}) }
+                else RemoteNavigation(repository, settings, false, {})
             }
         }
         compose.waitForIdle()
@@ -481,5 +495,92 @@ class MacHubUiTest {
         assertTrue(
             compose.onAllNodes(hasContentDescription("DEV-433", substring = true)).fetchSemanticsNodes().isNotEmpty()
         )
+    }
+
+    /** The clickable row of [projectId]'s chat [id], which carries its TalkBack actions. */
+    private fun chatRow(projectId: String, id: String) =
+        compose.onNode(
+            hasAnyAncestor(hasTestTag("projectChatRow-$projectId-$id")) and
+                SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+        )
+
+    private fun closeActions(projectId: String, id: String) =
+        chatRow(projectId, id).fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions).orEmpty()
+            .filter { it.label == label(R.string.remote_session_close) }
+
+    private fun confirmClose() {
+        compose.onNode(hasText(label(R.string.remote_session_close)) and hasClickAction() and hasAnyAncestor(isDialog()))
+            .assertIsEnabled()
+            .performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun aClosableChatOnTheProjectsPageConfirmsAndClosesItInItsProject() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p2", "Beta", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        val close = closeActions("p2", "two").single()
+        compose.runOnUiThread { close.action() }
+        compose.waitForIdle()
+        confirmClose()
+
+        assertEquals(listOf("p2" to "two"), repository.closedChats)
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+    }
+
+    @Test
+    fun aMacStartedChatOffersNoClose() {
+        render(
+            listOf(project("p2", "Beta")),
+            chats = listOf(chat("p2", "Beta", "two", "idle", origin = "pi"), chat("p2", "Beta", "tui", "idle", origin = "tui")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        assertTrue(closeActions("p2", "two").isEmpty())
+        assertTrue(closeActions("p2", "tui").isEmpty())
+    }
+
+    @Test
+    fun aMainSessionWhoseSubagentWaitsOffersNoClose() {
+        render(
+            listOf(project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p2", "Beta", "main", "idle", origin = "rpc"),
+                    chat("p2", "Beta", "sub", "waiting", origin = "rpc", parent = "main"),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        // The main session shows its subagent's question and waits with it.
+        assertTrue(closeActions("p2", "main").isEmpty())
+    }
+
+    @Test
+    fun projectsRowsFollowTheSwipeSetting() {
+        settings.setSwipeEndToStart(SwipeAction.NONE)
+        settings.setSwipeStartToEnd(SwipeAction.NONE)
+        render(
+            listOf(project("p2", "Beta")),
+            chats = listOf(chat("p2", "Beta", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            pointerMenu = true,
+        )
+
+        chatRow("p2", "two").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+
+        // The menu still offers Close.
+        chatRow("p2", "two").performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("menu_session_close").performClick()
+        compose.waitForIdle()
+        confirmClose()
+        assertEquals(listOf("p2" to "two"), repository.closedChats)
     }
 }
