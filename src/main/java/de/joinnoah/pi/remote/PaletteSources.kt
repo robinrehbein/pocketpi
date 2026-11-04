@@ -422,6 +422,11 @@ internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutatin
         ChatAction.STATUS, ChatAction.CLOSE -> false
         // The palette lists these as their slash commands, which say more than the menu's label.
         ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD -> false
+        // Attachability is owned by the repository (route offer, capability revision, worker
+        // session), which RemoteState cannot safely tell; only the header's gate offers it.
+        ChatAction.TERMINAL -> false
+        // Render recording is a local diagnostics flag RemoteState does not carry; only the header offers it.
+        ChatAction.RENDER_CAPTURE -> false
     }
 
 private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteItem> {

@@ -15,4 +15,10 @@
         <item quantity="one">%d arbeitet</item>
         <item quantity="other">%d arbeiten</item>
     </plurals>
+    <plurals name="remote_mac_ready_count">
+        <item quantity="one">%d neu</item>
+        <item quantity="other">%d neu</item>
+    </plurals>
+    <!-- Ein bereiter Chat auf der Projektseite, der seit einem Tag oder länger ruht. -->
+    <string name="remote_session_old">Alt</string>
 </resources>

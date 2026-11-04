@@ -57,6 +57,7 @@ private fun LoadingControlPill(width: Dp) {
         modifier = Modifier.width(width).height(32.dp),
         shape = CircleShape,
         blur = false,
+        shadowElevation = 0.dp,
     ) {
         Box(Modifier.fillMaxSize())
     }
@@ -84,7 +85,10 @@ internal fun ComposerControlPill(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        FloatingSurface(shape = CircleShape, blur = false, contentColor = contentColor) {
+        FloatingSurface(
+            shape = CircleShape, blur = false, contentColor = contentColor,
+            shadowElevation = 0.dp,
+        ) {
             CompositionLocalProvider(LocalContentColor provides contentColor) {
                 ProvideTextStyle(MaterialTheme.typography.labelLarge) {
                     Row(

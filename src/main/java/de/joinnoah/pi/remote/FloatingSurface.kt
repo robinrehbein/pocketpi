@@ -23,6 +23,8 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.SnackbarData
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarVisuals
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +49,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -171,6 +177,8 @@ internal fun FloatingSurface(
     // contentColorFor only knows the opaque scheme colors, so a translucent one is looked up as such.
     contentColor: Color = contentColorFor(color.copy(alpha = 1f)),
     blur: Boolean = true,
+    // Nested composer controls use their rim only: their scroll viewport would cut a shadow.
+    shadowElevation: Dp = 8.dp,
     content: @Composable () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -193,7 +201,7 @@ internal fun FloatingSurface(
         modifier
             // Keep the shadow outside the surface's rounded clipping layer.
             .shadow(
-                elevation = 8.dp,
+                elevation = shadowElevation,
                 shape = shape,
                 clip = false,
                 ambientColor = Color.Black.copy(alpha = 0.18f),
@@ -237,6 +245,18 @@ internal fun BannerSurface(
 }
 
 /**
+ * A snackbar whose spoken text [description] differs from the [message] it shows, for a message
+ * that leaves out what a screen reader should name (the session that was hidden).
+ */
+internal class DescribedSnackbarVisuals(
+    override val message: String,
+    val description: String,
+    override val actionLabel: String?,
+    override val duration: SnackbarDuration,
+    override val withDismissAction: Boolean = true,
+) : SnackbarVisuals
+
+/**
  * Material's snackbar as a floating glass bar of the inverse surface. The action keeps the bar's
  * text colour: inversePrimary would fall below 4.5:1 on the translucent bar over light content.
  */
@@ -256,9 +276,12 @@ internal fun GlassSnackbar(data: SnackbarData, modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val description = (visuals as? DescribedSnackbarVisuals)?.description
             Text(
                 visuals.message,
-                Modifier.weight(1f, fill = false).padding(vertical = 14.dp),
+                Modifier.weight(1f, fill = false).padding(vertical = 14.dp)
+                    // SnackbarHost already wraps the snackbar in a polite live region.
+                    .semantics { if (description != null) contentDescription = description },
                 style = MaterialTheme.typography.bodyMedium,
             )
             visuals.actionLabel?.let { label ->

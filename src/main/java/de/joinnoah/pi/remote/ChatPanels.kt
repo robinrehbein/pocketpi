@@ -297,6 +297,7 @@ internal fun SubagentStrip(
     sessionId: String? = null,
     expandedState: MutableState<Boolean> = rememberSaveable(sessionId) { mutableStateOf(false) },
     onOpenSummary: (() -> Unit)? = null,
+    activity: StripActivity? = null,
 ) {
     var expanded by expandedState
     if (!subagentChipShown(strip, expanded)) return
@@ -336,7 +337,7 @@ internal fun SubagentStrip(
         LazyColumn(Modifier.heightIn(max = 320.dp)) {
             items(strip.entries) { entry ->
                 SubagentStripRow(entry, canAbort(entry),
-                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
+                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort, activity = stripRowActivity(activity, entry))
             }
         }
     }
@@ -349,11 +350,13 @@ internal fun SubagentInsightSheet(
     onOpen: (SubagentStripEntry) -> Unit,
     onAbort: (SubagentStripEntry) -> Unit,
     onDismiss: () -> Unit,
+    activity: StripActivity? = null,
 ) {
     InsightSheet(title = stringResource(R.string.remote_subagent_popover_title), onDismiss = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 600.dp).testTag("subagentInsightSheet")) {
             items(strip.entries) { entry ->
-                SubagentStripRow(entry, canAbort(entry), onOpen = { onDismiss(); onOpen(it) }, onAbort = onAbort)
+                SubagentStripRow(entry, canAbort(entry), onOpen = { onDismiss(); onOpen(it) }, onAbort = onAbort,
+                    activity = stripRowActivity(activity, entry))
             }
         }
     }
@@ -493,6 +496,8 @@ private fun SubagentStripRow(
     allowAbort: Boolean,
     onOpen: (SubagentStripEntry) -> Unit,
     onAbort: (SubagentStripEntry) -> Unit,
+    /** Negotiated: the exact child session's typed state; null keeps the legacy glyph. */
+    activity: StripRowActivity? = null,
 ) {
     val openable = entry.openable && entry.sessionId != null
     Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -506,17 +511,37 @@ private fun SubagentStripRow(
                 Text(entry.agent ?: sessionTitleLabel(entry.title, entry.titleAttachment), style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     // A last-known state is muted and named as such, like the session list.
-                    val color =
-                        if (entry.lastKnown) MaterialTheme.colorScheme.outline else subagentStateColor(entry.state)
-                    val glyph = if (entry.lastKnown) null else subagentStateGlyph(entry.state)
+                    val live = activity?.live
+                    val color = when {
+                        entry.lastKnown -> MaterialTheme.colorScheme.outline
+                        live != null -> activityPhaseColor(live.phase, live.thinkingLevel)
+                        // Negotiated, running, no fresh typed view of this exact child: muted.
+                        activity != null -> MaterialTheme.colorScheme.outline
+                        else -> subagentStateColor(entry.state)
+                    }
+                    val glyph = when {
+                        entry.lastKnown -> null
+                        live != null -> activityGlyphKind(live.phase)
+                        else -> subagentStateGlyph(entry.state)
+                    }
                     if (glyph != null) {
-                        // Only live state reaches here (last-known entries show a muted dot), so a running
-                        // agent may animate. The label beside it carries the meaning; the shape does not rely on color.
-                        StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp).testTag("subagentGlyph_$glyph"))
+                        // Last-known entries show a muted dot. Legacy: a live running child animates.
+                        // Negotiated: only the child's own fresh typed view animates.
+                        // The label beside it carries the meaning; the shape does not rely on color.
+                        StatusGlyph(kind = glyph, color = color, modifier = Modifier.size(16.dp).testTag("subagentGlyph_$glyph"),
+                            animate = activity == null || live != null)
                     } else {
                         StatusDot(color)
                     }
-                    val label = stringResource(subagentStateLabel(entry.state))
+                    val label = stringResource(
+                        when (live?.phase) {
+                            ActivityPhase.Pending -> R.string.remote_subagent_phase_pending
+                            ActivityPhase.Thinking -> R.string.remote_subagent_phase_thinking
+                            ActivityPhase.Writing -> R.string.remote_subagent_phase_writing
+                            ActivityPhase.Tool -> R.string.remote_subagent_phase_tool
+                            null -> subagentStateLabel(entry.state)
+                        }
+                    )
                     Text(
                         if (entry.lastKnown) stringResource(R.string.remote_status_last_known, label) else label,
                         style = MaterialTheme.typography.labelMedium,

@@ -101,7 +101,7 @@ class BaselineProfileBenchmarks {
         startActivityAndWait()
         check(device.wait(Until.hasObject(By.text(Pattern.compile("$HOST|$PROJECT"))), 30_000))
         if (!device.hasObject(By.text(PROJECT))) device.tapUntil(HOST, By.text(PROJECT), "The projects did not load")
-        device.tapUntil(PROJECT, By.text(CHAT), "The session list did not load")
+        device.openProjectUntil(By.text(CHAT), "The session list did not load")
         device.tapUntil(CHAT, By.text(TAIL), "The chat did not open", timeoutMs = 30_000)
     }
 }

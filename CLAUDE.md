@@ -4,11 +4,16 @@ PocketPi is the Android client for pi Remote. It pairs with a Mac running pi, li
 shared projects and sessions, and chats with them through the pi Remote relay. The app ID is
 `de.robinrehbein.pocketpi`; the Kotlin package is still `de.joinnoah.pi.remote`.
 
-The pi host, relay, extensions and wire protocol live in `robinrehbein/noah-monorepo`
-(`packages/pi-atlas/extensions/remote`, formerly `packages/pi-remote`; the relay is
-`packages/pi-remote-relay`). This repository holds only the Android app and copies of the protocol test
-fixtures in `src/test/resources` (the README names their source commit). A change that needs a new
-protocol field or host behaviour lands in noah-monorepo first, under that repository's rules.
+The pi host, relay, extensions and wire protocol live in
+`noah-financial-services-gmbh/noah-monorepo`, checked out locally at
+`/Users/robinrehbein/Code/noah-org` (`packages/pi-atlas/extensions/remote`, formerly
+`packages/pi-remote`; the relay is `packages/pi-remote-relay`). The personal repository
+`robinrehbein/noah-monorepo` at `/Users/robinrehbein/Code/noah-monorepo` is a legacy reference,
+not the target for new host changes.
+
+This repository holds only the Android app and copies of the protocol test fixtures in
+`src/test/resources` (the README names their source commit). A change that needs a new protocol
+field or host behaviour lands in the organization repository first, under that repository's rules.
 
 ## Working here
 

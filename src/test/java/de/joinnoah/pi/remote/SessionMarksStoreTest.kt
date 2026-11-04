@@ -230,5 +230,140 @@ class SessionMarksStoreTest {
             projectSessions = mapOf("project" to projectSessions("project", "Project", rows, verified = true)),
         )
     }
-}
 
+    @Test
+    fun hidingSetsTheHideAndSeenFieldsAndClearsAFinish() {
+        val store = SessionMarksStore(context)
+        store.markFinished("host", "s1", now = 50)
+
+        val previous = store.hide("host", "s1", updatedAt = 100, now = 200)
+
+        assertEquals(SessionMark(finishedAt = 50), previous)
+        assertEquals(
+            SessionMark(seenAt = 200, seenUpdatedAt = 100, hiddenUpdatedAt = 100, hiddenAt = 200),
+            store.mark("host", "s1"),
+        )
+        store.unhide("host", "s1")
+        assertEquals(SessionMark(seenAt = 200, seenUpdatedAt = 100), store.mark("host", "s1"))
+    }
+
+    @Test
+    fun aRowWithoutUpdatedAtHidesAtZero() {
+        val store = SessionMarksStore(context)
+        store.hide("host", "s1", updatedAt = null, now = 200)
+        assertEquals(0L, store.mark("host", "s1")?.hiddenUpdatedAt)
+    }
+
+    @Test
+    fun undoingAHideRestoresTheSeenAndFinishedFields() {
+        val store = SessionMarksStore(context)
+        store.markSeen("host", "s1", updatedAt = 50, now = 60)
+        store.markFinished("host", "s1", now = 70)
+        val before = store.mark("host", "s1")
+        val previous = store.hide("host", "s1", updatedAt = 100, now = 200)
+        val applied = store.mark("host", "s1")
+
+        store.undoHide("host", "s1", previous, applied)
+
+        assertEquals(before, store.mark("host", "s1"))
+    }
+
+    @Test
+    fun undoingAHideKeepsWhatHappenedAfterIt() {
+        val store = SessionMarksStore(context)
+        val previous = store.hide("host", "s1", updatedAt = 100, now = 200)
+        val applied = store.mark("host", "s1")
+        store.markFinished("host", "s1", now = 300)
+        store.markSeen("host", "s2", updatedAt = 1, now = 1)
+
+        store.undoHide("host", "s1", previous, applied)
+
+        assertEquals(SessionMark(seenAt = 200, seenUpdatedAt = 100, finishedAt = 300), store.mark("host", "s1"))
+    }
+
+    @Test
+    fun undoingAHideAfterANewerLookKeepsTheLook() {
+        val store = SessionMarksStore(context)
+        val previous = store.hide("host", "s1", updatedAt = 100, now = 200)
+        val applied = store.mark("host", "s1")
+        store.markSeen("host", "s1", updatedAt = 150, now = 250)
+
+        store.undoHide("host", "s1", previous, applied)
+
+        assertEquals(SessionMark(seenAt = 200, seenUpdatedAt = 150), store.mark("host", "s1"))
+    }
+
+    @Test
+    fun pinningShowsAHiddenSessionAgain() {
+        val store = SessionMarksStore(context)
+        store.hide("host", "s1", updatedAt = 100, now = 200)
+
+        store.setPinned("host", "s1", true)
+
+        val mark = store.mark("host", "s1")
+        assertTrue(mark?.pinned == true)
+        assertNull(mark?.hiddenUpdatedAt)
+        assertNull(mark?.hiddenAt)
+    }
+
+    @Test
+    fun marksWithFourOrSixFieldsLoadAndOnlyHiddenOnesWriteSix() {
+        val prefs = context.getSharedPreferences(SessionMarksStore.PREFS_NAME, Context.MODE_PRIVATE)
+        val sep = "\u001F"
+        prefs.edit().putString("host" + sep + "old", "1,5,6,").putString("host" + sep + "bad", "1,2,3,4,5").commit()
+
+        val store = SessionMarksStore(context)
+        assertEquals(SessionMark(pinned = true, seenAt = 5, seenUpdatedAt = 6), store.mark("host", "old"))
+        assertNull(store.mark("host", "bad"))
+
+        store.hide("host", "h", updatedAt = 100, now = 200)
+        store.markSeen("host", "plain", updatedAt = 1, now = 2)
+        assertEquals("0,200,100,,100,200", prefs.getString("host" + sep + "h", null))
+        assertEquals("0,2,1,", prefs.getString("host" + sep + "plain", null))
+        assertEquals(store.mark("host", "h"), SessionMarksStore(context).mark("host", "h"))
+    }
+
+    @Test
+    fun aFreshHideOfAnOldSessionSurvivesTheCap() {
+        val store = SessionMarksStore(context)
+        store.markSeen("host", "old", updatedAt = 1, now = 1)
+        repeat(SessionMarksStore.MAX_PLAIN_MARKS_PER_ROUTE - 1) { index ->
+            store.markSeen("host", "s$index", updatedAt = index + 10L, now = index + 10L)
+        }
+        store.hide("host", "old", updatedAt = 1, now = System.currentTimeMillis())
+        store.markSeen("host", "extra", updatedAt = 5000, now = 5000)
+
+        assertTrue(store.mark("host", "old")?.hiddenUpdatedAt != null)
+        assertNull(store.mark("host", "s0"))
+    }
+
+    @Test
+    fun hidingAnExistingMarkEvictsNothing() {
+        val store = SessionMarksStore(context)
+        repeat(SessionMarksStore.MAX_PLAIN_MARKS_PER_ROUTE) { index ->
+            store.markSeen("host", "s$index", updatedAt = index + 10L, now = index + 10L)
+        }
+        store.hide("host", "s0", updatedAt = 10, now = 999)
+
+        assertEquals(SessionMarksStore.MAX_PLAIN_MARKS_PER_ROUTE, store.marks.value.keys.count { it.first == "host" })
+    }
+
+    @Test
+    fun aHiddenRowObservedRunningIsShownAgainAndStaysSoWhenItIsIdleAtTheSameUpdate() = runTest {
+        val store = SessionMarksStore(context)
+        store.hide("host", "s1", updatedAt = 10, now = 200)
+        val state = MutableStateFlow(stateWith(status = "idle", open = null))
+        store.observe(state, backgroundScope, now = { 500L })
+        runCurrent()
+        assertTrue(store.mark("host", "s1")?.hiddenUpdatedAt != null)
+
+        state.value = stateWith(status = "running", open = null)
+        runCurrent()
+        assertNull(store.mark("host", "s1")?.hiddenUpdatedAt)
+
+        state.value = stateWith(status = "idle", open = null)
+        runCurrent()
+        assertNull(store.mark("host", "s1")?.hiddenUpdatedAt)
+        assertFalse(sessionHidden(store.mark("host", "s1"), "idle", 10))
+    }
+}

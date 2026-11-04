@@ -223,13 +223,17 @@ internal enum class SessionMenuAction(@StringRes val label: Int) {
     PIN(R.string.remote_menu_pin),
     UNPIN(R.string.remote_menu_unpin),
     MARK_READ(R.string.remote_menu_mark_read),
+    /** Phone-local: hides a finished session until it changes (see [sessionHidden]). */
+    HIDE(R.string.remote_menu_hide),
+    UNHIDE(R.string.remote_menu_unhide),
     CLOSE(R.string.remote_session_close),
     COPY_ID(R.string.remote_menu_copy_session_id),
 }
 
 /**
  * The entries of a session row's menu. [pinned] names the pin entry: Pin, or Unpin when it is
- * set; [canMarkRead] offers Mark read on a row that is unread.
+ * set; [canMarkRead] offers Mark read on a row that is unread. A [hidden] row offers Show again
+ * instead of Hide, which [canHide] offers on a row that can be hidden.
  */
 internal fun sessionMenuActions(
     canRename: Boolean,
@@ -238,6 +242,8 @@ internal fun sessionMenuActions(
     canPin: Boolean = false,
     pinned: Boolean = false,
     canMarkRead: Boolean = false,
+    canHide: Boolean = false,
+    hidden: Boolean = false,
 ): List<SessionMenuAction> =
     buildList {
         add(SessionMenuAction.OPEN)
@@ -245,6 +251,7 @@ internal fun sessionMenuActions(
         if (canFork) add(SessionMenuAction.FORK_LATEST)
         if (canPin) add(if (pinned) SessionMenuAction.UNPIN else SessionMenuAction.PIN)
         if (canMarkRead) add(SessionMenuAction.MARK_READ)
+        if (hidden) add(SessionMenuAction.UNHIDE) else if (canHide) add(SessionMenuAction.HIDE)
         if (canClose) add(SessionMenuAction.CLOSE)
         add(SessionMenuAction.COPY_ID)
     }

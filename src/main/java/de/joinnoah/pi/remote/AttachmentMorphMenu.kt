@@ -73,6 +73,7 @@ internal fun AttachmentMorphMenu(
                     shape = CircleShape,
                     contentColor = LocalContentColor.current,
                     blur = false,
+                    shadowElevation = 0.dp,
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))

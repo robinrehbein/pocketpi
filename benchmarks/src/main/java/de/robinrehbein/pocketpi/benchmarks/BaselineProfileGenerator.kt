@@ -86,7 +86,7 @@ class BaselineProfileGenerator {
         // The launcher intent, so MainActivity's own start is profiled.
         startActivityAndWait()
         waitForProjects()
-        device.tapUntil(PROJECT, By.text(CHAT), "The session list did not load")
+        device.openProjectUntil(By.text(CHAT), "The session list did not load")
         device.tapUntil(CHAT, By.text(TAIL), "The chat did not open", timeoutMs = 30_000)
         device.waitForIdle(1_000)
         repeat(4) { swipeConversation(towardHistory = true) }
@@ -102,7 +102,7 @@ class BaselineProfileGenerator {
 
     /**
      * A moderate swipe in the middle of the screen, clear of the floating header and composer.
-     * MainActivity exposes no test tags as resource IDs, so it uses the display, not the list.
+     * It swipes the display, not the conversation list node, so the gesture stays as it was profiled.
      */
     private fun MacrobenchmarkScope.swipeConversation(towardHistory: Boolean) {
         val x = device.displayWidth / 2

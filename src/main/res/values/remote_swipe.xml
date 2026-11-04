@@ -7,4 +7,20 @@
     <string name="remote_swipe_action_close">Close</string>
     <string name="remote_swipe_action_rename">Rename</string>
     <string name="remote_swipe_action_none">Off</string>
+    <string name="remote_menu_hide">Hide</string>
+    <string name="remote_menu_unhide">Show again</string>
+    <string name="remote_swipe_action_hide">Hide</string>
+    <string name="remote_swipe_action_unhide">Show again</string>
+    <string name="remote_session_hidden_label">Hidden</string>
+    <string name="remote_session_hidden_snackbar">Hidden on this phone</string>
+    <string name="remote_session_hidden_snackbar_a11y">\"%1$s\" hidden on this phone</string>
+    <string name="remote_undo">Undo</string>
+    <plurals name="remote_sessions_hidden_count">
+        <item quantity="one">%d hidden session</item>
+        <item quantity="other">%d hidden sessions</item>
+    </plurals>
+    <string name="remote_sessions_show_hidden">Show</string>
+    <string name="remote_sessions_hide_hidden">Hide hidden sessions</string>
+    <string name="remote_sessions_hidden_state_shown">Shown</string>
+    <string name="remote_sessions_hidden_state_collapsed">Collapsed</string>
 </resources>

@@ -11,14 +11,19 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
@@ -78,31 +83,35 @@ class RemoteActivity : ComponentActivity() {
             val locked by app.appLock.locked.collectAsState()
             val preferences by app.settings.state.collectAsState()
             val systemDark = isSystemInDarkTheme()
-            CompositionLocalProvider(
-                LocalPromptPredictions provides app.predictions,
-                LocalAppLockStore provides app.appLock.store,
-                LocalSessionMarks provides app.sessionMarks,
-            ) {
-                AppLockGate(
-                    locked,
-                    onUnlock = ::unlock,
-                    colors =
-                        remember(preferences.themeMode, preferences.theme, systemDark) {
-                            appColorScheme(this@RemoteActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
-                        },
+            // The macrobenchmarks and smoke tests drive this activity with UiAutomator, which finds a
+            // Compose node by its test tag only when the tags are exposed as resource IDs.
+            Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }, propagateMinConstraints = true) {
+                CompositionLocalProvider(
+                    LocalPromptPredictions provides app.predictions,
+                    LocalAppLockStore provides app.appLock.store,
+                    LocalSessionMarks provides app.sessionMarks,
                 ) {
-                    RemoteApp(
-                        app.repository,
-                        app.settings,
-                        app.pushConfigured,
-                        app::enablePush,
-                        notification,
-                        { if (notification == it) notification = null },
-                        app::disablePush,
-                        share,
-                        { if (share == it) share = null },
-                        app.home.snapshot,
-                    )
+                    AppLockGate(
+                        locked,
+                        onUnlock = ::unlock,
+                        colors =
+                            remember(preferences.themeMode, preferences.theme, systemDark) {
+                                appColorScheme(this@RemoteActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
+                            },
+                    ) {
+                        RemoteApp(
+                            app.repository,
+                            app.settings,
+                            app.pushConfigured,
+                            app::enablePush,
+                            notification,
+                            { if (notification == it) notification = null },
+                            app::disablePush,
+                            share,
+                            { if (share == it) share = null },
+                            app.home.snapshot,
+                        )
+                    }
                 }
             }
         }
@@ -331,7 +340,11 @@ internal fun RemoteApp(
         onDispose {}
     }
     SystemBarsAppearance(dark)
-    CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+    CompositionLocalProvider(
+        LocalUriHandler provides uriHandler,
+        // The palette the scheme below actually draws, for the activity glyph colours.
+        LocalThemePalette provides effectiveThemePalette(preferences.theme, android.os.Build.VERSION.SDK_INT),
+    ) {
         MaterialTheme(
             colorScheme = colors,
             typography = RemoteTypography,
