@@ -701,4 +701,92 @@ class SessionListPresentationTest {
         assertEquals("idle", featured.first { it.session.text("id") == "main" }.session.text("status"))
         assertEquals("running", mainSessionChats(featured).first { it.session.text("id") == "main" }.session.text("status"))
     }
+
+    private fun hiddenMark(at: Long = 100) = SessionMark(hiddenUpdatedAt = at, hiddenAt = 1)
+
+    @Test
+    fun aMarkHidesASessionOnlyWhileNothingNewHappened() {
+        val mark = hiddenMark(100)
+        assertTrue(sessionHidden(mark, "idle", 100))
+        assertTrue(sessionHidden(mark, "idle", 50))
+        assertTrue(sessionHidden(hiddenMark(0), "idle", null))
+        assertFalse(sessionHidden(mark, "idle", 101))
+        assertFalse(sessionHidden(mark, "running", 100))
+        assertFalse(sessionHidden(mark, "waiting", 100))
+        assertFalse(sessionHidden(mark.copy(finishedAt = 5), "idle", 100))
+        assertFalse(sessionHidden(mark.copy(pinned = true), "idle", 100))
+        assertFalse(sessionHidden(null, "idle", 100))
+        assertFalse(sessionHidden(SessionMark(seenAt = 1), "idle", 100))
+    }
+
+    private fun tuiRow(id: String, status: String = "idle", updatedAt: Long = 100, parent: String? = null) =
+        if (parent == null) Wire.objectOf("id" to id, "title" to id, "origin" to "tui", "status" to status, "updatedAt" to updatedAt)
+        else Wire.objectOf("id" to id, "title" to id, "origin" to "tui", "status" to status, "updatedAt" to updatedAt, "parentSessionId" to parent)
+
+    private fun listed(sessions: List<JsonObject>, marks: Map<String, SessionMark>, showHidden: Boolean = false) =
+        visibleSessionListItems(
+            sessions, connected = true, loading = false, hideOffline = false,
+            marks = marks, confirmed = true, showHidden = showHidden,
+        )
+
+    @Test
+    fun hiddenRowsLeaveTheListUntilTheyAreShown() {
+        val sessions = listOf(tuiRow("a"), tuiRow("b"))
+        val marks = mapOf("a" to hiddenMark(100))
+
+        assertEquals(listOf("b"), listed(sessions, marks).map { it.id })
+        val shown = listed(sessions, marks, showHidden = true)
+        assertEquals(listOf("a", "b"), shown.map { it.id })
+        assertEquals(listOf(true, false), shown.map { it.hidden })
+        assertEquals(1, hiddenSessionCount(shown))
+        // A newer update brings the row back.
+        assertEquals(listOf("a", "b"), listed(listOf(tuiRow("a", updatedAt = 101), tuiRow("b")), marks).map { it.id })
+    }
+
+    @Test
+    fun aHiddenParentWithARunningSubagentStaysListedWithIt() {
+        val marks = mapOf("p" to hiddenMark(100))
+        val live = listed(listOf(tuiRow("p"), tuiRow("c", status = "running", parent = "p")), marks)
+        assertEquals(listOf("p", "c"), live.map { it.id })
+        assertFalse(live.first().hidden)
+
+        val idle = listed(listOf(tuiRow("p"), tuiRow("c", parent = "p"), tuiRow("other")), marks)
+        assertEquals(listOf("other"), idle.map { it.id })
+        val all = listed(listOf(tuiRow("p"), tuiRow("c", parent = "p"), tuiRow("other")), marks, showHidden = true)
+        assertEquals(1, hiddenSessionCount(all))
+    }
+
+    @Test
+    fun onlyRowsThePhoneCanNeverCloseOfferHide() {
+        val close = setOf(SESSION_CLOSE_CAPABILITY)
+        fun item(origin: String, status: String = "idle", parent: String? = null) =
+            sessionListItem(
+                Wire.objectOf("id" to "x", "title" to "X", "origin" to origin, "status" to status).let {
+                    if (parent == null) it else Wire.objectOf("id" to "x", "title" to "X", "origin" to origin, "status" to status, "parentSessionId" to parent)
+                },
+                connected = true, loading = false, confirmed = true,
+            )
+        assertTrue(canHideSession(item("tui"), close))
+        assertTrue(canHideSession(item("history"), close))
+        assertTrue(canHideSession(item("tui", status = "offline"), close))
+        assertTrue(canHideSession(item("rpc", status = "offline"), close))
+        assertFalse(canHideSession(item("rpc"), close))
+        assertFalse(canHideSession(item("tui", status = "running"), close))
+        assertFalse(canHideSession(item("tui", status = "waiting"), close))
+        assertFalse(canHideSession(item("tui", parent = "p"), close))
+        assertFalse(canHideSession(item("tui").copy(pinned = true), close))
+        assertFalse(canHideSession(item("tui").copy(hidden = true), close))
+        assertFalse(canHideSession(item("tui"), close, shownSessionId = "x"))
+    }
+
+    @Test
+    fun aProjectChatIsHiddenByTheStatusThePageShows() {
+        val marks = mapOf("main" to hiddenMark(1))
+        val chats = listOf(chat("main", "idle"), chat("sub", "running", parent = "main"))
+        // The busy subagent lifts its status onto the main session, which then shows again.
+        assertTrue(mainSessionChats(chats).filterNot { projectChatHidden(it, marks) }.isNotEmpty())
+        val idle = mainSessionChats(listOf(chat("main", "idle"), chat("sub", "idle", parent = "main")))
+        assertTrue(idle.filterNot { projectChatHidden(it, marks) }.isEmpty())
+        assertFalse(projectChatHidden(idle.single(), mapOf("main" to hiddenMark(0))))
+    }
 }
