@@ -238,14 +238,13 @@ class ChatNavigationUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
-    fun historyNeverPushesAPhoneHeaderActionIntoTheMenu() {
+    fun phoneHeaderKeepsHistoryAndSettingsInTheFullMenu() {
         render()
-        // New session, Refresh and Settings fit the pill as before; History does not take their place.
-        compose.onNodeWithContentDescription(label(R.string.remote_settings)).assertIsDisplayed()
-        compose.onNodeWithContentDescription(label(R.string.remote_refresh)).assertIsDisplayed()
-        compose.onNodeWithContentDescription(label(R.string.remote_new_session)).assertIsDisplayed()
-        compose.onNodeWithContentDescription(label(R.string.remote_chat_history)).assertIsDisplayed()
-        compose.onNodeWithContentDescription(label(R.string.remote_settings)).performClick()
+        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNodeWithTag("chatActionMenu_history").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionMenu_new_session").assertIsDisplayed()
+        compose.onNodeWithTag("chatActionMenu_settings").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("composerField").assertDoesNotExist()
     }

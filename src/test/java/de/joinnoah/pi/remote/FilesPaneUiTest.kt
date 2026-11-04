@@ -106,6 +106,17 @@ class FilesPaneUiTest {
 
     private fun label(id: Int, vararg args: Any) = compose.activity.getString(id, *args)
 
+    private fun headerAction(action: String) {
+        if (compose.onAllNodesWithTag("chatAction_$action").fetchSemanticsNodes().isNotEmpty())
+            compose.onNodeWithTag("chatAction_$action").performClick()
+        else {
+            compose.onNodeWithTag("chatActionsMore").performClick()
+            compose.waitForIdle()
+            compose.onNodeWithTag("chatActionMenu_$action").performClick()
+        }
+        compose.waitForIdle()
+    }
+
     private fun back() {
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitForIdle()
@@ -536,6 +547,8 @@ class FilesPaneUiTest {
         chat(emptySet())
         compose.onNodeWithTag("composerField").assertIsDisplayed()
         compose.onNodeWithTag("chatAction_files").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.waitForIdle()
         compose.onNodeWithTag("chatActionMenu_files").assertDoesNotExist()
     }
 
@@ -543,7 +556,7 @@ class FilesPaneUiTest {
     @Config(qualifiers = "w411dp-h891dp")
     fun selectedLinesFillTheComposer() {
         chat(setOf(FILES_CAPABILITY))
-        compose.onNodeWithTag("chatAction_files").performClick()
+        headerAction("files")
         compose.waitForIdle()
         assertEquals(1, repository.filesOpens)
         compose.onNodeWithTag("filesPane").assertIsDisplayed()
@@ -658,7 +671,7 @@ class FilesPaneUiTest {
     @Config(qualifiers = "w1300dp-h800dp")
     fun tabletsOpenFilesInTheInspector() {
         chat(setOf(FILES_CAPABILITY))
-        compose.onNodeWithTag("chatAction_files").performClick()
+        headerAction("files")
         compose.waitForIdle()
         compose.onNode(hasTestTag("filesPane") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
         compose.onNodeWithTag("composerField").assertIsDisplayed()
@@ -674,7 +687,7 @@ class FilesPaneUiTest {
         chat(setOf(FILES_CAPABILITY))
         val selection = RemoteSelection("host", "project", "s1")
         assertEquals(listOf("acquire" to selection), repository.presenceEvents)
-        compose.onNodeWithTag("chatAction_files").performClick()
+        headerAction("files")
         compose.waitForIdle()
         compose.onNodeWithTag("filesPane").assertIsDisplayed()
         assertEquals(listOf("acquire" to selection, "release" to selection), repository.presenceEvents)
@@ -689,7 +702,7 @@ class FilesPaneUiTest {
         chat(setOf(FILES_CAPABILITY))
         val selection = RemoteSelection("host", "project", "s1")
         assertEquals(listOf("acquire" to selection), repository.presenceEvents)
-        compose.onNodeWithTag("chatAction_files").performClick()
+        headerAction("files")
         compose.waitForIdle()
         compose.onNode(hasTestTag("filesPane") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
         assertEquals(listOf("acquire" to selection), repository.presenceEvents)
@@ -706,7 +719,7 @@ class FilesPaneUiTest {
         chat(setOf(GIT_CAPABILITY, FILES_CAPABILITY))
         fun shown(tag: String) =
             compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
-        // New users see Changes and Refresh in the pill; Files is in the menu.
+        // New users see Changes as their shortcut; Files is in the full menu.
         compose.onNodeWithTag("chatAction_changes").performClick()
         compose.waitForIdle()
         shown("changesPane")
@@ -716,7 +729,7 @@ class FilesPaneUiTest {
         shown("filesPane")
         compose.onNodeWithTag("changesPane").assertDoesNotExist()
         // Changes again switches back to their tab; the files stay open behind it.
-        compose.onNodeWithTag("chatAction_changes").performClick()
+        headerAction("changes")
         compose.waitForIdle()
         shown("changesPane")
         compose.onNodeWithTag("filesPane").assertDoesNotExist()

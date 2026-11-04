@@ -373,6 +373,9 @@ internal fun RemoteScreen(
         sessionActivityLine(state, presentation.items, chatKey?.selection())
     }
     val chatModel = model as? ChatViewModel
+    val chatActionUsage = chatModel?.chatActionUsage?.collectAsStateWithLifecycle()?.value.orEmpty()
+    LaunchedEffect(chatModel) { chatModel?.refreshChatActionUsage() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { chatModel?.refreshChatActionUsage() }
     val commitReview = chatModel?.commitReview?.state?.collectAsStateWithLifecycle()?.value
     val pushReview = chatModel?.pushReview?.state?.collectAsStateWithLifecycle()?.value
     val pullRequestReview = chatModel?.pullRequestReview?.state?.collectAsStateWithLifecycle()?.value
@@ -1622,7 +1625,7 @@ internal fun RemoteScreen(
                     if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
                         Text(stringResource(R.string.remote_terminal_title))
                     }
-                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = { currentRunAction(it) })
+                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, usage = chatActionUsage, sessionIdentity = key, onAction = { currentRunAction(it) })
                 }
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1632,7 +1635,7 @@ internal fun RemoteScreen(
                 // Compact, the banners' entry joins the menu while they show; see the status sheet.
                 val actionLayout = actionLayout(!standaloneHistory).let { if (compact) it.withStatus(bannersShown) else it }
                 val actionsWidth =
-                    48.dp * (actionLayout.shown.size + if (actionLayout.menu.isEmpty()) 0 else 1) +
+                    96.dp +
                         if (standaloneHistory) 56.dp else 0.dp
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
