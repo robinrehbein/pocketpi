@@ -191,7 +191,9 @@ internal class WatchViewModel(val repository: RemoteRepository, private val save
             WatchConfirmationKind.UNSHARE -> request.target?.let { repository.unshareProject(it); open(WatchScreen.PROJECTS) }
             // The repository refreshes and falls back to Sessions only after the close was accepted.
             // Navigating here would invalidate the asynchronous close request's selection epoch.
-            WatchConfirmationKind.CLOSE -> request.source.selection.sessionId?.let(repository::closeSession)
+            WatchConfirmationKind.CLOSE ->
+                // Terminal sessions started by hand are closed from the phone only.
+                if (hostOwned(repository.state.value)) request.source.selection.sessionId?.let { repository.closeSession(it) }
             WatchConfirmationKind.KILL_JOB -> request.target?.let(repository::stopJob)
             WatchConfirmationKind.DISMISS_SEND -> request.target?.let(repository::dismissFollowUp)
             WatchConfirmationKind.FORK_RETRY, WatchConfirmationKind.FORK_EDIT -> {

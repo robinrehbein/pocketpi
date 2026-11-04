@@ -5677,6 +5677,7 @@ class RemoteRepositoryTest {
         val repository = DefaultRemoteRepository(
             Pairings(listOf(host, other)), drafts, transport, backgroundScope,
             StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
         )
         val original = RemoteSelection("host", "project", "session")
         repository.activate(original)
@@ -5709,6 +5710,7 @@ class RemoteRepositoryTest {
         val repository = DefaultRemoteRepository(
             Pairings(listOf(host, other)), drafts, transport, backgroundScope,
             StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
         )
         repository.activate(RemoteSelection("host", "project", "session"))
         transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
@@ -18456,6 +18458,131 @@ class RemoteRepositoryTest {
         }
     }
 
+    private fun terminalCloseFixture(group: String, name: String): JsonObject =
+        Wire.parse(checkNotNull(javaClass.getResourceAsStream("/session-close-terminal-v1.json")).readBytes().decodeToString())
+            .array(group).map { it as JsonObject }.first { it.text("name") == name }.obj("payload")
+
+    private fun idleTerminal(): JsonObject = JsonObject(terminalControlSession() + ("status" to JsonPrimitive("idle")))
+
+    private fun closingTerminal(transport: Transport, row: JsonObject = idleTerminal()) {
+        controlling(transport, row)
+        advertising(
+            transport,
+            JsonArray(
+                listOf(FOLLOW_UP_CAPABILITY, STEER_CAPABILITY, RELOAD_CAPABILITY, HOST_WORKER_V2_CAPABILITY, SESSION_CLOSE_TERMINAL_CAPABILITY)
+                    .map(::JsonPrimitive),
+            ),
+        )
+    }
+
+    @Test
+    fun terminalCloseComesOnlyFromTheV3RouteNotTheHandshakeOrV2() = runTest {
+        val handshake = Transport().also {
+            controlling(it, idleTerminal())
+            it.capabilities = it.capabilities + SESSION_CLOSE_TERMINAL_CAPABILITY
+        }
+        val authenticated = repository(handshake)
+        authenticated.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertFalse(SESSION_CLOSE_TERMINAL_CAPABILITY in authenticated.state.value.capabilities)
+
+        val v2Only = Transport().also { closingTerminal(it) }
+        val answered = v2Only.response
+        v2Only.response = { request ->
+            val result = answered(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:"))
+                JsonObject(checkNotNull(result) - "capabilities")
+            else result
+        }
+        val v2 = repository(v2Only)
+        v2.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertFalse(SESSION_CLOSE_TERMINAL_CAPABILITY in v2.state.value.capabilities)
+
+        val v3 = repository(Transport().also { closingTerminal(it) })
+        v3.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertTrue(SESSION_CLOSE_TERMINAL_CAPABILITY in v3.state.value.capabilities)
+    }
+
+    @Test
+    fun anIdleTerminalSessionClosesFromThePhoneAndTracksTheRequest() = runTest {
+        val transport = Transport().also { closingTerminal(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val id = idleTerminal().text("id")
+        val answered = transport.response
+        var duringRequest: Set<String>? = null
+        transport.response = { request ->
+            if (request.text("type") == "session.close") duringRequest = repository.state.value.closingSessions
+            answered(request)
+        }
+        repository.closeSession(id, allowTerminal = true)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.close" })
+        val frame = transport.sent.single { it.text("type") == "session.close" }
+        val expected = JsonObject(terminalCloseFixture("wireValid", "close") - "requestId")
+        assertEquals(expected.keys, frame.keys - "requestId")
+        for (key in expected.keys) assertEquals(key, expected.text(key), frame.text(key))
+        assertEquals(id, frame.text("sessionId"))
+        for (name in listOf("close-extra-key", "close-missing-project"))
+            assertTrue(name, (terminalCloseFixture("wireInvalid", name) - "requestId").keys != frame.keys - "requestId")
+        assertEquals(setOf(id), duringRequest)
+        assertTrue(repository.state.value.closingSessions.isEmpty())
+    }
+
+    @Test
+    fun aTerminalSessionClosesNeitherWithoutThePhoneFlagNorWhileRunning() = runTest {
+        val transport = Transport().also { closingTerminal(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        repository.closeSession(idleTerminal().text("id"))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.close" })
+
+        val running = JsonObject(idleTerminal() + ("status" to JsonPrimitive("running")))
+        val other = Transport().also { closingTerminal(it, running) }
+        val busy = repository(other)
+        busy.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        busy.closeSession(running.text("id"), allowTerminal = true)
+        runCurrent()
+        assertEquals(0, other.sent.count { it.text("type") == "session.close" })
+    }
+
+    @Test
+    fun aTerminalCloseRefusalIsExplainedAndAnOldExtensionHidesClose() = runTest {
+        val id = idleTerminal().text("id")
+        val cases =
+            listOf(
+                Triple("busy", CLOSE_DRAFT_REFUSAL, R.string.remote_close_draft),
+                Triple("busy", "Session is busy", R.string.remote_close_busy),
+                Triple("internal", CLOSE_RESULT_UNKNOWN, R.string.remote_close_timeout),
+                Triple("offline", "Session is offline", R.string.remote_close_offline),
+                Triple("unsupported", EXTENSION_CONTROL_REFUSAL_MESSAGE, R.string.remote_close_unsupported),
+            )
+        for ((code, message, text) in cases) {
+            val transport = Transport().also { closingTerminal(it) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            transport.failure = { if (it.text("type") == "session.close") code else null }
+            transport.failureMessage = { message }
+            repository.closeSession(id, allowTerminal = true)
+            runCurrent()
+            assertEquals(message, text, repository.state.value.error)
+            assertTrue(repository.state.value.closingSessions.isEmpty())
+            val hidden = ExtensionControl.CLOSE in repository.state.value.sessionControlUnsupported[id].orEmpty()
+            assertEquals(message, code == "unsupported", hidden)
+            if (code == "internal" || code == "offline") {
+                // The list is read again: the close may have ended pi.
+                assertTrue(message, transport.sent.count { it.text("type") == "sessions.list" } >= 2)
+            }
+        }
+    }
+
     @Test
     fun aWorkerThatExitedAnswersOfflineAndStaysClosableAgain() = runTest {
         val worker = JsonObject(workerControlSession() + ("status" to JsonPrimitive("running")))
@@ -18466,7 +18593,7 @@ class RemoteRepositoryTest {
         transport.failure = { if (it.text("type") == "session.close") "offline" else null }
         repository.closeSession("worker-session")
         runCurrent()
-        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertEquals(R.string.remote_close_offline, repository.state.value.error)
         transport.failure = { null }
         repository.closeSession("worker-session")
         runCurrent()
@@ -18638,7 +18765,7 @@ class RemoteRepositoryTest {
 
         repository.closeProjectChat("p2", "two")
         runCurrent()
-        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertEquals(R.string.remote_close_offline, repository.state.value.error)
         assertEquals(listOf("two" to "rpc"), repository.featured("p2"))
 
         // It is not kept as closed: the next try goes out again.

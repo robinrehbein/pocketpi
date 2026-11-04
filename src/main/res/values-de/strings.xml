@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources>
+    <string name="remote_chat_activity_completed">Für %1$s gearbeitet</string>
+    <string name="remote_chat_duration_join">%1$s und %2$s</string>
+    <string name="remote_chat_duration_three">%1$s, %2$s und %3$s</string>
+    <plurals name="remote_chat_duration_seconds">
+        <item quantity="one">%d Sekunde</item>
+        <item quantity="other">%d Sekunden</item>
+    </plurals>
+    <plurals name="remote_chat_duration_minutes">
+        <item quantity="one">%d Minute</item>
+        <item quantity="other">%d Minuten</item>
+    </plurals>
+    <plurals name="remote_chat_duration_hours">
+        <item quantity="one">%d Stunde</item>
+        <item quantity="other">%d Stunden</item>
+    </plurals>
     <string name="remote_questionnaire_earlier_title">Antwort auf frühere Frage</string>
     <string name="remote_questionnaire_pending">Ausstehend</string>
     <string name="remote_questionnaire_answered">Beantwortet</string>
@@ -174,6 +189,14 @@
     <string name="remote_offline_sessions_hidden">Alle Sitzungen sind offline.</string>
     <string name="remote_session_close">Sitzung schließen</string>
     <string name="remote_session_close_confirmation">Diese Sitzung auf deinem Rechner schließen? Ihr Verlauf bleibt verfügbar.</string>
+    <string name="remote_session_close_terminal_confirmation">Diese Sitzung schließen? pi wird auf deinem Mac beendet und sein Terminal kehrt zur Shell zurück. Hat die Sitzung Nachrichten, bleibt sie als gespeicherte Sitzung in deiner Liste und du kannst sie fortsetzen.</string>
+    <string name="remote_session_closing">Wird geschlossen…</string>
+    <string name="remote_session_closed_announcement">Sitzung geschlossen</string>
+    <string name="remote_close_draft">Im Editor von pi auf deinem Mac steht noch ungesendeter Text. Sende oder lösche ihn dort und schließ dann erneut.</string>
+    <string name="remote_close_busy">pi ist auf deinem Mac beschäftigt. Versuch es erneut, sobald die Sitzung frei ist.</string>
+    <string name="remote_close_unsupported">Lade die Remote-Erweiterung in pi auf deinem Mac neu, um diese Sitzung vom Handy aus zu schließen.</string>
+    <string name="remote_close_timeout">PocketPi konnte nicht bestätigen, dass die Sitzung geschlossen wurde. Aktualisiere die Ansicht, um ihren Zustand zu sehen.</string>
+    <string name="remote_close_offline">PocketPi erreicht pi auf deinem Mac für diese Sitzung nicht und kann sie deshalb nicht vom Handy aus schließen. Schließ sie auf deinem Mac.</string>
     <string name="remote_prompt">Nachricht an pi</string>
     <string name="remote_send">Senden</string>
     <string name="remote_stop">pi anhalten</string>
@@ -888,4 +911,9 @@
     <string name="remote_render_capture">Chat-Layoutbericht erfassen</string>
     <string name="remote_render_snapshot_help">Dieser Bericht enthält letzte Layoutpositionen, Geräteinformationen und Diagnoseoptionen. Er enthält keine Nachrichtentexte, IDs oder Screenshots. Teile ihn zusammen mit deinem separat aufgenommenen Screenshot. Das Öffnen dieser Ansicht oder das Ändern der Diagnoseoptionen kann den Chat neu zeichnen.</string>
     <string name="remote_render_share">Layoutbericht teilen</string>
+    <string name="remote_pill_sizes">Pillengrößen</string>
+    <string name="remote_composer_pill_size">Steuerelemente im Eingabefeld</string>
+    <string name="remote_insight_pill_size">Übersichten über dem Eingabefeld</string>
+    <string name="remote_pill_small">Klein</string>
+    <string name="remote_pill_large">Groß</string>
 </resources>

@@ -139,18 +139,16 @@ class ComposerStopUiTest {
     private val queued = listOf(PendingFollowUp("queued", "Also check the logs", "pending"))
 
     @Test
-    fun modeMenuAndStopRemainAvailableOnNarrowScreenWithLargeFonts() {
+    fun sendAndStopRemainAvailableOnNarrowScreenWithLargeFonts() {
         render(state(draft = "Next step"), widthDp = 280, fontScale = 2f)
         val stop = compose.onNodeWithTag("stopRun").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val menu = compose.onNodeWithTag("sendModeMenu").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithTag("sendModeMenu").assertDoesNotExist()
         val send = compose.onNodeWithTag("steer").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val minSize = 48f * compose.density.density
         org.junit.Assert.assertTrue(stop.width >= minSize && stop.height >= minSize)
-        org.junit.Assert.assertTrue(menu.width >= minSize && menu.height >= minSize)
         org.junit.Assert.assertTrue(send.width >= minSize && send.height >= minSize)
-        org.junit.Assert.assertTrue(stop.right <= menu.left && menu.right <= send.left)
-        compose.onNodeWithTag("sendModeMenu").performClick()
-        compose.onNodeWithTag("sendWhenDone").performClick()
+        org.junit.Assert.assertTrue(stop.right <= send.left)
+        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
         compose.onNodeWithTag("followUp").performClick()
         assertEquals(1, followUps)
     }
@@ -364,22 +362,41 @@ class ComposerStopUiTest {
     }
 
     @Test
-    fun sendModeChoiceShowsBothVerbsAndSendsWithTheChosenMode() {
+    fun sendModeSwipesNameTheChosenModeAndSendWithIt() {
         render(state(draft = "Next step"))
-        compose.onNodeWithTag("sendModeMenu").performClick()
-        compose.onNodeWithText(label(R.string.remote_send_now)).assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_send_when_done)).assertIsDisplayed()
-        compose.onNodeWithTag("sendNow").performClick()
+        compose.onNodeWithTag("sendModeMenu").assertDoesNotExist()
+        compose.onNodeWithTag("steer").assertContentDescriptionEquals(label(R.string.remote_send_now))
+            .performTouchInput { swipeLeft() }
+        compose.onNodeWithTag("followUp").assertContentDescriptionEquals(label(R.string.remote_send_when_done))
+            .performTouchInput { swipeRight() }
+        compose.onNodeWithTag("steer").assertContentDescriptionEquals(label(R.string.remote_send_now))
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
 
         compose.onNodeWithTag("steer").performClick()
         assertEquals(1, steers)
         assertEquals(0, followUps)
 
-        compose.onNodeWithTag("sendModeMenu").performClick()
-        compose.onNodeWithTag("sendWhenDone").performClick()
-        compose.onNodeWithTag("followUp").performClick()
+        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
+        compose.onNodeWithTag("followUp").assertContentDescriptionEquals(label(R.string.remote_send_when_done))
+            .performClick()
         assertEquals(1, steers)
         assertEquals(1, followUps)
+        assertEquals(0, stops)
+    }
+
+    @Test
+    fun accessibilityActionSwitchesToTheNamedSendModeWithoutSending() {
+        render(state(draft = "Next step"))
+        val action = compose.onNodeWithTag("steer").fetchSemanticsNode()
+            .config[SemanticsActions.CustomActions]
+            .single { it.label == label(R.string.remote_send_when_done) }
+        compose.runOnIdle { org.junit.Assert.assertTrue(action.action()) }
+        compose.onNodeWithTag("followUp")
+            .assertContentDescriptionEquals(label(R.string.remote_send_when_done))
+        assertEquals(0, sends)
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
         assertEquals(0, stops)
     }
 

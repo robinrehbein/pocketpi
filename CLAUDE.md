@@ -15,6 +15,13 @@ This repository holds only the Android app and copies of the protocol test fixtu
 `src/test/resources` (the README names their source commit). A change that needs a new protocol
 field or host behaviour lands in the organization repository first, under that repository's rules.
 
+## Priorities
+
+- The sessions that matter are host workers (chats started from the phone) and pi sessions started
+  by hand in a Mac terminal. RPC sessions are only a fallback: never block a feature on RPC
+  support, and leave RPC out of a first version unless it comes for free.
+- iOS is negligible. Do not plan or build for it.
+
 ## Working here
 
 Robin is the founder and the only developer. Answer him in German in chat; write code, docs,

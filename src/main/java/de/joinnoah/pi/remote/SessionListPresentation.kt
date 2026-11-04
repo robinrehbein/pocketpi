@@ -14,6 +14,12 @@ internal enum class SessionAvailability {
 
 internal const val SESSION_CLOSE_CAPABILITY = "session.close.v1"
 
+/**
+ * The host closes an idle terminal session (origin `tui`, started by hand on the Mac) through its pi
+ * Remote extension. Only the `capabilities.v3:` route advertises it.
+ */
+internal const val SESSION_CLOSE_TERMINAL_CAPABILITY = "session.close.terminal.v1"
+
 internal data class SessionListItem(
     val id: String,
     val title: String,
@@ -497,8 +503,8 @@ internal fun visibleSessionListItems(
 internal fun hiddenSessionCount(items: List<SessionListItem>): Int = items.count { it.depth == 0 && it.hidden }
 
 /**
- * Hide is offered for a finished main session that the phone can never close (a terminal, history
- * or offline row), so each row has one obvious verb. [shownSessionId] is the chat open beside the
+ * Hide is offered for a finished main session that the phone can never close (a terminal row the
+ * host cannot close, a history or an offline row), so each row has one obvious verb. [shownSessionId] is the chat open beside the
  * list. The test is [hostOwned], a property of the row, not [canCloseSession], which also turns
  * false while the list loads or the connection drops.
  */
@@ -513,7 +519,8 @@ internal fun canHideSession(
         !item.hidden &&
         !item.busyStatus &&
         item.id != shownSessionId &&
-        (!hostOwned(item, capabilities) || item.availability == SessionAvailability.OFFLINE)
+        ((!hostOwned(item, capabilities) && !terminalClosable(item, capabilities)) ||
+            item.availability == SessionAvailability.OFFLINE)
 
 /**
  * Whether the main session [chat] of the Projects page is hidden on this phone. Call it after
@@ -535,13 +542,24 @@ internal fun canCloseSession(
     connected: Boolean,
     loading: Boolean,
     capabilities: Set<String>,
+    // Wear passes false: the watch closes host-owned sessions only (see [terminalClosable]).
+    terminal: Boolean = true,
+    unsupported: Set<ExtensionControl> = emptySet(),
 ): Boolean =
-    hostOwned(item, capabilities) &&
+    (hostOwned(item, capabilities) ||
+        (terminal &&
+            item.availability == SessionAvailability.IDLE &&
+            terminalClosable(item, capabilities, unsupported))) &&
         item.availability != SessionAvailability.OFFLINE &&
         !item.lastKnown &&
         connected &&
         !loading &&
         SESSION_CLOSE_CAPABILITY in capabilities
+
+/** The capabilities [canCloseSession] reads: those the host advertises minus the ones it refused. */
+internal fun closeCapabilities(state: RemoteState): Set<String> =
+    if (SESSION_CLOSE_TERMINAL_CAPABILITY in state.unavailableCapabilities) state.capabilities - SESSION_CLOSE_TERMINAL_CAPABILITY
+    else state.capabilities
 
 /**
  * The featured chat [sessionId] of [projectId], as the Projects page shows it, can be closed from
@@ -574,7 +592,7 @@ internal fun closableMainChat(state: RemoteState, chat: ProjectChatSummary): Boo
         chat.session.optionalText("status") == "idle" &&
         chat.session.optionalText("origin") != "history" &&
         chat.session.optionalText("parentSessionId").isNullOrBlank() &&
-        hostOwned(state, chat.session)
+        (hostOwned(state, chat.session) || terminalClosable(state, chat.session))
 
 /** The (project, session) IDs of the [mainChats] the Projects page can close, computed once per pass. */
 internal fun closableProjectChatIds(state: RemoteState, mainChats: List<ProjectChatSummary>): Set<Pair<String, String>> =

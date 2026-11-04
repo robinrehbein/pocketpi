@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_chat_activity_completed">Worked for %1$s</string>
+    <string name="remote_chat_duration_join">%1$s and %2$s</string>
+    <string name="remote_chat_duration_three">%1$s, %2$s and %3$s</string>
+    <plurals name="remote_chat_duration_seconds">
+        <item quantity="one">%d second</item>
+        <item quantity="other">%d seconds</item>
+    </plurals>
+    <plurals name="remote_chat_duration_minutes">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
+    <plurals name="remote_chat_duration_hours">
+        <item quantity="one">%d hour</item>
+        <item quantity="other">%d hours</item>
+    </plurals>
     <string name="remote_questionnaire_earlier_title">Answer to earlier question</string>
     <string name="remote_questionnaire_pending">Pending</string>
     <string name="remote_questionnaire_answered">Answered</string>
@@ -174,6 +189,14 @@
     <string name="remote_offline_sessions_hidden">All sessions are offline.</string>
     <string name="remote_session_close">Close session</string>
     <string name="remote_session_close_confirmation">Close this session on your computer? Its history will remain available.</string>
+    <string name="remote_session_close_terminal_confirmation">Close this session? pi ends on your Mac and its terminal returns to the shell. If the session has messages, it stays in your list as a saved session you can resume.</string>
+    <string name="remote_session_closing">Closing…</string>
+    <string name="remote_session_closed_announcement">Session closed</string>
+    <string name="remote_close_draft">There is unsent text in pi\'s editor on your Mac. Send or clear it there, then close again.</string>
+    <string name="remote_close_busy">pi is busy on your Mac. Try again once the session is idle.</string>
+    <string name="remote_close_unsupported">Reload the Remote extension in pi on your Mac to close this session from your phone.</string>
+    <string name="remote_close_timeout">PocketPi could not confirm that the session closed. Refresh to see its state.</string>
+    <string name="remote_close_offline">PocketPi cannot reach pi on your Mac for this session, so it cannot close it from your phone. Close it on your Mac.</string>
     <string name="remote_prompt">Message pi</string>
     <string name="remote_send">Send</string>
     <string name="remote_stop">Stop pi</string>
@@ -889,4 +912,9 @@
     <string name="remote_render_capture">Capture chat layout report</string>
     <string name="remote_render_snapshot_help">This report contains recent layout positions, device information and diagnostic options. It contains no message text, IDs or screenshots. Share it together with your separately taken screenshot. Opening this sheet or changing diagnostic options may redraw the chat.</string>
     <string name="remote_render_share">Share layout report</string>
+    <string name="remote_pill_sizes">Pill sizes</string>
+    <string name="remote_composer_pill_size">Composer controls</string>
+    <string name="remote_insight_pill_size">Insights above the composer</string>
+    <string name="remote_pill_small">Small</string>
+    <string name="remote_pill_large">Large</string>
 </resources>

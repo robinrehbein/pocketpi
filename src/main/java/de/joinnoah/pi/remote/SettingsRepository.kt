@@ -74,7 +74,19 @@ enum class ThinkingDisplay(val stored: String) {
     }
 }
 
+enum class PillSize(val stored: String) {
+    SMALL("small"),
+    LARGE("large");
+
+    companion object {
+        fun fromStored(value: String?, fallback: PillSize): PillSize =
+            entries.firstOrNull { it.stored == value } ?: fallback
+    }
+}
+
 data class RemoteSettings(
+    val composerPillSize: PillSize = PillSize.SMALL,
+    val insightPillSize: PillSize = PillSize.LARGE,
     val theme: ThemePalette = ThemePalette.BRAND,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val pushEnabled: Boolean = false,
@@ -107,6 +119,10 @@ interface SettingsRepository {
 
     fun setThinkingDisplay(display: ThinkingDisplay)
 
+    fun setComposerPillSize(size: PillSize) {}
+
+    fun setInsightPillSize(size: PillSize) {}
+
     fun setHideOfflineSessions(hide: Boolean)
 
     fun setSwipeEndToStart(action: SwipeAction)
@@ -132,6 +148,8 @@ class DefaultSettingsRepository(
     private val mutable =
         MutableStateFlow(
             RemoteSettings(
+                composerPillSize = PillSize.fromStored(preferences.getString("composer_pill_size", null), PillSize.SMALL),
+                insightPillSize = PillSize.fromStored(preferences.getString("insight_pill_size", null), PillSize.LARGE),
                 theme = ThemePalette.fromStored(preferences.getString("theme", null)),
                 themeMode = ThemeMode.fromStored(preferences.getString("theme_mode", null)),
                 pushEnabled = preferences.getBoolean("push_enabled", false),
@@ -177,6 +195,16 @@ class DefaultSettingsRepository(
     override fun markNotificationPromptShown() {
         preferences.edit().putBoolean("notification_prompt_shown", true).apply()
         mutable.value = mutable.value.copy(notificationPromptShown = true)
+    }
+
+    override fun setComposerPillSize(size: PillSize) {
+        preferences.edit().putString("composer_pill_size", size.stored).apply()
+        mutable.value = mutable.value.copy(composerPillSize = size)
+    }
+
+    override fun setInsightPillSize(size: PillSize) {
+        preferences.edit().putString("insight_pill_size", size.stored).apply()
+        mutable.value = mutable.value.copy(insightPillSize = size)
     }
 
     override fun setThinkingDisplay(display: ThinkingDisplay) {

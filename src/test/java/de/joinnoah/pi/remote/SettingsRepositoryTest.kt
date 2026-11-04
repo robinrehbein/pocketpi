@@ -36,6 +36,31 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun pillSizesDefaultIndependentlyAndPersist() {
+        val repository = repository()
+        assertEquals(PillSize.SMALL, repository.state.value.composerPillSize)
+        assertEquals(PillSize.LARGE, repository.state.value.insightPillSize)
+        repository.setComposerPillSize(PillSize.LARGE)
+        repository.setInsightPillSize(PillSize.SMALL)
+        assertEquals(PillSize.LARGE, repository.state.value.composerPillSize)
+        assertEquals(PillSize.SMALL, repository.state.value.insightPillSize)
+        assertEquals("large", preferences.getString("composer_pill_size", null))
+        assertEquals("small", preferences.getString("insight_pill_size", null))
+        assertEquals(PillSize.LARGE, repository().state.value.composerPillSize)
+        assertEquals(PillSize.SMALL, repository().state.value.insightPillSize)
+    }
+
+    @Test
+    fun unknownPillSizesUsePerFieldDefaults() {
+        preferences.edit().putString("composer_pill_size", "future").putString("insight_pill_size", "small").commit()
+        assertEquals(PillSize.SMALL, repository().state.value.composerPillSize)
+        assertEquals(PillSize.SMALL, repository().state.value.insightPillSize)
+        preferences.edit().putString("composer_pill_size", "large").putString("insight_pill_size", "future").commit()
+        assertEquals(PillSize.LARGE, repository().state.value.composerPillSize)
+        assertEquals(PillSize.LARGE, repository().state.value.insightPillSize)
+    }
+
+    @Test
     fun storedPaletteValuesReadAsTheirEnums() {
         assertEquals(ThemePalette.BRAND, repository().state.value.theme)
         val stored =

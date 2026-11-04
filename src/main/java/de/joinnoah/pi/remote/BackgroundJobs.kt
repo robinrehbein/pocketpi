@@ -857,16 +857,11 @@ internal fun BackgroundJobsChip(jobs: JobsState, expanded: Boolean, onClick: () 
     val running = jobs.jobs.count { it.status == JobStatus.RUNNING }
     val label = if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
         else stringResource(R.string.remote_jobs_title)
-    FloatingSurface(shape = androidx.compose.foundation.shape.CircleShape) {
-        Row(
-            Modifier.clickable(role = Role.Button, onClick = onClick).testTag("jobsChip")
-                .minimumInteractiveComponentSize().padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    InsightPillRow(
+        Modifier.testTag("jobsChip"), onClick = onClick,
+    ) {
             Icon(Icons.Outlined.Terminal, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(label, style = MaterialTheme.typography.labelLarge)
-        }
     }
 }
 

@@ -73,16 +73,10 @@ internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?,
                 lines?.let { pluralStringResource(R.plurals.remote_panel_lines_removed, it.removed, it.removed) },
             )
             .joinToString(", ")
-    FloatingSurface(shape = CircleShape) {
-        Row(
-            Modifier.clickable(role = Role.Button, onClick = onClick)
-                .testTag("touchedFilesSummary")
-                .semantics { contentDescription = description }
-                .minimumInteractiveComponentSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    InsightPillRow(
+        Modifier.testTag("touchedFilesSummary").semantics { contentDescription = description },
+        onClick = onClick,
+    ) {
             Icon(
                 Icons.Default.Description,
                 contentDescription = null,
@@ -107,7 +101,6 @@ internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?,
                     color = diffRemovedContent(),
                 )
             }
-        }
     }
 }
 
@@ -412,18 +405,11 @@ internal fun StatusPopover(
     content: @Composable () -> Unit,
 ) {
     Box {
-        FloatingSurface(
-            shape = CircleShape,
+        InsightPillRow(
+            modifier = Modifier.testTag(chipTag),
+            onClick = { onExpandedChange(!expanded) },
             color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         ) {
-            Row(
-                Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }
-                    .testTag(chipTag)
-                    .minimumInteractiveComponentSize()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
                 // Expanded, the icons take the container's content color like the text.
                 val iconTint = if (expanded) LocalContentColor.current else MaterialTheme.colorScheme.onSurfaceVariant
                 Icon(
@@ -447,7 +433,6 @@ internal fun StatusPopover(
                     tint = iconTint,
                     modifier = Modifier.size(18.dp),
                 )
-            }
         }
         val backdrop = rememberAppBackdrop(expanded)
         if (expanded) {
@@ -585,18 +570,11 @@ private fun SubagentStripRow(
 @Composable
 internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit) {
     if (count == 0 && !selected) return
-    FloatingSurface(
-        shape = CircleShape,
+    InsightPillRow(
+        modifier = Modifier.testTag("errorFilterChip"),
+        selected = selected, onClick = onToggle,
         color = if (selected) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
     ) {
-        Row(
-            Modifier.selectable(selected = selected, role = Role.Button, onClick = onToggle)
-                .testTag("errorFilterChip")
-                .minimumInteractiveComponentSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
             Icon(
                 Icons.Default.ErrorOutline,
                 contentDescription = null,
@@ -607,7 +585,6 @@ internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit
                 stringResource(R.string.remote_panel_errors_filter, count),
                 style = MaterialTheme.typography.labelLarge,
             )
-        }
     }
 }
 
