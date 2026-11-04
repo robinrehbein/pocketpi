@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -374,7 +375,7 @@ internal fun ChatComposer(
     onSubmitPagedEditor: (kotlinx.serialization.json.JsonObject, String) -> Unit = { _, _ -> },
     onRetryPagedEditorStorage: () -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
-    suggestions: @Composable ColumnScope.() -> Unit = {},
+    suggestions: @Composable ColumnScope.(@Composable () -> Unit) -> Unit = { attachmentControl -> attachmentControl() },
     onRemoveAttachment: (String) -> Unit = {},
     onCancelAttachments: () -> Unit = {},
     onPickPhotos: () -> Unit = {},
@@ -672,6 +673,69 @@ internal fun ChatComposer(
     val longDraft = draft.text.length > EXPAND_OFFER_CHARS || '\n' in draft.text
     val hasExtras = state.quote != null || state.attachments.isNotEmpty() ||
         state.importingAttachments || state.attachmentProgress != null
+    val attachmentControl: @Composable () -> Unit = {
+        if (ATTACHMENTS_CAPABILITY in state.capabilities)
+            Box {
+                ShortcutTooltip(stringResource(R.string.remote_add_attachment)) {
+                    IconButton(
+                        onClick = { addMenu = true },
+                        modifier = Modifier.size(48.dp),
+                        enabled =
+                            !state.loading &&
+                                !state.sending &&
+                                !state.importingAttachments &&
+                                state.attachments.size < 5,
+                    ) {
+                        FloatingSurface(
+                            Modifier.size(32.dp),
+                            shape = CircleShape,
+                            contentColor = LocalContentColor.current,
+                            blur = false,
+                        ) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))
+                            }
+                        }
+                    }
+                }
+                GlassDropdownMenu(addMenu, onDismissRequest = { addMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.remote_pick_photos)) },
+                        onClick = {
+                            addMenu = false
+                            onPickPhotos()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.remote_pick_files)) },
+                        onClick = {
+                            addMenu = false
+                            onPickFiles()
+                        },
+                    )
+                    if (onTakePhoto != null)
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.remote_take_photo)) },
+                            onClick = {
+                                addMenu = false
+                                onTakePhoto()
+                            },
+                            modifier = Modifier.testTag("takePhoto"),
+                        )
+                    if (onPasteAttachments != null)
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.remote_drop_paste_image)) },
+                            onClick = {
+                                addMenu = false
+                                val pasted = clipboardIntake(context)
+                                if (pasted != null) onPasteAttachments(pasted.attachments) {}
+                                else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.testTag("pasteAttachment"),
+                        )
+                }
+            }
+    }
     FloatingSurface(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Column(
@@ -739,8 +803,9 @@ internal fun ChatComposer(
                         .verticalScroll(rememberScrollState())
                         .animateContentSize(),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
-                    content = suggestions,
-                )
+                ) {
+                    suggestions(attachmentControl)
+                }
             }
             VoiceInputStatus(voiceInput, state)
             if (keyTarget?.stopHint == true) EscapeStopHint()
@@ -811,57 +876,6 @@ internal fun ChatComposer(
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 leading()
-                if (ATTACHMENTS_CAPABILITY in state.capabilities)
-                    Box {
-                        ShortcutTooltip(stringResource(R.string.remote_add_attachment)) {
-                            IconButton(
-                                onClick = { addMenu = true },
-                                enabled =
-                                    !state.loading &&
-                                        !state.sending &&
-                                        !state.importingAttachments &&
-                                        state.attachments.size < 5,
-                            ) {
-                                Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))
-                            }
-                        }
-                        GlassDropdownMenu(addMenu, onDismissRequest = { addMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.remote_pick_photos)) },
-                                onClick = {
-                                    addMenu = false
-                                    onPickPhotos()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.remote_pick_files)) },
-                                onClick = {
-                                    addMenu = false
-                                    onPickFiles()
-                                },
-                            )
-                            if (onTakePhoto != null)
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.remote_take_photo)) },
-                                    onClick = {
-                                        addMenu = false
-                                        onTakePhoto()
-                                    },
-                                    modifier = Modifier.testTag("takePhoto"),
-                                )
-                            if (onPasteAttachments != null)
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.remote_drop_paste_image)) },
-                                    onClick = {
-                                        addMenu = false
-                                        val pasted = clipboardIntake(context)
-                                        if (pasted != null) onPasteAttachments(pasted.attachments) {}
-                                        else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
-                                    },
-                                    modifier = Modifier.testTag("pasteAttachment"),
-                                )
-                        }
-                    }
                 val promptLabel = stringResource(R.string.remote_prompt)
                 val shellLabel = stringResource(R.string.remote_shell_command)
                 // TalkBack names what the button does; the suggestion alone would not say it fills the field.
