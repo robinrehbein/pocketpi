@@ -167,7 +167,7 @@ class ChatPanelsUiTest {
     }
 
     @Test
-    fun compactionBannerShowsTheDimmedSnakeInsteadOfASpinner() {
+    fun compactionBannerShowsTheDottedCompactionGlyph() {
         val now = System.currentTimeMillis()
         compose.setContent {
             MaterialTheme {
