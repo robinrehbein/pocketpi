@@ -120,7 +120,8 @@ internal fun ChatCurrentActivity(line: SessionActivityLine?) {
     val label = stringResource(line.labelRes)
     val text = line.detail?.let { "$label · $it" } ?: label
     Row(
-        Modifier.fillMaxWidth().testTag("chatCurrentActivity").padding(horizontal = 16.dp),
+        // Move the icon and label together while preserving the marquee viewport width.
+        Modifier.fillMaxWidth().testTag("chatCurrentActivity").padding(start = 10.dp, end = 22.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
