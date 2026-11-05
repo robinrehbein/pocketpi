@@ -325,10 +325,7 @@ class RemoteNavigationUiTest {
                 session = Wire.objectOf("id" to "live", "title" to "Live session", "origin" to "rpc"),
             )
         }
-        compose.onNodeWithTag("sendModeMenu").performClick()
-        compose.onNodeWithText(label(R.string.remote_send_now)).assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_send_when_done)).assertIsDisplayed()
-        compose.onNodeWithTag("sendWhenDone").performClick()
+        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
         compose.onNodeWithTag("followUp").assertIsDisplayed().performClick()
         assertEquals(1, repository.followUps)
         assertEquals(0, repository.aborts)
