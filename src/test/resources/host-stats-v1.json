@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "capability": "host.stats.v1",
+  "wireValid": [
+    {
+      "name": "request",
+      "payload": { "type": "host.stats", "requestId": "stats:1" }
+    },
+    {
+      "name": "mac",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "darwin",
+          "sampledAt": 1762272000000,
+          "uptimeSeconds": 86400,
+          "cpu": { "usagePercent": 37.5, "cores": 10, "load": [3.12, 2.5, 2.01] },
+          "memory": { "usedBytes": 12884901888, "totalBytes": 17179869184, "pressure": "normal" },
+          "disk": { "usedBytes": 250000000000, "totalBytes": 494384795648 },
+          "battery": { "percent": 87, "charging": false, "onAc": false }
+        }
+      }
+    },
+    {
+      "name": "mac-first-sample",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "darwin",
+          "sampledAt": 1762272000000,
+          "uptimeSeconds": 86400,
+          "cpu": { "cores": 10 },
+          "memory": { "usedBytes": 12884901888, "totalBytes": 17179869184 }
+        }
+      }
+    },
+    {
+      "name": "linux-container",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "linux",
+          "sampledAt": 1762272000000,
+          "uptimeSeconds": 3600,
+          "cpu": { "usagePercent": 50, "cores": 1.5 },
+          "memory": { "usedBytes": 805306368, "totalBytes": 2147483648 },
+          "disk": { "usedBytes": 10737418240, "totalBytes": 64424509440 },
+          "container": { "cpuLimitCores": 1.5, "memoryLimitBytes": 2147483648 }
+        }
+      }
+    },
+    {
+      "name": "linux-container-unlimited",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "linux",
+          "sampledAt": 1762272000000,
+          "uptimeSeconds": 3600,
+          "cpu": { "usagePercent": 3.2, "cores": 8 },
+          "memory": { "usedBytes": 805306368, "totalBytes": 17179869184 },
+          "container": {}
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "request-extra-field",
+      "payload": { "type": "host.stats", "requestId": "stats:1", "projectId": "p" }
+    },
+    {
+      "name": "percent-over-100",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "darwin",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "usagePercent": 100.1, "cores": 1 },
+          "memory": { "usedBytes": 1, "totalBytes": 2 }
+        }
+      }
+    },
+    {
+      "name": "used-over-total",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "darwin",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "cores": 1 },
+          "memory": { "usedBytes": 3, "totalBytes": 2 }
+        }
+      }
+    },
+    {
+      "name": "container-on-mac",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "darwin",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "cores": 1 },
+          "memory": { "usedBytes": 1, "totalBytes": 2 },
+          "container": {}
+        }
+      }
+    },
+    {
+      "name": "container-with-load",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "linux",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "cores": 1, "load": [1, 1, 1] },
+          "memory": { "usedBytes": 1, "totalBytes": 2 },
+          "container": {}
+        }
+      }
+    },
+    {
+      "name": "pressure-on-linux",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "linux",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "cores": 1 },
+          "memory": { "usedBytes": 1, "totalBytes": 2, "pressure": "normal" }
+        }
+      }
+    },
+    {
+      "name": "fractional-bytes",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "linux",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "cores": 1 },
+          "memory": { "usedBytes": 1.5, "totalBytes": 2 }
+        }
+      }
+    },
+    {
+      "name": "unknown-field",
+      "payload": {
+        "type": "result",
+        "requestId": "stats:1",
+        "ok": true,
+        "data": {
+          "kind": "host.stats",
+          "platform": "linux",
+          "sampledAt": 1,
+          "uptimeSeconds": 1,
+          "cpu": { "cores": 1 },
+          "memory": { "usedBytes": 1, "totalBytes": 2 },
+          "processes": []
+        }
+      }
+    }
+  ]
+}

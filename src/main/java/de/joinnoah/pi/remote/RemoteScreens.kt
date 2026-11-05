@@ -70,6 +70,8 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.*
@@ -1111,11 +1113,8 @@ internal fun RemoteScreen(
     val hiddenMessage = stringResource(R.string.remote_session_hidden_snackbar)
     val undoLabel = stringResource(R.string.remote_undo)
     val hideResources = LocalResources.current
-    val hideSession: (String, String, Long?) -> Unit = hide@{ sessionId, title, updatedAt ->
-        val store = sessionMarkStore ?: return@hide
-        val route = state.host?.routeId ?: return@hide
-        val previous = store.hide(route, sessionId, updatedAt, System.currentTimeMillis())
-        val applied = store.mark(route, sessionId)
+    // The snackbar that undoes a hide; the review sheet hands its last hide here as it closes.
+    fun showHideUndo(store: SessionMarksStore, route: String, sessionId: String, title: String, previous: SessionMark?, applied: SessionMark?) {
         snackbar.currentSnackbarData?.dismiss()
         hideScope.launch {
             val result =
@@ -1129,6 +1128,13 @@ internal fun RemoteScreen(
                 )
             if (result == SnackbarResult.ActionPerformed) store.undoHide(route, sessionId, previous, applied)
         }
+    }
+    val hideSession: (String, String, Long?) -> Unit = hide@{ sessionId, title, updatedAt ->
+        val store = sessionMarkStore ?: return@hide
+        val route = state.host?.routeId ?: return@hide
+        val previous = store.hide(route, sessionId, updatedAt, System.currentTimeMillis())
+        val applied = store.mark(route, sessionId)
+        showHideUndo(store, route, sessionId, title, previous, applied)
     }
     val unhideSession: (String) -> Unit = unhide@{ sessionId ->
         val route = state.host?.routeId ?: return@unhide
@@ -1627,8 +1633,13 @@ internal fun RemoteScreen(
     }
     // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
     var readyShowAll by rememberSaveable { mutableStateOf(false) }
-    var runningShowAll by rememberSaveable { mutableStateOf(false) }
+    // The Working group folds into a one-line summary (running chats do not need the user); expanded, it lists
+    // every running featured chat.
+    var runningExpanded by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
+    // "Review all" on the Ready group: the review in progress, or null. Not saved across process
+    // death; the activity keeps it over a rotation. A new page (another Mac) ends it.
+    var readyReview by remember(key) { mutableStateOf<ReadyReview?>(null) }
     // "5 minutes ago" on the Projects page's chat rows moves on without any state change. Not read here
     // (no `by`): only the rows read it, so the tick recomposes them and not the whole page.
     val projectsNow =
@@ -1642,16 +1653,19 @@ internal fun RemoteScreen(
     // Keep this captured value stable: recreating it on chat recomposition invalidates the lazy
     // content, whose layoutInfo observation would otherwise trigger another measurement.
     val projectQuickChats = remember(
-        key, projectSelected, state.projectChats, state.connected, runningShowAll, recentShowAll, readyShowAll, routeMarks,
+        key, projectSelected, state.projectChats, state.connected, runningExpanded, recentShowAll, readyShowAll, routeMarks,
     ) {
         quickChats(
             if (key is RemoteNavKey.Projects && !projectSelected) {
                 mainSessionChats(state.projectChats).filterNot { projectChatHidden(it, routeMarks) }
             } else emptyList(),
-            state.connected, showRunningAll = runningShowAll, showRecentAll = recentShowAll,
+            state.connected, showRunningAll = runningExpanded, showRecentAll = recentShowAll,
             marks = routeMarks, showReadyAll = readyShowAll,
         )
     }
+    // The group folds again once it is gone, so the next running chat starts folded.
+    val noRunning = projectQuickChats.runningTotal == 0
+    LaunchedEffect(noRunning) { if (noRunning) runningExpanded = false }
     val compactionFrame = rememberBrailleSpinnerFrame(
         (key is RemoteNavKey.Sessions && listedSessions.any { it.compacting }) ||
             (projectQuickChats.waiting + projectQuickChats.ready + projectQuickChats.running + projectQuickChats.recent).any { chat ->
@@ -3259,8 +3273,9 @@ internal fun RemoteScreen(
                             // the ready ones, then the running ones. Then the shared projects, then the recent
                             // chats. Beside an open project the chats hide, as before.
                             // Every featured waiting chat shows (the featured chats are bounded, see
-                            // sortedProjectChats); ready, running and recent chats are capped at three each until
-                            // their "Show all" (see quickChats).
+                            // sortedProjectChats); ready and recent chats are capped at three each until their
+                            // "Show all", and running chats fold into one summary line until it is tapped (see
+                            // quickChats). Ready, running and recent chats sit under one heading per project.
                             // Main sessions only: a busy subagent shows as the session it works for.
                             val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
                             val closableIds = closableProjectChatIds(state, mainChats)
@@ -3331,9 +3346,19 @@ internal fun RemoteScreen(
                             }
                             if (readyChats.isNotEmpty()) {
                                 item(key = "project_chats_ready_heading") {
-                                    ProjectsSectionHeading(stringResource(R.string.remote_status_ready))
+                                    val reviewable = quick.readyQueue
+                                    ProjectsSectionHeading(stringResource(R.string.remote_status_ready)) {
+                                        // One finished chat is quicker to handle on its row.
+                                        if (reviewable.size >= 2 && state.connected && model is ProjectsViewModel)
+                                            TextButton(
+                                                onClick = {
+                                                    readyReview = ReadyReview(readyReviewQueue(reviewable), errorAtStart = state.error)
+                                                },
+                                                modifier = Modifier.testTag("readyReviewAll"),
+                                            ) { Text(stringResource(R.string.remote_ready_review_all, reviewable.size)) }
+                                    }
                                 }
-                                projectChatRows(readyChats, chatRowContext, ready = true)
+                                groupedProjectChatRows("ready", readyChats, chatRowContext, ready = true)
                                 if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
                                     QuickChatsShowAll(
                                         expanded = readyShowAll,
@@ -3342,19 +3367,20 @@ internal fun RemoteScreen(
                                     )
                                 }
                             }
-                            if (runningChats.isNotEmpty()) {
+                            if (quick.runningTotal > 0) {
                                 item(key = "project_chats_running_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_working))
                                 }
-                                projectChatRows(runningChats, chatRowContext)
-                                // Directly under the group it expands, so it is not far down the page.
-                                if (quick.runningExpandable) item(key = "project_chats_running_show_all") {
-                                    QuickChatsShowAll(
-                                        expanded = runningShowAll,
-                                        tag = "quickChatsShowAllRunning",
-                                        onClick = { runningShowAll = !runningShowAll },
+                                item(key = "project_chats_running_summary") {
+                                    RunningSummary(
+                                        total = quick.runningTotal,
+                                        projects = quick.runningProjects,
+                                        expanded = runningExpanded,
+                                        onToggle = { runningExpanded = !runningExpanded },
                                     )
                                 }
+                                // Empty while folded (see quickChats).
+                                groupedProjectChatRows("running", runningChats, chatRowContext)
                             }
                             if (state.projects.isEmpty()) {
                                 // Only a list read on the live connection says there are no projects.
@@ -3418,7 +3444,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                projectChatRows(recentChats, chatRowContext)
+                                groupedProjectChatRows("recent", recentChats, chatRowContext)
                                 if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
                                     QuickChatsShowAll(
                                         expanded = recentShowAll,
@@ -4507,6 +4533,8 @@ internal fun RemoteScreen(
             host = macHost,
             status = stringResource(macStatus),
             onDismiss = { macDetails = false },
+            // Only the connected computer's page: another Mac's page must not show this one's load.
+            loadStats = if (projectsPage.routeId == state.host?.routeId && canUseHostStats(state)) model::hostStats else null,
         )
     removing?.let { host ->
         AlertDialog(
@@ -4570,7 +4598,8 @@ internal fun RemoteScreen(
         if (previousClosing.isEmpty() && state.closingSessions.isNotEmpty()) errorAtClose = state.error
         previousClosing = state.closingSessions
         // An error that was already showing before this close does not hide its announcement.
-        if (finished.isNotEmpty() && (state.error == null || state.error == errorAtClose)) {
+        // During a review the next card is the announcement (see ReadyReviewSheet).
+        if (finished.isNotEmpty() && readyReview == null && (state.error == null || state.error == errorAtClose)) {
             closedMessage = closedAnnouncement
             delay(3_000)
             closedMessage = null
@@ -4578,6 +4607,22 @@ internal fun RemoteScreen(
     }
     closedMessage?.let { message ->
         Box(Modifier.size(1.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = message })
+    }
+    readyReview?.let { review ->
+        ReadyReviewHost(
+            review = review,
+            onReviewChange = { readyReview = it },
+            key = key,
+            model = model,
+            state = state,
+            projectSelected = projectSelected,
+            routeMarks = routeMarks,
+            sessionMarkStore = sessionMarkStore,
+            sessionCompactionNow = sessionCompactionNow,
+            projectsNow = projectsNow,
+            navigator = navigator,
+            showHideUndo = ::showHideUndo,
+        )
     }
     // A chat closed from Projects that left the page (closed elsewhere, or no longer featured)
     // takes its dialog along.
@@ -4828,6 +4873,44 @@ private fun QuickChatsShowAll(expanded: Boolean, tag: String, onClick: () -> Uni
     }
 }
 
+/**
+ * The Working group folded into one line ("3 chats in Alpha", "7 chats in 2 projects"); a tap lists the running
+ * chats under it, or folds them back.
+ */
+@Composable
+private fun RunningSummary(total: Int, projects: List<String>, expanded: Boolean, onToggle: () -> Unit) {
+    val chats = pluralStringResource(R.plurals.remote_projects_running_chats, total, total)
+    val text =
+        if (projects.size == 1) stringResource(R.string.remote_projects_running_in_one, chats, projects.single())
+        else pluralStringResource(R.plurals.remote_projects_running_in_many, projects.size, chats, projects.size)
+    val description = stringResource(R.string.remote_projects_running_description, text)
+    val state = stringResource(if (expanded) R.string.remote_menu_expanded else R.string.remote_menu_collapsed)
+    val action = stringResource(if (expanded) R.string.remote_projects_running_hide else R.string.remote_projects_running_show)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClickLabel = action, onClick = onToggle)
+            .semantics { stateDescription = state; contentDescription = description }
+            .testTag("quickChatsRunningSummary"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // The running glyph of the rows' avatars; it holds still when the system turns animations off.
+        StatusGlyph(StatusGlyphKind.SESSION_RUNNING, color = MaterialTheme.colorScheme.primary)
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /** Room the ticket chip takes in the chat header's pill, taken from the title's. */
 private val CHAT_TICKET_CHIP_WIDTH = 96.dp
 
@@ -4904,13 +4987,27 @@ internal fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Uni
 
 /** The heading of a section of the Projects page; the rows under it belong to it. */
 @Composable
-private fun ProjectsSectionHeading(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 28.dp, bottom = 4.dp).semantics { heading() },
-    )
+private fun ProjectsSectionHeading(text: String, action: (@Composable () -> Unit)? = null) {
+    if (action == null) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 28.dp, bottom = 4.dp).semantics { heading() },
+        )
+        return
+    }
+    // The action's 48dp touch target takes part of the heading's top space, so the text stays where
+    // a plain heading's would.
+    Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f).padding(top = 12.dp, bottom = 4.dp).semantics { heading() },
+        )
+        action()
+    }
 }
 
 /** What every featured chat row of the Projects page shares; see [projectChatRows]. */
@@ -4943,32 +5040,77 @@ private fun LazyListScope.projectChatRows(
     context: ProjectChatRowContext,
     /** The chats are the Ready group, so a long-idle one wears the "Old" chip. */
     ready: Boolean = false,
+    /** Each row names its project above it; off under a project heading (see [groupedProjectChatRows]). */
+    showProject: Boolean = true,
 ) {
     items(chats, key = { "chat:${it.projectId}:${it.session.text("id")}" }) { chat ->
-        ProjectChatRow(chat, context, ready)
+        ProjectChatRow(chat, context, ready, showProject)
     }
 }
 
+/**
+ * The list row of a featured chat of the Projects page, with its marks: what its row shows and what
+ * the review card offers, so both offer the same verbs.
+ */
+internal fun projectChatItem(
+    chat: ProjectChatSummary,
+    marks: Map<String, SessionMark>,
+    connected: Boolean,
+    compactions: Map<String, SessionCompaction>,
+    nowMillis: Long,
+    ticketRef: (String) -> String?,
+): SessionListItem {
+    val id = chat.session.optionalText("id")
+    val mark = id?.let(marks::get)
+    return sessionListItem(
+        chat.session, connected && chat.verified, loading = false, confirmed = chat.verified,
+        compaction = id?.let(compactions::get), nowMillis = nowMillis,
+    ).let {
+        it.copy(
+            pinned = mark?.pinned == true,
+            unread = sessionUnread(mark, it.updatedAt, open = false),
+            ticketRef = id?.let(ticketRef),
+        )
+    }
+}
+
+/**
+ * The featured chats of a Projects section by project (see [groupedByProject]): one project heading, then that
+ * project's rows without their own label. [section] keeps the heading keys apart, since a project can head a
+ * group in several sections.
+ */
+private fun LazyListScope.groupedProjectChatRows(
+    section: String,
+    chats: List<ProjectChatSummary>,
+    context: ProjectChatRowContext,
+    ready: Boolean = false,
+) {
+    groupedByProject(chats).forEachIndexed { index, group ->
+        item(key = "${section}_project:${group.projectId}") { ProjectGroupHeading(group.projectName, first = index == 0) }
+        projectChatRows(group.chats, context, ready, showProject = false)
+    }
+}
+
+/** The project a run of featured chats belongs to; a heading, so TalkBack can move from project to project. */
 @Composable
-private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowContext, ready: Boolean) {
+private fun ProjectGroupHeading(name: String, first: Boolean) {
+    Text(
+        name,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = if (first) 0.dp else 12.dp).semantics { heading() }.testTag("projectGroupHeading"),
+    )
+}
+
+@Composable
+private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowContext, ready: Boolean, showProject: Boolean) {
     // Read here, not by the caller, so the minute tick recomposes the rows only.
     val nowMillis = context.now.value
     val id = chat.session.optionalText("id")
-    val mark = id?.let(context.marks::get)
-    val item =
-        sessionListItem(
-            chat.session, context.connected && chat.verified, loading = false, confirmed = chat.verified,
-            compaction = id?.let(context.compactions::get), nowMillis = context.nowMillis,
-        ).let {
-            it.copy(
-                pinned = mark?.pinned == true,
-                unread = sessionUnread(mark, it.updatedAt, open = false),
-                ticketRef = id?.let(context.ticketRef),
-            )
-        }
+    val item = projectChatItem(chat, context.marks, context.connected, context.compactions, context.nowMillis, context.ticketRef)
     val closable = context.closable(chat)
     Column(Modifier.testTag("projectChatRow-${chat.projectId}-${id.orEmpty()}")) {
-        Text(
+        if (showProject) Text(
             chat.projectName,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

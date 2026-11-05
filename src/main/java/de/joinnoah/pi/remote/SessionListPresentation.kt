@@ -159,14 +159,28 @@ internal data class QuickChats(
      * [sortedProjectChats]), unread first, cut to [QUICK_CHAT_LIMIT] until shown in full.
      */
     val ready: List<ProjectChatSummary>,
+    /**
+     * Every running chat while the Working group is expanded, none while it is folded into its one-line
+     * summary ([runningTotal], [runningProjects]): running chats do not need the user.
+     */
     val running: List<ProjectChatSummary>,
     val recent: List<ProjectChatSummary>,
     /** Whether the ready group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
     val readyExpandable: Boolean,
-    /** Whether the running group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
-    val runningExpandable: Boolean,
     /** Whether the recent group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
     val recentExpandable: Boolean,
+    /**
+     * Every ready chat in the group's order, never cut, without the pinned ones (a pin means keep it):
+     * what the Ready group's "Review all" walks (see [readyReviewQueue]).
+     */
+    val readyQueue: List<ProjectChatSummary> = emptyList(),
+    /**
+     * How many featured chats run, folded or not. Like the expanded list it counts the featured chats only
+     * (at most twelve), so the number never promises rows the expansion does not show.
+     */
+    val runningTotal: Int = 0,
+    /** The names of the projects the running chats belong to, each once, in the order of their first chat. */
+    val runningProjects: List<String> = emptyList(),
 )
 
 /**
@@ -174,14 +188,15 @@ internal data class QuickChats(
  * Mac lists as a copy to continue) and no subagent. The Ready group and [unreadReadyCount]
  * share this.
  */
-private fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
+internal fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
     status == "idle" && origin != "history" && parentSessionId.isNullOrBlank()
 
 /**
  * The quick chats of a Mac's Projects page. On a connected Mac, a verified chat is waiting, running
- * or ready (idle, open, top-level); waiting chats are not cut here, only by the twelve featured chats. Ready, running and recent
- * chats are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showReadyAll], [showRunningAll],
- * [showRecentAll]). Everything else is recent: offline, unverified, last-known and history chats,
+ * or ready (idle, open, top-level); waiting chats are not cut here, only by the twelve featured chats. Ready and recent
+ * chats are capped at [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showReadyAll], [showRecentAll]).
+ * Running chats are listed only while their group is expanded ([showRunningAll]); folded, the group is counted
+ * ([QuickChats.runningTotal], [QuickChats.runningProjects]). Everything else is recent: offline, unverified, last-known and history chats,
  * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by
  * [marks]; a chat without a mark counts as read), then the most recently updated.
  */
@@ -213,11 +228,28 @@ internal fun quickChats(
         waiting = waiting,
         ready = ready.take(if (showReadyAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         readyExpandable = ready.size > QUICK_CHAT_LIMIT,
-        running = running.take(if (showRunningAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        running = if (showRunningAll) running else emptyList(),
         recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
-        runningExpandable = running.size > QUICK_CHAT_LIMIT,
         recentExpandable = recent.size > QUICK_CHAT_LIMIT,
+        readyQueue = ready.filterNot { chat -> chat.session.optionalText("id")?.let(marks::get)?.pinned == true },
+        runningTotal = running.size,
+        runningProjects = running.distinctBy { it.projectId }.map { it.projectName },
     )
+}
+
+/** The chats of one project within a quick-chat group, under one project heading; see [groupedByProject]. */
+internal data class ProjectChatGroup(val projectId: String, val projectName: String, val chats: List<ProjectChatSummary>)
+
+/**
+ * [chats] by project: one group per project, in the order of each project's first chat, and the chats of a
+ * project in their given order. Applied to a group that is already sorted and cut, so the project of the first
+ * chat (unread, or the most recent) leads. Every unread chat stays above the read chats of its own project, but a
+ * project's read chat can now sit above another project's unread one.
+ */
+internal fun groupedByProject(chats: List<ProjectChatSummary>): List<ProjectChatGroup> {
+    val groups = LinkedHashMap<String, MutableList<ProjectChatSummary>>()
+    for (chat in chats) groups.getOrPut(chat.projectId) { mutableListOf() } += chat
+    return groups.map { (projectId, group) -> ProjectChatGroup(projectId, group.first().projectName, group) }
 }
 
 /** A ready chat idle for this long wears an "Old" chip. */

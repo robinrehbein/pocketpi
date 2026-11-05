@@ -42,7 +42,7 @@
       "name": "session-compaction-list-capability",
       "payload": {
         "type": "result",
-        "requestId": "capabilities.v2:compaction-list",
+        "requestId": "capabilities.v3:compaction-list",
         "ok": true,
         "data": {
           "kind": "projects",

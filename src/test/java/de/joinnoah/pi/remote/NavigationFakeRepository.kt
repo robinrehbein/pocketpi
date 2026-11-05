@@ -22,6 +22,15 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun canAttachTerminal(): Boolean = terminalAttachable
 
+    /** What `host.stats` answers; null makes it fail. Counts each request in [hostStatsRequests]. */
+    var hostStatsResult: HostStats? = null
+    var hostStatsRequests = 0
+
+    override suspend fun hostStats(): HostStats {
+        hostStatsRequests++
+        return hostStatsResult ?: throw RemoteRequestException("internal")
+    }
+
     override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
         terminalAttaches += cols to rows
         return false

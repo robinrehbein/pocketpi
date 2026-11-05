@@ -31,6 +31,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextEquals
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.serialization.json.JsonObject
@@ -111,12 +112,14 @@ class MacHubUiTest {
         fontScale: Float? = null,
         marks: SessionMarksStore? = null,
         pointerMenu: Boolean = false,
+        /** The computer the phone is connected to; the page shown is always Studio's. */
+        connectedHost: PairedHost = studio,
     ) {
         repository.state.value =
             RemoteState(
                 hosts = hosts,
                 hostsLoaded = true,
-                host = studio,
+                host = connectedHost,
                 selection = RemoteSelection("studio"),
                 connected = connected,
                 capabilities = capabilities,
@@ -232,6 +235,83 @@ class MacHubUiTest {
         assertTrue(headingTop(needsYou) < headingTop(working))
         assertTrue(headingTop(working) < headingTop(shared))
         assertTrue(headingTop(shared) < headingTop(quick))
+    }
+
+    @Test
+    fun theWorkingGroupFoldsIntoASummaryThatReadsItsStateAndExpands() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "a", "running"),
+                    chat("p2", "Beta", "b", "running"),
+                    chat("p1", "Alpha", "c", "running"),
+                ),
+        )
+
+        val summary = compose.onNodeWithTag("quickChatsRunningSummary")
+        summary.assertTextEquals("3 chats in 2 projects")
+        summary.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, label(R.string.remote_menu_collapsed)))
+        compose.onAllNodesWithText("Session a").assertCountEquals(0)
+
+        summary.performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("quickChatsRunningSummary")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, label(R.string.remote_menu_expanded)))
+        // Grouped by project: Alpha's two chats under one Alpha heading, then Beta's.
+        val a = compose.onNodeWithText("Session a").fetchSemanticsNode().positionInRoot.y
+        val c = compose.onNodeWithText("Session c").fetchSemanticsNode().positionInRoot.y
+        val b = compose.onNodeWithText("Session b").fetchSemanticsNode().positionInRoot.y
+        assertTrue(a < c && c < b)
+        compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(1)
+        compose.onAllNodes(projectGroupHeading("Beta")).assertCountEquals(1)
+    }
+
+    /** A project heading over a run of featured chats. */
+    private fun projectGroupHeading(name: String) =
+        hasText(name) and hasTestTag("projectGroupHeading") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+
+    @Test
+    fun readyChatsOfOneProjectShowTheirProjectNameOnceAndNeedsYouRowsKeepTheirLabel() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", updatedAt = 3),
+                    chat("p1", "Alpha", "two", "idle", updatedAt = 2),
+                    chat("p2", "Beta", "ask", "waiting"),
+                    chat("p2", "Beta", "three", "idle", updatedAt = 1),
+                ),
+        )
+
+        compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(1)
+        compose.onAllNodes(projectGroupHeading("Beta")).assertCountEquals(1)
+        // The waiting row keeps its own label, which is no heading.
+        compose.onNode(
+            hasText("Beta") and hasAnyAncestor(hasTestTag("projectChatRow-p2-ask")),
+            useUnmergedTree = true,
+        ).assertExists()
+        compose.onAllNodes(
+            hasText("Alpha") and hasAnyAncestor(hasTestTag("projectChatRow-p1-one")),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
+    }
+
+    @Test
+    fun aProjectHeadsAGroupInReadyAndInRecentlyUsedAlike() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "done", "idle"),
+                    chat("p1", "Alpha", "old", "idle", verified = false),
+                ),
+        )
+
+        compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(2)
+        compose.onNodeWithText("Session done").assertIsDisplayed()
+        compose.onNodeWithText("Session old").assertExists()
     }
 
     @Test
@@ -431,6 +511,78 @@ class MacHubUiTest {
         compose.onNodeWithText("device-studio").assertIsDisplayed()
         compose.onNodeWithTag("macDetailsClose").performClick()
         compose.onAllNodesWithTag("macDetailsBody").assertCountEquals(0)
+    }
+
+    private fun sampleStats() =
+        HostStats(
+            platform = HostPlatform.DARWIN,
+            sampledAt = 1,
+            uptimeSeconds = 3 * 86400L + 4 * 3600L,
+            cpuPercent = 73.0,
+            cores = 10.0,
+            load = listOf(7.4, 5.1, 3.9),
+            memory = HostUsage(8L * 1024 * 1024 * 1024, 16L * 1024 * 1024 * 1024),
+            pressure = MemoryPressure.WARN,
+            disk = null,
+            battery = HostBattery(41.0, charging = true, onAc = true),
+            container = null,
+        )
+
+    @Test
+    fun connectionDetailsShowTheLoadWhenTheHostOffersIt() {
+        repository.hostStatsResult =
+            HostStats(
+                platform = HostPlatform.DARWIN,
+                sampledAt = 1,
+                uptimeSeconds = 3 * 86400L + 4 * 3600L,
+                cpuPercent = 73.0,
+                cores = 10.0,
+                load = listOf(7.4, 5.1, 3.9),
+                memory = HostUsage(8L * 1024 * 1024 * 1024, 16L * 1024 * 1024 * 1024),
+                pressure = MemoryPressure.WARN,
+                disk = null,
+                battery = HostBattery(41.0, charging = true, onAc = true),
+                container = null,
+            )
+        render(listOf(project("p1", "Alpha")), capabilities = setOf(HOST_STATS_CAPABILITY))
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("hostStatsCpu").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("73%").assertIsDisplayed()
+        compose.onNodeWithText("Load 7.4 / 5.1 / 3.9", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_host_stats_pressure_warn)).assertIsDisplayed()
+        compose.onNodeWithText("41% · charging").assertIsDisplayed()
+        compose.onNodeWithText("Up for 3 d 4 h").assertIsDisplayed()
+        // Memory in powers of 1024, as macOS shows it.
+        compose.onNodeWithText("8 GB / 16 GB").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStatsDisk").assertCountEquals(0)
+    }
+
+    @Test
+    fun anotherMacsDetailsNeverShowTheConnectedComputersLoad() {
+        repository.hostStatsResult = sampleStats()
+        render(listOf(project("p1", "Alpha")), capabilities = setOf(HOST_STATS_CAPABILITY), connectedHost = laptop)
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+
+        compose.onNodeWithTag("macDetailsBody").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStats").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, repository.hostStatsRequests) }
+    }
+
+    @Test
+    fun connectionDetailsHideTheLoadWithoutTheCapability() {
+        render(listOf(project("p1", "Alpha")))
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+
+        compose.onNodeWithTag("macDetailsBody").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStats").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, repository.hostStatsRequests) }
     }
 
     @Test
@@ -779,5 +931,284 @@ class MacHubUiTest {
         compose.onNode(hasText(label(R.string.remote_session_close)) and hasClickAction() and hasAnyAncestor(isDialog()))
             .assertIsNotEnabled()
         assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
+
+    // "Review all" on the Ready group.
+
+    private fun startReview() {
+        compose.onNodeWithTag("readyReviewAll").performClick()
+        compose.waitForIdle()
+    }
+
+    /** The card's primary button ignores taps for a moment after it shows; let that pass. */
+    private fun armCard() {
+        compose.mainClock.advanceTimeBy(READY_REVIEW_ARM_MILLIS + 50)
+        compose.waitForIdle()
+    }
+
+    private fun reviewCardShows(title: String) =
+        compose.onNode(hasTestTag("readyReviewCard") and hasContentDescription(title, substring = true)).assertExists()
+
+    @Test
+    fun reviewAllWalksTheReadyChatsAndClosesThroughTheProjectsPath() {
+        val marks = unreadMarks("studio", "one", "two")
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p2", "Beta", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_ready_review_all, 2)).assertExists()
+        startReview()
+
+        reviewCardShows("Session one")
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_ready_review_progress, 1, 2)).assertExists()
+        // A chat the host runs closes at once: the review itself was the choice.
+        armCard()
+        compose.onNodeWithTag("readyReviewClose").assertIsEnabled().performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "one"), repository.closedChats)
+        assertTrue(!sessionUnread(marks.mark("studio", "one"), 20L, open = false))
+
+        reviewCardShows("Session two")
+        armCard()
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "one", "p2" to "two"), repository.closedChats)
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+    }
+
+    @Test
+    fun keepMarksTheChatSeenAndMovesOn() {
+        val marks = unreadMarks("studio", "one", "two")
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        startReview()
+
+        compose.onNodeWithTag("readyReviewKeep").performClick()
+        compose.waitForIdle()
+
+        assertTrue(!sessionUnread(marks.mark("studio", "one"), 20L, open = false))
+        assertTrue(sessionUnread(marks.mark("studio", "two"), 10L, open = false))
+        reviewCardShows("Session two")
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
+
+    @Test
+    fun reviewAllIsOfferedForTwoOrMoreReadyChatsOnly() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        compose.onAllNodesWithTag("readyReviewAll").assertCountEquals(0)
+    }
+
+    @Test
+    fun theReviewEndsWhenTheConnectionDrops() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p1", "Alpha", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(1)
+
+        repository.state.value = repository.state.value.copy(connected = false)
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+    }
+
+    @Test
+    fun theCardShowsThePreviewWhenTheRowHasOne() {
+        val withPreview =
+            ProjectChatSummary(
+                "p1", "Alpha",
+                buildJsonObject {
+                    put("id", "one")
+                    put("title", "Session one")
+                    put("status", "idle")
+                    put("origin", "rpc")
+                    put("updatedAt", 20L)
+                    put("preview", "The build passes now.")
+                },
+                verified = true,
+            )
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(withPreview, chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L)),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        reviewCardShows("The build passes now.")
+        compose.onNodeWithTag("readyReviewKeep").performClick()
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("readyReviewPreview", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun aTerminalChatAsksOnceMoreBeforeTheReviewClosesIt() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "tui", "idle", origin = "tui", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY, SESSION_CLOSE_TERMINAL_CAPABILITY),
+        )
+        startReview()
+
+        armCard()
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.waitForIdle()
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+        compose.onNodeWithText(label(R.string.remote_session_close_terminal_confirmation)).assertExists()
+
+        armCard()
+        compose.onNodeWithTag("readyReviewConfirmClose").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "tui"), repository.closedChats)
+        reviewCardShows("Session two")
+    }
+
+    @Test
+    fun closeGreysOutWhileThePageLoadsAndTheCardStays() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p1", "Alpha", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        repository.state.value = repository.state.value.copy(loading = true)
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("readyReviewClose").assertIsNotEnabled()
+        compose.onAllNodesWithTag("readyReviewHide").assertCountEquals(0)
+    }
+
+    @Test
+    fun aChatThePhoneCannotCloseIsHiddenWithAnUndoInTheSheet() {
+        val marks = SessionMarksStore(compose.activity)
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "pi", updatedAt = 30L),
+                    chat("p1", "Alpha", "two", "idle", origin = "pi", updatedAt = 20L),
+                    chat("p1", "Alpha", "three", "idle", origin = "pi", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        startReview()
+        compose.onAllNodesWithTag("readyReviewClose").assertCountEquals(0)
+
+        armCard()
+        compose.onNodeWithTag("readyReviewHide").performClick()
+        compose.waitForIdle()
+        armCard()
+        compose.onNodeWithTag("readyReviewHide").performClick()
+        compose.waitForIdle()
+        assertTrue(marks.mark("studio", "one")?.hiddenAt != null)
+        assertTrue(marks.mark("studio", "two")?.hiddenAt != null)
+
+        // Undo goes back through the hides, the latest first.
+        compose.onNodeWithTag("readyReviewUndo").performClick()
+        compose.waitForIdle()
+        assertNull(marks.mark("studio", "two")?.hiddenAt)
+        compose.onNodeWithTag("readyReviewUndo").performClick()
+        compose.waitForIdle()
+        assertNull(marks.mark("studio", "one")?.hiddenAt)
+        compose.onAllNodesWithTag("readyReviewUndo").assertCountEquals(0)
+        reviewCardShows("Session three")
+        assertEquals(emptyList<Pair<String, String>>(), repository.closedChats)
+    }
+
+    @Test
+    fun openEndsTheReviewInTheChat() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        compose.onNodeWithTag("readyReviewOpen").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+        assertTrue(repository.activations.any { it.first.projectId == "p1" && it.first.sessionId == "one" })
+    }
+
+    @Test
+    fun aQuickDoubleTapOnCloseDoesNotCloseTheNextChatUnseen() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "rpc", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "rpc", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        startReview()
+
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(listOf("p1" to "one"), repository.closedChats)
+
+        compose.mainClock.advanceTimeBy(READY_REVIEW_ARM_MILLIS + 50)
+        compose.onNodeWithTag("readyReviewClose").performClick()
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertEquals(listOf("p1" to "one", "p1" to "two"), repository.closedChats)
+    }
+
+    @Test
+    fun aHideMadeInTheReviewGetsTheUndoSnackbarWhenTheSheetIsDismissed() {
+        val marks = SessionMarksStore(compose.activity)
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", origin = "pi", updatedAt = 20L),
+                    chat("p1", "Alpha", "two", "idle", origin = "pi", updatedAt = 10L),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+        startReview()
+        armCard()
+        compose.onNodeWithTag("readyReviewHide").performClick()
+        compose.waitForIdle()
+
+        androidx.test.espresso.Espresso.pressBack()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("readyReviewSheet").assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_undo)).assertExists()
     }
 }
