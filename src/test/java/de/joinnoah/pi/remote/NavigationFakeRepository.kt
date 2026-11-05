@@ -22,6 +22,15 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun canAttachTerminal(): Boolean = terminalAttachable
 
+    /** What `host.stats` answers; null makes it fail. Counts each request in [hostStatsRequests]. */
+    var hostStatsResult: HostStats? = null
+    var hostStatsRequests = 0
+
+    override suspend fun hostStats(): HostStats {
+        hostStatsRequests++
+        return hostStatsResult ?: throw RemoteRequestException("internal")
+    }
+
     override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
         terminalAttaches += cols to rows
         return false
@@ -95,6 +104,14 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun queueAccept(projectId: String, ref: String, comment: String) {
         ticketAccepts += Triple(projectId, ref, comment)
+    }
+
+    /** The chats each accept asked to close, in the order of [ticketAccepts]. */
+    val ticketAcceptCloses = mutableListOf<List<String>>()
+
+    override fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String>) {
+        ticketAccepts += Triple(projectId, ref, comment)
+        ticketAcceptCloses += closeSessionIds
     }
 
     override fun undoAccept() {

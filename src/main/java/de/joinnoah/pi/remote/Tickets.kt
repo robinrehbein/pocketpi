@@ -207,6 +207,63 @@ internal fun ticketForSession(state: RemoteState, sessionId: String): Pair<Ticke
 internal fun ticketRefForSession(state: RemoteState, sessionId: String): String? =
     ticketForSession(state, sessionId)?.second?.ref
 
+/**
+ * What accepting a ticket can offer to close: the linked chats ([closable]) the Projects page could
+ * close right now, and how many linked chats are still running or waiting ([busy]).
+ */
+internal data class AcceptCloseOffer(val closable: List<String>, val busy: Int)
+
+/**
+ * Sorts the chats linked to [ticket] of [projectId] for [AcceptCloseOffer]. A chat is closable when
+ * [closableProjectChat] holds for it and it is not pinned on this phone (a pin means keep it). It is
+ * busy when its shown status (the featured chat's, which a busy subagent lends its main session,
+ * else the ticket's link status) is running or waiting; a linked subagent whose main chat is linked
+ * too counts with its main chat. Everything else is offered nothing: a history, offline, unverified
+ * or subagent chat, a terminal chat the host cannot close, a pinned one, or one not among the
+ * featured chats.
+ *
+ * Only the Projects page's featured chats (at most a dozen, across all projects) can close, which
+ * is the repository's gate; after a reconnect they stay unverified until the Projects page reads
+ * them again, so the offer is often empty on a ticket page opened directly. The pin is read when
+ * the offer is made, not again when the chats close after the undo window.
+ */
+internal fun acceptCloseOffer(
+    state: RemoteState,
+    projectId: String,
+    ticket: Ticket,
+    marks: Map<String, SessionMark> = emptyMap(),
+): AcceptCloseOffer {
+    val mainChats = mainSessionChats(state.projectChats)
+    val featured = mainChats.filter { it.projectId == projectId }.associateBy { it.session.optionalText("id") }
+    val closableIds = closableProjectChatIds(state, mainChats)
+    val parents =
+        state.projectChats
+            .filter { it.projectId == projectId }
+            .associate { it.session.optionalText("id") to it.session.optionalText("parentSessionId")?.takeIf(String::isNotBlank) }
+    val links = ticket.sessions.distinctBy { it.id }
+    val linkIds = links.map { it.id }.toSet()
+    val closable = mutableListOf<String>()
+    var busy = 0
+    for (link in links) {
+        val parent = parents[link.id]
+        if (parent != null && parent in linkIds) continue
+        val chat = featured[link.id]
+        val status =
+            chat?.session?.optionalText("status")
+                ?: when (link.status) {
+                    SessionLinkStatus.RUNNING -> "running"
+                    SessionLinkStatus.WAITING -> "waiting"
+                    else -> null
+                }
+        when {
+            status == "running" || status == "waiting" -> busy++
+            marks[link.id]?.pinned != true && link.id !in state.closingSessions &&
+                (projectId to link.id) in closableIds -> closable += link.id
+        }
+    }
+    return AcceptCloseOffer(closable, busy)
+}
+
 /** What a ticket page shows for one ref; see [ticketDetailView]. */
 internal sealed interface TicketDetailView {
     data object Loading : TicketDetailView

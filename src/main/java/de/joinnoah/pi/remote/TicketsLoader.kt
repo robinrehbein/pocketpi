@@ -28,8 +28,17 @@ internal interface TicketSource {
 /** Why the last tickets read or write failed; mapped like [ChangesFailure]. */
 enum class TicketsFailure { UNSUPPORTED, OFFLINE, BUSY, FORBIDDEN, NOT_FOUND, FAILED }
 
-/** An acceptance the user queued; the host hears of it at [deadline] unless it is undone. */
-data class PendingAccept(val projectId: String, val ref: String, val comment: String, val deadline: Long)
+/**
+ * An acceptance the user queued; the host hears of it at [deadline] unless it is undone. The chats
+ * [closeSessionIds] are closed once the host has taken the accept.
+ */
+data class PendingAccept(
+    val projectId: String,
+    val ref: String,
+    val comment: String,
+    val deadline: Long,
+    val closeSessionIds: List<String> = emptyList(),
+)
 
 /**
  * Tickets of the shown Mac.
@@ -87,12 +96,16 @@ private const val ACCEPT_STATE = "Done"
 /**
  * Loads [RemoteState.tickets]. Replies of an older read, or of another Mac, are dropped by version
  * counters and the route check in [write].
+ *
+ * [onAccepted] hears of an accept the host took (its request did not fail) that asked to close
+ * chats, with the route it was accepted on; it is not called when the shown Mac changed meanwhile.
  */
 internal class TicketsLoader(
     private val scope: CoroutineScope,
     private val source: TicketSource,
     private val current: () -> RemoteState,
     private val now: () -> Long = System::currentTimeMillis,
+    private val onAccepted: (routeId: String, projectId: String, sessionIds: List<String>) -> Unit = { _, _, _ -> },
     private val update: ((RemoteState) -> RemoteState) -> Unit,
 ) {
     private var listJob: Job? = null
@@ -104,6 +117,8 @@ internal class TicketsLoader(
     private var startVersion = 0L
     /** The ticket of the start job [startJob] follows. */
     private var startRef: String? = null
+    /** Counts [connectionLost] calls, so an accept answered on a later connection closes nothing. */
+    private var connectionEpoch = 0L
     /** The tickets of the writes sent and not answered yet, oldest first. */
     private val writingRefs = mutableListOf<String>()
 
@@ -231,16 +246,25 @@ internal class TicketsLoader(
 
     /**
      * Accepts [ref] (moves it to Done with [comment]) after [TICKET_ACCEPT_UNDO_MILLIS], unless
-     * [undo] or [connectionLost] comes first. A second accept while one waits is ignored.
+     * [undo] or [connectionLost] comes first. A second accept while one waits is ignored. Once the
+     * host took it, [closeSessionIds] go to [onAccepted]; an undone, dropped, failed or unknown
+     * accept closes nothing.
      */
-    fun queueAccept(projectId: String, ref: String, comment: String) {
+    fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String> = emptyList()) {
         val routeId = usableRoute() ?: return
         if (current().tickets.pendingAccept != null || comment.isEmpty() ||
             comment.length > MAX_TICKET_MOVE_COMMENT_CHARS || !writable(routeId, projectId)
         ) return
         if (!valid(routeId, ref) { requireWrite(projectId, ref); requireTicketMove(ACCEPT_STATE, comment) }) return
         val deadline = now() + TICKET_ACCEPT_UNDO_MILLIS
-        write(routeId) { it.copy(pendingAccept = PendingAccept(projectId, ref, comment, deadline), writeFailure = null, outcomeUnknown = false) }
+        val closing = closeSessionIds.distinct()
+        write(routeId) {
+            it.copy(
+                pendingAccept = PendingAccept(projectId, ref, comment, deadline, closing),
+                writeFailure = null,
+                outcomeUnknown = false,
+            )
+        }
         acceptJob = scope.launch {
             delay(TICKET_ACCEPT_UNDO_MILLIS)
             val pending = current().tickets.pendingAccept
@@ -249,7 +273,14 @@ internal class TicketsLoader(
             }
             write(routeId) { it.copy(pendingAccept = null) }
             // Its own coroutine: losing the connection must not cancel a request already sent.
-            scope.launch { send(routeId, projectId, ref) { source.moveTicket(projectId, ref, ACCEPT_STATE, comment) } }
+            val epoch = connectionEpoch
+            scope.launch {
+                val accepted = send(routeId, projectId, ref) { source.moveTicket(projectId, ref, ACCEPT_STATE, comment) }
+                // A reply that comes on a later connection or after a switch to another Mac closes
+                // nothing: the chats were chosen under the connection the accept was sent on.
+                if (accepted && closing.isNotEmpty() && epoch == connectionEpoch && routeId() == routeId)
+                    onAccepted(routeId, projectId, closing)
+            }
         }
     }
 
@@ -303,11 +334,16 @@ internal class TicketsLoader(
         scope.launch { send(routeId, projectId, ref) { source.moveTicket(projectId, ref, state, comment) } }
     }
 
-    /** One write, never retried; afterwards the ticket is read again whatever happened. */
-    private suspend fun send(routeId: String, projectId: String, ref: String, request: suspend () -> Any?) {
+    /**
+     * One write, never retried; afterwards the ticket is read again whatever happened. True when
+     * the request did not fail.
+     */
+    private suspend fun send(routeId: String, projectId: String, ref: String, request: suspend () -> Any?): Boolean {
         writingRefs += ref
+        var ok = false
         try {
             request()
+            ok = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -317,6 +353,7 @@ internal class TicketsLoader(
             writingRefs.remove(ref)
         }
         reread(routeId, projectId, ref)
+        return ok
     }
 
     private fun reread(routeId: String, projectId: String, ref: String) {
@@ -425,6 +462,7 @@ internal class TicketsLoader(
      * tickets can be used.
      */
     fun connectionLost() {
+        connectionEpoch++
         acceptJob?.cancel()
         acceptJob = null
         listJob?.cancel()

@@ -226,17 +226,23 @@ class EmptyStateUiTest {
     }
 
     @Test
-    fun theShowAllOfTheWorkingGroupSitsUnderItsOwnChatsAndExpandsOnlyThem() {
+    fun theWorkingSummaryCountsAndExpandsOnlyTheWorkingChats() {
         val running = (1..4).map { chat("w$it", "running") }
         render(projects = listOf(project("p1", "Alpha")), chats = running)
 
         compose.onAllNodesWithTag("quickChatsShowAllRecent").assertCountEquals(0)
-        compose.onAllNodesWithText("Session w4").assertCountEquals(0)
+        compose.onNodeWithText("4 chats in Alpha").assertIsDisplayed()
+        compose.onAllNodesWithText("Session w1").assertCountEquals(0)
 
-        compose.onNodeWithTag("quickChatsShowAllRunning").performClick()
+        compose.onNodeWithTag("quickChatsRunningSummary").performClick()
         compose.waitForIdle()
 
-        compose.onNodeWithText("Session w4").assertIsDisplayed()
+        (1..4).forEach { compose.onNodeWithText("Session w$it").assertExists() }
+
+        compose.onNodeWithTag("quickChatsRunningSummary").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithText("Session w1").assertCountEquals(0)
     }
 
     @Test
@@ -244,7 +250,6 @@ class EmptyStateUiTest {
         render(projects = listOf(project("p1", "Alpha")), chats = (1..3).map { chat("r$it", "idle", verified = false) })
 
         compose.onAllNodesWithTag("quickChatsShowAllRecent").assertCountEquals(0)
-        compose.onAllNodesWithTag("quickChatsShowAllRunning").assertCountEquals(0)
     }
 
     @Test
