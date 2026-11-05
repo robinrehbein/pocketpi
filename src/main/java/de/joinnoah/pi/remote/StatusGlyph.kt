@@ -15,6 +15,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -32,7 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 internal enum class StatusGlyphKind {
-    TASK_PENDING, TASK_RUNNING, DONE, FAILED, STOPPED, TOOL_RUNNING, SESSION_RUNNING, COMPACTING, WAITING, NEEDS_INPUT
+    TASK_PENDING, TASK_RUNNING, DONE, WORK_COMPLETED, FAILED, STOPPED, TOOL_RUNNING, SESSION_RUNNING, COMPACTING, WAITING, NEEDS_INPUT
 }
 
 internal fun statusGlyphFrame(kind: StatusGlyphKind, elapsedMillis: Long): Int = when (kind) {
@@ -52,6 +53,9 @@ private val sessionSnakeCells = intArrayOf(4, 5, 1, 3, 2, 10, 8, 12)
 /** Static session glyph (three quadrants, like ▛): reads as "busy" and differs from every snake frame and STOPPED. */
 internal const val SESSION_RUNNING_STATIC_CELLS = 7
 
+/** ▚: top-left and bottom-right quarter blocks; completed work, not a generic success dot. */
+internal const val WORK_COMPLETED_CELLS = 0b1001
+
 /** Quadrant bitmask for SESSION_RUNNING: bit 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right. */
 internal fun sessionRunningCells(frame: Int, animated: Boolean): Int =
     if (animated) sessionSnakeCells[Math.floorMod(frame, sessionSnakeCells.size)] else SESSION_RUNNING_STATIC_CELLS
@@ -63,6 +67,8 @@ internal fun StatusGlyph(
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
     animate: Boolean = true,
+    /** A shared compaction clock is read during drawing, without recomposing the row each frame. */
+    frameOverride: State<Int>? = null,
 ) {
     val cycle = when (kind) {
         StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING, StatusGlyphKind.SESSION_RUNNING, StatusGlyphKind.COMPACTING -> 800
@@ -84,7 +90,7 @@ internal fun StatusGlyph(
         animationsEnabled = systemAnimationsEnabled()
         onDispose { context.contentResolver.unregisterContentObserver(observer) }
     }
-    val animated = animate && animationsEnabled && cycle > 0
+    val animated = animate && animationsEnabled && cycle > 0 && frameOverride == null
     val elapsed = if (animated) {
         key(kind) {
             val transition = rememberInfiniteTransition(label = "status glyph")
@@ -95,12 +101,13 @@ internal fun StatusGlyph(
             ).value.toLong()
         }
     } else 0L
-    val frame = statusGlyphFrame(kind, elapsed)
     val descriptionModifier = if (contentDescription == null) Modifier else Modifier.semantics {
         this.contentDescription = contentDescription
     }
     // size() after the caller's modifier: a caller size/constraint wins, 16.dp is only the default.
     Canvas(modifier.size(16.dp).then(descriptionModifier)) {
+        val frame = if (animate && animationsEnabled && frameOverride != null) frameOverride.value
+            else statusGlyphFrame(kind, elapsed)
         val unit = size.minDimension
         val center = Offset(unit / 2, unit / 2)
         val stroke = unit / 10
@@ -147,9 +154,10 @@ internal fun StatusGlyph(
                             unit * (0.2f + (dot % 3) * 0.3f)))
                 }
             }
-            StatusGlyphKind.SESSION_RUNNING -> {
-                // Atlas: ▖▌▘▀▝▐▗▄ (quadrants and halves); static: ▛.
-                val cells = sessionRunningCells(frame, animated)
+            StatusGlyphKind.SESSION_RUNNING, StatusGlyphKind.WORK_COMPLETED -> {
+                // Work completed: ▚. Running: ▖▌▘▀▝▐▗▄ (quadrants and halves); static: ▛.
+                val cells = if (kind == StatusGlyphKind.WORK_COMPLETED) WORK_COMPLETED_CELLS
+                    else sessionRunningCells(frame, animated)
                 val start = unit * 0.2f
                 val half = unit * 0.3f
                 for (i in 0..3) if (cells and (1 shl i) != 0) {

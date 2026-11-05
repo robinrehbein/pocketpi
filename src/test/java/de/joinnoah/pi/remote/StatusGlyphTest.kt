@@ -40,6 +40,13 @@ class StatusGlyphTest {
     }
 
     @Test
+    fun completedWorkUsesExactlyTopLeftAndBottomRightQuarters() {
+        assertEquals(0b1001, WORK_COMPLETED_CELLS)
+        assertEquals(2, Integer.bitCount(WORK_COMPLETED_CELLS))
+        assertEquals(0, statusGlyphFrame(StatusGlyphKind.WORK_COMPLETED, Long.MAX_VALUE))
+    }
+
+    @Test
     fun staticGlyphsNeverAdvance() {
         for (kind in StatusGlyphKind.entries - setOf(StatusGlyphKind.TASK_RUNNING, StatusGlyphKind.TOOL_RUNNING, StatusGlyphKind.SESSION_RUNNING, StatusGlyphKind.COMPACTING)) {
             assertEquals(0, statusGlyphFrame(kind, 12345))

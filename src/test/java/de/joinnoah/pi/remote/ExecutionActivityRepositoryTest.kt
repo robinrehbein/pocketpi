@@ -156,7 +156,7 @@ class ExecutionActivityRepositoryTest {
         transport.deliver(transport.event("session.status", "session", "status" to "idle")); runCurrent()
         val state = repo.state.value
         assertEquals(54_000L, state.chatWorkTiming.durationMillis)
-        assertEquals(StatusGlyphKind.DONE, sessionActivityLine(state, emptyList(), selection, monotonic)?.glyphKind)
+        assertEquals(StatusGlyphKind.WORK_COMPLETED, sessionActivityLine(state, emptyList(), selection, monotonic)?.glyphKind)
     }
 
     @Test fun v3DiscoveryOptsInAndTheRouteAnswerGrants() = runTest {

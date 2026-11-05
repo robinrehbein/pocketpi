@@ -105,7 +105,7 @@ internal fun sessionActivityLine(
         destination?.sessionId != null && state.selection == destination && state.questions.isEmpty()
     ) {
         state.chatWorkTiming.durationMillis?.let {
-            return SessionActivityLine(R.string.remote_chat_activity_completed, glyphKind = StatusGlyphKind.DONE,
+            return SessionActivityLine(R.string.remote_chat_activity_completed, glyphKind = StatusGlyphKind.WORK_COMPLETED,
                 animate = false, completedDurationMillis = it)
         }
     }
