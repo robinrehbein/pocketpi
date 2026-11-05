@@ -641,15 +641,15 @@ class SessionListPresentationTest {
     private fun ids(chats: List<ProjectChatSummary>) = chats.map { it.session.text("id") }
 
     @Test
-    fun quickAccessShowsThreeRunningAndThreeRecentChatsUntilShowAll() {
+    fun quickAccessShowsThreeRecentChatsUntilShowAllAndListsRunningChatsOnlyExpanded() {
         val chats =
             (1..4).map { quickChat("running$it", "running") } +
                 (1..5).map { quickChat("recent$it", "idle", verified = false) }
 
         val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
-        assertEquals(3, folded.running.size)
+        assertTrue(folded.running.isEmpty())
+        assertEquals(4, folded.runningTotal)
         assertEquals(3, folded.recent.size)
-        assertTrue(folded.runningExpandable)
         assertTrue(folded.recentExpandable)
 
         val all = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = true)
@@ -664,7 +664,6 @@ class SessionListPresentationTest {
         val runningOnly = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = false)
         assertEquals(4, runningOnly.running.size)
         assertEquals(2, runningOnly.recent.size)
-        assertTrue(runningOnly.runningExpandable)
         assertFalse(runningOnly.recentExpandable)
     }
 
@@ -673,8 +672,59 @@ class SessionListPresentationTest {
         val chats = (1..3).map { quickChat("running$it", "running") } + quickChat("recent", "idle", verified = false)
 
         val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
-        assertFalse(folded.runningExpandable)
         assertFalse(folded.recentExpandable)
+        assertFalse(folded.readyExpandable)
+    }
+
+    @Test
+    fun quickChatsCountsAllRunningChatsAndTheirProjectsWhileFolded() {
+        val chats =
+            listOf(
+                quickChat("a1", "running"),
+                quickChat("b1", "running").copy(projectId = "p2", projectName = "Beta"),
+                quickChat("a2", "running"),
+                quickChat("b2", "running").copy(projectId = "p2", projectName = "Beta"),
+                quickChat("offline", "running", verified = false),
+                quickChat("idle", "idle"),
+            )
+
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(4, folded.runningTotal)
+        assertEquals(listOf("Alpha", "Beta"), folded.runningProjects)
+        assertTrue(folded.running.isEmpty())
+
+        val offline = quickChats(chats, connected = false, showRunningAll = true, showRecentAll = false)
+        assertEquals(0, offline.runningTotal)
+        assertTrue(offline.runningProjects.isEmpty())
+    }
+
+    @Test
+    fun groupedByProjectKeepsTheOrderOfEachProjectsFirstChatAndTheOrderWithinAProject() {
+        fun chat(id: String, project: String) = quickChat(id, "idle").copy(projectId = project, projectName = project.uppercase())
+        val groups = groupedByProject(listOf(chat("b1", "b"), chat("a1", "a"), chat("b2", "b"), chat("c1", "c"), chat("a2", "a")))
+
+        assertEquals(listOf("b", "a", "c"), groups.map { it.projectId })
+        assertEquals(listOf("B", "A", "C"), groups.map { it.projectName })
+        assertEquals(listOf(listOf("b1", "b2"), listOf("a1", "a2"), listOf("c1")), groups.map { ids(it.chats) })
+        assertTrue(groupedByProject(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun groupingKeepsEveryUnreadChatAboveTheReadChatsOfItsOwnProjectOnly() {
+        val aUnread = quickChat("aUnread", "idle", updatedAt = 30)
+        val bUnread = quickChat("bUnread", "idle", updatedAt = 20).copy(projectId = "p2", projectName = "Beta")
+        val aRead = quickChat("aRead", "idle", updatedAt = 40)
+        val marks =
+            mapOf(
+                "aUnread" to SessionMark(finishedAt = 30),
+                "bUnread" to SessionMark(finishedAt = 20),
+                "aRead" to SessionMark(seenAt = 50, seenUpdatedAt = 40),
+            )
+        val ready = quickChats(listOf(aRead, bUnread, aUnread), connected = true, showRunningAll = false, showRecentAll = false, marks = marks).ready
+        assertEquals(listOf("aUnread", "bUnread", "aRead"), ids(ready))
+
+        // Alpha leads by its unread chat; its read chat follows it, above Beta's unread one.
+        assertEquals(listOf("aUnread", "aRead", "bUnread"), groupedByProject(ready).flatMap { ids(it.chats) })
     }
 
     @Test

@@ -21,4 +21,17 @@
     </plurals>
     <!-- Ein bereiter Chat auf der Projektseite, der seit einem Tag oder länger ruht. -->
     <string name="remote_session_old">Alt</string>
+    <!-- Die Gruppe „Arbeitet“ der Projektseite, zu einer Zeile gefaltet: „3 Chats in Alpha“, „7 Chats in 2 Projekten“. -->
+    <plurals name="remote_projects_running_chats">
+        <item quantity="one">%d Chat</item>
+        <item quantity="other">%d Chats</item>
+    </plurals>
+    <string name="remote_projects_running_in_one">%1$s in %2$s</string>
+    <plurals name="remote_projects_running_in_many">
+        <item quantity="one">%1$s in %2$d Projekt</item>
+        <item quantity="other">%1$s in %2$d Projekten</item>
+    </plurals>
+    <string name="remote_projects_running_description">In Arbeit: %1$s</string>
+    <string name="remote_projects_running_show">Arbeitende Chats zeigen</string>
+    <string name="remote_projects_running_hide">Arbeitende Chats ausblenden</string>
 </resources>

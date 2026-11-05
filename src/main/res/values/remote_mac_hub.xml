@@ -21,4 +21,17 @@
     </plurals>
     <!-- A ready chat on the Projects page that has been idle for a day or more. -->
     <string name="remote_session_old">Old</string>
+    <!-- The Working group of the Projects page, folded into one line: "3 chats in Alpha", "7 chats in 2 projects". -->
+    <plurals name="remote_projects_running_chats">
+        <item quantity="one">%d chat</item>
+        <item quantity="other">%d chats</item>
+    </plurals>
+    <string name="remote_projects_running_in_one">%1$s in %2$s</string>
+    <plurals name="remote_projects_running_in_many">
+        <item quantity="one">%1$s in %2$d project</item>
+        <item quantity="other">%1$s in %2$d projects</item>
+    </plurals>
+    <string name="remote_projects_running_description">Working: %1$s</string>
+    <string name="remote_projects_running_show">Show working chats</string>
+    <string name="remote_projects_running_hide">Hide working chats</string>
 </resources>

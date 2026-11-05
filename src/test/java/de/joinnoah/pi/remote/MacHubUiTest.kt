@@ -31,6 +31,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextEquals
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.serialization.json.JsonObject
@@ -111,12 +112,14 @@ class MacHubUiTest {
         fontScale: Float? = null,
         marks: SessionMarksStore? = null,
         pointerMenu: Boolean = false,
+        /** The computer the phone is connected to; the page shown is always Studio's. */
+        connectedHost: PairedHost = studio,
     ) {
         repository.state.value =
             RemoteState(
                 hosts = hosts,
                 hostsLoaded = true,
-                host = studio,
+                host = connectedHost,
                 selection = RemoteSelection("studio"),
                 connected = connected,
                 capabilities = capabilities,
@@ -232,6 +235,83 @@ class MacHubUiTest {
         assertTrue(headingTop(needsYou) < headingTop(working))
         assertTrue(headingTop(working) < headingTop(shared))
         assertTrue(headingTop(shared) < headingTop(quick))
+    }
+
+    @Test
+    fun theWorkingGroupFoldsIntoASummaryThatReadsItsStateAndExpands() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "a", "running"),
+                    chat("p2", "Beta", "b", "running"),
+                    chat("p1", "Alpha", "c", "running"),
+                ),
+        )
+
+        val summary = compose.onNodeWithTag("quickChatsRunningSummary")
+        summary.assertTextEquals("3 chats in 2 projects")
+        summary.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, label(R.string.remote_menu_collapsed)))
+        compose.onAllNodesWithText("Session a").assertCountEquals(0)
+
+        summary.performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("quickChatsRunningSummary")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, label(R.string.remote_menu_expanded)))
+        // Grouped by project: Alpha's two chats under one Alpha heading, then Beta's.
+        val a = compose.onNodeWithText("Session a").fetchSemanticsNode().positionInRoot.y
+        val c = compose.onNodeWithText("Session c").fetchSemanticsNode().positionInRoot.y
+        val b = compose.onNodeWithText("Session b").fetchSemanticsNode().positionInRoot.y
+        assertTrue(a < c && c < b)
+        compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(1)
+        compose.onAllNodes(projectGroupHeading("Beta")).assertCountEquals(1)
+    }
+
+    /** A project heading over a run of featured chats. */
+    private fun projectGroupHeading(name: String) =
+        hasText(name) and hasTestTag("projectGroupHeading") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+
+    @Test
+    fun readyChatsOfOneProjectShowTheirProjectNameOnceAndNeedsYouRowsKeepTheirLabel() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", updatedAt = 3),
+                    chat("p1", "Alpha", "two", "idle", updatedAt = 2),
+                    chat("p2", "Beta", "ask", "waiting"),
+                    chat("p2", "Beta", "three", "idle", updatedAt = 1),
+                ),
+        )
+
+        compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(1)
+        compose.onAllNodes(projectGroupHeading("Beta")).assertCountEquals(1)
+        // The waiting row keeps its own label, which is no heading.
+        compose.onNode(
+            hasText("Beta") and hasAnyAncestor(hasTestTag("projectChatRow-p2-ask")),
+            useUnmergedTree = true,
+        ).assertExists()
+        compose.onAllNodes(
+            hasText("Alpha") and hasAnyAncestor(hasTestTag("projectChatRow-p1-one")),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
+    }
+
+    @Test
+    fun aProjectHeadsAGroupInReadyAndInRecentlyUsedAlike() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "done", "idle"),
+                    chat("p1", "Alpha", "old", "idle", verified = false),
+                ),
+        )
+
+        compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(2)
+        compose.onNodeWithText("Session done").assertIsDisplayed()
+        compose.onNodeWithText("Session old").assertExists()
     }
 
     @Test
@@ -431,6 +511,78 @@ class MacHubUiTest {
         compose.onNodeWithText("device-studio").assertIsDisplayed()
         compose.onNodeWithTag("macDetailsClose").performClick()
         compose.onAllNodesWithTag("macDetailsBody").assertCountEquals(0)
+    }
+
+    private fun sampleStats() =
+        HostStats(
+            platform = HostPlatform.DARWIN,
+            sampledAt = 1,
+            uptimeSeconds = 3 * 86400L + 4 * 3600L,
+            cpuPercent = 73.0,
+            cores = 10.0,
+            load = listOf(7.4, 5.1, 3.9),
+            memory = HostUsage(8L * 1024 * 1024 * 1024, 16L * 1024 * 1024 * 1024),
+            pressure = MemoryPressure.WARN,
+            disk = null,
+            battery = HostBattery(41.0, charging = true, onAc = true),
+            container = null,
+        )
+
+    @Test
+    fun connectionDetailsShowTheLoadWhenTheHostOffersIt() {
+        repository.hostStatsResult =
+            HostStats(
+                platform = HostPlatform.DARWIN,
+                sampledAt = 1,
+                uptimeSeconds = 3 * 86400L + 4 * 3600L,
+                cpuPercent = 73.0,
+                cores = 10.0,
+                load = listOf(7.4, 5.1, 3.9),
+                memory = HostUsage(8L * 1024 * 1024 * 1024, 16L * 1024 * 1024 * 1024),
+                pressure = MemoryPressure.WARN,
+                disk = null,
+                battery = HostBattery(41.0, charging = true, onAc = true),
+                container = null,
+            )
+        render(listOf(project("p1", "Alpha")), capabilities = setOf(HOST_STATS_CAPABILITY))
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("hostStatsCpu").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("73%").assertIsDisplayed()
+        compose.onNodeWithText("Load 7.4 / 5.1 / 3.9", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_host_stats_pressure_warn)).assertIsDisplayed()
+        compose.onNodeWithText("41% · charging").assertIsDisplayed()
+        compose.onNodeWithText("Up for 3 d 4 h").assertIsDisplayed()
+        // Memory in powers of 1024, as macOS shows it.
+        compose.onNodeWithText("8 GB / 16 GB").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStatsDisk").assertCountEquals(0)
+    }
+
+    @Test
+    fun anotherMacsDetailsNeverShowTheConnectedComputersLoad() {
+        repository.hostStatsResult = sampleStats()
+        render(listOf(project("p1", "Alpha")), capabilities = setOf(HOST_STATS_CAPABILITY), connectedHost = laptop)
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+
+        compose.onNodeWithTag("macDetailsBody").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStats").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, repository.hostStatsRequests) }
+    }
+
+    @Test
+    fun connectionDetailsHideTheLoadWithoutTheCapability() {
+        render(listOf(project("p1", "Alpha")))
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+
+        compose.onNodeWithTag("macDetailsBody").assertIsDisplayed()
+        compose.onAllNodesWithTag("hostStats").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(0, repository.hostStatsRequests) }
     }
 
     @Test
