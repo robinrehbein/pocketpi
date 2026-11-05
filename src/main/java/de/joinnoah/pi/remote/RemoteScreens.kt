@@ -1113,11 +1113,8 @@ internal fun RemoteScreen(
     val hiddenMessage = stringResource(R.string.remote_session_hidden_snackbar)
     val undoLabel = stringResource(R.string.remote_undo)
     val hideResources = LocalResources.current
-    val hideSession: (String, String, Long?) -> Unit = hide@{ sessionId, title, updatedAt ->
-        val store = sessionMarkStore ?: return@hide
-        val route = state.host?.routeId ?: return@hide
-        val previous = store.hide(route, sessionId, updatedAt, System.currentTimeMillis())
-        val applied = store.mark(route, sessionId)
+    // The snackbar that undoes a hide; the review sheet hands its last hide here as it closes.
+    fun showHideUndo(store: SessionMarksStore, route: String, sessionId: String, title: String, previous: SessionMark?, applied: SessionMark?) {
         snackbar.currentSnackbarData?.dismiss()
         hideScope.launch {
             val result =
@@ -1131,6 +1128,13 @@ internal fun RemoteScreen(
                 )
             if (result == SnackbarResult.ActionPerformed) store.undoHide(route, sessionId, previous, applied)
         }
+    }
+    val hideSession: (String, String, Long?) -> Unit = hide@{ sessionId, title, updatedAt ->
+        val store = sessionMarkStore ?: return@hide
+        val route = state.host?.routeId ?: return@hide
+        val previous = store.hide(route, sessionId, updatedAt, System.currentTimeMillis())
+        val applied = store.mark(route, sessionId)
+        showHideUndo(store, route, sessionId, title, previous, applied)
     }
     val unhideSession: (String) -> Unit = unhide@{ sessionId ->
         val route = state.host?.routeId ?: return@unhide
@@ -1633,6 +1637,9 @@ internal fun RemoteScreen(
     // every running featured chat.
     var runningExpanded by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
+    // "Review all" on the Ready group: the review in progress, or null. Not saved across process
+    // death; the activity keeps it over a rotation. A new page (another Mac) ends it.
+    var readyReview by remember(key) { mutableStateOf<ReadyReview?>(null) }
     // "5 minutes ago" on the Projects page's chat rows moves on without any state change. Not read here
     // (no `by`): only the rows read it, so the tick recomposes them and not the whole page.
     val projectsNow =
@@ -3332,7 +3339,17 @@ internal fun RemoteScreen(
                             }
                             if (readyChats.isNotEmpty()) {
                                 item(key = "project_chats_ready_heading") {
-                                    ProjectsSectionHeading(stringResource(R.string.remote_status_ready))
+                                    val reviewable = quick.readyQueue
+                                    ProjectsSectionHeading(stringResource(R.string.remote_status_ready)) {
+                                        // One finished chat is quicker to handle on its row.
+                                        if (reviewable.size >= 2 && state.connected && model is ProjectsViewModel)
+                                            TextButton(
+                                                onClick = {
+                                                    readyReview = ReadyReview(readyReviewQueue(reviewable), errorAtStart = state.error)
+                                                },
+                                                modifier = Modifier.testTag("readyReviewAll"),
+                                            ) { Text(stringResource(R.string.remote_ready_review_all, reviewable.size)) }
+                                    }
                                 }
                                 groupedProjectChatRows("ready", readyChats, chatRowContext, ready = true)
                                 if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
@@ -4574,7 +4591,8 @@ internal fun RemoteScreen(
         if (previousClosing.isEmpty() && state.closingSessions.isNotEmpty()) errorAtClose = state.error
         previousClosing = state.closingSessions
         // An error that was already showing before this close does not hide its announcement.
-        if (finished.isNotEmpty() && (state.error == null || state.error == errorAtClose)) {
+        // During a review the next card is the announcement (see ReadyReviewSheet).
+        if (finished.isNotEmpty() && readyReview == null && (state.error == null || state.error == errorAtClose)) {
             closedMessage = closedAnnouncement
             delay(3_000)
             closedMessage = null
@@ -4582,6 +4600,22 @@ internal fun RemoteScreen(
     }
     closedMessage?.let { message ->
         Box(Modifier.size(1.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = message })
+    }
+    readyReview?.let { review ->
+        ReadyReviewHost(
+            review = review,
+            onReviewChange = { readyReview = it },
+            key = key,
+            model = model,
+            state = state,
+            projectSelected = projectSelected,
+            routeMarks = routeMarks,
+            sessionMarkStore = sessionMarkStore,
+            sessionCompactionNow = sessionCompactionNow,
+            projectsNow = projectsNow,
+            navigator = navigator,
+            showHideUndo = ::showHideUndo,
+        )
     }
     // A chat closed from Projects that left the page (closed elsewhere, or no longer featured)
     // takes its dialog along.
@@ -4946,13 +4980,27 @@ internal fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Uni
 
 /** The heading of a section of the Projects page; the rows under it belong to it. */
 @Composable
-private fun ProjectsSectionHeading(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 28.dp, bottom = 4.dp).semantics { heading() },
-    )
+private fun ProjectsSectionHeading(text: String, action: (@Composable () -> Unit)? = null) {
+    if (action == null) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 28.dp, bottom = 4.dp).semantics { heading() },
+        )
+        return
+    }
+    // The action's 48dp touch target takes part of the heading's top space, so the text stays where
+    // a plain heading's would.
+    Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f).padding(top = 12.dp, bottom = 4.dp).semantics { heading() },
+        )
+        action()
+    }
 }
 
 /** What every featured chat row of the Projects page shares; see [projectChatRows]. */
@@ -4994,6 +5042,32 @@ private fun LazyListScope.projectChatRows(
 }
 
 /**
+ * The list row of a featured chat of the Projects page, with its marks: what its row shows and what
+ * the review card offers, so both offer the same verbs.
+ */
+internal fun projectChatItem(
+    chat: ProjectChatSummary,
+    marks: Map<String, SessionMark>,
+    connected: Boolean,
+    compactions: Map<String, SessionCompaction>,
+    nowMillis: Long,
+    ticketRef: (String) -> String?,
+): SessionListItem {
+    val id = chat.session.optionalText("id")
+    val mark = id?.let(marks::get)
+    return sessionListItem(
+        chat.session, connected && chat.verified, loading = false, confirmed = chat.verified,
+        compaction = id?.let(compactions::get), nowMillis = nowMillis,
+    ).let {
+        it.copy(
+            pinned = mark?.pinned == true,
+            unread = sessionUnread(mark, it.updatedAt, open = false),
+            ticketRef = id?.let(ticketRef),
+        )
+    }
+}
+
+/**
  * The featured chats of a Projects section by project (see [groupedByProject]): one project heading, then that
  * project's rows without their own label. [section] keeps the heading keys apart, since a project can head a
  * group in several sections.
@@ -5026,18 +5100,7 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
     // Read here, not by the caller, so the minute tick recomposes the rows only.
     val nowMillis = context.now.value
     val id = chat.session.optionalText("id")
-    val mark = id?.let(context.marks::get)
-    val item =
-        sessionListItem(
-            chat.session, context.connected && chat.verified, loading = false, confirmed = chat.verified,
-            compaction = id?.let(context.compactions::get), nowMillis = context.nowMillis,
-        ).let {
-            it.copy(
-                pinned = mark?.pinned == true,
-                unread = sessionUnread(mark, it.updatedAt, open = false),
-                ticketRef = id?.let(context.ticketRef),
-            )
-        }
+    val item = projectChatItem(chat, context.marks, context.connected, context.compactions, context.nowMillis, context.ticketRef)
     val closable = context.closable(chat)
     Column(Modifier.testTag("projectChatRow-${chat.projectId}-${id.orEmpty()}")) {
         if (showProject) Text(

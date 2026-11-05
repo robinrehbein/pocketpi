@@ -170,6 +170,11 @@ internal data class QuickChats(
     /** Whether the recent group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
     val recentExpandable: Boolean,
     /**
+     * Every ready chat in the group's order, never cut, without the pinned ones (a pin means keep it):
+     * what the Ready group's "Review all" walks (see [readyReviewQueue]).
+     */
+    val readyQueue: List<ProjectChatSummary> = emptyList(),
+    /**
      * How many featured chats run, folded or not. Like the expanded list it counts the featured chats only
      * (at most twelve), so the number never promises rows the expansion does not show.
      */
@@ -183,7 +188,7 @@ internal data class QuickChats(
  * Mac lists as a copy to continue) and no subagent. The Ready group and [unreadReadyCount]
  * share this.
  */
-private fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
+internal fun isReadyRow(status: String?, origin: String?, parentSessionId: String?): Boolean =
     status == "idle" && origin != "history" && parentSessionId.isNullOrBlank()
 
 /**
@@ -226,6 +231,7 @@ internal fun quickChats(
         running = if (showRunningAll) running else emptyList(),
         recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         recentExpandable = recent.size > QUICK_CHAT_LIMIT,
+        readyQueue = ready.filterNot { chat -> chat.session.optionalText("id")?.let(marks::get)?.pinned == true },
         runningTotal = running.size,
         runningProjects = running.distinctBy { it.projectId }.map { it.projectName },
     )
