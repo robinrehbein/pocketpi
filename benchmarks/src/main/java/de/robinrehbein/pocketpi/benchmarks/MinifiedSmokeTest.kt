@@ -28,6 +28,8 @@ private const val CACHED_CHAT = "Cached chat fixture"
 private const val CACHED_TAIL = "CONNECTED_FLOW_CACHED_TAIL"
 private const val UNCACHED_CHAT = "Uncached chat fixture"
 private const val UNCACHED_TAIL = "CONNECTED_FLOW_UNCACHED_TAIL"
+private const val SHORT_CHAT = "Short chat fixture"
+private const val SHORT_TAIL = "CONNECTED_FLOW_SHORT_TAIL"
 
 /**
  * Smoke checks of the R8-shrunk benchmark APK, driven from outside like a user: the paths where a
@@ -83,6 +85,21 @@ class MinifiedSmokeTest {
     @Test
     fun pairedAppOpensChat() {
         launch()
+        openChat(UNCACHED_CHAT, UNCACHED_TAIL)
+    }
+
+    /** A stray featured-chat tap must not strand project navigation on an unrelated chat. */
+    @Test
+    fun projectNavigationRecoversFromStrayChat() {
+        launch()
+        val featuredRow = "projectChatRow-project-pocketpi-session-short"
+        check(device.wait(Until.hasObject(By.res(featuredRow)), 30_000)) { "The featured chat did not load. " + device.screenTexts() }
+        device.waitForIdle(2_000)
+        device.tapUntil(
+            SHORT_CHAT, By.text(SHORT_TAIL), "The featured chat did not open",
+            timeoutMs = 30_000, rowTag = featuredRow,
+        )
+        check(device.hasObject(By.res("composerField"))) { "The fixture chat did not show its composer. " + device.screenTexts() }
         openChat(UNCACHED_CHAT, UNCACHED_TAIL)
     }
 
