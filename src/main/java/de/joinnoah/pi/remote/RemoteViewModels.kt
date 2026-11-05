@@ -20,6 +20,9 @@ internal open class DestinationViewModel(
     fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit =
         repository.acquireNativeEditorPresence(selection)
 
+    /** `host.stats` for the connection details sheet; see [canUseHostStats]. */
+    suspend fun hostStats(): HostStats = repository.hostStats()
+
     internal var cleared = false
         private set
 
