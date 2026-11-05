@@ -7,6 +7,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasText
@@ -37,10 +40,11 @@ class TicketSheetsTest {
     private fun ticket(
         actions: Set<TicketAction> = setOf(TicketAction.ACCEPT, TicketAction.COMMENT, TicketAction.MOVE),
         moveTargets: List<String> = listOf("Done", "Cancelled"),
+        sessions: List<TicketSession> = emptyList(),
     ) =
         Ticket(
             "DEV-1", "Title", "https://plane.example/DEV-1", "Review", TicketStateGroup.STARTED, "feature",
-            TicketPriority.NONE, true, TicketSection.ACCEPTANCE, false, actions, moveTargets, now, emptyList(),
+            TicketPriority.NONE, true, TicketSection.ACCEPTANCE, false, actions, moveTargets, now, sessions,
         )
 
     private fun stateOf(
@@ -57,6 +61,8 @@ class TicketSheetsTest {
         )
 
     private val accepted = mutableListOf<String>()
+    private val acceptedClosing = mutableListOf<Pair<String, List<String>>>()
+    private var marks by mutableStateOf(emptyMap<String, SessionMark>())
     private val comments = mutableListOf<String>()
     private val moves = mutableListOf<Pair<String, String?>>()
     private val starts = mutableListOf<String?>()
@@ -79,11 +85,25 @@ class TicketSheetsTest {
                     onStart = { starts += it },
                     onUndo = { undone++ },
                     onDismissNotice = { dismissed++ },
+                    onAcceptClosing = { comment, ids -> acceptedClosing += comment to ids },
+                    marks = marks,
                 )
             }
         }
         compose.waitForIdle()
     }
+
+    /** A featured chat of project p1 on the Projects page, verified by the current connection. */
+    private fun featured(id: String, status: String = "idle") =
+        ProjectChatSummary("p1", "Atlas", Wire.objectOf("id" to id, "status" to status, "origin" to "rpc", "updatedAt" to 1), true)
+
+    /** The ticket page of DEV-1 linked to [links], with [chats] featured and closing offered by the host. */
+    private fun linkedState(links: List<TicketSession>, vararg chats: ProjectChatSummary) =
+        stateOf(ticket(sessions = links)).copy(
+            selection = RemoteSelection(routeId = "studio"),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            projectChats = chats.toList(),
+        )
 
     private fun label(id: Int) = compose.activity.getString(id)
 
@@ -106,6 +126,68 @@ class TicketSheetsTest {
         compose.waitForIdle()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_tickets_accepting, "DEV-1")).assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_tickets_undo)).assertIsDisplayed()
+    }
+
+    @Test
+    fun theCloseOptionShowsOnlyWithClosableChatsAndIsOffByDefault() {
+        // A linked chat that is not among the featured chats offers nothing.
+        show(linkedState(listOf(TicketSession("s1", "One", SessionLinkStatus.IDLE))))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onAllNodesWithTag("ticketAcceptCloseLinked").assertCountEquals(0)
+        compose.onAllNodesWithTag("ticketAcceptBusyLinked").assertCountEquals(0)
+
+        current = linkedState(listOf(TicketSession("s1", "One", SessionLinkStatus.IDLE)), featured("s1"))
+        compose.waitForIdle()
+        compose.onNodeWithTag("ticketAcceptCloseLinked").assertIsOff()
+        compose.onNodeWithText(
+            compose.activity.resources.getQuantityString(R.plurals.remote_tickets_accept_close_linked, 1, 1),
+        ).assertIsDisplayed()
+        tap("ticketSheetConfirm")
+        compose.waitForIdle()
+        // Left off, the accept closes nothing.
+        assertEquals(listOf("Accepted in PocketPi."), accepted)
+        assertTrue(acceptedClosing.isEmpty())
+    }
+
+    @Test
+    fun confirmPassesTheChoice() {
+        show(
+            linkedState(
+                listOf(TicketSession("s1", "One", SessionLinkStatus.IDLE), TicketSession("s2", "Two", SessionLinkStatus.IDLE)),
+                featured("s1"), featured("s2"),
+            ),
+        )
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        tap("ticketAcceptCloseLinked")
+        compose.onNodeWithTag("ticketAcceptCloseLinked").assertIsOn()
+        tap("ticketSheetConfirm")
+        compose.waitForIdle()
+        assertEquals(listOf("Accepted in PocketPi." to listOf("s1", "s2")), acceptedClosing)
+        assertTrue(accepted.isEmpty())
+        compose.onAllNodesWithText(compose.activity.getString(R.string.remote_tickets_accept_title, "DEV-1")).assertCountEquals(0)
+    }
+
+    @Test
+    fun busyChatsGetANote() {
+        show(
+            linkedState(
+                listOf(TicketSession("s1", "One", SessionLinkStatus.IDLE), TicketSession("s2", "Two", SessionLinkStatus.RUNNING)),
+                featured("s1"),
+            ),
+        )
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onNodeWithTag("ticketAcceptCloseLinked").assertIsDisplayed()
+        compose.onNodeWithText(
+            compose.activity.resources.getQuantityString(R.plurals.remote_tickets_accept_busy_linked, 1, 1),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun aPinnedLinkedChatIsNotOffered() {
+        marks = mapOf("s1" to SessionMark(pinned = true))
+        show(linkedState(listOf(TicketSession("s1", "One", SessionLinkStatus.IDLE)), featured("s1")))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onAllNodesWithTag("ticketAcceptCloseLinked").assertCountEquals(0)
     }
 
     @Test

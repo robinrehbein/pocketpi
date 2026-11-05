@@ -10322,15 +10322,41 @@ class DefaultRemoteRepository(
             },
             { state.value },
             now,
-            ::update,
+            onAccepted = ::closeAcceptedTicketChats,
+            update = ::update,
         )
+
+    /**
+     * Closes the chats linked to a ticket the host just accepted on [routeId]. Each goes through
+     * [closeProjectChat], whose gate is read again: a chat that started working during the undo
+     * window stays open, and so does every chat while a project is open or the list is loading.
+     * Chats left open that way are reported once, so the user who asked to close them hears of it.
+     */
+    internal fun closeAcceptedTicketChats(routeId: String, projectId: String, sessionIds: List<String>) {
+        if (activeHost?.routeId != routeId || state.value.tickets.routeId != routeId) return
+        val closable = sessionIds.filter { closableProjectChat(state.value, projectId, it) }
+        closable.forEach { closeProjectChat(projectId, it) }
+        // Only a chat still listed as a live main chat "stayed open": one the user closed or that
+        // ended during the undo window is gone, and one already closing needs no note.
+        val now = state.value
+        val live =
+            mainSessionChats(now.projectChats)
+                .filter { it.projectId == projectId && it.session.optionalText("origin") != "history" }
+                .mapNotNull { it.session.optionalText("id") }
+                .toSet()
+        if (sessionIds.any { it in live && it !in closable && it !in now.closingSessions })
+            reportError(R.string.remote_tickets_accept_chats_stayed_open)
+    }
 
     override fun refreshTickets(force: Boolean) = ticketsLoader.refresh(force)
 
     override fun openTicket(projectId: String, ref: String) = ticketsLoader.loadDetail(projectId, ref)
 
     override fun queueAccept(projectId: String, ref: String, comment: String) =
-        ticketsLoader.queueAccept(projectId, ref, comment)
+        queueAccept(projectId, ref, comment, emptyList())
+
+    override fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String>) =
+        ticketsLoader.queueAccept(projectId, ref, comment, closeSessionIds)
 
     override fun undoAccept() = ticketsLoader.undo()
 

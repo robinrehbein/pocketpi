@@ -245,8 +245,8 @@ internal class ProjectsViewModel(
         return forwarded
     }
 
-    fun queueAccept(projectId: String, ref: String, comment: String) =
-        active { repository.queueAccept(projectId, ref, comment) }
+    fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String> = emptyList()) =
+        active { repository.queueAccept(projectId, ref, comment, closeSessionIds) }
 
     fun undoAccept() = repository.undoAccept()
 
@@ -329,8 +329,8 @@ internal class TicketsViewModel(
     fun comment(projectId: String, ref: String, text: String) =
         active { repository.commentOnTicket(projectId, ref, text) }
 
-    fun queueAccept(projectId: String, ref: String, comment: String) =
-        active { repository.queueAccept(projectId, ref, comment) }
+    fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String> = emptyList()) =
+        active { repository.queueAccept(projectId, ref, comment, closeSessionIds) }
 
     /** Not gated: taking an accept back must work whatever the page is doing. */
     fun undoAccept() = repository.undoAccept()

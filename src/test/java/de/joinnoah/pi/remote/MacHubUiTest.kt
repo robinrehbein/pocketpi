@@ -718,6 +718,29 @@ class MacHubUiTest {
     }
 
     @Test
+    fun acceptingFromTheProjectsPageWithCloseQueuesTheLinkedIds() {
+        val links = listOf(
+            TicketSession("done", "Done", SessionLinkStatus.IDLE),
+            TicketSession("busy", "Busy", SessionLinkStatus.RUNNING),
+        )
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "done", "idle", origin = "rpc"), chat("p1", "Alpha", "busy", "running", origin = "rpc")),
+            capabilities = setOf(TICKETS_CAPABILITY, SESSION_CLOSE_CAPABILITY),
+            tickets = ticketsState(ticket(1, sessions = links)),
+        )
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onNodeWithText(
+            compose.activity.resources.getQuantityString(R.plurals.remote_tickets_accept_busy_linked, 1, 1),
+        ).assertIsDisplayed()
+        compose.onNodeWithTag("ticketAcceptCloseLinked").performClick()
+        compose.onNodeWithTag("ticketSheetConfirm").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(Triple("p1", "DEV-1", "Accepted in PocketPi.")), repository.ticketAccepts)
+        assertEquals(listOf(listOf("done")), repository.ticketAcceptCloses)
+    }
+
+    @Test
     fun homeOffersNoSecondAcceptWhileOneIsPending() {
         renderTickets(ticketsState(ticket(1), ticket(2)).copy(pendingAccept = PendingAccept("p1", "DEV-1", "c", 5_000L)))
         compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)

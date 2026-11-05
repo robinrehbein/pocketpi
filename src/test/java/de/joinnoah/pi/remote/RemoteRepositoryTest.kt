@@ -18757,6 +18757,21 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun anAcceptedTicketClosesNothingForAnotherMacOrWithoutLoadedTickets() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("p2" to listOf(session("two", projectId = "p2")))
+        val (repository, _) = projectsPageWithClose(transport, lists)
+        assertTrue(closableProjectChat(repository.state.value, "p2", "two"))
+
+        // The chats were chosen for the ticket list of another route, or none is loaded here.
+        repository.closeAcceptedTicketChats("other-host", "p2", listOf("two"))
+        repository.closeAcceptedTicketChats("host", "p2", listOf("two"))
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.close" })
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
     fun aFailedProjectChatCloseReportsAnErrorAndKeepsTheRow() = runTest {
         val transport = Transport()
         val lists = mutableMapOf("p2" to listOf(session("two", projectId = "p2")))

@@ -744,6 +744,13 @@ interface RemoteRepository {
     /** Accepts [ref] after a five-second undo window; see [undoAccept]. */
     fun queueAccept(projectId: String, ref: String, comment: String) {}
 
+    /**
+     * Accepts [ref] as [queueAccept] does, then closes the chats [closeSessionIds] of [projectId]
+     * through [closeProjectChat] once the host took the accept; see [acceptCloseOffer].
+     */
+    fun queueAccept(projectId: String, ref: String, comment: String, closeSessionIds: List<String>) =
+        queueAccept(projectId, ref, comment)
+
     /** Comments on [ref]; a read-only project sends nothing. */
     fun commentOnTicket(projectId: String, ref: String, text: String) {}
 
