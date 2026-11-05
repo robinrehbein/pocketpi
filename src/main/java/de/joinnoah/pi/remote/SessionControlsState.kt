@@ -222,6 +222,19 @@ internal fun selectCommandName(text: String, name: String): String =
 internal fun paletteCommandDraft(text: String, name: String): String =
     if (text.startsWith("/")) selectCommandName(text, name) else "/$name $text"
 
+/**
+ * The selected chat's context usage, or null when the last read belongs to another chat or to a
+ * model other than the confirmed one (a model switch makes it stale until the next read).
+ */
+internal fun selectedContextUsage(state: RemoteState): SessionContextUsage? {
+    val confirmed = state.configuration?.model
+    return state.contextUsage?.takeIf { context ->
+        context.sessionId == state.selection.sessionId &&
+            (confirmed == null || context.modelProvider == null ||
+                (context.modelProvider == confirmed.provider && context.modelId == confirmed.id))
+    }
+}
+
 /** The Compact action is offered: the host advertises [COMPACT_CAPABILITY] and did not withdraw it. */
 internal fun compactAvailable(state: RemoteState): Boolean =
     COMPACT_CAPABILITY in state.capabilities && COMPACT_CAPABILITY !in state.unavailableCapabilities

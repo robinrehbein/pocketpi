@@ -7331,6 +7331,109 @@ class RemoteRepositoryTest {
         assertFalse(repository.state.value.compactionRequesting)
     }
 
+    @Test
+    fun aBusyCompactRefusalIsQuietOnlyWhileACompactionShows() = runTest {
+        val running = insight("compaction-running")
+        val sessionId = running.text("sessionId")
+        for (compacting in listOf(false, true)) {
+            val transport = Transport()
+            configure(transport, sessions = listOf(session(sessionId)), opened = session(sessionId))
+            transport.capabilities = setOf(COMPACT_CAPABILITY)
+            val original = transport.response
+            transport.response = { request ->
+                when {
+                    request.text("type") == "session.compact" -> null
+                    request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId ->
+                        JsonObject(original(request)!! + ("revision" to JsonPrimitive(14)))
+                    else -> original(request)
+                }
+            }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", sessionId))
+            runCurrent()
+            repository.compactContext()
+            runCurrent()
+            // pi's own threshold compaction starts before the phone's request reaches it.
+            if (compacting) {
+                transport.deliver(running)
+                runCurrent()
+                assertNotNull(repository.state.value.compaction)
+            }
+            val compact = transport.sent.last { it.text("type") == "session.compact" }
+            transport.deliver(
+                Wire.objectOf(
+                    "type" to "result",
+                    "requestId" to compact.text("requestId"),
+                    "ok" to false,
+                    "error" to Wire.objectOf("code" to "busy", "message" to "Session is busy"),
+                )
+            )
+            runCurrent()
+            assertFalse(repository.state.value.compactionRequesting)
+            assertEquals(if (compacting) null else R.string.remote_compact_error, repository.state.value.error)
+        }
+    }
+
+    @Test
+    fun theUsageReadBeforeARunEndsStaysStaleUntilAReadStartedAfterIt() = runTest {
+        val transport = Transport()
+        configure(transport)
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        val original = transport.response
+        var hold = false
+        var percent = 76.0
+        fun usage(sessionId: String) = Wire.objectOf(
+            "kind" to "context",
+            "sessionId" to sessionId,
+            "usedTokens" to (percent * 2_000).toLong(),
+            "contextWindow" to 200_000,
+            "percent" to percent,
+        )
+        transport.response = { request ->
+            when {
+                request.text("type") != "session.context.get" -> original(request)
+                hold -> null
+                else -> usage(request.text("sessionId"))
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("idle", repository.state.value.status)
+        // Going idle as it loaded marks the usage stale until the first read.
+        assertTrue(repository.state.value.contextUsageStale)
+        repository.refreshContextUsage()
+        runCurrent()
+        assertEquals(76.0, repository.state.value.contextUsage?.percent)
+        assertFalse(repository.state.value.contextUsageStale)
+
+        fun status(revision: Int, status: String) = transport.deliver(Wire.objectOf("type" to "event",
+            "sessionId" to "session", "revision" to revision, "kind" to "session.status", "status" to status))
+        status(1, "running")
+        runCurrent()
+        assertFalse(repository.state.value.contextUsageStale)
+        // A read starts during the run and answers only after it ended: it measured the run.
+        hold = true
+        repository.refreshContextUsage()
+        runCurrent()
+        val during = transport.sent.last { it.text("type") == "session.context.get" }
+        status(2, "idle")
+        runCurrent()
+        assertTrue(repository.state.value.contextUsageStale)
+        assertEquals(76.0, repository.state.value.contextUsage?.percent)
+        transport.result(during, usage("session"))
+        runCurrent()
+        assertTrue(repository.state.value.contextUsageStale)
+
+        // The read after the run clears it.
+        hold = false
+        percent = 82.0
+        repository.refreshContextUsage()
+        runCurrent()
+        assertEquals(82.0, repository.state.value.contextUsage?.percent)
+        assertFalse(repository.state.value.contextUsageStale)
+    }
+
     private fun forking(
         transport: Transport,
         result: (JsonObject) -> JsonObject? = { request ->

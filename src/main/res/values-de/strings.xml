@@ -99,6 +99,10 @@
     <string name="remote_context_compact">Kontext komprimieren</string>
     <string name="remote_context_compacting">Kontext wird komprimiert…</string>
     <string name="remote_compact_error">Die Kontextkomprimierung konnte nicht gestartet werden.</string>
+    <string name="remote_context_full_title">Kontext zu %1$d\u00A0%% voll</string>
+    <string name="remote_context_full_body_compact">Komprimieren fasst ältere Nachrichten zusammen, damit pi Platz zum Weitermachen hat.</string>
+    <string name="remote_compact_now_action">Jetzt komprimieren</string>
+    <string name="remote_context_offer_dismiss">Nicht jetzt</string>
     <string name="remote_settings">Einstellungen</string>
     <string name="remote_settings_privacy_title">Datenschutzerklärung</string>
     <string name="remote_settings_privacy_help">Erfahre, wie PocketPi mit deinen Daten umgeht.</string>

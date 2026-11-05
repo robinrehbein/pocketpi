@@ -1360,7 +1360,50 @@ internal fun RemoteScreen(
     var statusSheet by remember(key) { mutableStateOf(false) }
     var editorExpanded by rememberSaveable(key) { mutableStateOf(false) }
     var newSessionOpen by rememberSaveable(key) { mutableStateOf(false) }
-    val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
+    // The "Context full" offer: idle chats only, behind an error, a running compaction or a failed
+    // export, and hidden by a stored draft. The user's own typing while it shows counts as "Not now".
+    // The memory and this chat's session ID, while this chat is the selected one.
+    val offerChat: Pair<ContextOfferMemory, String>? =
+        chatKey?.sessionId?.takeIf { it == state.selection.sessionId }?.let { id -> chatModel?.contextOffers?.to(id) }
+    val shownOffer =
+        if (offerChat == null || state.error != null || exportState is ExportState.Failed || state.draft.isNotBlank()) null
+        else contextOffer(state, offerChat.first.dismissed(offerChat.second), compactionNow)
+    val offerResets = contextOfferResets(state, compactionNow)
+    LaunchedEffect(offerChat, offerResets) {
+        val (memory, sessionId) = offerChat ?: return@LaunchedEffect
+        if (offerResets) memory.forget(sessionId)
+    }
+    val currentShownOffer by rememberUpdatedState(shownOffer)
+    // Only text the user typed: a Mac draft, voice input or a command the app sets is no "Not now".
+    // The composer's text is not read here, which would recompose the whole chat on a keystroke.
+    DisposableEffect(offerChat, composerDraft) {
+        val (memory, sessionId) = offerChat ?: return@DisposableEffect onDispose {}
+        val remove = composerDraft?.addTypedListener { text ->
+            val offer = currentShownOffer
+            if (offer != null && text.isNotBlank()) memory.dismiss(sessionId, offer.level)
+        }
+        onDispose { remove?.invoke() }
+    }
+    val offerAnnounce = shownOffer != null && offerChat != null &&
+        offerChat.first.shouldAnnounce(offerChat.second, shownOffer.level)
+    LaunchedEffect(offerChat, shownOffer?.level) {
+        val level = shownOffer?.level ?: return@LaunchedEffect
+        val (memory, sessionId) = offerChat ?: return@LaunchedEffect
+        // Long enough for the live region's first announcement to go out before it is withdrawn.
+        delay(CONTEXT_OFFER_ANNOUNCE_MILLIS)
+        memory.announced(sessionId, level)
+    }
+    fun dismissContextOffer() {
+        val offer = shownOffer ?: return
+        val (memory, sessionId) = offerChat ?: return
+        memory.dismiss(sessionId, offer.level)
+        statusSheet = false
+    }
+    fun compactFromOffer() {
+        statusSheet = false
+        model.compactContext()
+    }
+    val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null || shownOffer != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
     // Compact, a one-line chip leads the insights row above the composer while a banner waits in the
@@ -1371,6 +1414,7 @@ internal fun RemoteScreen(
             compactionVisible(state.compaction, compactionNow) -> R.string.remote_panel_compacting
             exportState == ExportState.Exporting -> R.string.remote_export_running
             exportState is ExportState.Done -> R.string.remote_export_done
+            shownOffer != null -> R.string.remote_context_full_title
             else -> null
         }
     LaunchedEffect(exportState is ExportState.Failed) { if (exportState is ExportState.Failed) headerHidden = false }
@@ -1883,6 +1927,15 @@ internal fun RemoteScreen(
                     if (!compact && compactionVisible(state.compaction, compactionNow))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
+                        }
+                    if (!compact && shownOffer != null)
+                        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            ContextOfferBanner(
+                                shownOffer,
+                                announce = offerAnnounce,
+                                onCompact = ::compactFromOffer,
+                                onDismiss = ::dismissContextOffer,
+                            )
                         }
                     // A failed export always shows here: a failure must not wait behind a menu.
                     if (exportState != null && (!compact || exportState is ExportState.Failed))
@@ -3996,7 +4049,15 @@ internal fun RemoteScreen(
                         ) {
                             TaskInsightPill(state.tasks) { openInsightSheet(InsightSheetKind.TASKS) }
                             statusChipLine?.let { line ->
-                                ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
+                                if (line == R.string.remote_context_full_title && shownOffer != null)
+                                    ChatStatusChip(
+                                        line,
+                                        running = false,
+                                        label = stringResource(line, shownOffer.percent),
+                                        announce = offerAnnounce,
+                                    ) { statusSheet = true }
+                                else
+                                    ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
                             }
                             if (insightsShown) insightChips()
                         }
@@ -4042,6 +4103,14 @@ internal fun RemoteScreen(
                                 SheetHeader(stringResource(R.string.remote_chat_status), padding = PaddingValues(start = 8.dp))
                                 if (compactionVisible(state.compaction, compactionNow))
                                     CompactionBanner(state.compaction, compactionNow, floating = false)
+                                else if (shownOffer != null)
+                                    ContextOfferBanner(
+                                        shownOffer,
+                                        announce = false,
+                                        onCompact = ::compactFromOffer,
+                                        onDismiss = ::dismissContextOffer,
+                                        floating = false,
+                                    )
                                 if (exportState != null)
                                     ExportStatus(exportState, ::shareExport, floating = false) {
                                         if (exportState is ExportState.Done)
@@ -5363,9 +5432,16 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
  * read out as it changes.
  */
 @Composable
-internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
+internal fun ChatStatusChip(
+    @StringRes line: Int,
+    running: Boolean,
+    label: String = stringResource(line),
+    /** False keeps a line that returns often (the context offer after every turn) from being read out again. */
+    announce: Boolean = true,
+    onClick: () -> Unit,
+) {
     InsightPillRow(
-        Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
+        Modifier.testTag("chatStatusChip").semantics { if (announce) liveRegion = LiveRegionMode.Polite },
         onClick = onClick,
     ) {
             // Compaction shows pi core's dotted loader (static when animations are off), dimmed from
@@ -5380,7 +5456,7 @@ internal fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () 
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(stringResource(line), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

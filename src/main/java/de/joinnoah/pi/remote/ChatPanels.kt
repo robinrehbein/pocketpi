@@ -32,10 +32,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -619,6 +622,75 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
                 reason?.let {
                     Text(stringResource(it), style = MaterialTheme.typography.bodySmall)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The "Context full" offer in the chat's banner slot (below an error or a running compaction, which
+ * never show together with it). It names the fill level and leads with the actions of [offer]:
+ * "Compact now" today, the handover beside it once the host supports one. "Not now" dismisses the
+ * level; TalkBack users reach it as a custom action on the heading too. [announce] makes the banner a
+ * polite live region, which the caller grants once per offer level.
+ */
+@Composable
+internal fun ContextOfferBanner(
+    offer: ContextOffer,
+    announce: Boolean,
+    onCompact: () -> Unit,
+    onDismiss: () -> Unit,
+    floating: Boolean = true,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val dismissLabel = stringResource(R.string.remote_context_offer_dismiss)
+    BannerSurface(
+        floating = floating,
+        modifier = Modifier.fillMaxWidth().testTag("contextOfferBanner")
+            .semantics { if (announce) liveRegion = LiveRegionMode.Polite },
+        color = scheme.secondaryContainer,
+        contentColor = scheme.onSecondaryContainer,
+    ) {
+        Column(
+            Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Column(
+                Modifier.padding(end = 8.dp).testTag("contextOfferText").semantics(mergeDescendants = true) {
+                    heading()
+                    customActions = listOf(CustomAccessibilityAction(dismissLabel) { onDismiss(); true })
+                },
+            ) {
+                Text(
+                    stringResource(R.string.remote_context_full_title, offer.percent),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    stringResource(R.string.remote_context_full_body_compact),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            FlowRow(
+                Modifier.align(Alignment.End),
+                horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferDismiss"),
+                    colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                ) { Text(dismissLabel) }
+                if (ContextOfferAction.COMPACT in offer.actions)
+                    Button(
+                        onClick = onCompact,
+                        // Labelled "Compact now" only: the heading already reads out the fill.
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferCompact"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = scheme.onSecondaryContainer,
+                            contentColor = scheme.secondaryContainer,
+                        ),
+                    ) { Text(stringResource(R.string.remote_compact_now_action)) }
             }
         }
     }

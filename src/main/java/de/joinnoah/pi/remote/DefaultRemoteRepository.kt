@@ -531,6 +531,8 @@ class DefaultRemoteRepository(
 
     private var configurationVersion = 0L
     private var contextVersion = 0L
+    /** The [contextVersion] when the chat last went idle; only a read started after it is current. */
+    private var contextVersionAtIdle = 0L
     private var commandsVersion = 0L
     private var advisorVersion = 0L
     private var configurationNeedsRefresh = false
@@ -1461,6 +1463,9 @@ class DefaultRemoteRepository(
             (NATIVE_EDITOR_CAPABILITY in previous.capabilities) != (NATIVE_EDITOR_CAPABILITY in next.capabilities) ||
             (NATIVE_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (NATIVE_EDITOR_CAPABILITY in next.unavailableCapabilities)
         if (editorAuthorityChanged) editorAuthorityGeneration++
+        // The chat just went idle (a run ended, or it loaded): the usage read so far measured it before.
+        val wentIdle = previous.status != "idle" && next.status == "idle"
+        if (wentIdle) contextVersionAtIdle = contextVersion
         val oldEditors = previous.questions.filter { it.optionalText("kind") == "editor" }
         val newEditors = next.questions.filter { it.optionalText("kind") == "editor" }
         val editorsChanged = oldEditors.size != newEditors.size || oldEditors.zip(newEditors).any { (a, b) -> a !== b }
@@ -1494,6 +1499,7 @@ class DefaultRemoteRepository(
             pagedStorageFailed = pagedStorageFailed,
             pagedStorageRetryAvailable = pagedStorageFailed && !pagedStoragePending,
             questionBlocks = visibleBlocks,
+            contextUsageStale = wentIdle || next.contextUsageStale,
             gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
         )
         reconcileNativePresence()
@@ -6570,7 +6576,10 @@ class DefaultRemoteRepository(
                 )
                 if (epoch == selectionEpoch && version == contextVersion &&
                     state.value.selection.sessionId == sessionId) {
-                    update { it.copy(contextUsage = usage) }
+                    update { it.copy(
+                        contextUsage = usage,
+                        contextUsageStale = it.contextUsageStale && version <= contextVersionAtIdle,
+                    ) }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
                 Diagnostics.caught("repo.refreshContextUsage", e)
@@ -6611,6 +6620,9 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch) {
                     if (e.isUnsupported)
                         update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
+                    // pi started compacting on its own meanwhile (the host refuses a second one as
+                    // busy); the compaction banner already shows that, so the refusal says nothing.
+                    else if (e.hostCode == "busy" && compactionVisible(state.value.compaction, now())) return@launch
                     reportError(R.string.remote_compact_error)
                 }
             } finally {

@@ -115,12 +115,24 @@ internal class ComposerDraft(
             else -> {
                 this@ComposerDraft.suggestionsClosedFor = null
                 this@ComposerDraft.onTyped(after)
+                this@ComposerDraft.typedListeners.toList().forEach { it(after) }
             }
         }
     }
 
     /** Told each text the user typed, so voice input can tell its own text from the user's. */
     var onTyped: (String) -> Unit = {}
+
+    private val typedListeners = mutableListOf<(String) -> Unit>()
+
+    /**
+     * Also tells [listener] each text the user typed (never a [sync], [setText] or other edit the app
+     * makes), until the returned function removes it.
+     */
+    fun addTypedListener(listener: (String) -> Unit): () -> Unit {
+        typedListeners += listener
+        return { typedListeners.remove(listener) }
+    }
 
     /** Whether a long paste is held back for the user's choice; off where the composer takes no attachments. */
     var canOfferLongPaste = true

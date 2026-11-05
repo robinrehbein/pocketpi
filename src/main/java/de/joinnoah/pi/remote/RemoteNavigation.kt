@@ -1565,6 +1565,8 @@ private fun RemoteNavDisplay(
     pushDecided: Boolean,
     onNotificationDenied: () -> Unit,
 ) {
+    // Above the nav entries: a chat's "Not now" holds after its entry is gone and the chat is opened again.
+    val contextOffers = viewModel { ContextOfferMemory() }
     NavDisplay(
         backStack = stack,
         onBack = onBack,
@@ -1657,7 +1659,7 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     // Each page blurs only its own lists, also beside or behind another one.
                     ProvideGlass {
-                        val model = viewModel { ChatViewModel(repository, key, settings) }
+                        val model = viewModel { ChatViewModel(repository, key, settings, contextOffers) }
                         RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                     }
                 }
