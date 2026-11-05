@@ -699,6 +699,9 @@ interface RemoteRepository {
 
     fun requestChangesPreview(path: String) {}
 
+    /** `host.stats`: the load of the connected computer; only with [HOST_STATS_CAPABILITY]. Throws [RemoteRequestException]. */
+    suspend fun hostStats(): HostStats = throw RemoteRequestException.unsupported()
+
     /** `tickets.projects`; only with [TICKETS_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun ticketProjects(): List<TicketProject> = throw RemoteRequestException.unsupported()
 
