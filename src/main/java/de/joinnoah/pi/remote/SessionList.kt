@@ -149,6 +149,7 @@ internal fun SessionListRow(
     /** The row is hidden on this phone and listed only because hidden rows are shown. */
     hidden: Boolean = false,
     compactionFrame: State<Int>? = null,
+    activity: ActivitySnapshot.Active? = null,
 ) {
     fun available(action: SwipeAction): SessionSwipe =
         effectiveSessionSwipe(action, closeAvailable, onRename != null, onHide != null, onUnhide != null && hidden)
@@ -157,9 +158,18 @@ internal fun SessionListRow(
     val startToEnd = available(swipe.second)
     val title = sessionTitleLabel(item)
     val subagentLabel = stringResource(R.string.remote_subagent)
+    val liveActivity = activity.takeIf { !closing && !item.lastKnown && !item.compacting && item.availability == SessionAvailability.RUNNING }
+    val phaseLabel = when (liveActivity?.phase) {
+        ActivityPhase.Pending -> R.string.remote_subagent_phase_pending
+        ActivityPhase.Thinking -> R.string.remote_subagent_phase_thinking
+        ActivityPhase.Writing -> R.string.remote_subagent_phase_writing
+        ActivityPhase.Tool -> R.string.remote_subagent_phase_tool
+        null -> null
+    }
     val reported =
         stringResource(
-            if (item.compacting) R.string.remote_status_compacting
+            if (phaseLabel != null) phaseLabel
+            else if (item.compacting) R.string.remote_status_compacting
             else when (item.availability) {
                 SessionAvailability.IDLE -> R.string.remote_status_idle
                 SessionAvailability.RUNNING -> R.string.remote_status_running
@@ -173,7 +183,9 @@ internal fun SessionListRow(
         else if (item.lastKnown) stringResource(R.string.remote_status_last_known, reported)
         else reported
     val statusColor =
-        if (item.lastKnown) MaterialTheme.colorScheme.outline else sessionStatusColor(item.availability)
+        if (item.lastKnown) MaterialTheme.colorScheme.outline
+        else if (liveActivity != null) activityPhaseColor(liveActivity.phase, liveActivity.thinkingLevel)
+        else sessionStatusColor(item.availability)
     val copyExplanation = stringResource(R.string.remote_history_note)
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
@@ -362,7 +374,8 @@ internal fun SessionListRow(
                     // avatar's own color, following the badge's shape, keeps the badge on one known
                     // color: the status colors are picked to reach 3:1 against surfaceContainerHighest.
                     val halo = MaterialTheme.colorScheme.surfaceContainerHighest
-                    val badge = sessionBadgeGlyph(item.availability, item.lastKnown)
+                    val badge = liveActivity?.let { activityGlyphKind(it.phase) }
+                        ?: sessionBadgeGlyph(item.availability, item.lastKnown)
                     if (item.compacting) {
                         StatusGlyph(
                             kind = StatusGlyphKind.COMPACTING,

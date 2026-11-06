@@ -60,6 +60,15 @@ internal fun typedSessionActivity(state: RemoteState, sessionId: String?, now: L
     return if (activity.freshness(sessionId, now).live) TypedActivity.Live(snapshot) else TypedActivity.Static
 }
 
+/** A list row uses only its own fresh ledger entry, never a selected chat or a child's phase. */
+internal fun sessionListActivity(state: RemoteState, item: SessionListItem, now: Long): ActivitySnapshot.Active? {
+    if (!state.executionActivity.negotiated || !state.connected || state.loading || state.stale || state.preview ||
+        item.lastKnown || item.compacting || item.availability != SessionAvailability.RUNNING) return null
+    val activity = state.executionActivity
+    if (!activity.freshness(item.id, now).live) return null
+    return activity.sessions[item.id]?.snapshot as? ActivitySnapshot.Active
+}
+
 /** A tool card on a negotiated connection: [live] only for a typed tool phase naming its exact call. */
 internal data class ToolCardActivity(val live: Boolean)
 

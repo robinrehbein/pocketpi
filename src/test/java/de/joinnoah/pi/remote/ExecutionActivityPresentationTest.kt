@@ -57,6 +57,35 @@ class ExecutionActivityPresentationTest {
     private val before = 10_999L
     private val after = 11_000L
 
+    @Test fun listUsesItsOwnFreshPhaseWithoutRequiringAnOpenChat() {
+        val row = sessionListItem(
+            JsonObject(mapOf(
+                "id" to kotlinx.serialization.json.JsonPrimitive("s1"),
+                "title" to kotlinx.serialization.json.JsonPrimitive("Session"),
+                "origin" to kotlinx.serialization.json.JsonPrimitive("tui"),
+                "status" to kotlinx.serialization.json.JsonPrimitive("running"),
+            )),
+            connected = true, loading = false, confirmed = true,
+        )
+        val snapshot = active(ActivityPhase.Writing)
+        val s = state(snapshot).copy(selection = RemoteSelection("host", "project"))
+        assertEquals(snapshot, sessionListActivity(s, row, before))
+        for (phase in ActivityPhase.entries) {
+            val phaseSnapshot = active(phase)
+            assertEquals(phaseSnapshot, sessionListActivity(state(phaseSnapshot), row, before))
+        }
+        assertNull(sessionListActivity(s, row.copy(id = "other"), before))
+        assertNull(sessionListActivity(s, row, after))
+        assertNull(sessionListActivity(s, row.copy(lastKnown = true), before))
+        assertNull(sessionListActivity(s, row.copy(compacting = true), before))
+        for (availability in listOf(SessionAvailability.IDLE, SessionAvailability.WAITING, SessionAvailability.OFFLINE)) {
+            assertNull(sessionListActivity(s, row.copy(availability = availability), before))
+        }
+        for (unavailable in listOf(s.copy(connected = false), s.copy(loading = true), s.copy(stale = true), s.copy(preview = true), state(snapshot, negotiated = false))) {
+            assertNull(sessionListActivity(unavailable, row, before))
+        }
+    }
+
     @Test fun legacyCallsWithoutNowNeedNoAndroidClock() {
         // Plain JVM: no android.os.SystemClock is reachable; the legacy path must not touch it.
         val items = listOf(ConversationItem.Activity("a", "a", "read", "{\"path\":\"x\"}", null, "streaming", false))
