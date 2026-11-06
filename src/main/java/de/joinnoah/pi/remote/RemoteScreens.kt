@@ -3710,7 +3710,10 @@ internal fun RemoteScreen(
                                             typedToolCardActivity(typedChat, tool)
                                         },
                                         agentActivity = (item as? ConversationItem.Subagent)?.takeIf { typedChat != null }?.let { card ->
-                                            card.agents.map { actorRowActivity(state, chatKey?.sessionId, card.toolCallId, it, activityNow) }
+                                            card.agents.indices.map { index ->
+                                                val (source, localIndex) = card.rowSource(index)
+                                                actorRowActivity(state, chatKey?.sessionId, source.toolCallId, source.agents[localIndex], activityNow)
+                                            }
                                         },
                                         onQuote = model::quote,
                                         onOpenTool = {
