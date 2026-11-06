@@ -118,7 +118,8 @@ internal fun Modifier.conversationItemMotion(item: LazyItemScope, enabled: Boole
  */
 @Composable
 internal fun ConversationItemColumn(item: ConversationItem, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val outgoing = item is ConversationItem.Bubble && item.role == "user"
+    // A handover's summary is a card across the column, not the user's own bubble.
+    val outgoing = item is ConversationItem.Bubble && item.role == "user" && item.handover == null
     Box(modifier.readingColumn(remember(item) { conversationItemWidth(item) }, outgoing)) { content() }
 }
 
@@ -314,7 +315,16 @@ internal fun ConversationMessage(
     /** Negotiated: the thinking status pulses only in the typed thinking phase; it shows regardless. */
     thinkingMotion: Boolean = true,
     onJumpToQuestion: ((String) -> Unit)? = null,
+    /** Opens another chat of the project by session ID: the summary card's previous chat. */
+    onOpenSession: ((String) -> Unit)? = null,
 ) {
+    if (item is ConversationItem.Bubble && item.handover != null) {
+        val source = item.handover.sourceSessionId
+        Box(Modifier.jumpHighlight(highlighted)) {
+            HandoverSummaryCard(item.text, item.handover.partial, onOpenSession?.let { open -> { open(source) } })
+        }
+        return
+    }
     // A bubble draws the outline along its own shape; other items get it around their box.
     Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
         ConversationMessageContent(

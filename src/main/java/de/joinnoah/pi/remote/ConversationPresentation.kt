@@ -25,6 +25,8 @@ internal sealed interface ConversationItem {
         val pendingState: PendingSendState? = null,
         /** A terminal interruption, without implying who initiated it. */
         val interrupted: Boolean = false,
+        /** Set on the summary a handover started this chat with; it shows as a card, not a bubble. */
+        val handover: MessageHandover? = null,
     ) : ConversationItem
 
     /** A host-identified async answer, either a jump marker or a standalone history fallback. */
@@ -683,6 +685,16 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
     val timestamp = message.messageTimestamp()
     if (role == "user" && links.questionnaire != null) {
         add(ConversationItem.QuestionnaireAnswer(id, id, links.questionnaire, context.questionnaireTarget, timestamp, userMessageBody(message)))
+        return@buildList
+    }
+    // The summary is the message's whole text, Markdown the host wrote; it carries nothing else.
+    if (role == "user") messageHandover(message)?.let { handover ->
+        add(
+            ConversationItem.Bubble(
+                id, id, role, messageAuthor(message), message.optionalText("text").orEmpty(), null, truncated, timestamp,
+                handover = handover,
+            )
+        )
         return@buildList
     }
     if (role == "tool") {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -630,7 +631,7 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
 /**
  * The "Context full" offer in the chat's banner slot (below an error or a running compaction, which
  * never show together with it). It names the fill level and leads with the actions of [offer]:
- * "Compact now" today, the handover beside it once the host supports one. "Not now" dismisses the
+ * "Compact now", and "New chat with summary" in a host worker whose host offers it. "Not now" dismisses the
  * level; TalkBack users reach it as a custom action on the heading too. [announce] makes the banner a
  * polite live region, which the caller grants once per offer level.
  */
@@ -641,9 +642,18 @@ internal fun ContextOfferBanner(
     onCompact: () -> Unit,
     onDismiss: () -> Unit,
     floating: Boolean = true,
+    onHandover: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     val dismissLabel = stringResource(R.string.remote_context_offer_dismiss)
+    val compact = ContextOfferAction.COMPACT in offer.actions
+    val handover = ContextOfferAction.HANDOVER in offer.actions
+    val body =
+        when {
+            compact && handover -> R.string.remote_context_full_body_both
+            handover -> R.string.remote_context_full_body_handover
+            else -> R.string.remote_context_full_body_compact
+        }
     BannerSurface(
         floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("contextOfferBanner")
@@ -665,10 +675,7 @@ internal fun ContextOfferBanner(
                     stringResource(R.string.remote_context_full_title, offer.percent),
                     style = MaterialTheme.typography.labelLarge,
                 )
-                Text(
-                    stringResource(R.string.remote_context_full_body_compact),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                Text(stringResource(body), style = MaterialTheme.typography.bodySmall)
             }
             FlowRow(
                 Modifier.align(Alignment.End),
@@ -681,7 +688,14 @@ internal fun ContextOfferBanner(
                     modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferDismiss"),
                     colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
                 ) { Text(dismissLabel) }
-                if (ContextOfferAction.COMPACT in offer.actions)
+                // One tap starts it: the old chat stays as it is, so nothing needs confirming.
+                if (handover)
+                    TextButton(
+                        onClick = onHandover,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferHandover"),
+                        colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                    ) { Text(stringResource(R.string.remote_handover_action)) }
+                if (compact)
                     Button(
                         onClick = onCompact,
                         // Labelled "Compact now" only: the heading already reads out the fill.
@@ -692,6 +706,215 @@ internal fun ContextOfferBanner(
                         ),
                     ) { Text(stringResource(R.string.remote_compact_now_action)) }
             }
+        }
+    }
+}
+
+/**
+ * The open chat's handover in the banner slot: its progress while it runs (a polite live region, so
+ * TalkBack reads "Summarizing chat…" and then "Opening new chat…"), or its outcome when the phone did
+ * not move on by itself: a failure with what can be done next, or, in the old chat opened again
+ * after a `done`, the way to the new chat. [requesting] shows the first step before the host's
+ * first event. [onCompact] is set where "Compact now" can start, for a chat too long to summarize.
+ */
+@Composable
+internal fun HandoverBanner(
+    handover: SessionHandover?,
+    requesting: Boolean,
+    onRetry: () -> Unit,
+    onCompact: (() -> Unit)?,
+    onOpenTarget: (String) -> Unit,
+    onDismiss: () -> Unit,
+    floating: Boolean = true,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val running = handover?.running == true || requesting
+    val failed = handover?.state == HandoverState.FAILED
+    val target = handover?.targetSessionId?.takeIf { handover.state == HandoverState.DONE }
+    if (!running && !failed && target == null) return
+    val container = if (failed) scheme.errorContainer else scheme.secondaryContainer
+    val content = if (failed) scheme.onErrorContainer else scheme.onSecondaryContainer
+    BannerSurface(
+        floating = floating,
+        modifier = Modifier.fillMaxWidth().testTag("handoverBanner").semantics { liveRegion = LiveRegionMode.Polite },
+        color = container,
+        contentColor = content,
+    ) {
+        if (running) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("handoverProgress").semantics(mergeDescendants = true) {},
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CompactionGlyph(content)
+                Text(
+                    stringResource(
+                        if (handover?.state == HandoverState.SWITCHING) R.string.remote_handover_switching
+                        else R.string.remote_handover_summarizing
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+            return@BannerSurface
+        }
+        val error = handover?.error
+        Column(
+            Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Column(Modifier.padding(end = 8.dp).testTag("handoverOutcome").semantics(mergeDescendants = true) { heading() }) {
+                Text(
+                    stringResource(
+                        when {
+                            target != null -> R.string.remote_handover_continued
+                            error == HandoverError.TIMEOUT -> R.string.remote_handover_timeout_title
+                            else -> R.string.remote_handover_failed_title
+                        }
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                if (error != null)
+                    Text(stringResource(handoverErrorMessage(error)), style = MaterialTheme.typography.bodySmall)
+            }
+            FlowRow(
+                Modifier.align(Alignment.End),
+                horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("handoverDismiss"),
+                    colors = ButtonDefaults.textButtonColors(contentColor = content),
+                ) { Text(stringResource(R.string.remote_handover_dismiss)) }
+                val primary: Pair<Int, () -> Unit>? =
+                    when {
+                        target != null -> R.string.remote_handover_open_new to { onOpenTarget(target) }
+                        error == HandoverError.TOO_LARGE -> onCompact?.let { R.string.remote_compact_now_action to it }
+                        error == HandoverError.TIMEOUT -> null
+                        else -> R.string.remote_handover_retry to onRetry
+                    }
+                primary?.let { (label, action) ->
+                    Button(
+                        onClick = action,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("handoverAction"),
+                        colors = ButtonDefaults.buttonColors(containerColor = content, contentColor = container),
+                    ) { Text(stringResource(label)) }
+                }
+            }
+        }
+    }
+}
+
+/** What a failed handover tells the user, by its [error]. */
+internal fun handoverErrorMessage(error: HandoverError): Int =
+    when (error) {
+        HandoverError.BUSY -> R.string.remote_handover_failed_busy
+        HandoverError.CHANGED -> R.string.remote_handover_failed_changed
+        HandoverError.TOO_LARGE -> R.string.remote_handover_failed_too_large
+        HandoverError.SUMMARY_FAILED -> R.string.remote_handover_failed_summary
+        HandoverError.CANCELLED -> R.string.remote_handover_failed_cancelled
+        HandoverError.OFFLINE -> R.string.remote_handover_failed_offline
+        HandoverError.TIMEOUT -> R.string.remote_handover_failed_timeout
+    }
+
+/**
+ * The new chat of a handover whose summary pi could not write (`seeded: false`): it says so, and
+ * leads back to the previous chat, which still has everything.
+ */
+@Composable
+internal fun HandoverUnseededBanner(onOpenPrevious: (() -> Unit)?, floating: Boolean = true) {
+    val scheme = MaterialTheme.colorScheme
+    BannerSurface(
+        floating = floating,
+        modifier = Modifier.fillMaxWidth().testTag("handoverUnseeded"),
+        color = scheme.secondaryContainer,
+        contentColor = scheme.onSecondaryContainer,
+    ) {
+        Column(
+            Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                stringResource(R.string.remote_handover_unseeded),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+            if (onOpenPrevious != null)
+                TextButton(
+                    onClick = onOpenPrevious,
+                    modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp).testTag("handoverUnseededOpenPrevious"),
+                    colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                ) { Text(stringResource(R.string.remote_handover_open_previous)) }
+        }
+    }
+}
+
+/**
+ * The "Continue" chip above the composer of a new chat that holds only its summary. It reads the
+ * composer's text itself, so a keystroke recomposes only the chip, and hides while text is typed.
+ */
+@Composable
+internal fun HandoverContinueChip(draft: ComposerDraft?, onContinue: () -> Unit) {
+    if (draft != null && draft.text.isNotBlank()) return
+    val description = stringResource(R.string.remote_handover_continue_description)
+    AssistChip(
+        onClick = onContinue,
+        label = { Text(stringResource(R.string.remote_handover_continue)) },
+        leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        modifier = Modifier.heightIn(min = 48.dp).testTag("handoverContinue").semantics { contentDescription = description },
+    )
+}
+
+/**
+ * The summary a handover started the new chat with, in place of the user bubble it came as: a card
+ * titled "Summary of the previous chat" whose Markdown opens on a tap, with a way back to the
+ * previous chat when [onOpenPrevious] is set.
+ */
+@Composable
+internal fun HandoverSummaryCard(text: String, partial: Boolean, onOpenPrevious: (() -> Unit)?) {
+    val scheme = MaterialTheme.colorScheme
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val toggleLabel =
+        stringResource(if (expanded) R.string.remote_handover_summary_collapse else R.string.remote_handover_summary_expand)
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("handoverSummary"),
+        shape = MaterialTheme.shapes.medium,
+        color = scheme.surfaceContainerHigh,
+        contentColor = scheme.onSurface,
+    ) {
+        Column(Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clickable(role = Role.Button, onClickLabel = toggleLabel) { expanded = !expanded }
+                    .testTag("handoverSummaryToggle"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp), tint = scheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.remote_handover_summary_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f).semantics { heading() },
+                )
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.padding(horizontal = 12.dp).size(20.dp),
+                )
+            }
+            if (partial)
+                Text(
+                    stringResource(R.string.remote_handover_summary_partial),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+            if (expanded)
+                Box(Modifier.padding(end = 8.dp, top = 4.dp, bottom = 4.dp).testTag("handoverSummaryText")) { MarkdownText(text) }
+            if (onOpenPrevious != null)
+                TextButton(
+                    onClick = onOpenPrevious,
+                    modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp).testTag("handoverOpenPrevious"),
+                ) { Text(stringResource(R.string.remote_handover_open_previous)) }
         }
     }
 }

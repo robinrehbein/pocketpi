@@ -447,6 +447,12 @@ internal class NavigationFakeRepository : RemoteRepository {
         compactions++
     }
 
+    var handovers = 0
+
+    override fun startHandover() {
+        handovers++
+    }
+
     override fun quote(messageId: String?) {
         if (messageId != null) quotes += messageId
     }

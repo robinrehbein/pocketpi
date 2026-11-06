@@ -161,6 +161,17 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         private set
 
     /**
+     * The handover of this (old) chat to a new one: from `session.handover` events, the snapshot's
+     * `handover` key (kept ten minutes after the end), or [handoverAccepted]; null when none.
+     */
+    var handover: SessionHandover? = null
+        private set
+
+    /** The snapshot's `handedOverFrom`: this chat is the new one a handover opened; null otherwise. */
+    var handedOverFrom: HandedOverFrom? = null
+        private set
+
+    /**
      * Whether a snapshot of this epoch has been applied. Until then [messages], [questions] and
      * [nextCursor] are empty placeholders, not the session's state, and the owner keeps showing
      * what it had.
@@ -308,6 +319,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         compaction = previous.compaction
         suggestion = previous.suggestion
         pullRequest = previous.pullRequest
+        handover = previous.handover
+        handedOverFrom = previous.handedOverFrom
         journalEpoch = previous.journalEpoch
         tasksKnown = previous.tasksKnown
         // A resync the previous Timeline still owed is owed by this one.
@@ -374,6 +387,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         compaction = null
         suggestion = null
         pullRequest = null
+        handover = null
+        handedOverFrom = null
         this.status = status
     }
 
@@ -465,6 +480,12 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         suggestion = suggestionText(data["suggestion"])
         // Same for the pull request: absent means none, a malformed value is dropped.
         pullRequest = pullRequestStatus(data["pullRequest"])
+        // Absent or malformed means none. A handover this phone saw run keeps that it did, so its
+        // outcome still moves the phone to the new chat when it arrives with a resync.
+        handover = snapshotHandover(data["handover"])?.let { read ->
+            read.copy(live = handover?.let { it.live && it.requestId == read.requestId } == true)
+        }
+        handedOverFrom = parseHandedOverFrom(data["handedOverFrom"])
         compaction =
             if ((data["compacting"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true)
                 compaction ?: SessionCompaction(null, now())
@@ -686,6 +707,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             "session.pull_request" -> sessionPullRequest(event)?.let { pullRequest = it.pullRequest }
             // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
             "advisor.status" -> Unit
+            // A malformed handover event is ignored; the snapshot carries the handover too.
+            "session.handover" -> sessionHandoverEvent(event)?.let { handover = it }
             // `session_activity.v1`: the repository applies it to its activity view on receipt and
             // on replay; here it only advances the revision, never a message or tool state.
             "session.activity" -> Unit
@@ -698,6 +721,15 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     private fun buffer(event: JsonObject) {
         pendingEvents[event.long("revision")] = event
         while (pendingEvents.size > 128) pendingEvents.remove(pendingEvents.firstKey())
+    }
+
+    /**
+     * The host accepted this phone's `session.handover` [requestId]: it shows as summarizing until
+     * its events arrive, unless one of them already did.
+     */
+    fun handoverAccepted(requestId: String) {
+        if (handover?.requestId == requestId) return
+        handover = SessionHandover(requestId, HandoverState.SUMMARIZING, live = true)
     }
 
     /** Forgets a question the host reported as answered or closed elsewhere. */

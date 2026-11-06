@@ -64,6 +64,9 @@ internal open class DestinationViewModel(
                     changes = null,
                     compaction = null,
                     compactionRequesting = false,
+                    handoverRequesting = false,
+                    handover = null,
+                    handedOverFrom = null,
                     notice = null,
                 )
         }
@@ -151,6 +154,8 @@ internal open class DestinationViewModel(
     fun refreshContextUsage() = active(repository::refreshContextUsage)
 
     fun compactContext() = active(repository::compactContext)
+
+    fun startHandover() = active(repository::startHandover)
 
     fun refreshAdvisor() = active(repository::refreshAdvisor)
 

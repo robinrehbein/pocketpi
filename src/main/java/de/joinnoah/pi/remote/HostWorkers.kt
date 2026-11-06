@@ -27,6 +27,9 @@ enum class ExtensionControl {
     STEER,
     RELOAD,
     CLOSE,
+
+    /** `session.handover`; any `unsupported` hides "New chat with summary" for the session. */
+    HANDOVER,
 }
 
 /** Set on a list row the host listed as `worker`; the app keeps such a row as `tui`. */
