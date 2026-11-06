@@ -920,4 +920,24 @@
     <string name="remote_insight_pill_size">Übersichten über dem Eingabefeld</string>
     <string name="remote_pill_small">Klein</string>
     <string name="remote_pill_large">Groß</string>
+    <string name="scheduled_activity_title">Geplante Aktivität</string>
+    <string name="scheduled_activity_empty">Keine geplante Aktivität</string>
+    <string name="scheduled_activity_stale">Status nicht aktuell</string>
+    <string name="scheduled_activity_count">%1$d geplante Aktivitäten</string>
+    <string name="scheduled_activity_check_in">Prüfung in %1$d Min.</string>
+    <string name="scheduled_activity_waiting_status">Warten auf Status</string>
+    <string name="scheduled_activity_after_turn">Nach diesem Durchlauf</string>
+    <string name="scheduled_activity_continuing">Fortsetzung angefordert</string>
+    <string name="scheduled_activity_holding">Warten auf Hintergrundarbeit</string>
+    <string name="scheduled_activity_paused">Automatisierung pausiert</string>
+    <string name="scheduled_activity_wakeup">Geplante Prüfung</string>
+    <string name="scheduled_activity_loop">Wiederholte Prüfungen</string>
+    <string name="scheduled_activity_goal">Zielnachverfolgung</string>
+    <string name="scheduled_activity_next_time">Nächster geplanter Zeitpunkt: %1$s</string>
+    <string name="scheduled_activity_stop">Künftige Prüfungen stoppen</string>
+    <string name="scheduled_activity_stopping">Künftige Prüfungen werden gestoppt…</string>
+    <string name="scheduled_activity_retry_stop">Stoppen künftiger Prüfungen erneut versuchen</string>
+    <string name="scheduled_activity_stop_failed">Künftige Prüfungen konnten nicht gestoppt werden. Versuche es erneut.</string>
+    <string name="scheduled_activity_stop_note">Das Stoppen künftiger Prüfungen gilt nur für die ausgewählte Aktivität. Ein laufender Durchlauf wird nicht unterbrochen.</string>
+    <string name="scheduled_activity_stop_description">%1$s: %2$s</string>
 </resources>
