@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.View
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -16,6 +17,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
@@ -75,13 +79,21 @@ class VoiceInputInteractionUiTest {
                     else BusyComposerAction.Steer,
                     busyActionEnabled = true,
                     onBusyAction = { sends++ },
-                    modifier = Modifier.testTag("action"),
+                    modifier = Modifier.size(48.dp).testTag("action"),
                     permissionGrantedOverride = true,
                     interactionSourceOverride = source,
                 )
             }
         }
         compose.onNodeWithTag("action").performSemanticsAction(SemanticsActions.RequestFocus)
+    }
+
+    @Test
+    fun glassActionKeepsThe48DpTouchTarget() {
+        render()
+        compose.onNodeWithTag("action")
+            .assertWidthIsEqualTo(48.dp)
+            .assertHeightIsEqualTo(48.dp)
     }
 
     @Test
