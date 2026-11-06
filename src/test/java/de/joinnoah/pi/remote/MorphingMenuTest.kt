@@ -34,6 +34,30 @@ class MorphingMenuTest {
         }
     }
 
+    @Test fun movingComposerDuringImeDismissalKeepsMenuOpenAndUpdatesAnchor() {
+        val state = MorphMenuState()
+        state.updateAnchor(Rect(24f, 400f, 56f, 432f), clipped = false)
+        state.expanded = true
+        state.placed = true
+        for (top in listOf(440f, 520f, 640f, 720f)) {
+            val bounds = Rect(24f, top, 56f, top + 32f)
+            state.updateAnchor(bounds, clipped = false)
+            assertTrue("IME movement must not dismiss the popup", state.expanded)
+            assertEquals(bounds, state.anchor)
+        }
+    }
+
+    @Test fun scrollingAnchorOutOfViewStillDismissesMenuWithoutUsingClippedBounds() {
+        val state = MorphMenuState()
+        val anchor = Rect(24f, 400f, 56f, 432f)
+        state.updateAnchor(anchor, clipped = false)
+        state.expanded = true
+        state.placed = true
+        state.updateAnchor(Rect(24f, 400f, 40f, 432f), clipped = true)
+        assertFalse(state.expanded)
+        assertEquals(anchor, state.anchor)
+    }
+
     @Test fun openingRowsRemainInactiveUntilTheTransitionSettles() {
         val state = MorphMenuState()
         assertFalse(state.contentInteractive)
