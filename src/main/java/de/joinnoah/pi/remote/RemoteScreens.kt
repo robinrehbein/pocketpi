@@ -3338,6 +3338,7 @@ internal fun RemoteScreen(
                             val chatRowContext =
                                 ProjectChatRowContext(
                                     marks = routeMarks,
+                                    state = state,
                                     connected = state.connected,
                                     ticketRef = homeTicketRef,
                                     now = projectsNow,
@@ -3574,6 +3575,7 @@ internal fun RemoteScreen(
                                 Box(Modifier.itemMotion(this).testTag("sessionRow-${session.id}")) {
                                     SessionListRow(
                                         item = session,
+                                        activity = sessionListActivity(state, session, activityNow),
                                         compactionFrame = compactionFrame,
                                         selected = session.id == listPane?.selectedSessionId,
                                         onTogglePin = {
@@ -5077,6 +5079,7 @@ private fun ProjectsSectionHeading(text: String, action: (@Composable () -> Unit
 /** What every featured chat row of the Projects page shares; see [projectChatRows]. */
 private class ProjectChatRowContext(
     val marks: Map<String, SessionMark>,
+    val state: RemoteState,
     val connected: Boolean,
     val ticketRef: (String) -> String?,
     /** The minute clock the relative ages and the "Old" chip read. */
@@ -5181,6 +5184,7 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
         )
         SessionListRow(
             item = item,
+            activity = sessionListActivity(context.state, item, rememberActivityNow(context.state.executionActivity)),
             compactionFrame = context.compactionFrame,
             enabled = true,
             closeAvailable = closable,
