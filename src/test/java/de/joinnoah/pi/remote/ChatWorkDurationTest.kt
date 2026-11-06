@@ -22,7 +22,7 @@ class ChatWorkDurationTest {
         assertEquals(54000L, done.chatWorkTiming.durationMillis)
         assertEquals(done.chatWorkTiming, step(done, "idle", 90000).chatWorkTiming)
         val line = sessionActivityLine(done, emptyList(), done.selection)!!
-        assertEquals(StatusGlyphKind.DONE, line.glyphKind)
+        assertEquals(StatusGlyphKind.WORK_COMPLETED, line.glyphKind)
         assertFalse(line.animate)
         assertEquals(54000L, line.completedDurationMillis)
         assertNull(step(done, "running", 100000).chatWorkTiming.durationMillis)

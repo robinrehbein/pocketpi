@@ -335,7 +335,11 @@ internal fun SessionListRow(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Top,
             ) {
-                Box(Modifier.size(44.dp).clearAndSetSemantics {}) {
+                Box(
+                    Modifier.size(44.dp)
+                        .testTag(if (item.compacting) "sessionCompactionAvatar" else "sessionStatusAvatar")
+                        .clearAndSetSemantics {},
+                ) {
                     GlassAvatar(size = 44.dp) {
                         // A subagent shows the robot mark; only the host's parentSessionId makes a
                         // row one, nothing here guesses it from the title or origin.
@@ -359,7 +363,14 @@ internal fun SessionListRow(
                     // color: the status colors are picked to reach 3:1 against surfaceContainerHighest.
                     val halo = MaterialTheme.colorScheme.surfaceContainerHighest
                     val badge = sessionBadgeGlyph(item.availability, item.lastKnown)
-                    if (badge != null) {
+                    if (item.compacting) {
+                        StatusGlyph(
+                            kind = StatusGlyphKind.COMPACTING,
+                            color = statusColor.copy(alpha = COMPACTION_GLYPH_ALPHA),
+                            modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).badgeHalo(halo),
+                            frameOverride = compactionFrame,
+                        )
+                    } else if (badge != null) {
                         StatusGlyph(
                             kind = badge,
                             color = statusColor,
@@ -437,7 +448,6 @@ internal fun SessionListRow(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (item.compacting) {
-                            BrailleSpinner(compactionFrame, statusColor)
                             Text(
                                 status,
                                 style = MaterialTheme.typography.labelMedium,
