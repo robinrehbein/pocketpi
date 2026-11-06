@@ -1068,7 +1068,8 @@ private const val COMPOSER_MAX_LINES = 14
  * [shellDraft]) needs a command and no other one running.
  */
 internal fun canSendDraft(state: RemoteState): Boolean =
-    (state.connected &&
+    // While the chat hands over to a new one, the host answers busy to every prompt.
+    !handoverBusy(state) && ((state.connected &&
         !state.loading &&
         state.status == "idle" &&
         !state.sending &&
@@ -1078,7 +1079,7 @@ internal fun canSendDraft(state: RemoteState): Boolean =
         state.bash?.running != true &&
         (shellDraft(state)?.let { shellDraftSendable(it, state) }
             ?: (state.draft.isNotBlank() || state.attachments.isNotEmpty()))) ||
-        canQueuePrompt(state)
+        canQueuePrompt(state))
 
 /**
  * The draft can wait for the connection: a plain prompt (no attachment, `/` command or draft whose

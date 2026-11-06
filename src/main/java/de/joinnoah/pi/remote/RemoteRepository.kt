@@ -284,6 +284,12 @@ data class RemoteState(
      */
     val contextUsageStale: Boolean = false,
     val compactionRequesting: Boolean = false,
+    /** This phone's `session.handover` request for the open chat is in flight. */
+    val handoverRequesting: Boolean = false,
+    /** The open chat's handover to a new chat (see [SessionHandover]); null when there is none. */
+    val handover: SessionHandover? = null,
+    /** The open chat is the new chat of a handover; null otherwise. */
+    val handedOverFrom: HandedOverFrom? = null,
     val advisor: SessionAdvisor? = null,
     val advisorLoading: Boolean = false,
     val advisorChanging: Boolean = false,
@@ -545,6 +551,12 @@ interface RemoteRepository {
     fun refreshContextUsage() {}
 
     fun compactContext() {}
+
+    /** `session.handover`: continues the open host worker in a new chat; only when [canHandover]. */
+    fun startHandover() {}
+
+    /** The phone moved to the new chat of the open chat's handover [requestId]; see [SessionHandover.live]. */
+    fun handoverFollowed(requestId: String) {}
 
     fun refreshAdvisor() {}
 

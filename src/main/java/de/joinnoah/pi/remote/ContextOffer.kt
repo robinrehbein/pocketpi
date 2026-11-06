@@ -25,8 +25,8 @@ internal const val CONTEXT_OFFER_FLOOR_PERCENT = 50
 /** How long the offer stays a live region after it first shows, so TalkBack reads it once per level. */
 internal const val CONTEXT_OFFER_ANNOUNCE_MILLIS = 1_500L
 
-/** What the context offer lets the user do. The handover ("New chat with summary") joins in a later slice. */
-internal enum class ContextOfferAction { COMPACT }
+/** What the context offer lets the user do: compact the chat, or continue in a new chat with a summary. */
+internal enum class ContextOfferAction { COMPACT, HANDOVER }
 
 /**
  * The offer to make room in a filling context: [level] is the threshold it stands for
@@ -57,17 +57,27 @@ private fun offerLevel(percent: Double, usage: SessionContextUsage): Int? =
  * The offer the open chat shows now, or null. It needs an idle, loaded, connected chat that can
  * compact now ([canCompact]: no compaction requested or running), a usage read of this chat
  * ([selectedContextUsage]; a finished compaction clears it until the next read) that finished
- * after the chat's last run ended ([RemoteState.contextUsageStale]), an offer level that
+ * after the chat's last run ended ([RemoteState.contextUsageStale]), no handover running
+ * ([canCompact] covers that too), an offer level that
  * [dismissedLevel] does not already cover, and at least one available action.
  */
-internal fun contextOffer(state: RemoteState, dismissedLevel: Int?, nowMillis: Long): ContextOffer? {
+internal fun contextOffer(
+    state: RemoteState,
+    dismissedLevel: Int?,
+    nowMillis: Long,
+    /** A handover outcome shows in the banner slot: the offer leaves the handover out meanwhile. */
+    handoverOutcomeShown: Boolean = false,
+): ContextOffer? {
     if (state.selection.sessionId == null || state.contextLoading || state.contextUsageStale) return null
     if (!canCompact(state, nowMillis)) return null
     val usage = selectedContextUsage(state) ?: return null
     val percent = usage.percent ?: return null
     val level = offerLevel(percent, usage) ?: return null
     if (dismissedLevel != null && dismissedLevel >= level) return null
-    val actions = buildSet { if (compactAvailable(state)) add(ContextOfferAction.COMPACT) }
+    val actions = buildSet {
+        if (compactAvailable(state)) add(ContextOfferAction.COMPACT)
+        if (handoverAvailable(state) && !handoverOutcomeShown) add(ContextOfferAction.HANDOVER)
+    }
     if (actions.isEmpty()) return null
     return ContextOffer(level, percent.toInt(), actions)
 }
@@ -104,6 +114,26 @@ internal class ContextOfferMemory : ViewModel() {
         dismissedLevels.remove(sessionId)
         announcedLevels.removeAll { it.first == sessionId }
     }
+
+    /** Handover outcomes (by request ID) the user closed in the old chat's banner slot. */
+    private val closedHandovers = mutableStateSetOf<String>()
+
+    /** New chats a handover just opened, by session ID, with the old chat's session ID. */
+    private val continuedFrom = mutableMapOf<String, String>()
+
+    /** The phone moves from [sourceSessionId] to the new chat [target]; that chat's screen says so once. */
+    fun continued(target: String, sourceSessionId: String) {
+        continuedFrom[target] = sourceSessionId
+    }
+
+    /** The old chat's session ID, once, when [sessionId] is the new chat a handover just opened. */
+    fun takeContinuedFrom(sessionId: String): String? = continuedFrom.remove(sessionId)
+
+    fun closeHandover(requestId: String) {
+        closedHandovers += requestId
+    }
+
+    fun handoverClosed(requestId: String): Boolean = requestId in closedHandovers
 
     /** True until the offer at [level] in [sessionId] was read out once. */
     fun shouldAnnounce(sessionId: String, level: Int): Boolean = (sessionId to level) !in announcedLevels
