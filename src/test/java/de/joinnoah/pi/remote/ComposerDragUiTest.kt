@@ -115,6 +115,35 @@ class ComposerDragUiTest {
         assertEquals(wrapper.top, bounds("composer").top, 0.5f)
     }
 
+    @Test fun verticallyDominantDragAllowsSidewaysDrift() {
+        val state = open()
+        val edge = localEdge(state)
+        val chat = compose.onNodeWithTag("chat")
+        chat.performTouchInput {
+            down(Offset(100f, edge - 180f))
+            // Both axes exceed touch slop in the first event, but intent is vertical.
+            moveTo(Offset(140f, edge - 80f))
+            moveTo(Offset(150f, edge + 40f))
+        }
+        compose.runOnIdle {
+            assertTrue(state.dragging)
+            assertEquals(40f, state.progress, 0.5f)
+        }
+        chat.performTouchInput { up() }
+    }
+
+    @Test fun horizontalIntentDoesNotHideComposer() {
+        val state = open()
+        val edge = localEdge(state)
+        compose.onNodeWithTag("chat").performTouchInput {
+            down(Offset(100f, edge - 180f))
+            moveTo(Offset(200f, edge - 140f))
+            moveTo(Offset(200f, edge + 80f))
+            up()
+        }
+        compose.runOnIdle { assertFalse(state.hidden); assertFalse(state.dragging) }
+    }
+
     @Test fun releasesBeyondHalfHiddenThenReverseScrollReveals() {
         val state = open()
         val edge = localEdge(state)

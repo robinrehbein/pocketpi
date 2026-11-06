@@ -648,11 +648,13 @@ internal fun RemoteScreen(
     val composerTravel by rememberUpdatedState(composerSize.height + WindowInsets.safeDrawing.getBottom(density))
     val composerHideAllowed: () -> Boolean = {
         isChat && !wideLayout && !touchExploring.value && imeInsets.getBottom(density) == 0 &&
-            !composerFocused && !composerVoiceActive && state.questions.isEmpty() && state.error == null &&
+            // Dismissing the IME leaves the empty field focused. Transfer that focus only when
+            // an eligible chat drag actually starts hiding it, rather than blocking every drag.
+            !composerVoiceActive && state.questions.isEmpty() && state.error == null &&
             composerDraft?.text.isNullOrBlank() && state.draft.isBlank() && state.quote == null &&
             state.attachments.isEmpty() && !state.importingAttachments && !state.sending &&
             !state.uncertain && state.connected && state.preparedText.isNullOrEmpty() &&
-            state.bash == null && commitReview == null && pushReview == null && pullRequestReview == null
+            state.bash == null && commitReview?.open != true && pushReview?.open != true && pullRequestReview?.open != true
     }
     val currentComposerHideAllowed by rememberUpdatedState(composerHideAllowed)
     val composerSettledLift = animateIntAsState(
@@ -2702,6 +2704,7 @@ internal fun RemoteScreen(
                         hidden = { composerHidden },
                         dragging = { composerDragging },
                         onDrag = { progress ->
+                            if (!composerDragging && composerFocused) parkFocus()
                             composerDragging = true
                             composerDragOffset = progress
                         },

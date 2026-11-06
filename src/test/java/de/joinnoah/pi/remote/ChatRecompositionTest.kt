@@ -7,7 +7,12 @@ import androidx.compose.runtime.Composer
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.CompositionTracer
 import androidx.compose.runtime.InternalComposeTracingApi
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -144,6 +149,33 @@ class ChatRecompositionTest {
         }
         compose.waitForIdle()
         compose.onNodeWithText("Reply 19").assertExists()
+    }
+
+    @Test
+    fun emptyFocusedComposerCanFollowChatDragWithImeClosed() {
+        render()
+        // Robolectric has no visible IME here, but clicking retains real text-field focus,
+        // just as Android does after dismissing the keyboard with Back.
+        compose.onNodeWithTag("composerField").performClick().assertIsFocused()
+        val chat = compose.onNodeWithTag("conversationList")
+        val composer = compose.onNodeWithTag("floatingComposer")
+        val original = composer.getUnclippedBoundsInRoot()
+        val listBounds = chat.getUnclippedBoundsInRoot()
+        val edge = with(compose.density) { (original.top - listBounds.top).toPx() }
+        chat.performTouchInput {
+            down(Offset(100f, edge - 180f))
+            moveTo(Offset(140f, edge - 80f))
+            moveTo(Offset(150f, edge + 40f))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField", useUnmergedTree = true).assertIsNotFocused()
+        // Continue the same pointer sequence after focus parking recomposes the screen.
+        chat.performTouchInput { moveTo(Offset(150f, edge + 60f)) }
+        compose.waitForIdle()
+        // A partially hidden composer removes its descendants from merged accessibility
+        // semantics. They must stay hidden rather than cancellation revealing them again.
+        compose.onNodeWithTag("composerField").assertDoesNotExist()
+        chat.performTouchInput { up() }
     }
 
     @Test

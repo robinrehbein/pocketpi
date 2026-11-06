@@ -76,9 +76,14 @@ internal fun Modifier.observeComposerDrag(
                                 }
                                 val delta = change.position - start
                                 if (!tracking && !rejected) {
-                                    if (change.uptimeMillis - startedAt >= viewConfiguration.longPressTimeoutMillis ||
-                                        abs(delta.x) > viewConfiguration.touchSlop) rejected = true
-                                    else if (abs(delta.y) > viewConfiguration.touchSlop && abs(delta.y) > abs(delta.x)) tracking = true
+                                    if (change.uptimeMillis - startedAt >= viewConfiguration.longPressTimeoutMillis) {
+                                        rejected = true
+                                    } else if (abs(delta.y) > viewConfiguration.touchSlop && abs(delta.y) > abs(delta.x)) {
+                                        // Real fingers drift sideways too; only reject horizontal intent.
+                                        tracking = true
+                                    } else if (abs(delta.x) > viewConfiguration.touchSlop && abs(delta.x) > abs(delta.y)) {
+                                        rejected = true
+                                    }
                                 }
                                 if (tracking && !rejected && current.allowed()) {
                                     if (change.position.y < previousY && !current.dragging()) current.onReveal()
