@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Close
@@ -196,19 +197,31 @@ internal fun FolderBrowserContent(
                     onNew = { creating = true },
                     onClone = { cloning = true },
                 )
-                Button(
-                    onClick = { onOpen(folders.path) },
-                    enabled = actionable && !atRoot,
-                    modifier = Modifier.fillMaxWidth().testTag("folderOpenHere"),
+                FloatingSurface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = CircleShape,
+                    color = if (actionable && !atRoot) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceContainer,
                 ) {
-                    if (folders.working) {
-                        val workingLabel = stringResource(R.string.remote_folders_working)
-                        CircularProgressIndicator(
-                            Modifier.size(18.dp).semantics { contentDescription = workingLabel },
-                            strokeWidth = 2.dp,
-                        )
+                    Button(
+                        onClick = { onOpen(folders.path) },
+                        enabled = actionable && !atRoot,
+                        modifier = Modifier.fillMaxWidth().testTag("folderOpenHere"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                        ),
+                    ) {
+                        if (folders.working) {
+                            val workingLabel = stringResource(R.string.remote_folders_working)
+                            CircularProgressIndicator(
+                                Modifier.size(18.dp).semantics { contentDescription = workingLabel },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                        else Text(stringResource(R.string.remote_folders_open_here))
                     }
-                    else Text(stringResource(R.string.remote_folders_open_here))
                 }
                 if (atRoot)
                     FloatingSurface(Modifier.fillMaxWidth()) {
@@ -320,7 +333,7 @@ private fun FolderSecondaryActions(enabled: Boolean, cloneEnabled: Boolean, onNe
         val stacked = stackFolderActions(maxWidth.value, LocalDensity.current.fontScale)
         @Composable fun NewAction(modifier: Modifier) {
             FloatingSurface(modifier, shape = CircleShape) {
-                OutlinedButton(onClick = onNew, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("folderNewAction")) {
+                OutlinedButton(onClick = onNew, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("folderNewAction"), border = null) {
                     Icon(Icons.Default.CreateNewFolder, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.remote_folders_new_folder))
@@ -329,7 +342,7 @@ private fun FolderSecondaryActions(enabled: Boolean, cloneEnabled: Boolean, onNe
         }
         @Composable fun CloneAction(modifier: Modifier) {
             FloatingSurface(modifier, shape = CircleShape) {
-                OutlinedButton(onClick = onClone, enabled = cloneEnabled, modifier = Modifier.fillMaxWidth().testTag("folderCloneAction")) {
+                OutlinedButton(onClick = onClone, enabled = cloneEnabled, modifier = Modifier.fillMaxWidth().testTag("folderCloneAction"), border = null) {
                     Icon(Icons.Default.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.remote_folders_clone))
