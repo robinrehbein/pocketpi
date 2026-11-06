@@ -53,7 +53,7 @@ internal fun OpenFolderButton(enabled: Boolean, onClick: () -> Unit) {
         IconButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.size(56.dp),
+            modifier = Modifier.size(48.dp),
         ) {
             Icon(
                 Icons.Default.FolderOpen,

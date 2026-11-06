@@ -2529,7 +2529,7 @@ internal fun RemoteScreen(
             else Modifier,
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButtonPosition = FabPosition.Center,
-        // The 5 s window of a queued accept; the open-folder button sits in the same corner.
+        // The 5 s window of a queued accept.
         snackbarHost = {
             if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions)
                 Column {
@@ -2539,11 +2539,6 @@ internal fun RemoteScreen(
                 }
         },
         floatingActionButton = {
-            if (key is RemoteNavKey.Projects && canOpenFolders(state))
-                OpenFolderButton(
-                    enabled = !state.loading,
-                    onClick = { navigator.openFolders(key.routeId) },
-                )
             // An empty session list names its one action beside the list, so its button stands out; disabled, it is
             // greyed. A list still loading keeps the small button: most projects have sessions, so the button
             // changes its shape only for a list that turns out empty.
@@ -2587,35 +2582,13 @@ internal fun RemoteScreen(
                     IconButton(
                         onClick = { navigator.createSession(key.routeId, key.projectId) },
                         enabled = newSessionEnabled,
-                        modifier = Modifier.size(64.dp),
+                        modifier = Modifier.size(48.dp),
                     ) {
                         Icon(
                             Icons.Default.Add,
                             contentDescription = stringResource(R.string.remote_new_session),
-                            modifier = Modifier.size(28.dp),
+                            modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    }
-                }
-            } else if (key is RemoteNavKey.Hosts && !firstRun) {
-                // The first-run card holds both ways to pair; once a Mac is paired this button names its action.
-                FloatingSurface(
-                    shape = MaterialTheme.shapes.extraLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                ) {
-                    Row(
-                        Modifier.testTag("scanQrButton")
-                            .heightIn(min = 56.dp)
-                            .clickable(role = Role.Button, onClick = { scan = true })
-                            .padding(horizontal = 20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
-                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                        Text(
-                            stringResource(R.string.remote_onboarding_scan),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary,
                         )
                     }
                 }
@@ -2626,14 +2599,16 @@ internal fun RemoteScreen(
                 // No bar of its own: the action floats as a glass pill over the list, which scrolls on
                 // under it, like the header pills above.
                 Box {
-                    Column(
-                        Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp)
+                    Row(
+                        Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         when (key) {
                             RemoteNavKey.Settings -> Unit
                             RemoteNavKey.Hosts -> {
                                 if (!firstRun)
-                                    FloatingSurface(Modifier.fillMaxWidth(), shape = CircleShape) {
+                                    FloatingSurface(Modifier.weight(1f), shape = CircleShape) {
                                         TextButton(
                                             onClick = { paste = true },
                                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("pasteCodeButton"),
@@ -2647,6 +2622,18 @@ internal fun RemoteScreen(
                                             Text(stringResource(R.string.remote_onboarding_paste))
                                         }
                                     }
+                                FloatingSurface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+                                    IconButton(
+                                        onClick = { scan = true },
+                                        modifier = Modifier.size(48.dp).testTag("scanQrButton"),
+                                    ) {
+                                        Icon(
+                                            Icons.Default.QrCodeScanner,
+                                            contentDescription = stringResource(R.string.remote_onboarding_scan),
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                        )
+                                    }
+                                }
                             }
                             is RemoteNavKey.Sessions -> Unit
                             is RemoteNavKey.Chat -> Unit
@@ -2655,10 +2642,10 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Tickets -> Unit
                             is RemoteNavKey.Ticket -> Unit
                             is RemoteNavKey.Activity -> Unit
-                            // Providers, Open folder, Disconnect and Remove pairing live in the Mac's
-                            // overflow in the header, so the list keeps the full height.
+                            // Secondary host actions remain in the header overflow; the primary
+                            // folder action shares the floating footer with Activity.
                             is RemoteNavKey.Projects -> {
-                                FloatingSurface(Modifier.fillMaxWidth(), shape = CircleShape) {
+                                FloatingSurface(Modifier.weight(1f), shape = CircleShape) {
                                     TextButton(
                                         onClick = { navigator.openActivity(key.routeId, twoPane) },
                                         enabled = state.host != null,
@@ -2667,6 +2654,11 @@ internal fun RemoteScreen(
                                         Text(stringResource(R.string.remote_activity_title))
                                     }
                                 }
+                                if (canOpenFolders(state))
+                                    OpenFolderButton(
+                                        enabled = !state.loading,
+                                        onClick = { navigator.openFolders(key.routeId) },
+                                    )
                             }
                         }
                     }
