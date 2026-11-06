@@ -616,7 +616,7 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
         ) {
             // Pi core's dotted compaction loader. Decorative: the text says it.
             // StatusGlyph holds a static frame while system animations are off.
-            CompactionGlyph(MaterialTheme.colorScheme.onSecondaryContainer)
+            CompactionGlyph(if (floating) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface)
             Column {
                 Text(stringResource(R.string.remote_panel_compacting), style = MaterialTheme.typography.labelLarge)
                 reason?.let {
@@ -644,6 +644,8 @@ internal fun ContextOfferBanner(
 ) {
     val scheme = MaterialTheme.colorScheme
     val dismissLabel = stringResource(R.string.remote_context_offer_dismiss)
+    val bannerContent = if (floating) scheme.onSecondaryContainer else scheme.onSurface
+    val buttonContent = if (floating) scheme.secondaryContainer else scheme.surfaceContainer
     BannerSurface(
         floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("contextOfferBanner")
@@ -673,13 +675,13 @@ internal fun ContextOfferBanner(
             FlowRow(
                 Modifier.align(Alignment.End),
                 horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
-                verticalArrangement = Arrangement.Center,
+                verticalArrangement = if (floating) Arrangement.Center else Arrangement.spacedBy(4.dp),
             ) {
-                // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
+                // The banner's own text colour stays legible over the translucent surface.
                 TextButton(
                     onClick = onDismiss,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferDismiss"),
-                    colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                    colors = ButtonDefaults.textButtonColors(contentColor = bannerContent),
                 ) { Text(dismissLabel) }
                 if (ContextOfferAction.COMPACT in offer.actions)
                     Button(
@@ -687,8 +689,8 @@ internal fun ContextOfferBanner(
                         // Labelled "Compact now" only: the heading already reads out the fill.
                         modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferCompact"),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = scheme.onSecondaryContainer,
-                            contentColor = scheme.secondaryContainer,
+                            containerColor = bannerContent,
+                            contentColor = buttonContent,
                         ),
                     ) { Text(stringResource(R.string.remote_compact_now_action)) }
             }

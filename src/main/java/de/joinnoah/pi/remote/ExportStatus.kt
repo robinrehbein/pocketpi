@@ -7,6 +7,8 @@ import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -65,6 +67,7 @@ internal fun exportFailureText(failure: ExportFailure): Int =
     }
 
 /** Progress, failure or completion of `/export`; [onShare] shares the finished file again. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ExportStatus(
     state: ExportState?,
@@ -74,12 +77,15 @@ internal fun ExportStatus(
 ) {
     if (state == null) return
     val failed = state is ExportState.Failed
-    // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
+    val labelColor = when {
+        !floating -> MaterialTheme.colorScheme.onSurface
+        failed -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    // The banner's own text colour stays legible over the translucent surface.
     val labelColors =
         ButtonDefaults.textButtonColors(
-            contentColor =
-                if (failed) MaterialTheme.colorScheme.onErrorContainer
-                else MaterialTheme.colorScheme.onSecondaryContainer,
+            contentColor = labelColor,
         )
     BannerSurface(
         floating = floating,
@@ -88,14 +94,10 @@ internal fun ExportStatus(
         contentColor =
             if (failed) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
-        Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        val content: @Composable () -> Unit = {
             when (state) {
                 ExportState.Exporting -> {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = labelColor)
                     Text(
                         stringResource(R.string.remote_export_running),
                         style = MaterialTheme.typography.labelLarge,
@@ -122,6 +124,20 @@ internal fun ExportStatus(
                     TextButton(onClick = onDismiss, colors = labelColors) { Text(stringResource(R.string.remote_export_dismiss)) }
                 }
             }
+        }
+        if (floating) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) { content() }
+        } else {
+            FlowRow(
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) { content() }
         }
     }
 }

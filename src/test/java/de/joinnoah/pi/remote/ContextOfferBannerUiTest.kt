@@ -2,6 +2,11 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -88,6 +93,26 @@ class ContextOfferBannerUiTest {
         }
         compose.onAllNodesWithTag("contextOfferBanner").assertCountEquals(2)
         compose.onAllNodesWithTag("contextOfferCompact").assertCountEquals(1)
+    }
+
+    @Test
+    fun sheetButtonsWrapWithoutOverlappingAtLargeFontScale() {
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                MaterialTheme {
+                    Column(Modifier.width(240.dp)) {
+                        ContextOfferBanner(offer, announce = false, onCompact = {}, onDismiss = {}, floating = false)
+                    }
+                }
+            }
+        }
+        val banner = compose.onNodeWithTag("contextOfferBanner").fetchSemanticsNode().boundsInRoot
+        val dismiss = compose.onNodeWithTag("contextOfferDismiss").assertHeightIsAtLeast(48.dp).fetchSemanticsNode().boundsInRoot
+        val compact = compose.onNodeWithTag("contextOfferCompact").assertHeightIsAtLeast(48.dp).fetchSemanticsNode().boundsInRoot
+        org.junit.Assert.assertTrue(dismiss.bottom <= compact.top || dismiss.right <= compact.left)
+        org.junit.Assert.assertTrue(dismiss.left >= banner.left && dismiss.right <= banner.right)
+        org.junit.Assert.assertTrue(compact.left >= banner.left && compact.right <= banner.right)
     }
 
     @Test
