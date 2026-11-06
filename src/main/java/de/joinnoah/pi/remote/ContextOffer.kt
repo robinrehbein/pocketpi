@@ -61,7 +61,13 @@ private fun offerLevel(percent: Double, usage: SessionContextUsage): Int? =
  * ([canCompact] covers that too), an offer level that
  * [dismissedLevel] does not already cover, and at least one available action.
  */
-internal fun contextOffer(state: RemoteState, dismissedLevel: Int?, nowMillis: Long): ContextOffer? {
+internal fun contextOffer(
+    state: RemoteState,
+    dismissedLevel: Int?,
+    nowMillis: Long,
+    /** A handover outcome shows in the banner slot: the offer leaves the handover out meanwhile. */
+    handoverOutcomeShown: Boolean = false,
+): ContextOffer? {
     if (state.selection.sessionId == null || state.contextLoading || state.contextUsageStale) return null
     if (!canCompact(state, nowMillis)) return null
     val usage = selectedContextUsage(state) ?: return null
@@ -70,7 +76,7 @@ internal fun contextOffer(state: RemoteState, dismissedLevel: Int?, nowMillis: L
     if (dismissedLevel != null && dismissedLevel >= level) return null
     val actions = buildSet {
         if (compactAvailable(state)) add(ContextOfferAction.COMPACT)
-        if (handoverAvailable(state)) add(ContextOfferAction.HANDOVER)
+        if (handoverAvailable(state) && !handoverOutcomeShown) add(ContextOfferAction.HANDOVER)
     }
     if (actions.isEmpty()) return null
     return ContextOffer(level, percent.toInt(), actions)
@@ -109,24 +115,15 @@ internal class ContextOfferMemory : ViewModel() {
         announcedLevels.removeAll { it.first == sessionId }
     }
 
-    /** Handovers (by request ID) whose `done` already moved the phone to the new chat. */
-    private val followedHandovers = mutableSetOf<String>()
-
     /** Handover outcomes (by request ID) the user closed in the old chat's banner slot. */
     private val closedHandovers = mutableStateSetOf<String>()
 
     /** New chats a handover just opened, by session ID, with the old chat's session ID. */
     private val continuedFrom = mutableMapOf<String, String>()
 
-    /**
-     * True once per [handover]: the first time its live `done` is seen, so the phone moves to the new
-     * chat once, and [target] learns where it came from (see [takeContinuedFrom]).
-     */
-    fun follow(handover: SessionHandover, sourceSessionId: String): Boolean {
-        val target = handover.targetSessionId ?: return false
-        if (!followedHandovers.add(handover.requestId)) return false
+    /** The phone moves from [sourceSessionId] to the new chat [target]; that chat's screen says so once. */
+    fun continued(target: String, sourceSessionId: String) {
         continuedFrom[target] = sourceSessionId
-        return true
     }
 
     /** The old chat's session ID, once, when [sessionId] is the new chat a handover just opened. */

@@ -321,7 +321,7 @@ internal fun ConversationMessage(
     if (item is ConversationItem.Bubble && item.handover != null) {
         val source = item.handover.sourceSessionId
         Box(Modifier.jumpHighlight(highlighted)) {
-            HandoverSummaryCard(item.text, item.handover.partial, onOpenSession?.let { open -> { open(source) } })
+            HandoverSummaryCard(item.text, item.handover.partial, onOpenSession?.let { open -> { open(source) } }, item.truncated)
         }
         return
     }

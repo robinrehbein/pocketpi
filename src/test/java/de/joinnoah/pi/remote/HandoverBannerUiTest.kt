@@ -81,9 +81,13 @@ class HandoverBannerUiTest {
         var compacts = 0
         var retries = 0
         var dismissals = 0
+        val canRetry = mutableStateOf(true)
         compose.setContent {
             MaterialTheme {
-                HandoverBanner(handover.value, false, onRetry = { retries++ }, onCompact = { compacts++ }, onOpenTarget = {}, onDismiss = { dismissals++ })
+                HandoverBanner(
+                    handover.value, false, onRetry = if (canRetry.value) { { retries++ } } else null,
+                    onCompact = { compacts++ }, onOpenTarget = {}, onDismiss = { dismissals++ },
+                )
             }
         }
         compose.onNodeWithTag("handoverBanner").assert(polite)
@@ -95,6 +99,13 @@ class HandoverBannerUiTest {
         handover.value = handover.value.copy(error = HandoverError.CANCELLED)
         compose.onNodeWithTag("handoverAction").assertTextEquals(context.getString(R.string.remote_handover_retry)).performClick()
         assertEquals(1, retries)
+
+        // Offline, or with no retry possible now, the failure only explains.
+        handover.value = handover.value.copy(error = HandoverError.OFFLINE)
+        compose.onAllNodesWithTag("handoverAction").assertCountEquals(0)
+        canRetry.value = false
+        handover.value = handover.value.copy(error = HandoverError.CANCELLED)
+        compose.onAllNodesWithTag("handoverAction").assertCountEquals(0)
 
         handover.value = handover.value.copy(error = HandoverError.TIMEOUT)
         compose.onNodeWithTag("handoverOutcome").assertTextContains(context.getString(R.string.remote_handover_timeout_title))

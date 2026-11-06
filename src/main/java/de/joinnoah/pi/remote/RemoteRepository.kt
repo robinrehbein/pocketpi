@@ -555,6 +555,9 @@ interface RemoteRepository {
     /** `session.handover`: continues the open host worker in a new chat; only when [canHandover]. */
     fun startHandover() {}
 
+    /** The phone moved to the new chat of the open chat's handover [requestId]; see [SessionHandover.live]. */
+    fun handoverFollowed(requestId: String) {}
+
     fun refreshAdvisor() {}
 
     fun setAdvisor(provider: String?, id: String? = null, level: String? = null) {}

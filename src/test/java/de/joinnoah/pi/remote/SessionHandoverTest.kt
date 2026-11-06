@@ -137,6 +137,41 @@ class SessionHandoverTest {
     }
 
     @Test
+    fun aFollowedDoneIsNoLongerLiveAcrossAResume() {
+        val timeline = Timeline("old-session")
+        timeline.snapshot(JsonObject(valid("snapshot-source-summarizing").data() + ("revision" to JsonPrimitive(9))))
+        timeline.event(valid("event-done"))
+        assertTrue(timeline.handover!!.live)
+        timeline.handoverFollowed("other")
+        assertTrue(timeline.handover!!.live)
+        timeline.handoverFollowed("handover:1")
+        assertEquals(SessionHandover("handover:1", HandoverState.DONE, "new-session"), timeline.handover)
+        // The chat opened again resumes from this Timeline, and its resync keeps it non-live.
+        val resumed = Timeline("old-session")
+        resumed.continueFrom(timeline)
+        assertFalse(resumed.handover!!.live)
+        resumed.snapshot(JsonObject(valid("snapshot-source-done").data() + ("revision" to JsonPrimitive(12))))
+        assertFalse(resumed.handover!!.live)
+    }
+
+    private val epoch = "A".repeat(22)
+
+    private fun replayFrom(seen: Boolean): SessionHandover? {
+        val timeline = Timeline("old-session")
+        val base = valid("snapshot-source-summarizing").data() - "handover" + ("revision" to JsonPrimitive(6)) + ("epoch" to JsonPrimitive(epoch))
+        assertTrue(timeline.snapshot(JsonObject(base)))
+        if (seen) timeline.handoverAccepted("handover:1")
+        timeline.replay(SessionEventsReply("old-session", epoch, 6, 7, listOf(at(valid("event-done"), 7))))
+        return timeline.handover
+    }
+
+    @Test
+    fun aReplayedDoneIsLiveOnlyWhenThisPhoneSawItRun() {
+        assertEquals(SessionHandover("handover:1", HandoverState.DONE, "new-session"), replayFrom(seen = false))
+        assertEquals(SessionHandover("handover:1", HandoverState.DONE, "new-session", live = true), replayFrom(seen = true))
+    }
+
+    @Test
     fun theNewChatKnowsItsSource() {
         val timeline = Timeline("new-session")
         timeline.snapshot(valid("snapshot-target").data())
@@ -201,6 +236,9 @@ class SessionHandoverTest {
         assertFalse(canCompact(running, 0L))
         assertFalse(canHandover(running, 0L))
         assertNull(contextOffer(running, null, 0L))
+        // While a handover outcome shows, the offer leaves the handover out.
+        assertEquals(setOf(ContextOfferAction.COMPACT), contextOffer(idle(), null, 0L, handoverOutcomeShown = true)?.actions)
+        assertNull(contextOffer(idle(capabilities = setOf(SESSION_HANDOVER_CAPABILITY, HOST_WORKER_V2_CAPABILITY)), null, 0L, handoverOutcomeShown = true))
         // A failed one leaves the chat usable.
         val failed = running.copy(handover = SessionHandover("h", HandoverState.FAILED, error = HandoverError.CANCELLED))
         assertTrue(canSendDraft(failed))
@@ -217,6 +255,10 @@ class SessionHandoverTest {
         assertFalse(handoverContinueOffered(chat.copy(handedOverFrom = HandedOverFrom("old-session", false))))
         assertFalse(handoverContinueOffered(chat.copy(messages = listOf(seed, Wire.objectOf("id" to "u", "role" to "user", "text" to "x")))))
         assertFalse(handoverContinueOffered(chat.copy(handedOverFrom = null)))
+        // Something the user prepared goes first.
+        assertFalse(handoverContinueOffered(chat.copy(draft = "Mine")))
+        assertFalse(handoverContinueOffered(chat.copy(quote = MessageQuote("seed-1", "user", "Goal"))))
+        assertFalse(handoverContinueOffered(chat.copy(attachments = listOf(LocalAttachment("a", "a.png", "image", "image/png", 1, "0".repeat(64))))))
     }
 
     @Test

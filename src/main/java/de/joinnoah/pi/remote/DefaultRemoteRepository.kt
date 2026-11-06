@@ -6695,6 +6695,12 @@ class DefaultRemoteRepository(
         }
     }
 
+    override fun handoverFollowed(requestId: String) {
+        val current = timeline?.takeIf { it.sessionId == state.value.selection.sessionId } ?: return
+        current.handoverFollowed(requestId)
+        publishTimeline()
+    }
+
     private fun canChangeConfiguration(): Boolean =
         state.value.let {
             it.connected &&

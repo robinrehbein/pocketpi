@@ -10,6 +10,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import kotlinx.serialization.json.JsonObject
@@ -130,6 +132,48 @@ class HandoverScreenTest {
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitForIdle()
         assertEquals(RemoteSelection("host", "project"), repository.state.value.selection)
+    }
+
+    @Test
+    fun theOldChatOpenedAgainOffersTheNewChatAndStays() {
+        start("old-session")
+        handover(SessionHandover("h1", HandoverState.DONE, "new-session", live = true))
+        assertEquals(RemoteSelection("host", "project", "new-session"), repository.state.value.selection)
+        assertEquals(listOf("h1"), repository.followedHandovers)
+        compose.onNodeWithText(string(R.string.remote_handover_open_previous)).performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "old-session"), repository.state.value.selection)
+        openStatusSheet()
+        compose.onNodeWithTag("handoverAction").assertTextEquals(string(R.string.remote_handover_open_new))
+        // The followed done moves nobody again; the button does.
+        assertEquals(RemoteSelection("host", "project", "old-session"), repository.state.value.selection)
+        compose.onNodeWithTag("handoverAction").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "new-session"), repository.state.value.selection)
+    }
+
+    @Test
+    fun aDoneOnlyTheSnapshotReportsDoesNotMove() {
+        start("old-session")
+        handover(SessionHandover("h1", HandoverState.DONE, "new-session"))
+        assertEquals(RemoteSelection("host", "project", "old-session"), repository.state.value.selection)
+        compose.onAllNodesWithText(string(R.string.remote_handover_continued)).assertCountEquals(1)
+    }
+
+    @Test
+    fun continueThatCannotSendLeavesTheComposerEmpty() {
+        start("new-session")
+        repository.state.value = repository.state.value.copy(
+            messages = listOf(seed),
+            handedOverFrom = HandedOverFrom("old-session", true),
+            contextUsage = null,
+        )
+        compose.waitForIdle()
+        // This fake's prompt() does not send.
+        compose.onNodeWithTag("handoverContinue").performClick()
+        compose.waitForIdle()
+        assertEquals(1, repository.prompts)
+        assertEquals("", repository.state.value.draft)
     }
 
     @Test

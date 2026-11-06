@@ -165,7 +165,7 @@ internal fun canHandover(state: RemoteState, nowMillis: Long): Boolean =
 internal fun handoverContinueOffered(state: RemoteState): Boolean {
     val from = state.handedOverFrom?.takeIf { it.seeded } ?: return false
     if (state.status != "idle" || state.loading || !state.connected || state.sending || state.pendingSend != null) return false
-    if (state.questions.isNotEmpty()) return false
+    if (state.questions.isNotEmpty() || state.attachments.isNotEmpty() || state.quote != null || state.draft.isNotBlank()) return false
     val only = state.messages.singleOrNull() ?: return false
     return messageHandover(only)?.sourceSessionId == from.sourceSessionId
 }

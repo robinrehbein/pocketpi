@@ -157,6 +157,8 @@ internal open class DestinationViewModel(
 
     fun startHandover() = active(repository::startHandover)
 
+    fun handoverFollowed(requestId: String) = active { repository.handoverFollowed(requestId) }
+
     fun refreshAdvisor() = active(repository::refreshAdvisor)
 
     fun setAdvisor(provider: String?, id: String?, level: String?) =
@@ -677,6 +679,30 @@ internal class ChatViewModel(
      * goes into the composer after what is typed there, as [prefillPrompt] does, so nothing the
      * user typed, quoted or attached is sent along unseen.
      */
+    /**
+     * Sends [prompt] only when the composer is empty and the chat takes it now; otherwise nothing
+     * happens, and the prompt never lands in the composer. True when it went out.
+     */
+    fun sendNow(prompt: String): Boolean {
+        var sent = false
+        active {
+            val current = repository.state.value
+            if (
+                current.draft.isNotBlank() || current.quote != null || current.attachments.isNotEmpty() ||
+                    !current.connected || current.sending || current.questions.isNotEmpty() ||
+                    current.status != "idle"
+            )
+                return@active
+            repository.draft(prompt)
+            if (repository.state.value.draft != prompt) return@active
+            repository.prompt()
+            sent = repository.state.value.sending
+            // A prompt the repository would not send leaves the composer as it was.
+            if (!sent && repository.state.value.draft == prompt) repository.draft("")
+        }
+        return sent
+    }
+
     fun askNow(prompt: String): PromptHandoff {
         var handoff: PromptHandoff? = null
         active {

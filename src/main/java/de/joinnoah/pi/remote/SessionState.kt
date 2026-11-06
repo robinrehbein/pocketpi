@@ -708,7 +708,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
             "advisor.status" -> Unit
             // A malformed handover event is ignored; the snapshot carries the handover too.
-            "session.handover" -> sessionHandoverEvent(event)?.let { handover = it }
+            // A replayed one counts as seen running only when this phone already saw it run.
+            "session.handover" -> sessionHandoverEvent(event)?.let { read ->
+                handover = if (!replaying) read
+                else read.copy(live = handover?.let { it.live && it.requestId == read.requestId } == true)
+            }
             // `session_activity.v1`: the repository applies it to its activity view on receipt and
             // on replay; here it only advances the revision, never a message or tool state.
             "session.activity" -> Unit
@@ -730,6 +734,14 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     fun handoverAccepted(requestId: String) {
         if (handover?.requestId == requestId) return
         handover = SessionHandover(requestId, HandoverState.SUMMARIZING, live = true)
+    }
+
+    /**
+     * The phone moved to the new chat of [requestId]: its `done` no longer counts as live, so the old
+     * chat, opened again (also from another activity, or after a resume), offers the way there instead.
+     */
+    fun handoverFollowed(requestId: String) {
+        handover?.takeIf { it.requestId == requestId && it.live }?.let { handover = it.copy(live = false) }
     }
 
     /** Forgets a question the host reported as answered or closed elsewhere. */

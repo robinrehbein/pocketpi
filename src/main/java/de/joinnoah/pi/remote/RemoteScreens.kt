@@ -1367,9 +1367,14 @@ internal fun RemoteScreen(
     // The memory and this chat's session ID, while this chat is the selected one.
     val offerChat: Pair<ContextOfferMemory, String>? =
         chatKey?.sessionId?.takeIf { it == state.selection.sessionId }?.let { id -> chatModel?.contextOffers?.to(id) }
+    // A handover of this chat (never the new chat's view of it) whose outcome the user has not closed.
+    val handoverOutcome = state.handover?.takeIf { handover ->
+        offerChat != null && !handover.running && handover.targetSessionId != offerChat.second &&
+            !offerChat.first.handoverClosed(handover.requestId)
+    }
     val shownOffer =
         if (offerChat == null || state.error != null || exportState is ExportState.Failed || state.draft.isNotBlank()) null
-        else contextOffer(state, offerChat.first.dismissed(offerChat.second), compactionNow)
+        else contextOffer(state, offerChat.first.dismissed(offerChat.second), compactionNow, handoverOutcomeShown = handoverOutcome != null)
     val offerResets = contextOfferResets(state, compactionNow)
     LaunchedEffect(offerChat, offerResets) {
         val (memory, sessionId) = offerChat ?: return@LaunchedEffect
@@ -1416,6 +1421,7 @@ internal fun RemoteScreen(
     val handoverChat = offerChat
     val shownHandover = state.handover?.takeIf { handover ->
         handoverChat != null && !handoverChat.first.handoverClosed(handover.requestId) &&
+            handover.targetSessionId != handoverChat.second &&
             !(handover.state == HandoverState.DONE && handover.live)
     }
     val handoverRequesting = handoverChat != null && state.handoverRequesting
@@ -1424,8 +1430,11 @@ internal fun RemoteScreen(
         val (memory, sessionId) = handoverChat ?: return@LaunchedEffect
         val handover = state.handover?.takeIf { it.state == HandoverState.DONE && it.live } ?: return@LaunchedEffect
         val chat = chatKey ?: return@LaunchedEffect
-        if (memory.follow(handover, sessionId))
-            navigator.open(RemoteNavKey.Chat(chat.routeId, chat.projectId, checkNotNull(handover.targetSessionId)))
+        val target = checkNotNull(handover.targetSessionId)
+        // The repository forgets that it was live first, so no later view of the old chat moves again.
+        chatModel?.handoverFollowed(handover.requestId)
+        memory.continued(target, sessionId)
+        navigator.open(RemoteNavKey.Chat(chat.routeId, chat.projectId, target))
     }
     fun openSessionInProject(sessionId: String) {
         val chat = chatKey ?: return
@@ -1452,7 +1461,7 @@ internal fun RemoteScreen(
         HandoverBanner(
             shownHandover,
             requesting = handoverRequesting,
-            onRetry = ::retryHandover,
+            onRetry = if (canHandover(state, compactionNow)) ::retryHandover else null,
             onCompact = handoverCompact,
             onOpenTarget = ::openSessionInProject,
             onDismiss = ::closeHandoverOutcome,
@@ -1491,7 +1500,7 @@ internal fun RemoteScreen(
             shownHandover != null ->
                 if (shownHandover.error == HandoverError.TIMEOUT) R.string.remote_handover_timeout_title
                 else R.string.remote_handover_failed_title
-            unseededFrom != null -> R.string.remote_handover_summary_title
+            unseededFrom != null -> R.string.remote_handover_no_summary
             shownOffer != null -> R.string.remote_context_full_title
             else -> null
         }
@@ -4142,7 +4151,7 @@ internal fun RemoteScreen(
                                         line,
                                         running = line != R.string.remote_export_done && line != R.string.remote_handover_continued &&
                                             line != R.string.remote_handover_failed_title && line != R.string.remote_handover_timeout_title &&
-                                            line != R.string.remote_handover_summary_title,
+                                            line != R.string.remote_handover_no_summary,
                                     ) { statusSheet = true }
                             }
                             if (insightsShown) insightChips()
@@ -4238,7 +4247,8 @@ internal fun RemoteScreen(
                         HandoverContinueChip(composerDraft) {
                             // What is typed goes to the repository first, so a typed prompt is never replaced.
                             composerDraft?.flush()
-                            chatModel.askNow(HANDOVER_CONTINUE_PROMPT)
+                            // Sent or nothing: the English prompt never lands in the composer.
+                            chatModel.sendNow(HANDOVER_CONTINUE_PROMPT)
                         }
                     ChatComposerNotices(
                          connectionStatusLine(state),

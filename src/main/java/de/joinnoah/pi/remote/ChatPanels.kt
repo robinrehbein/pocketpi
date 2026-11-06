@@ -721,7 +721,8 @@ internal fun ContextOfferBanner(
 internal fun HandoverBanner(
     handover: SessionHandover?,
     requesting: Boolean,
-    onRetry: () -> Unit,
+    /** Set while a new attempt can start now ([canHandover]); a failure then offers "Try again". */
+    onRetry: (() -> Unit)?,
     onCompact: (() -> Unit)?,
     onOpenTarget: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -790,8 +791,9 @@ internal fun HandoverBanner(
                     when {
                         target != null -> R.string.remote_handover_open_new to { onOpenTarget(target) }
                         error == HandoverError.TOO_LARGE -> onCompact?.let { R.string.remote_compact_now_action to it }
-                        error == HandoverError.TIMEOUT -> null
-                        else -> R.string.remote_handover_retry to onRetry
+                        // After a timeout the outcome is open; offline needs the chat back first.
+                        error == HandoverError.TIMEOUT || error == HandoverError.OFFLINE -> null
+                        else -> onRetry?.let { R.string.remote_handover_retry to it }
                     }
                 primary?.let { (label, action) ->
                     Button(
@@ -871,7 +873,7 @@ internal fun HandoverContinueChip(draft: ComposerDraft?, onContinue: () -> Unit)
  * previous chat when [onOpenPrevious] is set.
  */
 @Composable
-internal fun HandoverSummaryCard(text: String, partial: Boolean, onOpenPrevious: (() -> Unit)?) {
+internal fun HandoverSummaryCard(text: String, partial: Boolean, onOpenPrevious: (() -> Unit)?, truncated: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
     var expanded by rememberSaveable { mutableStateOf(false) }
     val toggleLabel =
@@ -910,6 +912,9 @@ internal fun HandoverSummaryCard(text: String, partial: Boolean, onOpenPrevious:
                 )
             if (expanded)
                 Box(Modifier.padding(end = 8.dp, top = 4.dp, bottom = 4.dp).testTag("handoverSummaryText")) { MarkdownText(text) }
+            // As on any bubble: the host sent only the start of a long message.
+            if (truncated)
+                Text(stringResource(R.string.remote_truncated), style = MaterialTheme.typography.labelSmall)
             if (onOpenPrevious != null)
                 TextButton(
                     onClick = onOpenPrevious,

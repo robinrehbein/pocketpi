@@ -453,6 +453,16 @@ internal class NavigationFakeRepository : RemoteRepository {
         handovers++
     }
 
+    val followedHandovers = mutableListOf<String>()
+
+    /** As the real repository does: the open chat's handover no longer counts as live. */
+    override fun handoverFollowed(requestId: String) {
+        followedHandovers += requestId
+        state.value.handover?.takeIf { it.requestId == requestId }?.let {
+            state.value = state.value.copy(handover = it.copy(live = false))
+        }
+    }
+
     override fun quote(messageId: String?) {
         if (messageId != null) quotes += messageId
     }

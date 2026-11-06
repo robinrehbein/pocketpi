@@ -116,6 +116,7 @@
     <string name="remote_handover_summary_expand">Zusammenfassung anzeigen</string>
     <string name="remote_handover_summary_collapse">Zusammenfassung ausblenden</string>
     <string name="remote_handover_unseeded">Die Zusammenfassung konnte nicht erstellt werden. Der vorherige Chat enthält weiterhin alles.</string>
+    <string name="remote_handover_no_summary">Keine Zusammenfassung</string>
     <string name="remote_handover_continue">Weiter</string>
     <string name="remote_handover_continue_description">Mit den nächsten Schritten aus der Zusammenfassung weitermachen</string>
     <string name="remote_handover_failed_title">Neuer Chat nicht gestartet</string>

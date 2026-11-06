@@ -116,6 +116,7 @@
     <string name="remote_handover_summary_expand">Show summary</string>
     <string name="remote_handover_summary_collapse">Hide summary</string>
     <string name="remote_handover_unseeded">The summary could not be written. The previous chat still has everything.</string>
+    <string name="remote_handover_no_summary">No summary</string>
     <string name="remote_handover_continue">Continue</string>
     <string name="remote_handover_continue_description">Continue with the next steps from the summary</string>
     <string name="remote_handover_failed_title">New chat not started</string>
