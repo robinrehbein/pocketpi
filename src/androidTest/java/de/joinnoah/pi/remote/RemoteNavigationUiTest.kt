@@ -1418,8 +1418,8 @@ class RemoteNavigationUiTest {
 
         compose
             .onNodeWithContentDescription(label(R.string.remote_new_session))
-            .assertWidthIsEqualTo(64.dp)
-            .assertHeightIsEqualTo(64.dp)
+            .assertWidthIsEqualTo(48.dp)
+            .assertHeightIsEqualTo(48.dp)
             .performClick()
         compose.onNodeWithText("Message for created").assertIsDisplayed()
         compose.runOnIdle {
