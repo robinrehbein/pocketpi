@@ -29,7 +29,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -297,8 +299,17 @@ internal fun VoiceInput(
             }
         }
     } else Modifier
-    FilledIconButton(
+    FloatingSurface(
+        shape = CircleShape,
+        color = if (enabled) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+    ) {
+        IconButton(
             onClick = activate,
+            colors = IconButtonDefaults.iconButtonColors(
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            ),
             interactionSource = interactionSource,
             modifier = modifier.then(touchModifier)
                 .semantics {
@@ -361,6 +372,7 @@ internal fun VoiceInput(
                 }
             }
     }
+}
 
 private enum class VoiceInputButton {
     Mic,
