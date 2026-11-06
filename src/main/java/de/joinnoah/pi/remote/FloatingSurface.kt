@@ -229,7 +229,7 @@ internal fun glassRimColor(scheme: ColorScheme): Color =
 
 /**
  * A banner that floats over the chat (in its header) as tinted glass, or sits [floating] = false
- * inside a sheet as a plain surface of the same colour.
+ * inside a sheet as a neutral translucent surface over the sheet's own frosted backdrop.
  */
 @Composable
 internal fun BannerSurface(
@@ -241,8 +241,19 @@ internal fun BannerSurface(
 ) {
     val shape = MaterialTheme.shapes.small
     if (floating) FloatingSurface(modifier, shape, color, contentColor, content = content)
-    else Surface(modifier, shape = shape, color = color, contentColor = contentColor, content = content)
+    else {
+        val scheme = MaterialTheme.colorScheme
+        Surface(
+            modifier, shape = shape,
+            color = sheetBannerColor(scheme), contentColor = scheme.onSurface,
+            border = BorderStroke(GLASS_RIM_WIDTH, glassRimColor(scheme)), content = content,
+        )
+    }
 }
+
+/** Neutral tint over the sheet's already frosted backdrop, without a second blur or shadow. */
+internal fun sheetBannerColor(scheme: ColorScheme): Color =
+    scheme.surfaceContainer.copy(alpha = FLOATING_HEADER_ALPHA)
 
 /**
  * A snackbar whose spoken text [description] differs from the [message] it shows, for a message
