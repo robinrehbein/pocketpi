@@ -59,9 +59,23 @@ internal fun UiDevice.tapUntil(
 
 /** Activate the checked identity, not coordinates that may belong to another row after layout. */
 private fun UiObject2.activateRow() {
-    check(accessibilityNodeInfo.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-        "The checked row did not accept its accessibility click action"
+    // Featured-chat tags wrap a heading and the interactive session row. Find the nearest
+    // actionable descendant, without descending into its secondary controls (such as Close).
+    var level = listOf(accessibilityNodeInfo)
+    while (level.isNotEmpty()) {
+        val targets = level.filter { node ->
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
+        }
+        if (targets.isNotEmpty()) {
+            check(targets.size == 1) { "The checked row has ambiguous accessibility click targets" }
+            check(targets.single().performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                "The checked row did not accept its accessibility click action"
+            }
+            return
+        }
+        level = level.flatMap { node -> (0 until node.childCount).mapNotNull(node::getChild) }
     }
+    error("The checked row has no accessibility click action")
 }
 
 /** The fixture project of src/benchmark/assets/connected-flow.json, as its Projects row is tagged. */
