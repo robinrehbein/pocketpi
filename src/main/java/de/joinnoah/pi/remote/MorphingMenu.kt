@@ -67,6 +67,12 @@ internal class MorphMenuState internal constructor(private val coordinator: Morp
     /** Rows must not accept keyboard focus or activation while clipped by a transition. */
     val contentInteractive: Boolean get() = expanded && visibility.isIdle
     fun dismiss() { expanded = false }
+    internal fun updateAnchor(bounds: Rect, clipped: Boolean) {
+        // A focusable popup can hide the IME and move the composer while opening.
+        // Follow the layout instead of treating that movement as an outside dismissal.
+        if (expanded && clipped) dismiss()
+        if (!clipped) anchor = bounds
+    }
     internal fun dispose() { dismiss(); coordinator.remove(this); placed = false }
 }
 
@@ -88,11 +94,7 @@ internal fun Modifier.morphMenuAnchor(state: MorphMenuState): Modifier = compose
         view.getLocationInWindow(window)
         val bounds = it.boundsInWindow().translate((screen[0] - window[0]).toFloat(), (screen[1] - window[1]).toFloat())
         val clipped = bounds.width < it.size.width - 1f || bounds.height < it.size.height - 1f
-        if (state.expanded && (clipped || (state.anchor != Rect.Zero && state.anchor != bounds))) {
-            // Scrolling/IME changes dismiss rather than chase a moving anchor mid-morph.
-            state.dismiss()
-        }
-        if (!state.anchorHidden) state.anchor = bounds
+        state.updateAnchor(bounds, clipped)
     }.drawWithContent { if (!state.anchorHidden) drawContent() }
         .then(if (state.expanded || state.anchorHidden) Modifier.clearAndSetSemantics {} else Modifier)
 }
