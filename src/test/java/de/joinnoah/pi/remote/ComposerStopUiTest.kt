@@ -105,6 +105,7 @@ class ComposerStopUiTest {
         hardwareKeyboard: Boolean = false,
         widthDp: Int = 360,
         fontScale: Float = 1f,
+        chatHeightDp: Int? = null,
     ) {
         current.value = initial
         compose.setContent {
@@ -121,6 +122,7 @@ class ComposerStopUiTest {
                     ChatComposer(
                         state = current.value,
                         onDraft = {},
+                        chatHeight = chatHeightDp?.let { height -> { height.dp } },
                         onSend = { sends++ },
                         onStop = { stops++ },
                         onRemoveQuote = {},
@@ -134,6 +136,53 @@ class ComposerStopUiTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun preparedTextIsMeasuredAboveControlsAndCopyDoesNotSendOrReplaceDraft() {
+        render(state(draft = "Keep my draft").copy(preparedText = "PR69 and 70"))
+        val notice = compose.onNodeWithTag("preparedTextNotice").assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val send = compose.onNodeWithTag("steer").assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        org.junit.Assert.assertTrue(notice.bottom <= send.top)
+        compose.onNodeWithText(label(R.string.remote_prepared_text_copy)).performClick()
+        compose.onNodeWithText("Keep my draft").assertIsDisplayed()
+        compose.onNodeWithTag("preparedText").assertTextEquals("PR69 and 70")
+        compose.runOnIdle {
+            val clipboard = RuntimeEnvironment.getApplication().getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+            assertEquals("PR69 and 70", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+        assertEquals(0, sends)
+        assertEquals(0, steers)
+        assertEquals(0, followUps)
+        compose.runOnIdle { current.value = current.value.copy(preparedText = null) }
+        compose.onNodeWithTag("preparedTextNotice").assertDoesNotExist()
+        compose.onNodeWithText("Keep my draft").assertIsDisplayed()
+    }
+
+    @Test
+    fun preparedTextRemainsAvailableWhileAnsweringAQuestion() {
+        render(state(question = true).copy(preparedText = "PR69 and 70"))
+        compose.onNodeWithTag("preparedText").assertIsDisplayed().assertTextEquals("PR69 and 70")
+        compose.onNodeWithText(label(R.string.remote_prepared_text_copy)).performClick()
+        assertEquals(0, sends)
+        assertEquals(0, aborts)
+    }
+
+    @Test
+    fun longPreparedTextKeepsSendVisibleWithinCappedExtras() {
+        render(
+            state(draft = "Keep my draft").copy(preparedText = "Prepared line\n".repeat(200)),
+            widthDp = 280,
+            chatHeightDp = 600,
+        )
+        compose.onNodeWithTag("preparedText").assertIsDisplayed()
+        val send = compose.onNodeWithTag("steer").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val notice = compose.onNodeWithTag("preparedTextNotice").fetchSemanticsNode().boundsInRoot
+        org.junit.Assert.assertTrue(notice.bottom <= send.top)
+        compose.onNodeWithText("Keep my draft").assertIsDisplayed()
     }
 
     private val queued = listOf(PendingFollowUp("queued", "Also check the logs", "pending"))

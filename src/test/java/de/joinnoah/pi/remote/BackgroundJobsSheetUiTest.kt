@@ -258,6 +258,8 @@ class BackgroundJobsSheetUiTest {
         compose.onNodeWithTag("jobsChip").performClick()
         // A repository selection alone does not navigate: the old chat retains its own snapshot.
         compose.runOnIdle { notification.value = RemoteNotification("host", "other", 2) }
+        // Process the notification's recomposition/effect before polling a non-Compose list.
+        compose.waitForIdle()
         compose.waitUntil(5_000) { repository.notificationRequests.contains("host" to "other") }
         compose.waitUntil(5_000) { repository.state.value.selection == otherSelection }
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("jobsInsightSheet").fetchSemanticsNodes().isEmpty() }

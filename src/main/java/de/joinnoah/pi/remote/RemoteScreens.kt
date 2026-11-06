@@ -4128,16 +4128,6 @@ internal fun RemoteScreen(
                             busy = navigator.mutating,
                         )
                     ChatPreviewHint(state)
-                    state.preparedText?.takeIf(String::isNotEmpty)?.let { prepared ->
-                        val clipboard = LocalClipboardManager.current
-                        Column(Modifier.fillMaxWidth().padding(8.dp)) {
-                            Text(stringResource(R.string.remote_prepared_text_explanation))
-                            SelectionContainer { Text(prepared, modifier = Modifier.testTag("preparedText")) }
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(prepared)) }) {
-                                Text(stringResource(R.string.remote_prepared_text_copy))
-                            }
-                        }
-                    }
                     val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }
                     if (shellRun != null && chatModel != null)
                         ShellCommandPanel(shellRun, state.connected, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
