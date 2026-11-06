@@ -12,6 +12,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -151,7 +152,7 @@ class PairingUiTest {
     fun withAMacPairedTheButtonsNameTheirAction() {
         render(RemoteState(hosts = listOf(studio, laptop), hostsLoaded = true))
         compose.onNodeWithTag("firstRunCard").assertDoesNotExist()
-        compose.onNodeWithTag("scanQrButton").assert(hasText(label(R.string.remote_onboarding_scan)))
+        compose.onNodeWithTag("scanQrButton").assert(hasContentDescription(label(R.string.remote_onboarding_scan)))
         compose.onNodeWithTag("pasteCodeButton").assert(hasText(label(R.string.remote_onboarding_paste)))
         compose.onNodeWithTag("scanQrButton").performClick()
         compose.onNodeWithTag("cameraMessage").assertExists()
