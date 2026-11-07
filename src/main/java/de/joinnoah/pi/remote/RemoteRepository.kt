@@ -226,6 +226,9 @@ data class RemoteState(
     val sessionsReused: Boolean = false,
     val session: JsonObject? = null,
     val tasks: SessionTasks = SessionTasks(),
+    val continuations: SessionContinuations = SessionContinuations(),
+    val continuationStopping: Set<String> = emptySet(),
+    val continuationStopFailed: Set<String> = emptySet(),
     val messages: List<JsonObject> = emptyList(),
     val questions: List<JsonObject> = emptyList(),
     val status: String = "offline",
@@ -341,6 +344,7 @@ internal const val PUSH_WAKE_WAIT_MILLIS = 3_000L
 data class Picked(val uri: String, val photo: Boolean)
 
 interface RemoteRepository {
+    fun stopContinuation(id: String) {}
     suspend fun loadEditorRecovery(): EditorRecoveryLoad = EditorRecoveryLoad.Unavailable
     val state: StateFlow<RemoteState>
     fun acquireNativeEditorPresence(selection: RemoteSelection): () -> Unit = {}

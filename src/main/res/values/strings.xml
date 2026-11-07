@@ -922,4 +922,24 @@
     <string name="remote_insight_pill_size">Insights above the composer</string>
     <string name="remote_pill_small">Small</string>
     <string name="remote_pill_large">Large</string>
+    <string name="scheduled_activity_title">Scheduled activity</string>
+    <string name="scheduled_activity_empty">No scheduled activity</string>
+    <string name="scheduled_activity_stale">Status out of date</string>
+    <string name="scheduled_activity_count">%1$d scheduled activities</string>
+    <string name="scheduled_activity_check_in">Check in %1$d min</string>
+    <string name="scheduled_activity_waiting_status">Waiting for status</string>
+    <string name="scheduled_activity_after_turn">After this turn</string>
+    <string name="scheduled_activity_continuing">Continuation requested</string>
+    <string name="scheduled_activity_holding">Waiting for background work</string>
+    <string name="scheduled_activity_paused">Automation paused</string>
+    <string name="scheduled_activity_wakeup">Scheduled check</string>
+    <string name="scheduled_activity_loop">Repeated checks</string>
+    <string name="scheduled_activity_goal">Goal follow-up</string>
+    <string name="scheduled_activity_next_time">Next scheduled time: %1$s</string>
+    <string name="scheduled_activity_stop">Stop future checks</string>
+    <string name="scheduled_activity_stopping">Stopping future checks…</string>
+    <string name="scheduled_activity_retry_stop">Retry stopping future checks</string>
+    <string name="scheduled_activity_stop_failed">Could not stop future checks. Try again.</string>
+    <string name="scheduled_activity_stop_note">Stopping future checks applies only to the selected activity. It does not interrupt a running turn.</string>
+    <string name="scheduled_activity_stop_description">%1$s: %2$s</string>
 </resources>

@@ -1,0 +1,17 @@
+{
+  "capability": "session.continuations.v1",
+  "request": { "type": "session.snapshot", "requestId": "r1", "sessionId": "s1", "includeContinuations": true },
+  "snapshots": [
+    { "name": "after-turn", "continuations": { "owner": "runtime-1", "items": [{ "id": "w1", "kind": "wakeup", "phase": "after_turn", "restartPolicy": "volatile", "delayMs": 1000, "purpose": "Check the build" }] } },
+    { "name": "scheduled", "continuations": { "owner": "runtime-1", "items": [{ "id": "l1", "kind": "loop", "phase": "scheduled", "restartPolicy": "volatile", "dueAt": 1700000000000 }] } },
+    { "name": "multiple", "continuations": { "owner": "runtime-1", "items": [{ "id": "w1", "kind": "wakeup", "phase": "scheduled", "restartPolicy": "volatile", "dueAt": 1700000000000 }, { "id": "g1", "kind": "goal", "phase": "holding", "restartPolicy": "restore", "purpose": "Wait for approval" }] } },
+    { "name": "empty", "continuations": { "owner": "runtime-1", "items": [] } }
+  ],
+  "cancel": { "type": "session.continuations.cancel", "requestId": "r2", "sessionId": "s1", "owner": "runtime-1", "id": "w1" },
+  "cancellations": [
+    { "type": "result", "requestId": "r2", "ok": true, "data": { "kind": "continuations.cancelled", "sessionId": "s1", "outcome": "cancelled" } },
+    { "type": "result", "requestId": "r2", "ok": true, "data": { "kind": "continuations.cancelled", "sessionId": "s1", "outcome": "not_found" } },
+    { "type": "result", "requestId": "r2", "ok": true, "data": { "kind": "continuations.cancelled", "sessionId": "s1", "outcome": "stale" } },
+    { "type": "result", "requestId": "r2", "ok": true, "data": { "kind": "continuations.cancelled", "sessionId": "s1", "outcome": "unavailable" } }
+  ]
+}
