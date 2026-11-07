@@ -96,8 +96,12 @@ class SessionArtifactsGalleryUiTest {
         // A thumbnail that cannot be drawn falls back to the title, so a title may appear twice.
         for (title in listOf("Quarterly report", "Company logo", "Release flow"))
             assertTrue(title, compose.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty())
-        // One button per card, not one for the picture and another for the caption.
+        // The cards are present before their asynchronous content is ready to open. Wait for
+        // each one to become clickable, then still verify the full accessibility contract.
         for (id in listOf(htmlId, svgId, mermaidId)) {
+            compose.waitUntil(5_000) {
+                compose.onAllNodes(hasTestTag("artifactCard-$id") and hasClickAction()).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithTag("artifactCard-$id").assertHasClickAction()
             compose.onAllNodes(hasClickAction() and hasAnyAncestor(hasTestTag("artifactCard-$id"))).assertCountEquals(0)
         }

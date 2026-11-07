@@ -594,11 +594,13 @@ internal fun RemoteScreen(
         sessionQuery = ""
     }
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
+    var restoreControlsHeight by remember { mutableStateOf(0) }
     var composerHidden by remember(key) { mutableStateOf(false) }
     var composerDragging by remember(key) { mutableStateOf(false) }
     var composerDragOffset by remember(key) { mutableStateOf(0f) }
     var composerRestingTop by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
     var composerFocused by remember(key) { mutableStateOf(false) }
+    var headerFocused by remember(key) { mutableStateOf(false) }
     var composerVoiceActive by remember(key) { mutableStateOf(false) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
     // The conversation list's after-padding: its last item can scroll to just above the composer.
@@ -619,25 +621,17 @@ internal fun RemoteScreen(
         }
     }
     val compact by compactState
-    // Dragging the list down hides the compact header and dragging it up brings it back; see
-    // [headerHiddenAfterScroll]. Only the user's own scrolling counts, never auto-follow, a jump or a
-    // restored position, and TalkBack keeps the header, whose actions it could no longer reach.
-    var headerHidden by remember(key) { mutableStateOf(false) }
+    // Header and composer enter and leave reading mode together after the composer gesture.
+    val headerHidden = composerHidden
     val touchExploring = rememberTouchExploring()
-    // Keyed on compactState too: a new layout or keyboard state makes a new one, which the old
-    // connection would no longer read.
     var historyScrollRevision by remember(key) { mutableLongStateOf(0L) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
-    val headerScroll = remember(listState, compactState) {
-        HeaderHideConnection(
+    val headerScroll = remember(listState) {
+        HistoryScrollConnection(
             position = { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset },
-            active = { compactState.value && !touchExploring.value },
-            hidden = { headerHidden },
-            setHidden = { headerHidden = it },
             onUserScroll = { if (!scrollingProgrammatically) historyScrollRevision++ },
         )
     }
-    LaunchedEffect(compact, touchExploring.value) { if (!compact || touchExploring.value) headerHidden = false }
     // Hidden, the header also leaves the status bar's area, where it would still show through.
     val headerTopInset = WindowInsets.safeDrawing.getTop(density)
     val headerLift by animateIntAsState(
@@ -681,15 +675,6 @@ internal fun RemoteScreen(
     }
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
-    LaunchedEffect(key, listState) {
-        snapshotFlow { autoFollow || !listState.canScrollForward }.collect { atBottom ->
-            if (atBottom) {
-                composerHidden = false
-                composerDragging = false
-                composerDragOffset = 0f
-            }
-        }
-    }
     // The chat counts as read once it shows its end; a newer update after that is unread again.
     // The chat is only the selected one once the repository confirmed it; a chat opened from a
     // list, a notification or a restore first shows cached content with an empty selection.
@@ -1419,7 +1404,13 @@ internal fun RemoteScreen(
             shownOffer != null -> R.string.remote_context_full_title
             else -> null
         }
-    LaunchedEffect(exportState is ExportState.Failed) { if (exportState is ExportState.Failed) headerHidden = false }
+    LaunchedEffect(exportState is ExportState.Failed) {
+        if (exportState is ExportState.Failed) {
+            composerHidden = false
+            composerDragging = false
+            composerDragOffset = 0f
+        }
+    }
     // The large editor is a compact-chrome control: it closes with the compact rules, not when they return.
     LaunchedEffect(compact) { if (!compact) editorExpanded = false }
     val exportScope = rememberCoroutineScope()
@@ -2696,7 +2687,7 @@ internal fun RemoteScreen(
                         hidden = { composerHidden },
                         dragging = { composerDragging },
                         onDrag = { progress ->
-                            if (!composerDragging && composerFocused) parkFocus()
+                            if (!composerDragging && (composerFocused || headerFocused)) parkFocus()
                             composerDragging = true
                             composerDragOffset = progress
                         },
@@ -3883,11 +3874,25 @@ internal fun RemoteScreen(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .onSizeChanged { headerSize = it }
                     .offset { IntOffset(0, headerLift) }
-                    .then(underlay)
-                    .testTag("chatHeader"),
+                    .onFocusChanged { headerFocused = it.hasFocus }
+                    .testTag("chatHeader")
+                    .then(if (headerHidden) Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)
+                    .then(underlay),
             ) {
                 chatHeader()
             }
+        }
+        if (key is RemoteNavKey.Chat && !composerCovered && (composerHidden || headerHidden)) {
+            RestoreChatControls(
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = if (composerHidden) 16.dp else composerHeight + 8.dp)
+                    .onSizeChanged { restoreControlsHeight = it.height }.then(underlay),
+                onClick = {
+                    composerHidden = false
+                    composerDragging = false
+                    composerDragOffset = 0f
+                },
+            )
         }
         if (key is RemoteNavKey.Chat && chatScrollbarVisible(listScrollable, markers.size, shownItems.size)) {
             ChatScrollbar(
@@ -3912,7 +3917,10 @@ internal fun RemoteScreen(
             // composer nor the list changes size when it comes and goes.
             Box(
                 Modifier.align(Alignment.BottomEnd)
-                    .padding(end = ((maxWidth - (PROSE_READING_WIDTH + 32.dp)).coerceAtLeast(0.dp) / 2) + 12.dp, bottom = composerHeight + 8.dp)
+                    .padding(
+                        end = ((maxWidth - (PROSE_READING_WIDTH + 32.dp)).coerceAtLeast(0.dp) / 2) + 12.dp,
+                        bottom = composerHeight + if (composerHidden) with(density) { restoreControlsHeight.toDp() } + 24.dp else 8.dp,
+                    )
                     .graphicsLayer { translationY = composerLift().coerceAtMost(composerSize.height.toFloat()) }
                     .then(underlay),
             ) {
@@ -3937,7 +3945,8 @@ internal fun RemoteScreen(
                         }
                     }
                     .graphicsLayer { translationY = composerLift() }
-                    .then(if (composerHidden || composerDragging && composerDragOffset > 0f) Modifier.clearAndSetSemantics {} else Modifier)
+                    .then(if (composerHidden || composerDragging && composerDragOffset > 0f)
+                        Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)
                     .then(underlay)
                     .padding(bottom = 16.dp)
             ) {
@@ -5402,22 +5411,6 @@ private fun LayoutSettingsSection(twoPane: TwoPaneState) {
 }
 
 /**
- * Whether the compact header is hidden after the list's first visible item moved from [previous] to
- * [current] (an item index and its offset): moving down hides it, moving up or being at the top
- * shows it again, and no movement keeps [hidden].
- */
-internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, current: Pair<Int, Int>): Boolean {
-    if (current.first == 0 && current.second == 0) return false
-    val down = current.first > previous.first || (current.first == previous.first && current.second > previous.second)
-    val up = current.first < previous.first || (current.first == previous.first && current.second < previous.second)
-    return when {
-        down -> true
-        up -> false
-        else -> hidden
-    }
-}
-
-/**
  * The compact chat's status in one line, at the start of the insights row while a banner waits in
  * the status sheet: what runs (compaction shows the dotted braille loader, other [running] work a spinner) or
  * what is done. A tap opens the sheet; the line is
@@ -5491,18 +5484,10 @@ internal fun insightChipOrder(compact: Boolean, pullRequestNeedsAttention: Boole
     return if (includeTasks) listOf(InsightChip.TASKS) + existing else existing
 }
 
-/**
- * Hides the compact header while the user drags the list down and shows it again on a drag up or at
- * the top. Only [NestedScrollSource.UserInput] hides it: auto-follow while pi streams, jumps and a
- * restored position scroll the list without the user, and the header stays as it is. [position] is the
- * list's first visible item and offset.
- */
-internal class HeaderHideConnection(
+/** Tracks reader movement without changing reading mode. */
+internal class HistoryScrollConnection(
     private val position: () -> Pair<Int, Int>,
-    private val active: () -> Boolean,
-    private val hidden: () -> Boolean,
-    private val setHidden: (Boolean) -> Unit,
-    private val onUserScroll: () -> Unit = {},
+    private val onUserScroll: () -> Unit,
 ) : NestedScrollConnection {
     private var before = 0 to 0
 
@@ -5516,9 +5501,18 @@ internal class HeaderHideConnection(
         // Fling frames use SideEffect, but are still reader movement. Layout-only prepends do
         // not dispatch consumed scroll; callers exclude their own programmatic movement.
         if (consumed.y != 0f && current != before) onUserScroll()
-        if (current == 0 to 0) setHidden(false)
-        else if (source == NestedScrollSource.UserInput && active()) setHidden(headerHiddenAfterScroll(hidden(), before, current))
         return Offset.Zero
+    }
+}
+
+@Composable
+private fun RestoreChatControls(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    FloatingSurface(modifier = modifier, shape = CircleShape) {
+        TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp).testTag("restoreChatControls")) {
+            Icon(Icons.Default.Restore, contentDescription = null)
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.remote_restore_chat_controls))
+        }
     }
 }
 
