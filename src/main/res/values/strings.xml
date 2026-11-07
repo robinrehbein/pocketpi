@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_restore_chat_controls">Show chat controls</string>
     <string name="remote_chat_activity_completed">Worked for %1$s</string>
     <string name="remote_chat_duration_join">%1$s and %2$s</string>
     <string name="remote_chat_duration_three">%1$s, %2$s and %3$s</string>
