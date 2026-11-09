@@ -1,0 +1,999 @@
+{
+  "version": 1,
+  "capability": "subagent_metadata.v1",
+  "optIn": {
+    "granted": [
+      "capabilities.v3:optin=subagent_metadata.v1:n",
+      "capabilities.v3:optin=session_activity.v1+subagent_metadata.v1:n"
+    ],
+    "refused": [
+      "capabilities.v2:optin=subagent_metadata.v1:n",
+      "capabilities.v3:optin=subagent_metadata.v1:",
+      "capabilities.v3:optin=session_activity.v1:n",
+      "capabilities.v3:optin=subagent_metadata.v1:a b"
+    ]
+  },
+  "wireValid": [
+    {
+      "name": "omitted-stats-run-1",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "known-zero-run-2",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 2,
+                  "turns": 0,
+                  "durationMs": 0,
+                  "toolUses": 0,
+                  "tokens": {
+                    "input": 0
+                  },
+                  "costUsd": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "selected-and-response-models",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 2,
+                  "model": {
+                    "provider": "p",
+                    "id": "selected",
+                    "name": "Selected"
+                  },
+                  "responseModel": {
+                    "provider": "p",
+                    "id": "served"
+                  },
+                  "requestedModel": "alias",
+                  "thinkingLevel": "max",
+                  "requestedThinkingLevel": "high",
+                  "maxTurns": 1,
+                  "tokens": {
+                    "cacheRead": 3
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "utf8-256",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 0,
+                  "requestedModel": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "missing-run",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {}
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "negative-run",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": -1
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "unsafe-run",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 9007199254740992
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "extra-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "prompt": "no"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "empty-tokens",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "tokens": {}
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "extra-token",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "tokens": {
+                    "total": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "unsafe-token",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "tokens": {
+                    "input": 9007199254740992
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "negative-turns",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "turns": -1
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "zero-limit",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "maxTurns": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "cost-over",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "costUsd": 1000001
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "bad-level",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "thinkingLevel": "auto"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "empty-model",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "model": {
+                    "provider": "p",
+                    "id": ""
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "extra-model",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "model": {
+                    "provider": "p",
+                    "id": "i",
+                    "extra": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "utf8-257",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1,
+                  "requestedModel": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééx"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "legacyProjection": [
+    {
+      "input": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                },
+                "metadata": {
+                  "run": 1
+                }
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 12,
+        "kind": "message.upsert",
+        "message": {
+          "id": "m1",
+          "role": "tool",
+          "text": "",
+          "state": "streaming",
+          "toolName": "subagent",
+          "toolCallId": "call-sub",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "scout",
+                "state": "running",
+                "activity": "reading files",
+                "instanceId": "inst-1",
+                "spawnToolCallId": "call-sub",
+                "needsInput": true,
+                "executionActivity": {
+                  "clockId": "other-clock",
+                  "epoch": "child-gen",
+                  "seq": 2,
+                  "state": "active",
+                  "expiresAt": 5,
+                  "phase": "tool",
+                  "tools": [
+                    {
+                      "toolCallId": "cc",
+                      "name": "edit"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

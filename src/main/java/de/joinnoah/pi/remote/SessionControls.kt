@@ -944,6 +944,7 @@ internal fun thinkingLevelLabel(level: String): String =
         "medium" -> stringResource(R.string.remote_thinking_medium)
         "high" -> stringResource(R.string.remote_thinking_high)
         "xhigh" -> stringResource(R.string.remote_thinking_xhigh)
+        "max" -> stringResource(R.string.remote_thinking_max)
         else -> level
     }
 

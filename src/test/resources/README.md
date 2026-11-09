@@ -26,5 +26,11 @@ capability.
 `insights-v1.json` holds the `compactionListValid` shapes (the `sessions.list` compaction opt-in and
 its result) from noah TOOLING-1254, now on `dev`.
 
+`subagent-metadata-v1.json` holds the wire shapes of `subagent_metadata.v1` (noah TOOLING-1264): the
+opt-in strings granted and refused, valid and invalid card `metadata`, and the projection without it
+for a peer that did not opt in. It is copied from noah-monorepo PR #85, branch
+`task/tooling-1264-subagent-metadata`, commit `951ca2c129601e7dda734aa4bebfd9f691590fcd`, not yet
+on `dev`; `session-activity-v1.json` is unchanged there.
+
 `host-stats-v1.json` holds the wire shapes of `host.stats.v1`: the request, a Mac sample, a first
 sample without CPU percent, a Linux container with and without limits, and refused shapes.
