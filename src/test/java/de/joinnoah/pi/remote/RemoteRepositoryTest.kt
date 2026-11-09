@@ -6984,6 +6984,123 @@ class RemoteRepositoryTest {
         assertEquals(JsonPrimitive(true), transport.sent.last { it.text("type") == "sessions.list" }["includeCompaction"])
     }
 
+    private fun sessionWithContext(id: String) = JsonObject(session(id) + ("context" to Wire.objectOf(
+        "usedTokens" to 164_000, "contextWindow" to 200_000, "percent" to 82,
+    )))
+
+    /** Strips the advertisement from `projects.list` replies on the routes [stripped] names, so discovery falls back. */
+    private fun strippingRoutes(transport: Transport, vararg stripped: String) {
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && stripped.any { request.text("requestId").startsWith("$it:") })
+                JsonObject(checkNotNull(result) - "capabilities")
+            else result
+        }
+    }
+
+    @Test
+    fun listContextOptInNeedsTheV3AdvertisementAndCombinesWithCompaction() = runTest {
+        for (compaction in listOf(false, true)) {
+            val transport = Transport()
+            configure(transport, sessions = listOf(sessionWithContext("other")))
+            advertising(transport, JsonArray(listOfNotNull(
+                SESSION_LIST_CONTEXT_CAPABILITY, SESSION_COMPACTION_LIST_CAPABILITY.takeIf { compaction },
+            ).map(::JsonPrimitive)))
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            assertTrue(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+            val request = transport.sent.last { it.text("type") == "sessions.list" }
+            assertEquals(JsonPrimitive(true), request["includeContext"])
+            assertEquals(if (compaction) JsonPrimitive(true) else null, request["includeCompaction"])
+            val row = repository.state.value.sessions.single { it.text("id") == "other" }
+            assertEquals(82.0, sessionListItem(row, connected = true, loading = false, confirmed = true).context?.percent)
+            repository.disconnect()
+        }
+    }
+
+    @Test
+    fun listContextIsNeverRequestedOnV1OrV2RoutesOrFromTheHandshake() = runTest {
+        for (stripped in listOf(listOf("capabilities.v3"), listOf("capabilities.v3", "capabilities.v2"))) {
+            val transport = Transport()
+            configure(transport)
+            advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY))))
+            strippingRoutes(transport, *stripped.toTypedArray())
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:") })
+            assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+            val lists = transport.sent.filter { it.text("type") == "sessions.list" }
+            assertTrue(lists.isNotEmpty())
+            assertTrue(lists.none { it.containsKey("includeContext") })
+            repository.disconnect()
+        }
+        // Authentication never grants a v3-only capability.
+        val handshake = Transport().also { it.capabilities = setOf(SESSION_LIST_CONTEXT_CAPABILITY) }
+        configure(handshake)
+        val repository = repository(handshake)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+        val lists = handshake.sent.filter { it.text("type") == "sessions.list" }
+        assertTrue(lists.isNotEmpty())
+        assertTrue(lists.none { it.containsKey("includeContext") })
+    }
+
+    @Test
+    fun aCompactionEventDropsTheListedFillUntilTheNextRead() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(sessionWithContext("other")))
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertTrue("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        transport.deliver(Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+            "revision" to 5, "state" to "done",
+        ))
+        runCurrent()
+        assertFalse("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        advanceTimeBy(5_001)
+        repository.refreshSessions()
+        runCurrent()
+        assertTrue("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        repository.disconnect()
+    }
+
+    @Test
+    fun listContextStopsAfterTheHostDowngrades() = runTest {
+        val transport = Transport()
+        configure(transport)
+        var advertised = true
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (advertised && request.text("type") == "projects.list" && result != null)
+                JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY)))))
+            else result
+        }
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project")
+        repository.activate(selection)
+        runCurrent()
+        assertEquals(JsonPrimitive(true), transport.sent.last { it.text("type") == "sessions.list" }["includeContext"])
+        advertised = false
+        val before = transport.sent.size
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+        repository.activate(selection)
+        runCurrent()
+        val after = transport.sent.drop(before).filter { it.text("type") == "sessions.list" }
+        assertTrue(after.isNotEmpty())
+        assertTrue(after.none { it.containsKey("includeContext") })
+        repository.disconnect()
+    }
+
     @Test
     fun compactionEventsDuringListRefreshWinOverStaleMetadata() = runTest {
         val transport = Transport().also { it.capabilities = setOf(SESSION_COMPACTION_LIST_CAPABILITY) }

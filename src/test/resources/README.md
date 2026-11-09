@@ -2,7 +2,7 @@
 
 The `*-v1.json` files and `paged-editor-wire.json` here are copies of the Remote protocol fixtures in the noah monorepo, under
 `packages/pi-atlas/extensions/remote/protocol/fixtures/`. Copy them byte for byte; change them there
-first. The copies match noah `dev` commit `6ec8b26f66159f6334b35f275a25e23f6dc24269` (session.handover.v1, noah-monorepo PR #66).
+first. The copies match noah `dev` commit `df23e9910ff646b70a6b4305d09b233c991c626e` (session.list.context.v1, noah-monorepo PR #96).
 
 `session-close-terminal-v1.json` holds the wire shapes of `session.close.terminal.v1`: closing an
 idle terminal session, its `accepted` result and the refusals (`busy` with and without unsent Mac
@@ -39,3 +39,9 @@ sample without CPU percent, a Linux container with and without limits, and refus
 `accepted` result and refusals (`busy`, both `unsupported` sentences, `offline`), every
 `session.handover` event state and error, the old chat's snapshot `handover` field, the new chat's
 `handedOverFrom` field and its summary message, and refused shapes.
+
+`session-list-context-v1.json` holds the wire shapes of `session.list.context.v1`: `sessions.list`
+requests with `includeContext` alone and together with `includeCompaction`, list rows with a fill,
+after a compaction (unknown tokens and percent), over their window and without a fill, and refused
+shapes (unknown or missing keys, bad counts and percents, a `null` context, a `false` or misplaced
+flag, a fill outside a list).
