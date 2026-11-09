@@ -34,4 +34,16 @@
     <string name="remote_projects_running_description">In Arbeit: %1$s</string>
     <string name="remote_projects_running_show">Arbeitende Chats zeigen</string>
     <string name="remote_projects_running_hide">Arbeitende Chats ausblenden</string>
+    <!-- Die Gruppe der fertigen Chats auf der Projektseite, eine Karte pro Projekt (RemoteScreens.kt). Auch die Markierung der Projektzeile. -->
+    <string name="remote_projects_done">Fertig</string>
+    <plurals name="remote_projects_done_count">
+        <item quantity="one">%d fertig</item>
+        <item quantity="other">%d fertig</item>
+    </plurals>
+    <!-- Die Schaltfläche in der Zeile eines fertigen Chats; die Beschreibung nennt den Chat für TalkBack. -->
+    <string name="remote_projects_close_chat">Schließen</string>
+    <string name="remote_projects_close_chat_description">%1$s schließen</string>
+    <!-- Die Überschrift „Zuletzt verwendet“ klappt ihre Chats ein; was ein Tippen tut, für TalkBack. -->
+    <string name="remote_projects_recent_show">Zuletzt verwendete Chats zeigen</string>
+    <string name="remote_projects_recent_hide">Zuletzt verwendete Chats ausblenden</string>
 </resources>

@@ -81,6 +81,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -129,6 +130,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -1759,6 +1761,9 @@ internal fun RemoteScreen(
     // every running featured chat.
     var runningExpanded by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
+    // Recently used sits at the bottom of the page folded under its heading, which a tap unfolds.
+    // Each Mac's page starts folded.
+    var recentExpanded by rememberSaveable(key) { mutableStateOf(false) }
     // "Review all" on the Ready group: the review in progress, or null. Not saved across process
     // death; the activity keeps it over a rotation. A new page (another Mac) ends it.
     var readyReview by remember(key) { mutableStateOf<ReadyReview?>(null) }
@@ -1775,15 +1780,22 @@ internal fun RemoteScreen(
     // Keep this captured value stable: recreating it on chat recomposition invalidates the lazy
     // content, whose layoutInfo observation would otherwise trigger another measurement.
     val projectQuickChats = remember(
-        key, projectSelected, state.projectChats, state.connected, runningExpanded, recentShowAll, readyShowAll, routeMarks,
+        key, projectSelected, state.projectChats, state.connected, runningExpanded, recentShowAll, readyShowAll, recentExpanded, routeMarks,
     ) {
         quickChats(
             if (key is RemoteNavKey.Projects && !projectSelected) {
                 mainSessionChats(state.projectChats).filterNot { projectChatHidden(it, routeMarks) }
             } else emptyList(),
             state.connected, showRunningAll = runningExpanded, showRecentAll = recentShowAll,
-            marks = routeMarks, showReadyAll = readyShowAll,
+            marks = routeMarks, showReadyAll = readyShowAll, showRecent = recentExpanded,
         )
+    }
+    // The done and unread counts of each project the Mac listed: the project rows' badges and the Done cards'
+    // counts, so both say the same. A cached list has none.
+    val projectReadyCounts = remember(state.projectSessions, routeMarks) {
+        state.projectSessions.mapNotNull { (projectId, entry) ->
+            entry.takeIf { it.verified }?.let { projectId to readyCounts(it.sessions, routeMarks) }
+        }.toMap()
     }
     // The group folds again once it is gone, so the next running chat starts folded.
     val noRunning = projectQuickChats.runningTotal == 0
@@ -3401,12 +3413,14 @@ internal fun RemoteScreen(
                         }
                         is RemoteNavKey.Projects -> {
                             // What needs the user leads the page: the featured chats waiting for an answer, then
-                            // the ready ones, then the running ones. Then the shared projects, then the recent
-                            // chats. Beside an open project the chats hide, as before.
+                            // the done (ready) ones, then the running ones. Then the shared projects, and at the
+                            // bottom the recent chats, folded under their heading until it is tapped. Beside an
+                            // open project the chats hide, as before.
                             // Every featured waiting chat shows (the featured chats are bounded, see
-                            // sortedProjectChats); ready and recent chats are capped at three each until their
+                            // sortedProjectChats); done and recent chats are capped at three each until their
                             // "Show all", and running chats fold into one summary line until it is tapped (see
-                            // quickChats). Ready, running and recent chats sit under one heading per project.
+                            // quickChats). Done chats sit in one card per project; running and recent chats
+                            // under one heading per project.
                             // Main sessions only: a busy subagent shows as the session it works for.
                             val mainChats = if (projectSelected) emptyList() else mainSessionChats(state.projectChats)
                             val closableIds = closableProjectChatIds(state, mainChats)
@@ -3479,7 +3493,7 @@ internal fun RemoteScreen(
                             if (readyChats.isNotEmpty()) {
                                 item(key = "project_chats_ready_heading") {
                                     val reviewable = quick.readyQueue
-                                    ProjectsSectionHeading(stringResource(R.string.remote_status_ready)) {
+                                    ProjectsSectionHeading(stringResource(R.string.remote_projects_done)) {
                                         // One finished chat is quicker to handle on its row.
                                         if (reviewable.size >= 2 && state.connected && model is ProjectsViewModel)
                                             TextButton(
@@ -3490,7 +3504,12 @@ internal fun RemoteScreen(
                                             ) { Text(stringResource(R.string.remote_ready_review_all, reviewable.size)) }
                                     }
                                 }
-                                groupedProjectChatRows("ready", readyChats, chatRowContext, ready = true)
+                                // The project's whole count where the Mac listed it, as its row's badge says.
+                                readyProjectCards(
+                                    readyChats,
+                                    quick.readyCounts + projectReadyCounts.mapValues { it.value.done }.filterValues { it > 0 },
+                                    chatRowContext,
+                                )
                                 if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
                                     QuickChatsShowAll(
                                         expanded = readyShowAll,
@@ -3564,24 +3583,8 @@ internal fun RemoteScreen(
                                             } else null,
                                         // Only a list the Mac confirmed has counts; a cached row has none.
                                         counts = state.projectSessions[projectId]?.counts,
-                                        unreadReady =
-                                            state.projectSessions[projectId]
-                                                ?.takeIf { it.verified }
-                                                ?.let { unreadReadyCount(it.sessions, routeMarks) } ?: 0,
-                                    )
-                                }
-                            }
-                            // Quick chats only refresh while no project is open; beside one they hide.
-                            if (recentChats.isNotEmpty()) {
-                                item(key = "project_chats_heading") {
-                                    ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
-                                }
-                                groupedProjectChatRows("recent", recentChats, chatRowContext)
-                                if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
-                                    QuickChatsShowAll(
-                                        expanded = recentShowAll,
-                                        tag = "quickChatsShowAllRecent",
-                                        onClick = { recentShowAll = !recentShowAll },
+                                        unreadReady = projectReadyCounts[projectId]?.unread ?: 0,
+                                        done = projectReadyCounts[projectId]?.done ?: 0,
                                     )
                                 }
                             }
@@ -3609,6 +3612,26 @@ internal fun RemoteScreen(
                                             Text(stringResource(R.string.remote_notification_not_now))
                                         }
                                     }
+                                }
+                            }
+                            // Quick chats only refresh while no project is open; beside one they hide. The recent
+                            // ones close the page, folded until their heading is tapped.
+                            if (quick.recentTotal > 0) {
+                                item(key = "project_chats_heading") {
+                                    RecentChatsHeading(
+                                        count = quick.recentTotal,
+                                        expanded = recentExpanded,
+                                        onToggle = { recentExpanded = !recentExpanded },
+                                    )
+                                }
+                                // Empty while folded (see quickChats).
+                                groupedProjectChatRows("recent", recentChats, chatRowContext)
+                                if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = recentShowAll,
+                                        tag = "quickChatsShowAllRecent",
+                                        onClick = { recentShowAll = !recentShowAll },
+                                    )
                                 }
                             }
                         }
@@ -5270,6 +5293,135 @@ private fun LazyListScope.groupedProjectChatRows(
     }
 }
 
+/**
+ * The Done group: one glass card per project (see [groupedByProject]), its name and how many of its chats are
+ * done ([counts], uncut) at the top, then its rows without their own label. A row that can be closed carries an
+ * inline Close; a pinned one does not, since the pin means keep it.
+ */
+private fun LazyListScope.readyProjectCards(
+    chats: List<ProjectChatSummary>,
+    counts: Map<String, Int>,
+    context: ProjectChatRowContext,
+) {
+    groupedByProject(chats).forEachIndexed { index, group ->
+        item(key = "ready_project:${group.projectId}") {
+            ReadyProjectCard(group, counts[group.projectId] ?: group.chats.size, context, first = index == 0)
+        }
+    }
+}
+
+@Composable
+private fun ReadyProjectCard(group: ProjectChatGroup, count: Int, context: ProjectChatRowContext, first: Boolean) {
+    GlassCard(Modifier.padding(top = if (first) 4.dp else 12.dp).testTag("readyProjectCard-${group.projectId}")) {
+        // One heading node: "Alpha, 2 done".
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 2.dp)
+                .semantics(mergeDescendants = true) { heading() }
+                .testTag("projectGroupHeading"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                group.projectName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                pluralStringResource(R.plurals.remote_projects_done_count, count, count),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp).testTag("readyProjectCount-${group.projectId}"),
+            )
+        }
+        Column(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+            group.chats.forEach { chat ->
+                key(chat.projectId, chat.session.text("id")) {
+                    ProjectChatRow(chat, context, ready = true, showProject = false, inCard = true)
+                }
+            }
+        }
+    }
+}
+
+/** A row's opaque colour inside a [GlassCard]: the card's glass tint over the page, so the row blends in. */
+@Composable
+private fun glassCardRowColor(): Color =
+    MaterialTheme.colorScheme.surfaceContainer.copy(alpha = FLOATING_HEADER_ALPHA)
+        .compositeOver(MaterialTheme.colorScheme.background)
+
+/**
+ * Close on a done chat's row: the same request as the row's swipe and menu ([ProjectChatRowContext.onClose]), so
+ * the same confirmation follows. A small glass pill with a 48dp touch target; TalkBack names the chat.
+ */
+@Composable
+private fun ProjectChatCloseButton(title: String, sessionId: String, onClick: () -> Unit) {
+    val description = stringResource(R.string.remote_projects_close_chat_description, title)
+    FloatingSurface(
+        Modifier.padding(start = 4.dp),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        blur = false,
+        shadowElevation = 0.dp,
+    ) {
+        Box(
+            Modifier.clickable(role = Role.Button, onClick = onClick)
+                .heightIn(min = 48.dp)
+                .padding(horizontal = 14.dp)
+                .semantics { contentDescription = description }
+                .testTag("projectChatClose-$sessionId"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(stringResource(R.string.remote_projects_close_chat), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * The Recently used heading at the bottom of the Projects page: its name and how many chats it holds; a tap
+ * unfolds them or folds them back. One heading node with its state, at least 48dp tall.
+ */
+@Composable
+private fun RecentChatsHeading(count: Int, expanded: Boolean, onToggle: () -> Unit) {
+    val state = stringResource(if (expanded) R.string.remote_menu_expanded else R.string.remote_menu_collapsed)
+    val action = stringResource(if (expanded) R.string.remote_projects_recent_hide else R.string.remote_projects_recent_show)
+    val chats = pluralStringResource(R.plurals.remote_projects_running_chats, count, count)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp)
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClickLabel = action, onClick = onToggle)
+            .semantics(mergeDescendants = true) {
+                heading()
+                stateDescription = state
+            }
+            .testTag("quickChatsRecentToggle"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(R.string.remote_projects_quick_chats),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            count.toString(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // TalkBack reads the number with its noun: "Recently used, 2 chats".
+            modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = chats },
+        )
+        Spacer(Modifier.weight(1f))
+        Icon(
+            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /** The project a run of featured chats belongs to; a heading, so TalkBack can move from project to project. */
 @Composable
 private fun ProjectGroupHeading(name: String, first: Boolean) {
@@ -5282,7 +5434,14 @@ private fun ProjectGroupHeading(name: String, first: Boolean) {
 }
 
 @Composable
-private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowContext, ready: Boolean, showProject: Boolean) {
+private fun ProjectChatRow(
+    chat: ProjectChatSummary,
+    context: ProjectChatRowContext,
+    ready: Boolean,
+    showProject: Boolean,
+    /** The row sits in a Done card: it paints the card's colour and offers Close inline when it can close. */
+    inCard: Boolean = false,
+) {
     // Read here, not by the caller, so the minute tick recomposes the rows only.
     val nowMillis = context.now.value
     val id = chat.session.optionalText("id")
@@ -5307,6 +5466,11 @@ private fun ProjectChatRow(chat: ProjectChatSummary, context: ProjectChatRowCont
             swipe = context.swipe,
             now = nowMillis,
             old = ready && readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),
+            containerColor = if (inCard) glassCardRowColor() else MaterialTheme.colorScheme.background,
+            trailing =
+                if (inCard && closable && !item.pinned && id != null) {
+                    { ProjectChatCloseButton(sessionTitleLabel(item), id) { context.onClose(chat, item) } }
+                } else null,
         )
     }
 }

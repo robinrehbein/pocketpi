@@ -235,6 +235,8 @@ internal fun ProjectRow(
     counts: SessionCounts? = null,
     /** How many of the project's ready sessions are unread (see [unreadReadyCount]), shown as the "new" badge. */
     unreadReady: Int = 0,
+    /** How many of the project's chats are done (see [doneCount]), shown as the "done" badge. */
+    done: Int = 0,
 ) {
     val context = LocalContext.current
     val regionChild = rememberRegionChild()
@@ -242,11 +244,13 @@ internal fun ProjectRow(
         counts?.waiting?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_waiting_count, it, it) }
     val workingBadge =
         counts?.running?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_working_count, it, it) }
+    val doneBadge =
+        done.takeIf { counts != null && it > 0 }?.let { pluralStringResource(R.plurals.remote_projects_done_count, it, it) }
     val readyBadge =
         unreadReady.takeIf { counts != null && it > 0 }
             ?.let { pluralStringResource(R.plurals.remote_mac_ready_count, it, it) }
     // With badges the row reads them after its name, as one label.
-    val badgeDescription = listOfNotNull(waitingBadge, workingBadge, readyBadge).takeIf { it.isNotEmpty() }
+    val badgeDescription = listOfNotNull(waitingBadge, workingBadge, doneBadge, readyBadge).takeIf { it.isNotEmpty() }
     val unshareLabel = stringResource(R.string.remote_project_unshare)
     val updateNeededLabel = stringResource(R.string.remote_project_unshare_update_needed)
     val updateHint = stringResource(R.string.remote_project_unshare_update_host)
@@ -341,6 +345,15 @@ internal fun ProjectRow(
                     MaterialTheme.colorScheme.primaryContainer,
                     MaterialTheme.colorScheme.onPrimaryContainer,
                     "projectBadgeWorking-$projectId",
+                )
+            }
+            doneBadge?.let {
+                ProjectCountBadge(
+                    it,
+                    // The accent of the Done group's heading, lighter than the working badge's container.
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                    MaterialTheme.colorScheme.primary,
+                    "projectBadgeDone-$projectId",
                 )
             }
             readyBadge?.let {

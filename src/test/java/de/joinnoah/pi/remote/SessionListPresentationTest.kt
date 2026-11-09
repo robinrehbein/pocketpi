@@ -641,6 +641,70 @@ class SessionListPresentationTest {
     private fun ids(chats: List<ProjectChatSummary>) = chats.map { it.session.text("id") }
 
     @Test
+    fun theRecentGroupListsNothingWhileFoldedButCountsItsChats() {
+        val chats = (1..5).map { quickChat("recent$it", "idle", verified = false) } + quickChat("done", "idle")
+
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = true, showRecent = false)
+        assertTrue(folded.recent.isEmpty())
+        assertFalse(folded.recentExpandable)
+        assertEquals(5, folded.recentTotal)
+        assertEquals(listOf("done"), ids(folded.ready))
+
+        val open = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false, showRecent = true)
+        assertEquals(3, open.recent.size)
+        assertTrue(open.recentExpandable)
+        assertEquals(5, open.recentTotal)
+    }
+
+    @Test
+    fun theReadyCountsOfEachProjectAreUncut() {
+        val chats =
+            (1..4).map { quickChat("a$it", "idle") } +
+                quickChat("b1", "idle").copy(projectId = "p2", projectName = "Beta") +
+                quickChat("w", "running")
+
+        val quick = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(3, quick.ready.size)
+        assertEquals(mapOf("p1" to 4, "p2" to 1), quick.readyCounts)
+    }
+
+    @Test
+    fun doneCountCountsOpenIdleTopLevelSessionsReadOrUnread() {
+        fun row(id: String, status: String, origin: String = "rpc", parent: String? = null) =
+            Wire.objectOf("id" to id, "status" to status, "origin" to origin, "updatedAt" to 10, "parentSessionId" to parent)
+        val rows =
+            listOf(
+                row("done1", "idle"),
+                row("done2", "idle", origin = "pi"),
+                row("closed", "idle", origin = "history"),
+                row("sub", "idle", parent = "done1"),
+                row("busy", "running"),
+                // A main session whose subagent waits is no longer done.
+                row("main", "idle"),
+                row("asking", "waiting", parent = "main"),
+            )
+        assertEquals(2, doneCount(rows, emptyMap()))
+        assertEquals(0, doneCount(emptyList(), emptyMap()))
+    }
+
+    @Test
+    fun newNeverExceedsDoneWhenASubagentLendsItsMainSessionItsStatus() {
+        val rows =
+            listOf(
+                Wire.objectOf("id" to "main", "status" to "idle", "origin" to "rpc", "updatedAt" to 10),
+                Wire.objectOf("id" to "asking", "status" to "waiting", "origin" to "rpc", "parentSessionId" to "main", "updatedAt" to 10),
+                Wire.objectOf("id" to "other", "status" to "idle", "origin" to "rpc", "updatedAt" to 10),
+            )
+        val unread = SessionMark(seenUpdatedAt = 5, seenAt = 5)
+        val marks = mapOf("main" to unread, "other" to unread)
+
+        // The main session waits with its subagent, so it is neither done nor new; before, it counted as new.
+        assertEquals(ReadyCounts(done = 1, unread = 1), readyCounts(rows, marks))
+        assertEquals(1, unreadReadyCount(rows, marks))
+        assertEquals(1, doneCount(rows, marks))
+    }
+
+    @Test
     fun quickAccessShowsThreeRecentChatsUntilShowAllAndListsRunningChatsOnlyExpanded() {
         val chats =
             (1..4).map { quickChat("running$it", "running") } +

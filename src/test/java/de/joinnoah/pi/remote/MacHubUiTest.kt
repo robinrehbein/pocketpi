@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
@@ -223,10 +224,13 @@ class MacHubUiTest {
         )
 
         val needsYou = label(R.string.remote_status_needs_you)
-        val ready = label(R.string.remote_status_ready)
+        val ready = label(R.string.remote_projects_done)
         val working = label(R.string.remote_status_working)
         val shared = label(R.string.remote_projects_shared)
         val quick = label(R.string.remote_projects_quick_chats)
+        // Recently used is folded until its heading is tapped.
+        compose.onAllNodesWithText("Session recent").assertCountEquals(0)
+        expandRecent()
         assertTrue(headingTop(needsYou) < headingTop(ready))
         assertTrue(headingTop(ready) < headingTop(working))
         // The unverified idle chat sits under Recent, the verified one under Ready.
@@ -266,6 +270,11 @@ class MacHubUiTest {
         assertTrue(a < c && c < b)
         compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(1)
         compose.onAllNodes(projectGroupHeading("Beta")).assertCountEquals(1)
+    }
+
+    private fun expandRecent() {
+        compose.onNodeWithTag("quickChatsRecentToggle").performClick()
+        compose.waitForIdle()
     }
 
     /** A project heading over a run of featured chats. */
@@ -308,6 +317,7 @@ class MacHubUiTest {
                     chat("p1", "Alpha", "old", "idle", verified = false),
                 ),
         )
+        expandRecent()
 
         compose.onAllNodes(projectGroupHeading("Alpha")).assertCountEquals(2)
         compose.onNodeWithText("Session done").assertIsDisplayed()
@@ -325,12 +335,12 @@ class MacHubUiTest {
         compose.onNode(hasText(label(R.string.remote_status_needs_you)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             .assertIsDisplayed()
         compose.onAllNodesWithText(label(R.string.remote_status_working)).assertCountEquals(0)
-        compose.onAllNodesWithText(label(R.string.remote_status_ready)).assertCountEquals(0)
+        compose.onAllNodesWithText(label(R.string.remote_projects_done)).assertCountEquals(0)
         compose.onAllNodesWithText(label(R.string.remote_projects_quick_chats)).assertCountEquals(0)
     }
 
     private fun readyHeading() =
-        hasText(label(R.string.remote_status_ready)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+        hasText(label(R.string.remote_projects_done)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
 
     @Test
     fun anOfflineMacShowsItsChatsUnderRecentNotReady() {
@@ -342,6 +352,7 @@ class MacHubUiTest {
 
         compose.onAllNodes(readyHeading()).assertCountEquals(0)
         compose.onNodeWithText(label(R.string.remote_projects_quick_chats)).assertIsDisplayed()
+        expandRecent()
         compose.onNodeWithText("Session done").assertIsDisplayed()
     }
 
@@ -390,7 +401,7 @@ class MacHubUiTest {
 
         compose.onNodeWithText("3 new").assertIsDisplayed()
         compose.onNodeWithTag("projectBadgeReady-p1", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription("Alpha, 1 working, 3 new").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Alpha, 1 working, 4 done, 3 new").assertIsDisplayed()
     }
 
     @Test
@@ -792,6 +803,197 @@ class MacHubUiTest {
         assertTrue(
             compose.onAllNodes(hasContentDescription("DEV-433", substring = true)).fetchSemanticsNodes().isNotEmpty()
         )
+    }
+
+    @Test
+    fun theDoneGroupHasOneCardPerProjectWithItsCount() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "one", "idle", updatedAt = 3),
+                    chat("p1", "Alpha", "two", "idle", updatedAt = 2),
+                    chat("p2", "Beta", "three", "idle", updatedAt = 1),
+                ),
+        )
+
+        compose.onNode(readyHeading()).assertIsDisplayed()
+        compose.onNode(hasTestTag("readyProjectCard-p1") and hasAnyDescendant(projectGroupHeading("Alpha"))).assertExists()
+        compose.onNode(hasTestTag("readyProjectCard-p2") and hasAnyDescendant(projectGroupHeading("Beta"))).assertExists()
+        compose.onNodeWithTag("readyProjectCount-p1", useUnmergedTree = true).assertTextEquals("2 done")
+        compose.onNodeWithTag("readyProjectCount-p2", useUnmergedTree = true).assertTextEquals("1 done")
+        compose.onNode(hasTestTag("projectChatRow-p1-two") and hasAnyAncestor(hasTestTag("readyProjectCard-p1"))).assertExists()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "de-w411dp-h1600dp")
+    fun theDoneHeadingReadsFertigInGerman() {
+        render(listOf(project("p1", "Alpha")), chats = listOf(chat("p1", "Alpha", "one", "idle")))
+
+        compose.onNode(hasText("Fertig") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertIsDisplayed()
+        compose.onNodeWithTag("readyProjectCount-p1", useUnmergedTree = true).assertTextEquals("1 fertig")
+    }
+
+    @Test
+    fun theInlineCloseConfirmsAndClosesThroughTheRowsPath() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p2", "Beta", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        compose.onNodeWithTag("projectChatClose-two")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("Close Session two")))
+            .performClick()
+        compose.waitForIdle()
+        confirmClose()
+
+        assertEquals(listOf("p2" to "two"), repository.closedChats)
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+    }
+
+    @Test
+    fun theInlineCloseIsMissingOnPinnedAndUnclosableRows() {
+        val marks = SessionMarksStore(compose.activity).also { it.setPinned("studio", "pinned", true) }
+        render(
+            listOf(project("p1", "Alpha")),
+            chats =
+                listOf(
+                    chat("p1", "Alpha", "pinned", "idle", origin = "rpc"),
+                    chat("p1", "Alpha", "mac", "idle", origin = "pi"),
+                    chat("p1", "Alpha", "open", "idle", origin = "rpc"),
+                ),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            marks = marks,
+        )
+
+        compose.onNodeWithTag("projectChatClose-open").assertIsDisplayed()
+        compose.onAllNodesWithTag("projectChatClose-pinned").assertCountEquals(0)
+        compose.onAllNodesWithTag("projectChatClose-mac").assertCountEquals(0)
+        // The pinned row keeps its swipe and menu Close.
+        assertEquals(1, closeActions("p1", "pinned").size)
+    }
+
+    @Test
+    fun theDoneCardCountsLikeTheProjectRowBadge() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "a", "idle")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            List(4) { Wire.objectOf("id" to listOf("a", "b", "c", "d")[it], "status" to "idle", "origin" to "rpc", "updatedAt" to 10) },
+                            verified = true,
+                            counts = SessionCounts(),
+                        ),
+                ),
+        )
+
+        // One featured row, but the Mac lists four done chats: card and badge both say four.
+        compose.onNodeWithTag("readyProjectCount-p1", useUnmergedTree = true).assertTextEquals("4 done")
+        compose.onNode(hasText("4 done") and hasAnyAncestor(hasTestTag("projectBadgeDone-p1")), useUnmergedTree = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun theInlineCloseGoesWhileItsCloseIsInFlightAndIsATouchTarget() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p1", "Alpha", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        val pill = compose.onNodeWithTag("projectChatClose-two").fetchSemanticsNode()
+        assertTrue(pill.size.height >= 48 * compose.activity.resources.displayMetrics.density - 1)
+
+        repository.state.value = repository.state.value.copy(closingSessions = setOf("two"))
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("projectChatClose-two").assertCountEquals(0)
+        compose.onNodeWithTag("projectChatClose-one").assertIsDisplayed()
+    }
+
+    @Test
+    fun theInlineCloseMovesWithItsRowWhenSwiped() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        val before = compose.onNodeWithTag("projectChatClose-one").fetchSemanticsNode().boundsInRoot.left
+
+        compose.onNodeWithTag("projectChatRow-p1-one").performTouchInput {
+            down(centerLeft + androidx.compose.ui.geometry.Offset(40f, 0f))
+            moveBy(androidx.compose.ui.geometry.Offset(-60f, 0f))
+            moveBy(androidx.compose.ui.geometry.Offset(-60f, 0f))
+        }
+        compose.waitForIdle()
+
+        assertTrue(compose.onNodeWithTag("projectChatClose-one").fetchSemanticsNode().boundsInRoot.left < before)
+    }
+
+    @Test
+    fun aProjectRowShowsItsDoneCount() {
+        render(
+            listOf(project("p1", "Alpha"), project("p2", "Beta")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            listOf(
+                                Wire.objectOf("id" to "a", "status" to "idle", "origin" to "rpc", "updatedAt" to 10),
+                                Wire.objectOf("id" to "b", "status" to "idle", "origin" to "pi", "updatedAt" to 10),
+                                Wire.objectOf("id" to "c", "status" to "running", "origin" to "rpc", "updatedAt" to 10),
+                            ),
+                            verified = true,
+                            counts = SessionCounts(running = 1),
+                        ),
+                    "p2" to
+                        ProjectSessions(
+                            "p2",
+                            "Beta",
+                            listOf(Wire.objectOf("id" to "d", "status" to "running", "origin" to "rpc", "updatedAt" to 10)),
+                            verified = true,
+                            counts = SessionCounts(running = 1),
+                        ),
+                ),
+        )
+
+        compose.onNode(hasText("2 done") and hasAnyAncestor(hasTestTag("projectBadgeDone-p1")), useUnmergedTree = true)
+            .assertIsDisplayed()
+        compose.onNodeWithContentDescription("Alpha, 1 working, 2 done").assertIsDisplayed()
+        compose.onAllNodesWithTag("projectBadgeDone-p2", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun recentlyUsedIsFoldedAtTheBottomUntilItsHeadingIsTapped() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "old1", "idle", verified = false), chat("p1", "Alpha", "old2", "idle", verified = false)),
+        )
+
+        val toggle = compose.onNodeWithTag("quickChatsRecentToggle")
+        toggle.assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, label(R.string.remote_menu_collapsed)))
+            .assert(hasText("2"))
+        compose.onAllNodesWithText("Session old1").assertCountEquals(0)
+        assertTrue(headingTop(label(R.string.remote_projects_shared)) < headingTop(label(R.string.remote_projects_quick_chats)))
+        assertTrue(toggle.fetchSemanticsNode().size.height >= 48 * compose.activity.resources.displayMetrics.density - 1)
+
+        expandRecent()
+
+        compose.onNodeWithTag("quickChatsRecentToggle")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, label(R.string.remote_menu_expanded)))
+        compose.onNodeWithText("Session old1").assertIsDisplayed()
+        compose.onNodeWithText("Session old2").assertIsDisplayed()
+
+        expandRecent()
+        compose.onAllNodesWithText("Session old1").assertCountEquals(0)
     }
 
     /** The clickable row of [projectId]'s chat [id], which carries its TalkBack actions. */
