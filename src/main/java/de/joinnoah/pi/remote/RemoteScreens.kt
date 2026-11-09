@@ -81,6 +81,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -1676,7 +1677,8 @@ internal fun RemoteScreen(
     var runningExpanded by rememberSaveable { mutableStateOf(false) }
     var recentShowAll by rememberSaveable { mutableStateOf(false) }
     // Recently used sits at the bottom of the page folded under its heading, which a tap unfolds.
-    var recentExpanded by rememberSaveable { mutableStateOf(false) }
+    // Each Mac's page starts folded.
+    var recentExpanded by rememberSaveable(key) { mutableStateOf(false) }
     // "Review all" on the Ready group: the review in progress, or null. Not saved across process
     // death; the activity keeps it over a rotation. A new page (another Mac) ends it.
     var readyReview by remember(key) { mutableStateOf<ReadyReview?>(null) }
@@ -1702,6 +1704,13 @@ internal fun RemoteScreen(
             state.connected, showRunningAll = runningExpanded, showRecentAll = recentShowAll,
             marks = routeMarks, showReadyAll = readyShowAll, showRecent = recentExpanded,
         )
+    }
+    // The done and unread counts of each project the Mac listed: the project rows' badges and the Done cards'
+    // counts, so both say the same. A cached list has none.
+    val projectReadyCounts = remember(state.projectSessions, routeMarks) {
+        state.projectSessions.mapNotNull { (projectId, entry) ->
+            entry.takeIf { it.verified }?.let { projectId to readyCounts(it.sessions, routeMarks) }
+        }.toMap()
     }
     // The group folds again once it is gone, so the next running chat starts folded.
     val noRunning = projectQuickChats.runningTotal == 0
@@ -3403,7 +3412,12 @@ internal fun RemoteScreen(
                                             ) { Text(stringResource(R.string.remote_ready_review_all, reviewable.size)) }
                                     }
                                 }
-                                readyProjectCards(readyChats, quick.readyCounts, chatRowContext)
+                                // The project's whole count where the Mac listed it, as its row's badge says.
+                                readyProjectCards(
+                                    readyChats,
+                                    quick.readyCounts + projectReadyCounts.mapValues { it.value.done }.filterValues { it > 0 },
+                                    chatRowContext,
+                                )
                                 if (quick.readyExpandable) item(key = "project_chats_ready_show_all") {
                                     QuickChatsShowAll(
                                         expanded = readyShowAll,
@@ -3477,14 +3491,8 @@ internal fun RemoteScreen(
                                             } else null,
                                         // Only a list the Mac confirmed has counts; a cached row has none.
                                         counts = state.projectSessions[projectId]?.counts,
-                                        unreadReady =
-                                            state.projectSessions[projectId]
-                                                ?.takeIf { it.verified }
-                                                ?.let { unreadReadyCount(it.sessions, routeMarks) } ?: 0,
-                                        done =
-                                            state.projectSessions[projectId]
-                                                ?.takeIf { it.verified }
-                                                ?.let { doneCount(it.sessions, routeMarks) } ?: 0,
+                                        unreadReady = projectReadyCounts[projectId]?.unread ?: 0,
+                                        done = projectReadyCounts[projectId]?.done ?: 0,
                                     )
                                 }
                             }
@@ -5195,8 +5203,12 @@ private fun LazyListScope.readyProjectCards(
 @Composable
 private fun ReadyProjectCard(group: ProjectChatGroup, count: Int, context: ProjectChatRowContext, first: Boolean) {
     GlassCard(Modifier.padding(top = if (first) 4.dp else 12.dp).testTag("readyProjectCard-${group.projectId}")) {
+        // One heading node: "Alpha, 2 done".
         Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 2.dp),
+            Modifier.fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 2.dp)
+                .semantics(mergeDescendants = true) { heading() }
+                .testTag("projectGroupHeading"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -5205,7 +5217,7 @@ private fun ReadyProjectCard(group: ProjectChatGroup, count: Int, context: Proje
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).semantics { heading() }.testTag("projectGroupHeading"),
+                modifier = Modifier.weight(1f),
             )
             Text(
                 pluralStringResource(R.plurals.remote_projects_done_count, count, count),
@@ -5223,6 +5235,12 @@ private fun ReadyProjectCard(group: ProjectChatGroup, count: Int, context: Proje
         }
     }
 }
+
+/** A row's opaque colour inside a [GlassCard]: the card's glass tint over the page, so the row blends in. */
+@Composable
+private fun glassCardRowColor(): Color =
+    MaterialTheme.colorScheme.surfaceContainer.copy(alpha = FLOATING_HEADER_ALPHA)
+        .compositeOver(MaterialTheme.colorScheme.background)
 
 /**
  * Close on a done chat's row: the same request as the row's swipe and menu ([ProjectChatRowContext.onClose]), so
@@ -5259,6 +5277,7 @@ private fun ProjectChatCloseButton(title: String, sessionId: String, onClick: ()
 private fun RecentChatsHeading(count: Int, expanded: Boolean, onToggle: () -> Unit) {
     val state = stringResource(if (expanded) R.string.remote_menu_expanded else R.string.remote_menu_collapsed)
     val action = stringResource(if (expanded) R.string.remote_projects_recent_hide else R.string.remote_projects_recent_show)
+    val chats = pluralStringResource(R.plurals.remote_projects_running_chats, count, count)
     Row(
         Modifier
             .fillMaxWidth()
@@ -5281,7 +5300,8 @@ private fun RecentChatsHeading(count: Int, expanded: Boolean, onToggle: () -> Un
             count.toString(),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 8.dp),
+            // TalkBack reads the number with its noun: "Recently used, 2 chats".
+            modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = chats },
         )
         Spacer(Modifier.weight(1f))
         Icon(
@@ -5323,27 +5343,25 @@ private fun ProjectChatRow(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
-                SessionListRow(
-                    item = item,
-                    activity = sessionListActivity(context.state, item, rememberActivityNow(context.state.executionActivity)),
-                    compactionFrame = context.compactionFrame,
-                    enabled = true,
-                    closeAvailable = closable,
-                    closing = id != null && id in context.closing,
-                    onClick = { context.onOpen(chat) },
-                    onClose = { context.onClose(chat, item) },
-                    onHide = if (!closable && canHideSession(item, context.capabilities)) ({ context.onHide(chat) }) else null,
-                    swipe = context.swipe,
-                    now = nowMillis,
-                    old = ready && readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),
-                    containerColor = if (inCard) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.background,
-                )
-            }
-            if (inCard && closable && !item.pinned && id != null)
-                ProjectChatCloseButton(sessionTitleLabel(item), id) { context.onClose(chat, item) }
-        }
+        SessionListRow(
+            item = item,
+            activity = sessionListActivity(context.state, item, rememberActivityNow(context.state.executionActivity)),
+            compactionFrame = context.compactionFrame,
+            enabled = true,
+            closeAvailable = closable,
+            closing = id != null && id in context.closing,
+            onClick = { context.onOpen(chat) },
+            onClose = { context.onClose(chat, item) },
+            onHide = if (!closable && canHideSession(item, context.capabilities)) ({ context.onHide(chat) }) else null,
+            swipe = context.swipe,
+            now = nowMillis,
+            old = ready && readyIsOld(chat.session["updatedAt"]?.jsonPrimitive?.longOrNull, nowMillis),
+            containerColor = if (inCard) glassCardRowColor() else MaterialTheme.colorScheme.background,
+            trailing =
+                if (inCard && closable && !item.pinned && id != null) {
+                    { ProjectChatCloseButton(sessionTitleLabel(item), id) { context.onClose(chat, item) } }
+                } else null,
+        )
     }
 }
 

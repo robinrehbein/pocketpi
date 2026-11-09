@@ -875,6 +875,67 @@ class MacHubUiTest {
     }
 
     @Test
+    fun theDoneCardCountsLikeTheProjectRowBadge() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "a", "idle")),
+            counts =
+                mapOf(
+                    "p1" to
+                        ProjectSessions(
+                            "p1",
+                            "Alpha",
+                            List(4) { Wire.objectOf("id" to listOf("a", "b", "c", "d")[it], "status" to "idle", "origin" to "rpc", "updatedAt" to 10) },
+                            verified = true,
+                            counts = SessionCounts(),
+                        ),
+                ),
+        )
+
+        // One featured row, but the Mac lists four done chats: card and badge both say four.
+        compose.onNodeWithTag("readyProjectCount-p1", useUnmergedTree = true).assertTextEquals("4 done")
+        compose.onNode(hasText("4 done") and hasAnyAncestor(hasTestTag("projectBadgeDone-p1")), useUnmergedTree = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun theInlineCloseGoesWhileItsCloseIsInFlightAndIsATouchTarget() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc"), chat("p1", "Alpha", "two", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+
+        val pill = compose.onNodeWithTag("projectChatClose-two").fetchSemanticsNode()
+        assertTrue(pill.size.height >= 48 * compose.activity.resources.displayMetrics.density - 1)
+
+        repository.state.value = repository.state.value.copy(closingSessions = setOf("two"))
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("projectChatClose-two").assertCountEquals(0)
+        compose.onNodeWithTag("projectChatClose-one").assertIsDisplayed()
+    }
+
+    @Test
+    fun theInlineCloseMovesWithItsRowWhenSwiped() {
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = listOf(chat("p1", "Alpha", "one", "idle", origin = "rpc")),
+            capabilities = setOf(SESSION_CLOSE_CAPABILITY),
+        )
+        val before = compose.onNodeWithTag("projectChatClose-one").fetchSemanticsNode().boundsInRoot.left
+
+        compose.onNodeWithTag("projectChatRow-p1-one").performTouchInput {
+            down(centerLeft + androidx.compose.ui.geometry.Offset(40f, 0f))
+            moveBy(androidx.compose.ui.geometry.Offset(-60f, 0f))
+            moveBy(androidx.compose.ui.geometry.Offset(-60f, 0f))
+        }
+        compose.waitForIdle()
+
+        assertTrue(compose.onNodeWithTag("projectChatClose-one").fetchSemanticsNode().boundsInRoot.left < before)
+    }
+
+    @Test
     fun aProjectRowShowsItsDoneCount() {
         render(
             listOf(project("p1", "Alpha"), project("p2", "Beta")),

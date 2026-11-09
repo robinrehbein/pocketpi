@@ -688,6 +688,23 @@ class SessionListPresentationTest {
     }
 
     @Test
+    fun newNeverExceedsDoneWhenASubagentLendsItsMainSessionItsStatus() {
+        val rows =
+            listOf(
+                Wire.objectOf("id" to "main", "status" to "idle", "origin" to "rpc", "updatedAt" to 10),
+                Wire.objectOf("id" to "asking", "status" to "waiting", "origin" to "rpc", "parentSessionId" to "main", "updatedAt" to 10),
+                Wire.objectOf("id" to "other", "status" to "idle", "origin" to "rpc", "updatedAt" to 10),
+            )
+        val unread = SessionMark(seenUpdatedAt = 5, seenAt = 5)
+        val marks = mapOf("main" to unread, "other" to unread)
+
+        // The main session waits with its subagent, so it is neither done nor new; before, it counted as new.
+        assertEquals(ReadyCounts(done = 1, unread = 1), readyCounts(rows, marks))
+        assertEquals(1, unreadReadyCount(rows, marks))
+        assertEquals(1, doneCount(rows, marks))
+    }
+
+    @Test
     fun quickAccessShowsThreeRecentChatsUntilShowAllAndListsRunningChatsOnlyExpanded() {
         val chats =
             (1..4).map { quickChat("running$it", "running") } +

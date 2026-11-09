@@ -270,32 +270,39 @@ internal fun readyIsOld(updatedAt: Long?, now: Long): Boolean = updatedAt != nul
 data class SessionCounts(val waiting: Int = 0, val running: Int = 0)
 
 /**
- * How many of [sessions] are ready (open, idle, top-level, the Ready group's rule) and unread by
- * [marks]: their result is one the user has not seen yet. This is the "N new" badge of a project
- * row. It lives apart from [SessionCounts] because unread is phone-local (see [sessionUnread]):
- * the repository counts by the Mac's list alone, so the view applies the marks. A session
- * without a mark counts as read.
+ * A project's done chats and how many of them are unread: the "N done" and "N new" badges of its row and the
+ * count of its Done card. One pass by the Done group's rule: a busy subagent lends its main session its
+ * status first ([mainSessionChats]), then a session counts when it is open, idle and top-level ([isReadyRow])
+ * and not hidden on this phone, so "new" never exceeds "done".
  */
-internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
-    sessions.count {
-        val mark = it.optionalText("id")?.let(marks::get)
-        isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId")) &&
-            sessionUnread(mark, it["updatedAt"]?.jsonPrimitive?.longOrNull, open = false) &&
-            !sessionHidden(mark, it.optionalText("status"), sessionUpdatedAt(it))
-    }
+internal data class ReadyCounts(val done: Int = 0, val unread: Int = 0)
 
 /**
- * How many of a project's [sessions] are done, as the Done group counts its chats: open, idle and top-level
- * ([isReadyRow]) after a busy subagent lends its main session its status ([mainSessionChats]), and not hidden
- * on this phone. Read or unread alike; this is the "N done" badge of a project row.
+ * The [ReadyCounts] of a project's [sessions]. Unread is phone-local (see [sessionUnread]), so it lives apart
+ * from [SessionCounts]: the repository counts by the Mac's list alone and the view applies [marks]. A session
+ * without a mark counts as read.
  */
-internal fun doneCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
-    mainSessionChats(sessions.map { ProjectChatSummary("", "", it) }).count { chat ->
+internal fun readyCounts(sessions: List<JsonObject>, marks: Map<String, SessionMark>): ReadyCounts {
+    var done = 0
+    var unread = 0
+    for (chat in mainSessionChats(sessions.map { ProjectChatSummary("", "", it) })) {
         val session = chat.session
         val status = session.optionalText("status")
-        isReadyRow(status, session.optionalText("origin"), session.optionalText("parentSessionId")) &&
-            !sessionHidden(session.optionalText("id")?.let(marks::get), status, sessionUpdatedAt(session))
+        val mark = session.optionalText("id")?.let(marks::get)
+        if (!isReadyRow(status, session.optionalText("origin"), session.optionalText("parentSessionId"))) continue
+        if (sessionHidden(mark, status, sessionUpdatedAt(session))) continue
+        done++
+        if (sessionUnread(mark, session["updatedAt"]?.jsonPrimitive?.longOrNull, open = false)) unread++
     }
+    return ReadyCounts(done, unread)
+}
+
+/** How many of [sessions] are ready and unread by [marks]; see [readyCounts]. */
+internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
+    readyCounts(sessions, marks).unread
+
+/** How many of a project's [sessions] are done, read or unread; see [readyCounts]. */
+internal fun doneCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int = readyCounts(sessions, marks).done
 
 /**
  * A project's sessions for views across projects, such as an activity board, badges or a
