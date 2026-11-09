@@ -250,7 +250,7 @@ internal fun ReadyReviewSheet(
  * card replaces it: the review's only announcement per step.
  */
 @Composable
-private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Long, old: Boolean) {
+internal fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Long, old: Boolean) {
     val title = sessionTitleLabel(item)
     val age =
         item.updatedAt?.let {
@@ -258,6 +258,8 @@ private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Lon
         }
     val oldLabel = stringResource(R.string.remote_session_old)
     val compactingLabel = stringResource(R.string.remote_status_compacting)
+    val contextFill = contextFill(item.context)
+    val contextLabel = contextFillDescription(contextFill)
     val description =
         listOfNotNull(
             title,
@@ -266,11 +268,13 @@ private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Lon
             oldLabel.takeIf { old },
             compactingLabel.takeIf { item.compacting },
             item.preview,
+            contextLabel,
         ).joinToString(", ")
     SheetSection(
         Modifier.testTag("readyReviewCard").clearAndSetSemantics {
             contentDescription = description
             liveRegion = LiveRegionMode.Polite
+            if (contextFill != null) contextFillShown = contextFill
         }
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -312,6 +316,7 @@ private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Lon
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp).testTag("readyReviewPreview"),
                 )
+            if (contextFill != null) ContextFillBar(contextFill, Modifier.padding(top = 4.dp))
         }
     }
 }

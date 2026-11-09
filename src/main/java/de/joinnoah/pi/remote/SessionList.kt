@@ -251,6 +251,8 @@ internal fun SessionListRow(
                 DateUtils.getRelativeTimeSpanString(minOf(it, now), now, DateUtils.MINUTE_IN_MILLIS).toString()
             }
         else null
+    val contextFill = contextFill(item.context)
+    val contextLabel = contextFillDescription(contextFill)
     val rowDescription =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
@@ -265,6 +267,7 @@ internal fun SessionListRow(
             relativeAge,
             item.preview,
             status,
+            contextLabel,
         ).joinToString(", ")
     SnapBackSwipeBox(
         enableStartToEnd = startToEnd != SessionSwipe.NONE,
@@ -356,7 +359,7 @@ internal fun SessionListRow(
                     Box(
                         Modifier.size(44.dp)
                             .testTag(if (item.compacting) "sessionCompactionAvatar" else "sessionStatusAvatar")
-                            .clearAndSetSemantics {},
+                            .clearAndSetSemantics { if (contextFill != null) contextFillShown = contextFill },
                     ) {
                         GlassAvatar(size = 44.dp) {
                             // A subagent shows the robot mark; only the host's parentSessionId makes a
@@ -375,6 +378,8 @@ internal fun SessionListRow(
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                         }
+                        // The context fill rings the avatar; the badge below is drawn on top of it.
+                        if (contextFill != null) ContextRing(contextFill, Modifier.matchParentSize())
                         // No backing disc. The badge straddles the avatar's edge, so half of it would sit
                         // on the row background (secondaryContainer when selected). A thin contour in the
                         // avatar's own color, following the badge's shape, keeps the badge on one known

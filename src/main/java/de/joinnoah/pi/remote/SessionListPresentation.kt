@@ -56,6 +56,11 @@ internal data class SessionListItem(
     val compacting: Boolean = false,
     /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
     val titleAttachment: TitleAttachment? = null,
+    /**
+     * The context fill the host last reported for a live session (see [sessionListContext]); null
+     * when unknown, and always null on an offline row.
+     */
+    val context: SessionContextUsage? = null,
 )
 
 data class ProjectChatSummary(
@@ -443,6 +448,7 @@ internal fun sessionListItem(
         compacting = connected && confirmed && !loading &&
             availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
             compactionVisible(compaction, nowMillis),
+        context = sessionListContext(session).takeIf { availability != SessionAvailability.OFFLINE },
     )
 }
 

@@ -39,3 +39,9 @@ sample without CPU percent, a Linux container with and without limits, and refus
 `accepted` result and refusals (`busy`, both `unsupported` sentences, `offline`), every
 `session.handover` event state and error, the old chat's snapshot `handover` field, the new chat's
 `handedOverFrom` field and its summary message, and refused shapes.
+
+`session-list-context-v1.json` holds the wire shapes of `session.list.context.v1`: `sessions.list`
+requests with `includeContext` alone and together with `includeCompaction`, list rows with a fill,
+after a compaction (unknown tokens and percent), over their window and without a fill, and refused
+shapes (unknown or missing keys, bad counts and percents, a `null` context, a `false` or misplaced
+flag, a fill outside a list).
