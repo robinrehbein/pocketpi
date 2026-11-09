@@ -3798,6 +3798,7 @@ internal fun RemoteScreen(
                                                 actorRowActivity(state, chatKey?.sessionId, source.toolCallId, source.agents[localIndex], activityNow)
                                             }
                                         },
+                                        agentMetadata = SUBAGENT_METADATA_CAPABILITY in state.capabilities,
                                         onQuote = model::quote,
                                         onOpenTool = {
                                             openToolId = it.id

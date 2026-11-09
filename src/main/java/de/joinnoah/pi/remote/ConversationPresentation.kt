@@ -112,6 +112,8 @@ internal data class AgentProgress(
     val executionActivity: ActivitySnapshot? = null,
     /** The agent's own `needsInput: true` as recorded; like [executionActivity], not live proof. */
     val needsInput: Boolean = false,
+    /** Run-bound statistics (`subagent_metadata.v1`); shown only while the connection grants it. */
+    val metadata: AgentMetadata? = null,
 )
 
 /** Token usage of one assistant message; [cost] is USD when the host knew it. */
@@ -262,6 +264,8 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
         // invalid there rejects the message on the host, so here it drops the agent, never just the
         // field, so a bad instance or a `needsInput: false` cannot leave a live-looking row.
         val structured = structuredAgentFields(agent) ?: return@mapNotNull null
+        // `metadata` likewise: parse.ts rejects the message for an invalid one, so here the agent goes.
+        val metadata = if (!agent.containsKey("metadata")) null else parseAgentMetadata(agent["metadata"]) ?: return@mapNotNull null
         AgentProgress(
             name,
             state,
@@ -275,13 +279,14 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
             spawnToolCallId = structured.spawnToolCallId,
             executionActivity = structured.executionActivity,
             needsInput = structured.needsInput,
+            metadata = metadata,
         )
     }.orEmpty().let { agents ->
-        // An instance ID listed twice names no single run: neither row keeps its structured fields.
+        // An instance ID listed twice names no single run: neither row keeps its structured fields or metadata.
         val counts = agents.mapNotNull { it.instanceId }.groupingBy { it }.eachCount()
         agents.map {
             if (it.instanceId != null && counts.getValue(it.instanceId) > 1)
-                it.copy(instanceId = null, spawnToolCallId = null, executionActivity = null, needsInput = false)
+                it.copy(instanceId = null, spawnToolCallId = null, executionActivity = null, needsInput = false, metadata = null)
             else it
         }
     }
