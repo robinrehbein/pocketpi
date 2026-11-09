@@ -161,6 +161,26 @@ class SubagentMetadataTest {
         assertEquals("low", requestOnly.requestedThinkingLevel)
     }
 
+    @Test fun optInStringsAreReadAsTheHostReadsThem() {
+        val optIn = fixture.getValue("optIn").jsonObject
+        for (id in optIn.getValue("granted").jsonArray.map { (it as JsonPrimitive).content }) assertTrue(id, subagentMetadataOptedIn(id))
+        for (id in optIn.getValue("refused").jsonArray.map { (it as JsonPrimitive).content }) assertFalse(id, subagentMetadataOptedIn(id))
+    }
+
+    @Test fun modelsSharingALabelShowProviderAndId() {
+        val display = agentMetadataDisplay(AgentMetadata(run = 0, model = MetadataModel("p1", "x", "X"), responseModel = MetadataModel("p2", "x", "X")))
+        assertEquals("p1/x", display.model)
+        assertEquals("p2/x", display.responseModel)
+    }
+
+    @Test fun onlyMetadataWithTurnsTokensOrCostReplacesTheLegacyUsage() {
+        assertFalse(agentMetadataDisplay(AgentMetadata(run = 1)).coversUsage)
+        assertFalse(agentMetadataDisplay(AgentMetadata(run = 1, durationMs = 5, toolUses = 2)).coversUsage)
+        assertTrue(agentMetadataDisplay(AgentMetadata(run = 1, turns = 0)).coversUsage)
+        assertTrue(agentMetadataDisplay(AgentMetadata(run = 1, costUsd = 0.0)).coversUsage)
+        assertTrue(agentMetadataDisplay(AgentMetadata(run = 1, tokens = MetadataTokens(null, 1, null, null))).coversUsage)
+    }
+
     @Test fun aLimitWithoutTurnsIsStillOnlyALimit() {
         val display = agentMetadataDisplay(AgentMetadata(run = 0, maxTurns = 10))
         assertNull(display.turns)

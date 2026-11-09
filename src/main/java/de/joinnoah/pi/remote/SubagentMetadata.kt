@@ -23,6 +23,12 @@ private val METADATA_KEYS = setOf(
 private val MODEL_KEYS = setOf("provider", "id", "name")
 private val TOKEN_KEYS = setOf("input", "output", "cacheRead", "cacheWrite")
 
+private val OPT_IN_NAMES = Regex("^capabilities\\.v3:optin=([a-z0-9_.]+(?:\\+[a-z0-9_.]+)*):[^\\s:]\\S*$")
+
+/** Whether request [id] opts into `subagent_metadata.v1` as the host's `parseSubagentMetadataOptIn` reads it. */
+internal fun subagentMetadataOptedIn(id: String): Boolean =
+    OPT_IN_NAMES.matchEntire(id)?.groupValues?.get(1)?.split('+')?.contains(SUBAGENT_METADATA_CAPABILITY) == true
+
 internal data class MetadataModel(val provider: String, val id: String, val name: String?) {
     val label: String get() = name ?: id
 }
@@ -131,6 +137,9 @@ internal data class AgentMetadataDisplay(
 ) {
     val hasModelLine: Boolean
         get() = model != null || responseModel != null || requestedModel != null || thinkingLevel != null || requestedThinkingLevel != null
+    /** It knows turns, tokens or cost itself, so the legacy usage line would only repeat or contradict it. */
+    val coversUsage: Boolean
+        get() = turns != null || totalTokens != null || tokenParts != null || costUsd != null
     val hasStatsLine: Boolean
         get() = turns != null || maxTurns != null || totalTokens != null || tokenParts != null ||
             costUsd != null || durationMs != null || toolUses != null || resume != null
@@ -145,9 +154,12 @@ internal fun agentMetadataDisplay(metadata: AgentMetadata): AgentMetadataDisplay
         val selected = metadata.model
         selected == null || selected.provider != it.provider || selected.id != it.id
     }
+    // Models that share a label but not a provider and ID show both in full.
+    val ambiguous = served != null && metadata.model?.label == served.label
+    fun MetadataModel.shown() = if (ambiguous) "$provider/$id" else label
     return AgentMetadataDisplay(
-        model = metadata.model?.label,
-        responseModel = served?.label,
+        model = metadata.model?.shown(),
+        responseModel = served?.shown(),
         requestedModel = metadata.requestedModel,
         thinkingLevel = metadata.thinkingLevel,
         requestedThinkingLevel = metadata.requestedThinkingLevel?.takeIf { it != metadata.thinkingLevel },

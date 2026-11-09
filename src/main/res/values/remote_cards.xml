@@ -18,7 +18,7 @@
     <string name="remote_card_agent_response_model">answered by %1$s</string>
     <string name="remote_card_agent_requested_model">requested %1$s</string>
     <string name="remote_card_agent_reasoning">reasoning %1$s</string>
-    <string name="remote_card_agent_requested_reasoning">requested %1$s</string>
+    <string name="remote_card_agent_requested_reasoning">requested reasoning %1$s</string>
     <plurals name="remote_card_agent_turns_of">
         <item quantity="one">%1$d of %2$d turn</item>
         <item quantity="other">%1$d of %2$d turns</item>

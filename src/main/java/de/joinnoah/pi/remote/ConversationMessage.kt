@@ -1116,7 +1116,10 @@ private fun AgentMetadataLines(metadata: AgentMetadataDisplay) {
         )) value?.let { part(stringResource(label, formatTokenCount(it, locale)), stringResource(label, spelledCount(it, locale))) }
     }
     metadata.costUsd?.let { part(formatCost(it, locale)) }
-    metadata.durationMs?.let { part(completedWorkDuration(it)) }
+    // A known zero stays zero; [completedWorkDuration] rounds sub-second runs up to one second.
+    metadata.durationMs?.let {
+        part(if (it == 0L) pluralStringResource(R.plurals.remote_chat_duration_seconds, 0, 0) else completedWorkDuration(it))
+    }
     metadata.toolUses?.let {
         val count = it.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         part(pluralStringResource(R.plurals.remote_card_agent_tool_uses, count, count))
@@ -1333,8 +1336,9 @@ private fun SubagentAgentRow(
                     Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 val metadata = agent.metadata?.takeIf { showMetadata }?.let(::agentMetadataDisplay)
-                if (metadata != null) AgentMetadataLines(metadata)
-                else agent.usage?.let { AgentUsageLine(it) }
+                metadata?.let { AgentMetadataLines(it) }
+                // Metadata without turns, tokens or cost (an evicted conversation's) keeps the legacy line.
+                if (metadata?.coversUsage != true) agent.usage?.let { AgentUsageLine(it) }
                 agent.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 if (showPreview)
                     agent.preview?.let {
