@@ -220,6 +220,42 @@ class ExecutionActivityRepositoryTest {
         }
     }
 
+    @Test fun subagentMetadataIsGrantedOnV3IndependentlyOfActivity() = runTest {
+        val transport = Transport().apply { routeCapabilities = setOf(SUBAGENT_METADATA_CAPABILITY) }
+        val repo = repository(transport)
+        repo.activate(selection); runCurrent()
+        val discovery = transport.sent.first { it.text("type") == "projects.list" }.text("requestId")
+        val names = discovery.substringAfter("optin=").substringBefore(':').split('+')
+        assertTrue(SUBAGENT_METADATA_CAPABILITY in names && SESSION_ACTIVITY_CAPABILITY in names)
+        assertTrue(discovery.toByteArray(Charsets.UTF_8).size <= 256)
+        assertTrue(SUBAGENT_METADATA_CAPABILITY in repo.state.value.capabilities)
+        // Neither grant implies the other.
+        assertFalse(repo.activity().negotiated)
+        // A new connection's answer without it takes it back.
+        transport.routeCapabilities = setOf(SESSION_ACTIVITY_CAPABILITY)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        backgroundScope.launch { repo.activate(selection) }
+        runCurrent()
+        assertFalse(SUBAGENT_METADATA_CAPABILITY in repo.state.value.capabilities)
+        assertTrue(repo.activity().negotiated)
+    }
+
+    @Test fun subagentMetadataIsNeverGrantedByAHandshakeV2OrAnOldHost() = runTest {
+        for (case in listOf("none", "handshake", "v2")) {
+            val transport = Transport().apply {
+                when (case) {
+                    "none" -> routeCapabilities = emptySet()
+                    "handshake" -> { routeCapabilities = emptySet(); handshake = setOf(SUBAGENT_METADATA_CAPABILITY) }
+                    "v2" -> { routeCapabilities = setOf(SUBAGENT_METADATA_CAPABILITY); v2Only = true }
+                }
+            }
+            val repo = repository(transport)
+            repo.activate(selection); runCurrent()
+            assertFalse(case, SUBAGENT_METADATA_CAPABILITY in repo.state.value.capabilities)
+            assertTrue(case, repo.state.value.connected)
+        }
+    }
+
     @Test fun liveEventsAdvanceBySeqAndDuplicatesNeverExtendTheDeadline() = runTest {
         val transport = Transport().apply { snapshotActivity = active(1, 1_500) }
         val repo = repository(transport)

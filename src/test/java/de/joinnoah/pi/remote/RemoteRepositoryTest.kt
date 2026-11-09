@@ -492,7 +492,7 @@ class RemoteRepositoryTest {
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
             assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1:"))
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -9413,6 +9413,11 @@ class RemoteRepositoryTest {
         val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
         repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
         assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").contains("question_editor_positive_outcome.v1") })
+        // The longest opt-in list still fits the host's 256-byte request ID, nonce included.
+        for (id in transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }) {
+            assertTrue(id, id.toByteArray(Charsets.UTF_8).size <= 256)
+            assertTrue(id, id.substringAfterLast(':').length >= 16)
+        }
         val query = transport.sent.single { it.text("type") == "session.question.editor.outcome.get" }
         assertEquals(Wire.parse("""{"sessionId":"session","questionId":"e","ownerIncarnationId":"owner","grantId":"g","uploadId":"u","commitRequestId":"c","byteLength":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"""), query.obj("receipt"))
         assertTrue(storage.saved.attempts.isEmpty())
@@ -10871,7 +10876,7 @@ class RemoteRepositoryTest {
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
         val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1:"))
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
         assertTrue(ids[1].startsWith("capabilities.v2:"))
         assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
     }
