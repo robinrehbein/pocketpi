@@ -687,13 +687,14 @@ private fun ConversationMessageContent(
                         val openAgentLabel = stringResource(R.string.remote_card_open_subagent)
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             for ((index, agent) in item.agents.withIndex()) {
+                                val (source, localIndex) = item.rowSource(index)
                                 SubagentAgentRow(
                                     agent,
                                     first = index == 0,
                                     last = index == item.agents.lastIndex,
-                                    showPreview = !expanded || item.output == null,
+                                    showPreview = !expanded || source.output == null,
                                     openLabel = openAgentLabel,
-                                    onOpen = onOpenAgent?.let { open -> { open(item, index) } },
+                                    onOpen = onOpenAgent?.let { open -> { open(source, localIndex) } },
                                     actor = agentActivity?.getOrNull(index),
                                     negotiated = agentActivity != null,
                                 )
@@ -701,12 +702,14 @@ private fun ConversationMessageContent(
                         }
                     }
                     if (expanded) {
-                        item.output?.let { SelectionContainer { MarkdownText(it) } }
-                        if (item.truncated)
-                            Text(
-                                stringResource(R.string.remote_truncated),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
+                        for (source in item.originalCards()) {
+                            source.output?.let { SelectionContainer { MarkdownText(it) } }
+                            if (source.truncated)
+                                Text(
+                                    stringResource(R.string.remote_truncated),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                        }
                     }
                 }
             }

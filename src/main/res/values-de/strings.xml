@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources>
+    <string name="remote_restore_chat_controls">Chat-Bedienelemente anzeigen</string>
     <string name="remote_chat_activity_completed">Für %1$s gearbeitet</string>
     <string name="remote_chat_duration_join">%1$s und %2$s</string>
     <string name="remote_chat_duration_three">%1$s, %2$s und %3$s</string>
@@ -841,8 +842,9 @@
     <string name="remote_terminal_ctrl_alt_shortcuts">Strg+Alt-Kürzel senden</string>
     <string name="remote_terminal_key_unsupported">Diese Tastenkombination wird im aktuellen Terminalmodus nicht unterstützt. Wartende Eingaben wurden verworfen.</string>
     <string name="remote_terminal_draft_busy">Warte auf die ausstehende Terminaleingabe, bevor du den Entwurf sendest.</string>
-    <string name="remote_prepared_text_explanation">Beim Öffnen wurde eine andere Sitzung erstellt. Dein vorbereiteter Text bleibt in der ursprünglichen Sitzung verfügbar. Du kannst ihn bei Bedarf kopieren und hier einfügen.</string>
-    <string name="remote_prepared_text_copy">Vorbereiteten Text kopieren</string>
+    <string name="remote_prepared_text_title">Text aus ursprünglicher Sitzung</string>
+    <string name="remote_prepared_text_explanation">Eine andere Sitzung wurde geöffnet. Dein Text bleibt in der ursprünglichen Sitzung erhalten.</string>
+    <string name="remote_prepared_text_copy">Text kopieren</string>
     <string name="preview_title">Vorschau</string>
     <string name="preview_port">Port</string>
     <string name="preview_open">Öffnen</string>

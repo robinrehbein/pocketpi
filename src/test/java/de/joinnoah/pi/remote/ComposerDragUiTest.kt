@@ -144,7 +144,7 @@ class ComposerDragUiTest {
         compose.runOnIdle { assertFalse(state.hidden); assertFalse(state.dragging) }
     }
 
-    @Test fun releasesBeyondHalfHiddenThenReverseScrollReveals() {
+    @Test fun releasesBeyondHalfHiddenAndScrollingBothDirectionsKeepsItHidden() {
         val state = open()
         val edge = localEdge(state)
         val distance = state.travel * 0.75f
@@ -160,8 +160,14 @@ class ComposerDragUiTest {
             down(Offset(100f, edge - 60f))
             moveTo(Offset(100f, edge - 140f))
         }
-        compose.runOnIdle { assertFalse(state.hidden) }
         chat.performTouchInput { up() }
+        compose.runOnIdle { assertTrue(state.hidden) }
+        chat.performTouchInput {
+            down(Offset(100f, edge - 140f))
+            moveTo(Offset(100f, edge - 60f))
+            up()
+        }
+        compose.runOnIdle { assertTrue(state.hidden) }
     }
 
     @Test fun ignoresTouchesStartingInsideComposerAndReadsUpdatedGate() {

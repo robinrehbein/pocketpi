@@ -617,7 +617,7 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long, f
         ) {
             // Pi core's dotted compaction loader. Decorative: the text says it.
             // StatusGlyph holds a static frame while system animations are off.
-            CompactionGlyph(MaterialTheme.colorScheme.onSecondaryContainer)
+            CompactionGlyph(if (floating) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface)
             Column {
                 Text(stringResource(R.string.remote_panel_compacting), style = MaterialTheme.typography.labelLarge)
                 reason?.let {
@@ -654,6 +654,8 @@ internal fun ContextOfferBanner(
             handover -> R.string.remote_context_full_body_handover
             else -> R.string.remote_context_full_body_compact
         }
+    val bannerContent = if (floating) scheme.onSecondaryContainer else scheme.onSurface
+    val buttonContent = if (floating) scheme.secondaryContainer else scheme.surfaceContainer
     BannerSurface(
         floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("contextOfferBanner")
@@ -680,20 +682,20 @@ internal fun ContextOfferBanner(
             FlowRow(
                 Modifier.align(Alignment.End),
                 horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
-                verticalArrangement = Arrangement.Center,
+                verticalArrangement = if (floating) Arrangement.Center else Arrangement.spacedBy(4.dp),
             ) {
-                // The banner's own text colour: primary would fall below 4.5:1 on the translucent glass.
+                // The banner's own text colour stays legible over the translucent surface.
                 TextButton(
                     onClick = onDismiss,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferDismiss"),
-                    colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                    colors = ButtonDefaults.textButtonColors(contentColor = bannerContent),
                 ) { Text(dismissLabel) }
                 // One tap starts it: the old chat stays as it is, so nothing needs confirming.
                 if (handover)
                     TextButton(
                         onClick = onHandover,
                         modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferHandover"),
-                        colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                        colors = ButtonDefaults.textButtonColors(contentColor = bannerContent),
                     ) { Text(stringResource(R.string.remote_handover_action)) }
                 if (compact)
                     Button(
@@ -701,8 +703,8 @@ internal fun ContextOfferBanner(
                         // Labelled "Compact now" only: the heading already reads out the fill.
                         modifier = Modifier.heightIn(min = 48.dp).testTag("contextOfferCompact"),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = scheme.onSecondaryContainer,
-                            contentColor = scheme.secondaryContainer,
+                            containerColor = bannerContent,
+                            contentColor = buttonContent,
                         ),
                     ) { Text(stringResource(R.string.remote_compact_now_action)) }
             }
@@ -734,7 +736,9 @@ internal fun HandoverBanner(
     val target = handover?.targetSessionId?.takeIf { handover.state == HandoverState.DONE }
     if (!running && !failed && target == null) return
     val container = if (failed) scheme.errorContainer else scheme.secondaryContainer
-    val content = if (failed) scheme.onErrorContainer else scheme.onSecondaryContainer
+    // In a sheet BannerSurface draws a neutral surface with onSurface (see ContextOfferBanner).
+    val content = if (!floating) scheme.onSurface else if (failed) scheme.onErrorContainer else scheme.onSecondaryContainer
+    val buttonContent = if (floating) container else scheme.surfaceContainer
     BannerSurface(
         floating = floating,
         modifier = Modifier.fillMaxWidth().testTag("handoverBanner").semantics { liveRegion = LiveRegionMode.Polite },
@@ -799,7 +803,7 @@ internal fun HandoverBanner(
                     Button(
                         onClick = action,
                         modifier = Modifier.heightIn(min = 48.dp).testTag("handoverAction"),
-                        colors = ButtonDefaults.buttonColors(containerColor = content, contentColor = container),
+                        colors = ButtonDefaults.buttonColors(containerColor = content, contentColor = buttonContent),
                     ) { Text(stringResource(label)) }
                 }
             }
@@ -845,7 +849,7 @@ internal fun HandoverUnseededBanner(onOpenPrevious: (() -> Unit)?, floating: Boo
                 TextButton(
                     onClick = onOpenPrevious,
                     modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp).testTag("handoverUnseededOpenPrevious"),
-                    colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSecondaryContainer),
+                    colors = ButtonDefaults.textButtonColors(contentColor = if (floating) scheme.onSecondaryContainer else scheme.onSurface),
                 ) { Text(stringResource(R.string.remote_handover_open_previous)) }
         }
     }

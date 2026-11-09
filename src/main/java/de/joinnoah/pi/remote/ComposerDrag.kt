@@ -61,7 +61,6 @@ internal fun Modifier.observeComposerDrag(
                         val startedHidden = current.hidden()
                         var tracking = false
                         var rejected = !eligible
-                        var previousY = start.y
                         try {
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -86,7 +85,6 @@ internal fun Modifier.observeComposerDrag(
                                     }
                                 }
                                 if (tracking && !rejected && current.allowed()) {
-                                    if (change.position.y < previousY && !current.dragging()) current.onReveal()
                                     val progress = composerDragProgress(change.position.y + rootTop, current.restingTop(), current.travel().toFloat())
                                     if (!startedHidden && (current.dragging() || (delta.y > 0 && progress > 0f))) {
                                         current.onDrag(progress)
@@ -94,7 +92,6 @@ internal fun Modifier.observeComposerDrag(
                                 } else if (rejected && current.dragging()) {
                                     current.onReveal()
                                 }
-                                previousY = change.position.y
                             }
                         } finally {
                             // Cancellation/lost pointers must not leave partially hidden controls.

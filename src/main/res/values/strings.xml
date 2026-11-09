@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- English is the fallback; German strings use the same keys in values-de. -->
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_restore_chat_controls">Show chat controls</string>
     <string name="remote_chat_activity_completed">Worked for %1$s</string>
     <string name="remote_chat_duration_join">%1$s and %2$s</string>
     <string name="remote_chat_duration_three">%1$s, %2$s and %3$s</string>
@@ -842,8 +843,9 @@
     <string name="remote_terminal_ctrl_alt_shortcuts">Send Ctrl+Alt shortcuts</string>
     <string name="remote_terminal_key_unsupported">This key combination is not supported by the current terminal mode. Pending input was cleared.</string>
     <string name="remote_terminal_draft_busy">Wait for pending terminal input before sending the draft.</string>
-    <string name="remote_prepared_text_explanation">Opening created a different session. Your prepared text remains available in the original session; copy and paste it here if you wish.</string>
-    <string name="remote_prepared_text_copy">Copy prepared text</string>
+    <string name="remote_prepared_text_title">Text from original session</string>
+    <string name="remote_prepared_text_explanation">A different session was opened. Your text remains in the original session.</string>
+    <string name="remote_prepared_text_copy">Copy text</string>
     <string name="preview_title">Preview</string>
     <string name="preview_port">Port</string>
     <string name="preview_open">Open</string>

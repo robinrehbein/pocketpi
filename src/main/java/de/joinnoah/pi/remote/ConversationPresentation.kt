@@ -72,8 +72,25 @@ internal sealed interface ConversationItem {
         val truncated: Boolean,
         val toolCallId: String? = null,
         val outputMessageId: String? = null,
+        /** Original cards from one assistant tool-call batch; never includes chains. */
+        val constituents: List<Subagent> = emptyList(),
     ) : ConversationItem
 }
+
+/** The exact originating card and its local row index, for navigation and actor lookup. */
+internal fun ConversationItem.Subagent.rowSource(index: Int): Pair<ConversationItem.Subagent, Int> {
+    require(index in agents.indices)
+    if (constituents.isEmpty()) return this to index
+    var remaining = index
+    for (card in constituents) {
+        if (remaining < card.agents.size) return card.rowSource(remaining)
+        remaining -= card.agents.size
+    }
+    error("Missing constituent subagent row")
+}
+
+internal fun ConversationItem.Subagent.originalCards(): List<ConversationItem.Subagent> =
+    if (constituents.isEmpty()) listOf(this) else constituents.flatMap { it.originalCards() }
 
 internal data class AgentProgress(
     val name: String,
@@ -557,7 +574,7 @@ private class Segment(val links: MessageLinks, val context: MessageContext, val 
     /** File touches with their index in [items]. */
     val touches = items.withIndex().mapNotNull { (index, item) -> fileTouch(item)?.let { index to it } }
 
-    val subagents = items.filterIsInstance<ConversationItem.Subagent>()
+    val subagents = items.filterIsInstance<ConversationItem.Subagent>().flatMap { it.originalCards() }
 }
 
 /**
@@ -862,6 +879,37 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                     )
                 )
             }
+        }
+    }
+    // Only this assistant message proves batch membership. Existing parallel/chain cards keep
+    // their own semantics; only single-agent calls share a common header.
+    if (role == "assistant") {
+        val members = filterIsInstance<ConversationItem.Subagent>().filter {
+            !it.legacy && it.mode == "single" && it.agents.size == 1
+        }
+        // Reserve the batch identity from the first progress result, even while other calls
+        // still render as placeholders. Otherwise the second result replaces the first card.
+        if (members.isNotEmpty()) {
+            val first = members.first()
+            val memberIds = members.mapTo(HashSet()) { it.id }
+            val grouped = first.copy(
+                // Progress may arrive out of order; identity belongs to the batch, not its first result.
+                id = "$id-agent-batch",
+                mode = "parallel",
+                agents = members.flatMap { it.agents },
+                output = null,
+                truncated = members.any { it.truncated },
+                constituents = members,
+            )
+            val combined = mapNotNull { entry ->
+                when {
+                    entry.id == first.id -> grouped
+                    entry.id in memberIds -> null
+                    else -> entry
+                }
+            }
+            clear()
+            addAll(combined)
         }
     }
     if (usage != null || interrupted) {
