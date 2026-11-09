@@ -7434,6 +7434,116 @@ class RemoteRepositoryTest {
         assertFalse(repository.state.value.contextUsageStale)
     }
 
+    private val handoverFixture: JsonObject by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/session-handover-v1.json")!!.readText()).jsonObject
+    }
+
+    private fun handoverPayload(name: String) =
+        handoverFixture.getValue("wireValid").jsonArray.map { it.jsonObject }
+            .single { it.text("name") == name }.getValue("payload").jsonObject
+
+    /** A host worker `old-session` on a v3 host that advertises the handover. */
+    private fun handoverHost(transport: Transport) {
+        val worker = session("old-session", origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> JsonObject(
+                    data("projects", listOf(project)) + ("capabilities" to
+                        JsonArray(listOf(SESSION_HANDOVER_CAPABILITY, HOST_WORKER_V2_CAPABILITY, COMPACT_CAPABILITY).map(::JsonPrimitive)))
+                )
+                "session.handover" -> Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+                else -> original(request)
+            }
+        }
+    }
+
+    @Test
+    fun aHandoverRunsFromTheFixtureRequestToTheNewChat() = runTest {
+        val transport = Transport()
+        handoverHost(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "old-session"))
+        runCurrent()
+        assertTrue(handoverAvailable(repository.state.value))
+        repository.startHandover()
+        runCurrent()
+        val sent = transport.sent.single { it.text("type") == "session.handover" }
+        assertEquals(JsonObject(handoverPayload("handover") - "requestId"), JsonObject(sent - "requestId"))
+        val requestId = sent.text("requestId")
+        // Accepted: the progress shows before the first event, and the chat takes no prompt.
+        val accepted = repository.state.value
+        assertFalse(accepted.handoverRequesting)
+        assertEquals(SessionHandover(requestId, HandoverState.SUMMARIZING, live = true), accepted.handover)
+        assertFalse(canSendDraft(accepted.copy(draft = "x")))
+
+        fun event(name: String, revision: Int) = transport.deliver(
+            JsonObject(handoverPayload(name) + ("requestId" to JsonPrimitive(requestId)) + ("revision" to JsonPrimitive(revision)))
+        )
+        event("event-summarizing", 1)
+        event("event-switching", 2)
+        runCurrent()
+        assertEquals(HandoverState.SWITCHING, repository.state.value.handover?.state)
+        val lists = transport.sent.count { it.text("type") == "sessions.list" }
+        event("event-done", 3)
+        runCurrent()
+        assertEquals(SessionHandover(requestId, HandoverState.DONE, "new-session", live = true), repository.state.value.handover)
+        // The list learns the new chat at once.
+        assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > lists)
+    }
+
+    @Test
+    fun aHandoverRefusalIsCachedOrReported() = runTest {
+        for ((code, message) in listOf(
+            "unsupported" to "Handover is available only in chats started from the phone",
+            "unsupported" to EXTENSION_CONTROL_REFUSAL_MESSAGE,
+            "busy" to "Session is busy",
+            "internal" to HANDOVER_NOTHING_MESSAGE,
+            "offline" to "Session is offline",
+        )) {
+            val transport = Transport()
+            handoverHost(transport)
+            transport.failure = { if (it.text("type") == "session.handover") code else null }
+            transport.failureMessage = { message }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "old-session"))
+            runCurrent()
+            repository.startHandover()
+            runCurrent()
+            val state = repository.state.value
+            assertFalse(state.handoverRequesting)
+            assertNull(state.handover)
+            val expected = when (code) {
+                "unsupported" -> R.string.remote_handover_unsupported
+                "busy" -> R.string.remote_handover_busy
+                "internal" -> R.string.remote_handover_nothing
+                else -> R.string.remote_handover_error
+            }
+            assertEquals(message, expected, state.error)
+            // Either unsupported sentence hides the action for this session.
+            assertEquals(message, code != "unsupported", handoverAvailable(state))
+        }
+    }
+
+    @Test
+    fun theOldChatsSnapshotTellsTheOutcomeAfterAReopen() = runTest {
+        val transport = Transport()
+        handoverHost(transport)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot")
+                JsonObject(handoverPayload("snapshot-source-done").getValue("data").jsonObject + ("revision" to JsonPrimitive(0)))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "old-session"))
+        runCurrent()
+        // Only the snapshot reports it: the phone offers the way to the new chat, it does not move.
+        assertEquals(SessionHandover("handover:1", HandoverState.DONE, "new-session"), repository.state.value.handover)
+        assertFalse(handoverBusy(repository.state.value))
+    }
+
     private fun forking(
         transport: Transport,
         result: (JsonObject) -> JsonObject? = { request ->
