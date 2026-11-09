@@ -150,6 +150,8 @@ internal fun SessionListRow(
     hidden: Boolean = false,
     compactionFrame: State<Int>? = null,
     activity: ActivitySnapshot.Active? = null,
+    /** What the row paints over its swipe background: the page's background, or the colour of the card it sits in. */
+    containerColor: Color = MaterialTheme.colorScheme.background,
 ) {
     fun available(action: SwipeAction): SessionSwipe =
         effectiveSessionSwipe(action, closeAvailable, onRename != null, onHide != null, onUnhide != null && hidden)
@@ -289,7 +291,7 @@ internal fun SessionListRow(
         },
     ) {
         Column(
-            Modifier.background(MaterialTheme.colorScheme.background)
+            Modifier.background(containerColor)
         ) {
             Row(
                 modifier =

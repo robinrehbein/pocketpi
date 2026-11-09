@@ -34,4 +34,16 @@
     <string name="remote_projects_running_description">Working: %1$s</string>
     <string name="remote_projects_running_show">Show working chats</string>
     <string name="remote_projects_running_hide">Hide working chats</string>
+    <!-- The Projects page's group of finished chats, one card per project (RemoteScreens.kt). Also the project row's badge. -->
+    <string name="remote_projects_done">Done</string>
+    <plurals name="remote_projects_done_count">
+        <item quantity="one">%d done</item>
+        <item quantity="other">%d done</item>
+    </plurals>
+    <!-- The inline button on a done chat's row; the description names the chat for TalkBack. -->
+    <string name="remote_projects_close_chat">Close</string>
+    <string name="remote_projects_close_chat_description">Close %1$s</string>
+    <!-- The Recently used heading folds its chats; what a tap does, for TalkBack. -->
+    <string name="remote_projects_recent_show">Show recently used chats</string>
+    <string name="remote_projects_recent_hide">Hide recently used chats</string>
 </resources>

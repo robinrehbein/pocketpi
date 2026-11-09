@@ -208,6 +208,8 @@ class EmptyStateUiTest {
     fun quickAccessShowsAllBeyondThreeChatsAndFoldsBack() {
         val recent = (1..4).map { chat("r$it", "idle", verified = false) }
         render(projects = listOf(project("p1", "Alpha")), chats = recent)
+        compose.onNodeWithTag("quickChatsRecentToggle").performClick()
+        compose.waitForIdle()
 
         compose.onNodeWithText("Session r3").assertIsDisplayed()
         compose.onAllNodesWithText("Session r4").assertCountEquals(0)
@@ -248,6 +250,9 @@ class EmptyStateUiTest {
     @Test
     fun quickAccessHasNoShowAllWhileThreeChatsFit() {
         render(projects = listOf(project("p1", "Alpha")), chats = (1..3).map { chat("r$it", "idle", verified = false) })
+        compose.onNodeWithTag("quickChatsRecentToggle").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Session r3").assertIsDisplayed()
 
         compose.onAllNodesWithTag("quickChatsShowAllRecent").assertCountEquals(0)
     }

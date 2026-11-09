@@ -181,6 +181,10 @@ internal data class QuickChats(
     val runningTotal: Int = 0,
     /** The names of the projects the running chats belong to, each once, in the order of their first chat. */
     val runningProjects: List<String> = emptyList(),
+    /** How many ready chats each project has, uncut: the "N done" of its Done card. */
+    val readyCounts: Map<String, Int> = emptyMap(),
+    /** How many chats the Recently used group holds, uncut and whether folded or not: its heading's count. */
+    val recentTotal: Int = 0,
 )
 
 /**
@@ -198,7 +202,8 @@ internal fun isReadyRow(status: String?, origin: String?, parentSessionId: Strin
  * Running chats are listed only while their group is expanded ([showRunningAll]); folded, the group is counted
  * ([QuickChats.runningTotal], [QuickChats.runningProjects]). Everything else is recent: offline, unverified, last-known and history chats,
  * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by
- * [marks]; a chat without a mark counts as read), then the most recently updated.
+ * [marks]; a chat without a mark counts as read), then the most recently updated. The recent group lists
+ * nothing while it is folded ([showRecent]); [QuickChats.recentTotal] counts it either way.
  */
 internal fun quickChats(
     chats: List<ProjectChatSummary>,
@@ -207,6 +212,7 @@ internal fun quickChats(
     showRecentAll: Boolean,
     marks: Map<String, SessionMark> = emptyMap(),
     showReadyAll: Boolean = false,
+    showRecent: Boolean = true,
 ): QuickChats {
     fun ProjectChatSummary.live() = verified && connected
     fun ProjectChatSummary.status() = session.optionalText("status")
@@ -229,11 +235,13 @@ internal fun quickChats(
         ready = ready.take(if (showReadyAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         readyExpandable = ready.size > QUICK_CHAT_LIMIT,
         running = if (showRunningAll) running else emptyList(),
-        recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
-        recentExpandable = recent.size > QUICK_CHAT_LIMIT,
+        recent = if (!showRecent) emptyList() else recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        recentExpandable = showRecent && recent.size > QUICK_CHAT_LIMIT,
         readyQueue = ready.filterNot { chat -> chat.session.optionalText("id")?.let(marks::get)?.pinned == true },
         runningTotal = running.size,
         runningProjects = running.distinctBy { it.projectId }.map { it.projectName },
+        readyCounts = ready.groupingBy { it.projectId }.eachCount(),
+        recentTotal = recent.size,
     )
 }
 
@@ -274,6 +282,19 @@ internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, Ses
         isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId")) &&
             sessionUnread(mark, it["updatedAt"]?.jsonPrimitive?.longOrNull, open = false) &&
             !sessionHidden(mark, it.optionalText("status"), sessionUpdatedAt(it))
+    }
+
+/**
+ * How many of a project's [sessions] are done, as the Done group counts its chats: open, idle and top-level
+ * ([isReadyRow]) after a busy subagent lends its main session its status ([mainSessionChats]), and not hidden
+ * on this phone. Read or unread alike; this is the "N done" badge of a project row.
+ */
+internal fun doneCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
+    mainSessionChats(sessions.map { ProjectChatSummary("", "", it) }).count { chat ->
+        val session = chat.session
+        val status = session.optionalText("status")
+        isReadyRow(status, session.optionalText("origin"), session.optionalText("parentSessionId")) &&
+            !sessionHidden(session.optionalText("id")?.let(marks::get), status, sessionUpdatedAt(session))
     }
 
 /**
