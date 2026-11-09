@@ -1354,9 +1354,14 @@ internal fun RemoteScreen(
     // The memory and this chat's session ID, while this chat is the selected one.
     val offerChat: Pair<ContextOfferMemory, String>? =
         chatKey?.sessionId?.takeIf { it == state.selection.sessionId }?.let { id -> chatModel?.contextOffers?.to(id) }
+    // A handover of this chat (never the new chat's view of it) whose outcome the user has not closed.
+    val handoverOutcome = state.handover?.takeIf { handover ->
+        offerChat != null && !handover.running && handover.targetSessionId != offerChat.second &&
+            !offerChat.first.handoverClosed(handover.requestId)
+    }
     val shownOffer =
         if (offerChat == null || state.error != null || exportState is ExportState.Failed || state.draft.isNotBlank()) null
-        else contextOffer(state, offerChat.first.dismissed(offerChat.second), compactionNow)
+        else contextOffer(state, offerChat.first.dismissed(offerChat.second), compactionNow, handoverOutcomeShown = handoverOutcome != null)
     val offerResets = contextOfferResets(state, compactionNow)
     LaunchedEffect(offerChat, offerResets) {
         val (memory, sessionId) = offerChat ?: return@LaunchedEffect
@@ -1392,7 +1397,79 @@ internal fun RemoteScreen(
         statusSheet = false
         model.compactContext()
     }
-    val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null || shownOffer != null
+    fun handoverFromOffer() {
+        statusSheet = false
+        chatModel?.startHandover()
+    }
+    // The handover of this chat: its progress, and an outcome the phone did not act on by itself. A
+    // `done` this phone saw run opens the new chat in place of this one, so Back leads where this
+    // chat's Back led (as after a create or fork); one only the snapshot still reports (the chat
+    // opened again later) offers the way there instead. The outcome stays until the user closes it.
+    val handoverChat = offerChat
+    val shownHandover = state.handover?.takeIf { handover ->
+        handoverChat != null && !handoverChat.first.handoverClosed(handover.requestId) &&
+            handover.targetSessionId != handoverChat.second &&
+            !(handover.state == HandoverState.DONE && handover.live)
+    }
+    val handoverRequesting = handoverChat != null && state.handoverRequesting
+    val handoverShown = handoverRequesting || shownHandover != null
+    LaunchedEffect(handoverChat, state.handover) {
+        val (memory, sessionId) = handoverChat ?: return@LaunchedEffect
+        val handover = state.handover?.takeIf { it.state == HandoverState.DONE && it.live } ?: return@LaunchedEffect
+        val chat = chatKey ?: return@LaunchedEffect
+        val target = checkNotNull(handover.targetSessionId)
+        // The repository forgets that it was live first, so no later view of the old chat moves again.
+        chatModel?.handoverFollowed(handover.requestId)
+        memory.continued(target, sessionId)
+        navigator.open(RemoteNavKey.Chat(chat.routeId, chat.projectId, target))
+    }
+    fun openSessionInProject(sessionId: String) {
+        val chat = chatKey ?: return
+        navigator.open(RemoteNavKey.Chat(chat.routeId, chat.projectId, sessionId))
+    }
+    fun closeHandoverOutcome() {
+        val handover = shownHandover ?: return
+        handoverChat?.first?.closeHandover(handover.requestId)
+        statusSheet = false
+    }
+    fun retryHandover() {
+        closeHandoverOutcome()
+        chatModel?.startHandover()
+    }
+    val handoverCompact: (() -> Unit)? =
+        if (compactAvailable(state) && canCompact(state, compactionNow)) {
+            {
+                closeHandoverOutcome()
+                model.compactContext()
+            }
+        } else null
+    @Composable
+    fun handoverBanner(floating: Boolean) =
+        HandoverBanner(
+            shownHandover,
+            requesting = handoverRequesting,
+            onRetry = if (canHandover(state, compactionNow)) ::retryHandover else null,
+            onCompact = handoverCompact,
+            onOpenTarget = ::openSessionInProject,
+            onDismiss = ::closeHandoverOutcome,
+            floating = floating,
+        )
+    // The new chat of a handover this phone just made says where it came from, once.
+    val continuedLabel = stringResource(R.string.remote_handover_continued)
+    val openPreviousLabel = stringResource(R.string.remote_handover_open_previous)
+    LaunchedEffect(chatKey, chatModel) {
+        val chat = chatKey ?: return@LaunchedEffect
+        val source = chatModel?.contextOffers?.takeContinuedFrom(chat.sessionId) ?: return@LaunchedEffect
+        listScope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar(continuedLabel, actionLabel = openPreviousLabel, withDismissAction = true, duration = SnackbarDuration.Long)
+            if (result == SnackbarResult.ActionPerformed) openSessionInProject(source)
+        }
+    }
+    // A new chat without its summary says so while nothing was sent in it yet.
+    val unseededFrom = state.handedOverFrom?.takeIf { !it.seeded && chatKey?.sessionId == state.selection.sessionId && state.messages.isEmpty() }
+    val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null || shownOffer != null ||
+        handoverShown || unseededFrom != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
     // Compact, a one-line chip leads the insights row above the composer while a banner waits in the
@@ -1403,6 +1480,14 @@ internal fun RemoteScreen(
             compactionVisible(state.compaction, compactionNow) -> R.string.remote_panel_compacting
             exportState == ExportState.Exporting -> R.string.remote_export_running
             exportState is ExportState.Done -> R.string.remote_export_done
+            handoverRequesting || shownHandover?.running == true ->
+                if (shownHandover?.state == HandoverState.SWITCHING) R.string.remote_handover_switching
+                else R.string.remote_handover_summarizing
+            shownHandover?.state == HandoverState.DONE -> R.string.remote_handover_continued
+            shownHandover != null ->
+                if (shownHandover.error == HandoverError.TIMEOUT) R.string.remote_handover_timeout_title
+                else R.string.remote_handover_failed_title
+            unseededFrom != null -> R.string.remote_handover_no_summary
             shownOffer != null -> R.string.remote_context_full_title
             else -> null
         }
@@ -1933,6 +2018,12 @@ internal fun RemoteScreen(
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
                         }
+                    if (!compact && handoverShown)
+                        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) { handoverBanner(floating = true) }
+                    if (!compact && unseededFrom != null)
+                        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            HandoverUnseededBanner({ openSessionInProject(unseededFrom.sourceSessionId) })
+                        }
                     if (!compact && shownOffer != null)
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             ContextOfferBanner(
@@ -1940,6 +2031,7 @@ internal fun RemoteScreen(
                                 announce = offerAnnounce,
                                 onCompact = ::compactFromOffer,
                                 onDismiss = ::dismissContextOffer,
+                                onHandover = ::handoverFromOffer,
                             )
                         }
                     // A failed export always shows here: a failure must not wait behind a menu.
@@ -3746,6 +3838,7 @@ internal fun RemoteScreen(
                                         forkMenuRequested = item.id == forkMenuRequest,
                                         onForkMenuRequestHandled = { forkMenuRequest = null },
                                         onCancelQueued = model::cancelQueuedPrompt,
+                                        onOpenSession = ::openSessionInProject,
                                     )
                                 }
                             }
@@ -4090,7 +4183,12 @@ internal fun RemoteScreen(
                                         announce = offerAnnounce,
                                     ) { statusSheet = true }
                                 else
-                                    ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
+                                    ChatStatusChip(
+                                        line,
+                                        running = line != R.string.remote_export_done && line != R.string.remote_handover_continued &&
+                                            line != R.string.remote_handover_failed_title && line != R.string.remote_handover_timeout_title &&
+                                            line != R.string.remote_handover_no_summary,
+                                    ) { statusSheet = true }
                             }
                             if (insightsShown) insightChips()
                         }
@@ -4136,13 +4234,17 @@ internal fun RemoteScreen(
                                 SheetHeader(stringResource(R.string.remote_chat_status), padding = PaddingValues(start = 8.dp))
                                 if (compactionVisible(state.compaction, compactionNow))
                                     CompactionBanner(state.compaction, compactionNow, floating = false)
-                                else if (shownOffer != null)
+                                if (handoverShown) handoverBanner(floating = false)
+                                if (unseededFrom != null)
+                                    HandoverUnseededBanner({ openSessionInProject(unseededFrom.sourceSessionId) }, floating = false)
+                                if (!compactionVisible(state.compaction, compactionNow) && shownOffer != null)
                                     ContextOfferBanner(
                                         shownOffer,
                                         announce = false,
                                         onCompact = ::compactFromOffer,
                                         onDismiss = ::dismissContextOffer,
                                         floating = false,
+                                        onHandover = ::handoverFromOffer,
                                     )
                                 if (exportState != null)
                                     ExportStatus(exportState, ::shareExport, floating = false) {
@@ -4167,6 +4269,13 @@ internal fun RemoteScreen(
                     val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }
                     if (shellRun != null && chatModel != null)
                         ShellCommandPanel(shellRun, state.connected, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
+                    if (chatModel != null && handoverContinueOffered(state))
+                        HandoverContinueChip(composerDraft) {
+                            // What is typed goes to the repository first, so a typed prompt is never replaced.
+                            composerDraft?.flush()
+                            // Sent or nothing: the English prompt never lands in the composer.
+                            chatModel.sendNow(HANDOVER_CONTINUE_PROMPT)
+                        }
                     ChatComposerNotices(
                          connectionStatusLine(state),
                          draftDeliveryNotice(state.sending, state.uncertain, state.connected),
