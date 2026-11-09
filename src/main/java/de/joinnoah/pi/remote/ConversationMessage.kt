@@ -311,6 +311,8 @@ internal fun ConversationMessage(
     toolActivity: ToolCardActivity? = null,
     /** Per agent of a subagent card, its exact actor ledger entry; null keeps every row static. */
     agentActivity: List<ActorRowActivity?>? = null,
+    /** The connection granted `subagent_metadata.v1`: agent rows show their run's statistics. */
+    agentMetadata: Boolean = false,
     /** Negotiated: the thinking status pulses only in the typed thinking phase; it shows regardless. */
     thinkingMotion: Boolean = true,
     onJumpToQuestion: ((String) -> Unit)? = null,
@@ -337,6 +339,7 @@ internal fun ConversationMessage(
             hideThinkingStatus,
             toolActivity,
             agentActivity,
+            agentMetadata,
             thinkingMotion,
             onJumpToQuestion,
         )
@@ -381,6 +384,7 @@ private fun ConversationMessageContent(
     hideThinkingStatus: Boolean,
     toolActivity: ToolCardActivity?,
     agentActivity: List<ActorRowActivity?>?,
+    agentMetadata: Boolean,
     thinkingMotion: Boolean,
     onJumpToQuestion: ((String) -> Unit)?,
 ) {
@@ -687,6 +691,7 @@ private fun ConversationMessageContent(
                                     onOpen = onOpenAgent?.let { open -> { open(source, localIndex) } },
                                     actor = agentActivity?.getOrNull(index),
                                     negotiated = agentActivity != null,
+                                    showMetadata = agentMetadata,
                                 )
                             }
                         }
@@ -1054,6 +1059,83 @@ private fun AgentUsageLine(usage: AgentUsage) {
     )
 }
 
+/**
+ * The model and reasoning line, then the statistics line, of a run's metadata; each hides what the
+ * host did not know. Turns, duration and the resume describe this run, tokens and cost the agent's
+ * whole subtree, tool uses its own calls only, so each part carries its own label.
+ */
+@Composable
+private fun AgentMetadataLines(metadata: AgentMetadataDisplay) {
+    val locale = LocalConfiguration.current.locales[0]
+    if (metadata.hasModelLine) {
+        val parts = buildList {
+            metadata.model?.let { add(it) }
+            metadata.responseModel?.let { add(stringResource(R.string.remote_card_agent_response_model, it)) }
+            metadata.requestedModel?.let { add(stringResource(R.string.remote_card_agent_requested_model, it)) }
+            metadata.thinkingLevel?.let { add(stringResource(R.string.remote_card_agent_reasoning, thinkingLevelLabel(it))) }
+            metadata.requestedThinkingLevel?.let {
+                add(stringResource(R.string.remote_card_agent_requested_reasoning, thinkingLevelLabel(it)))
+            }
+        }
+        Text(
+            parts.joinToString(" · "),
+            modifier = Modifier.testTag("subagentModel"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (!metadata.hasStatsLine) return
+    val shown = mutableListOf<String>()
+    val spoken = mutableListOf<String>()
+    fun part(text: String, description: String = text) {
+        shown += text
+        spoken += description
+    }
+    val turns = metadata.turns?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt()
+    val maxTurns = metadata.maxTurns?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt()
+    when {
+        turns != null && maxTurns != null ->
+            part(pluralStringResource(R.plurals.remote_card_agent_turns_of, maxTurns, turns, maxTurns))
+        turns != null -> part(pluralStringResource(R.plurals.remote_card_agent_turns, turns, turns))
+        maxTurns != null -> part(pluralStringResource(R.plurals.remote_card_agent_max_turns, maxTurns, maxTurns))
+    }
+    metadata.totalTokens?.let {
+        part(
+            stringResource(R.string.remote_card_agent_tokens, formatTokenCount(it, locale)),
+            stringResource(R.string.remote_card_agent_tokens, spelledCount(it, locale)),
+        )
+    }
+    metadata.tokenParts?.let { tokens ->
+        for ((value, label) in listOf(
+            tokens.input to R.string.remote_card_agent_tokens_input,
+            tokens.output to R.string.remote_card_agent_tokens_output,
+            tokens.cacheRead to R.string.remote_card_agent_tokens_cache_read,
+            tokens.cacheWrite to R.string.remote_card_agent_tokens_cache_write,
+        )) value?.let { part(stringResource(label, formatTokenCount(it, locale)), stringResource(label, spelledCount(it, locale))) }
+    }
+    metadata.costUsd?.let { part(formatCost(it, locale)) }
+    metadata.durationMs?.let { part(completedWorkDuration(it)) }
+    metadata.toolUses?.let {
+        val count = it.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        part(pluralStringResource(R.plurals.remote_card_agent_tool_uses, count, count))
+    }
+    metadata.resume?.let {
+        val count = it.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        part(stringResource(R.string.remote_card_agent_resume, count))
+    }
+    val description = spoken.joinToString(", ")
+    Text(
+        shown.joinToString(" · "),
+        modifier = Modifier.testTag("subagentMetadata").semantics { contentDescription = description },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
 private fun spelledCount(value: Long, locale: Locale): String =
     NumberFormat.getIntegerInstance(locale).format(value.coerceAtLeast(0))
 
@@ -1179,6 +1261,8 @@ private fun SubagentAgentRow(
     actor: ActorRowActivity? = null,
     /** The connection negotiated structured activity: a running row without a fresh actor is muted. */
     negotiated: Boolean = false,
+    /** The connection granted `subagent_metadata.v1`; metadata never changes state, glyph or motion. */
+    showMetadata: Boolean = false,
 ) {
     val lifecycle = when (agent.state) {
         "queued" -> R.string.remote_subagent_queued
@@ -1248,7 +1332,9 @@ private fun SubagentAgentRow(
                 agent.task?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                agent.usage?.let { AgentUsageLine(it) }
+                val metadata = agent.metadata?.takeIf { showMetadata }?.let(::agentMetadataDisplay)
+                if (metadata != null) AgentMetadataLines(metadata)
+                else agent.usage?.let { AgentUsageLine(it) }
                 agent.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 if (showPreview)
                     agent.preview?.let {

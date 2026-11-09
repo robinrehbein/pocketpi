@@ -14,4 +14,27 @@
     </plurals>
     <string name="remote_card_agent_usage">%1$s · %2$s tokens · %3$s</string>
     <string name="remote_card_agent_usage_description">%1$s, tokens: %2$s, cost: %3$s</string>
+    <!-- Subagent metadata (subagent_metadata.v1): only values the host knew; nothing is filled in. -->
+    <string name="remote_card_agent_response_model">answered by %1$s</string>
+    <string name="remote_card_agent_requested_model">requested %1$s</string>
+    <string name="remote_card_agent_reasoning">reasoning %1$s</string>
+    <string name="remote_card_agent_requested_reasoning">requested %1$s</string>
+    <plurals name="remote_card_agent_turns_of">
+        <item quantity="one">%1$d of %2$d turn</item>
+        <item quantity="other">%1$d of %2$d turns</item>
+    </plurals>
+    <plurals name="remote_card_agent_max_turns">
+        <item quantity="one">at most %d turn</item>
+        <item quantity="other">at most %d turns</item>
+    </plurals>
+    <string name="remote_card_agent_tokens">%1$s tokens</string>
+    <string name="remote_card_agent_tokens_input">%1$s in</string>
+    <string name="remote_card_agent_tokens_output">%1$s out</string>
+    <string name="remote_card_agent_tokens_cache_read">%1$s cache read</string>
+    <string name="remote_card_agent_tokens_cache_write">%1$s cache write</string>
+    <plurals name="remote_card_agent_tool_uses">
+        <item quantity="one">%d own tool use</item>
+        <item quantity="other">%d own tool uses</item>
+    </plurals>
+    <string name="remote_card_agent_resume">resume %1$d</string>
 </resources>

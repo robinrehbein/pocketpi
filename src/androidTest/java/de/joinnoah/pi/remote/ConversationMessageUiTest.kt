@@ -72,6 +72,7 @@ class ConversationMessageUiTest {
         onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)? = null,
         onAskToFix: ((String) -> Unit)? = null,
         copyButton: Boolean = false,
+        agentMetadata: Boolean = false,
     ) {
         compose.setContent {
             MaterialTheme {
@@ -84,6 +85,7 @@ class ConversationMessageUiTest {
                     onOpenAgent = onOpenAgent,
                     onAskToFix = onAskToFix,
                     copyButton = copyButton,
+                    agentMetadata = agentMetadata,
                 )
             }
         }
@@ -240,6 +242,50 @@ class ConversationMessageUiTest {
         compose.onAllNodesWithTag("subagentAgent")[1].performClick()
         compose.waitForIdle()
         assertEquals(listOf("subagent-1" to 1), opened)
+    }
+
+    private fun metadataCard() = ConversationItem.Subagent(
+        id = "subagent-2",
+        sourceId = "message-10",
+        mode = "single",
+        agents = listOf(
+            AgentProgress(
+                "scout", "succeeded", null, null,
+                usage = AgentUsage(1200, 300, 0, 0, 1500, 3, 0.012),
+                metadata = AgentMetadata(
+                    run = 1,
+                    model = MetadataModel("p", "selected", "Selected"),
+                    responseModel = MetadataModel("p", "served", null),
+                    thinkingLevel = "off",
+                    turns = 2,
+                    tokens = MetadataTokens(null, null, 3, null),
+                ),
+            ),
+        ),
+        legacy = false,
+        output = null,
+        truncated = false,
+        toolCallId = "call_meta",
+    )
+
+    @Test
+    fun grantedMetadataShowsOnlyKnownValues() {
+        show(metadataCard(), agentMetadata = true)
+        compose.onNodeWithTag("subagentMetadata", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("subagentModel", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("subagentUsage", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText("Selected", substring = true, useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("served", substring = true, useUnmergedTree = true).assertExists()
+        // Unknown cost stays hidden; it never reads as $0.
+        compose.onNodeWithText("$", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun withoutTheGrantTheLegacyUsageLineStays() {
+        show(metadataCard())
+        compose.onNodeWithTag("subagentUsage", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("subagentMetadata", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("subagentModel", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test
