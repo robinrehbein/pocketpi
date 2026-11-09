@@ -58,7 +58,8 @@ internal data class SessionListItem(
     val titleAttachment: TitleAttachment? = null,
     /**
      * The context fill the host last reported for a live session (see [sessionListContext]); null
-     * when unknown, and always null on an offline row.
+     * when unknown, on a row that is offline, last known or not yet confirmed, and while a
+     * compaction of the session shows.
      */
     val context: SessionContextUsage? = null,
 )
@@ -448,7 +449,10 @@ internal fun sessionListItem(
         compacting = connected && confirmed && !loading &&
             availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
             compactionVisible(compaction, nowMillis),
-        context = sessionListContext(session).takeIf { availability != SessionAvailability.OFFLINE },
+        // Like compacting: only a confirmed live row shows it, and a compaction voids it until the next read.
+        context = sessionListContext(session).takeIf {
+            connected && confirmed && !loading && availability != SessionAvailability.OFFLINE && compaction == null
+        },
     )
 }
 

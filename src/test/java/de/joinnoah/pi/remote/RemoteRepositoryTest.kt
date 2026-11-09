@@ -7032,7 +7032,9 @@ class RemoteRepositoryTest {
             runCurrent()
             assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:") })
             assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
-            assertTrue(transport.sent.filter { it.text("type") == "sessions.list" }.none { it.containsKey("includeContext") })
+            val lists = transport.sent.filter { it.text("type") == "sessions.list" }
+            assertTrue(lists.isNotEmpty())
+            assertTrue(lists.none { it.containsKey("includeContext") })
             repository.disconnect()
         }
         // Authentication never grants a v3-only capability.
@@ -7042,7 +7044,31 @@ class RemoteRepositoryTest {
         repository.activate(RemoteSelection("host", "project"))
         runCurrent()
         assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
-        assertTrue(handshake.sent.filter { it.text("type") == "sessions.list" }.none { it.containsKey("includeContext") })
+        val lists = handshake.sent.filter { it.text("type") == "sessions.list" }
+        assertTrue(lists.isNotEmpty())
+        assertTrue(lists.none { it.containsKey("includeContext") })
+    }
+
+    @Test
+    fun aCompactionEventDropsTheListedFillUntilTheNextRead() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(sessionWithContext("other")))
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertTrue("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        transport.deliver(Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+            "revision" to 5, "state" to "done",
+        ))
+        runCurrent()
+        assertFalse("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        advanceTimeBy(5_001)
+        repository.refreshSessions()
+        runCurrent()
+        assertTrue("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        repository.disconnect()
     }
 
     @Test

@@ -1890,6 +1890,7 @@ class DefaultRemoteRepository(
         val sessions = connectionRequest("sessions.list", *sessionListFields(project.text("id"), includeCompaction, includeContext)).array("items")
         // A reply to a connection that is gone, or to another Mac, says nothing about this one.
         if (connection != generation || activeHost?.routeId != routeId) return null
+        if (includeContext) reportMalformedListContexts(sessions)
         if (includeCompaction) {
             sessionCompactions.list(sessions, compactionWatermark)
             update { it.copy(sessionCompactions = sessionCompactions.values) }
@@ -3523,6 +3524,28 @@ class DefaultRemoteRepository(
         return true
     }
 
+    /**
+     * A compaction that started or ended makes the fill a list read reported for [sessionId] stale:
+     * its live rows drop it until the next `sessions.list` reports a new one.
+     */
+    private fun dropListContext(sessionId: String) {
+        fun dropped(row: JsonObject): JsonObject =
+            if (row.optionalText("id") == sessionId && "context" in row) JsonObject(row - "context") else row
+        if (state.value.sessions.any { it.optionalText("id") == sessionId && "context" in it })
+            update { it.copy(sessions = it.sessions.map(::dropped)) }
+        val routeId = activeHost?.routeId ?: return
+        if (projectChatCandidates.values.any { chats -> chats.any { it.session.optionalText("id") == sessionId && "context" in it.session } }) {
+            projectChatCandidates.replaceAll { _, chats -> chats.map { it.copy(session = dropped(it.session)) } }
+            publishProjectChats(routeId, persist = false)
+        }
+        if (projectSessionsRoute == routeId &&
+            projectSessionsAggregate.values.any { entry -> entry.sessions.any { it.optionalText("id") == sessionId && "context" in it } }
+        ) {
+            projectSessionsAggregate.replaceAll { _, entry -> entry.patched(::dropped) }
+            publishProjectSessions(routeId)
+        }
+    }
+
     private fun eventEffects(payload: JsonObject) {
         if (payload.text("kind") == "session.activity") sessionActivityEvent(payload)
         if (payload.text("kind") == "message.upsert") actorActivityEvent(payload)
@@ -3530,6 +3553,7 @@ class DefaultRemoteRepository(
         if (payload.text("kind") == "session.compaction" && eventEpochApplies(payload)) {
             sessionCompactions.event(payload)
             update { it.copy(sessionCompactions = sessionCompactions.values) }
+            payload.optionalText("sessionId")?.let(::dropListContext)
         }
         selectedChatHints(payload)
         if (payload.text("kind") == "advisor.status") {
@@ -4069,6 +4093,7 @@ class DefaultRemoteRepository(
         val compactionWatermark = sessionCompactions.watermark()
         val items = request("sessions.list", epoch, *sessionListFields(projectId, includeCompaction, includeContext)).array("items")
         checkEpoch(epoch)
+        if (includeContext) reportMalformedListContexts(items)
         if (includeCompaction) {
             sessionCompactions.list(items, compactionWatermark)
             update { it.copy(sessionCompactions = sessionCompactions.values) }

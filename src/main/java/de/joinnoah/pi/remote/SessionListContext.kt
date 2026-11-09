@@ -22,7 +22,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import kotlin.math.floor
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -90,6 +91,9 @@ internal fun parseSessionListContext(value: JsonElement?, sessionId: String): Se
     return SessionContextUsage(sessionId, null, null, used, window, percent)
 }
 
+/** The largest fill a label shows; a chat far over its window reads "999%". */
+private const val MAX_SHOWN_PERCENT = 999
+
 /** The context fill of a list row, or null when it is unknown or malformed (a malformed one shows as unknown). */
 internal fun sessionListContext(session: JsonObject): SessionContextUsage? =
     try {
@@ -97,6 +101,21 @@ internal fun sessionListContext(session: JsonObject): SessionContextUsage? =
     } catch (_: IllegalArgumentException) {
         null
     }
+
+/**
+ * Reports a malformed `context` among a list read's [items] to [Diagnostics], once per read; the
+ * rows show such a fill as unknown ([sessionListContext]).
+ */
+internal fun reportMalformedListContexts(items: List<JsonObject>) {
+    for (item in items) {
+        try {
+            parseSessionListContext(item["context"], item.optionalText("id").orEmpty())
+        } catch (error: IllegalArgumentException) {
+            Diagnostics.caught("sessions.list.context", error)
+            return
+        }
+    }
+}
 
 /** How full a row's context reads: the colour of its ring and bar. */
 internal enum class ContextFillLevel { NORMAL, WARNING, CRITICAL }
@@ -117,7 +136,9 @@ internal fun contextFill(usage: SessionContextUsage?): ContextFill? {
         CONTEXT_OFFER_PERCENT -> ContextFillLevel.WARNING
         else -> ContextFillLevel.NORMAL
     }
-    return ContextFill(percent.roundToInt(), (percent / 100.0).toFloat().coerceIn(0f, 1f), level)
+    // Floored, so the label never names a threshold the colour has not reached.
+    val shown = floor(percent).coerceAtMost(MAX_SHOWN_PERCENT.toDouble()).toInt()
+    return ContextFill(shown, (percent / 100.0).toFloat().coerceIn(0f, 1f), level)
 }
 
 /** The fill a ring or bar draws, on the node that owns it; tests read it, accessibility services ignore it. */
@@ -128,7 +149,8 @@ internal var SemanticsPropertyReceiver.contextFillShown by ContextFillKey
 internal fun contextFillColor(level: ContextFillLevel): Color =
     when (level) {
         ContextFillLevel.NORMAL -> MaterialTheme.colorScheme.outline
-        ContextFillLevel.WARNING -> waitingColor()
+        // Not the amber of a waiting chat, so the ring does not read as "needs you".
+        ContextFillLevel.WARNING -> MaterialTheme.colorScheme.tertiary
         ContextFillLevel.CRITICAL -> MaterialTheme.colorScheme.error
     }
 
@@ -145,7 +167,7 @@ internal fun contextFillDescription(fill: ContextFill?): String? =
 internal fun ContextRing(fill: ContextFill, modifier: Modifier = Modifier) {
     val color = contextFillColor(fill.level)
     val track = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f)
-    Canvas(modifier) {
+    Canvas(modifier.testTag("sessionContextRing").clearAndSetSemantics { contextFillShown = fill }) {
         val stroke = 2.5.dp.toPx()
         val inset = stroke / 2
         val arcSize = Size(size.width - stroke, size.height - stroke)
@@ -160,7 +182,8 @@ internal fun ContextRing(fill: ContextFill, modifier: Modifier = Modifier) {
 @Composable
 internal fun ContextFillBar(fill: ContextFill, modifier: Modifier = Modifier) {
     val color = contextFillColor(fill.level)
-    Column(modifier.testTag("contextFillBar"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // The card's description already says the fill; the bar only carries it for tests.
+    Column(modifier.testTag("contextFillBar").clearAndSetSemantics { contextFillShown = fill }, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             stringResource(R.string.remote_session_context_label, fill.percent),
             style = MaterialTheme.typography.labelMedium,

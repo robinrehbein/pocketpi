@@ -107,6 +107,16 @@ class SessionListContextTest {
     }
 
     @Test
+    fun theLabelFloorsAndCaps() {
+        // Floored: 74.9% stays below the 75 the colour has not crossed.
+        assertEquals(74, contextFill(usage(74.9))?.percent)
+        assertEquals(89, contextFill(usage(89.99))?.percent)
+        assertEquals(ContextFillLevel.WARNING, contextFill(usage(89.99))?.level)
+        assertEquals(2, contextFill(usage(2.5))?.percent)
+        assertEquals(999, contextFill(usage(2500.0))?.percent)
+    }
+
+    @Test
     fun largeWindowsWarnFromTheTokenRule() {
         // 210k of 300k (70%) passes the 200k-token rule, like the chat's offer.
         assertEquals(ContextFillLevel.WARNING, contextFill(usage(70.0, window = 300_000, used = 210_000))?.level)
@@ -122,5 +132,22 @@ class SessionListContextTest {
         assertEquals(2.5, sessionListItem(session, connected = true, loading = false, confirmed = true).context?.percent)
         assertNull(sessionListItem(session, connected = false, loading = false, confirmed = true).context)
         assertNull(sessionListItem(JsonObject(session + ("status" to JsonPrimitive("offline"))), connected = true, loading = false, confirmed = true).context)
+    }
+
+    @Test
+    fun staleUnconfirmedAndCompactingRowsCarryNoFill() {
+        val session = validItem("row-with-context")
+        // Lost connection: the row keeps its last-known status but not the fill.
+        val stale = sessionListItem(session, connected = false, loading = false, stale = true, confirmed = true)
+        assertTrue(stale.lastKnown)
+        assertNull(stale.context)
+        // Connected, but no list of this connection stands behind the row yet (reconnect, restored snapshot).
+        assertNull(sessionListItem(session, connected = true, loading = false, confirmed = false).context)
+        assertNull(sessionListItem(session, connected = true, loading = true, confirmed = true).context)
+        // A compaction voids the fill the list read reported.
+        assertNull(sessionListItem(
+            session, connected = true, loading = false, confirmed = true,
+            compaction = SessionCompaction("manual", 100), nowMillis = 200,
+        ).context)
     }
 }

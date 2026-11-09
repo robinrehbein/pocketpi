@@ -45,37 +45,36 @@ class SessionListContextUiTest {
 
     @Test fun aProjectsRowRingsTheAvatarAndSaysTheFill() {
         projectRow(82.0)
-        compose.onNodeWithTag("sessionStatusAvatar", useUnmergedTree = true)
-            .assert(fill(82, ContextFillLevel.WARNING))
+        compose.onNodeWithTag("sessionStatusAvatar", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("sessionContextRing", useUnmergedTree = true).assert(fill(82, ContextFillLevel.WARNING))
         compose.onNodeWithContentDescription("Context 82% full", substring = true).assertExists()
     }
 
     @Test fun anUnknownFillShowsNoRing() {
         projectRow(null)
-        compose.onNodeWithTag("sessionStatusAvatar", useUnmergedTree = true)
-            .assert(SemanticsMatcher.keyNotDefined(ContextFillKey))
+        compose.onNodeWithTag("sessionStatusAvatar", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("sessionContextRing", useUnmergedTree = true).assertDoesNotExist()
         compose.onNodeWithContentDescription("Context", substring = true).assertDoesNotExist()
     }
 
     @Test @Config(qualifiers = "de")
     fun talkBackSaysTheFillInGerman() {
         projectRow(91.6)
-        compose.onNodeWithContentDescription("Kontext zu 92 % voll", substring = true).assertExists()
-        compose.onNodeWithTag("sessionStatusAvatar", useUnmergedTree = true)
-            .assert(fill(92, ContextFillLevel.CRITICAL))
+        compose.onNodeWithContentDescription("Kontext zu 91\u00A0% voll", substring = true).assertExists()
+        compose.onNodeWithTag("sessionContextRing", useUnmergedTree = true).assert(fill(91, ContextFillLevel.CRITICAL))
     }
 
     @Test fun theCleanUpCardShowsTheBar() {
         val item = sessionListItem(session(64.0), connected = true, loading = false, confirmed = true)
         compose.setContent { MaterialTheme { ReadyReviewCard(item, "Project", now = 0, old = false) } }
-        compose.onNodeWithTag("readyReviewCard")
-            .assert(fill(64, ContextFillLevel.NORMAL))
+        compose.onNodeWithTag("contextFillBar", useUnmergedTree = true).assert(fill(64, ContextFillLevel.NORMAL))
         compose.onNodeWithContentDescription("Context 64% full", substring = true).assertExists()
     }
 
     @Test fun theCleanUpCardHidesTheBarWhenUnknown() {
         val item = sessionListItem(session(null), connected = true, loading = false, confirmed = true)
         compose.setContent { MaterialTheme { ReadyReviewCard(item, "Project", now = 0, old = false) } }
-        compose.onNodeWithTag("readyReviewCard").assert(SemanticsMatcher.keyNotDefined(ContextFillKey))
+        compose.onNodeWithTag("readyReviewCard").assertExists()
+        compose.onNodeWithTag("contextFillBar", useUnmergedTree = true).assertDoesNotExist()
     }
 }
