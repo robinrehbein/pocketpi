@@ -460,6 +460,7 @@ internal class ChatViewModel(
     }
 
     fun abortSession(sessionId: String) = active { repository.abortSession(sessionId) }
+    fun stopContinuation(id: String) = active { repository.stopContinuation(id) }
 
     fun refreshSessions() = active(repository::refreshSessions)
 

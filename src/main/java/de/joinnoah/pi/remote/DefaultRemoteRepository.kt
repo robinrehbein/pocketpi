@@ -406,6 +406,7 @@ class DefaultRemoteRepository(
             // Only on capability routes v2 and later; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
+            SESSION_CONTINUATIONS_CAPABILITY,
             SESSION_COMPACTION_LIST_CAPABILITY,
             // Browser commands additionally require a successfully negotiated v3 route.
             SESSION_PREVIEW_CAPABILITY,
@@ -422,6 +423,23 @@ class DefaultRemoteRepository(
     private var terminalRouteOffered = false
     private var capabilityRoute = CAPABILITIES_V3_ROUTE
     private var tasksCapabilityKnown = false
+    private var continuationsCapabilityKnown = false
+    private var continuationRefreshPending = false
+    private class ContinuationStopAttempt(var awaitingConfirmation: Boolean = false)
+    private val continuationStopAttempts = mutableMapOf<String, ContinuationStopAttempt>()
+
+    private fun finishContinuationStop(id: String, attempt: ContinuationStopAttempt, failed: Boolean) {
+        if (continuationStopAttempts[id] !== attempt) return
+        continuationStopAttempts.remove(id)
+        update { it.copy(continuationStopping = it.continuationStopping - id,
+            continuationStopFailed = if (failed) it.continuationStopFailed + id else it.continuationStopFailed - id) }
+    }
+
+    private fun finishContinuationConfirmations(attempts: Map<String, ContinuationStopAttempt>, items: SessionContinuations? = null) {
+        attempts.forEach { (id, attempt) ->
+            finishContinuationStop(id, attempt, items == null || items.items.any { it.id == id })
+        }
+    }
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
     private var nativePresenceOwner: Any? = null
@@ -748,7 +766,9 @@ class DefaultRemoteRepository(
         update { it.copy(questionDetails = emptyMap()) }
     }
     private var selectionEpoch = 0L
+        set(value) { if (field != value) continuationStopAttempts.clear(); field = value }
     private var generation = 0L
+        set(value) { if (field != value) continuationStopAttempts.clear(); field = value }
     /** The [generation] whose `projects.list` answer granted `session_activity.v1`; sticky for it. */
     private var activityGeneration: Long? = null
     /** Grows per authoritative activity request on a connection; see [ActivityRequestToken]. */
@@ -1019,7 +1039,7 @@ class DefaultRemoteRepository(
      * lists, an open of a live chat alongside `sessions.open`. The chat's events that arrive
      * meanwhile wait here for that Timeline, so none is lost before it exists.
      */
-    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean, val base: ResumeBase?) {
+    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean, val includeContinuations: Boolean, val base: ResumeBase?) {
         lateinit var reply: Deferred<Result<JsonObject>>
         val events = ArrayDeque<HeldEvent>()
     }
@@ -1033,7 +1053,7 @@ class DefaultRemoteRepository(
     private var heldSnapshot: HeldSnapshot? = null
 
     /** A chat's Timeline kept after the chat was left, with the tasks it showed then. */
-    private class DetachedTimeline(val timeline: Timeline, val tasks: SessionTasks)
+    private class DetachedTimeline(val timeline: Timeline, val tasks: SessionTasks, val continuations: SessionContinuations)
 
     /** At most [DETACHED_TIMELINES] per Mac, least recently left first. */
     private val detachedTimelines = LinkedHashMap<DraftKey, DetachedTimeline>()
@@ -1365,6 +1385,8 @@ class DefaultRemoteRepository(
                     promptDeliveryGeneration = null
                     terminalRouteOffered = false
                     tasksCapabilityKnown = false
+                    continuationsCapabilityKnown = false
+                    continuationRefreshPending = false
                     taskRefreshPending = false
                     update {
                         it.copy(
@@ -1564,6 +1586,9 @@ class DefaultRemoteRepository(
             capabilities = emptySet(),
             capabilitiesKnown = false,
             tasks = SessionTasks(),
+            continuations = SessionContinuations(),
+            continuationStopping = emptySet(),
+            continuationStopFailed = emptySet(),
             unavailableCapabilities = emptySet(),
             childControlUnsupported = emptySet(),
             sessionControlUnsupported = emptyMap(),
@@ -2553,6 +2578,9 @@ class DefaultRemoteRepository(
             val shown = if (keep) it else lastKnownCleared(it)
             shown.copy(
                 connected = false,
+                continuations = staleContinuations(shown.continuations),
+                continuationStopping = emptySet(),
+                continuationStopFailed = emptySet(),
                 // The rows stay as last known; only a list read on the next connection confirms them.
                 sessionsFresh = false,
                 connection = line,
@@ -2703,10 +2731,12 @@ class DefaultRemoteRepository(
                     (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
                 val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) || revision == 3) && (it != SUBAGENT_METADATA_CAPABILITY || subagentMetadataOptedIn(id)) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, SESSION_CONTINUATIONS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) || revision == 3) && (it != SUBAGENT_METADATA_CAPABILITY || subagentMetadataOptedIn(id)) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
                     update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, SUBAGENT_METADATA_CAPABILITY)) }
+                val hadContinuations = canReadContinuations()
+                if (revision == 3 && SESSION_CONTINUATIONS_CAPABILITY in merged) continuationsCapabilityKnown = true
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2727,6 +2757,10 @@ class DefaultRemoteRepository(
                 }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
+                    drainTaskRefresh()
+                }
+                if (!hadContinuations && canReadContinuations()) {
+                    continuationRefreshPending = true
                     drainTaskRefresh()
                 }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
@@ -2769,24 +2803,31 @@ class DefaultRemoteRepository(
     private fun drainTaskRefresh() {
         val current = timeline ?: return
         val selected = state.value.selection
-        if (!taskRefreshPending || !canReadTasks() || !state.value.connected ||
+        if (!(taskRefreshPending && canReadTasks() || continuationRefreshPending && canReadContinuations()) || !state.value.connected ||
             taskActivationEpoch == selectionEpoch || resynchronizing || snapshotPending === current ||
             selected.sessionId != current.sessionId || selected.routeId != activeHost?.routeId
         ) return
         taskRefreshPending = false
+        continuationRefreshPending = false
         snapshotAsync()
     }
 
-    private fun snapshotFields(sessionId: String, includeTasks: Boolean): Array<Pair<String, Any?>> =
-        if (includeTasks) arrayOf("sessionId" to sessionId, "includeTasks" to true)
-        else arrayOf("sessionId" to sessionId)
+    private fun canReadContinuations() = state.value.capabilitiesKnown && continuationsCapabilityKnown &&
+        SESSION_CONTINUATIONS_CAPABILITY in state.value.capabilities
+
+    private fun snapshotFields(sessionId: String, includeTasks: Boolean, includeContinuations: Boolean = canReadContinuations()): Array<Pair<String, Any?>> =
+        buildList<Pair<String, Any?>> {
+            add("sessionId" to sessionId)
+            if (includeTasks) add("includeTasks" to true)
+            if (includeContinuations) add("includeContinuations" to true)
+        }.toTypedArray()
 
     /**
      * Asks for the snapshot of [sessionId] on [routeId] before select() makes its Timeline; see
      * [HeldSnapshot]. It resumes from the Timeline that select() will continue, when there is one.
      */
     private fun CoroutineScope.holdSnapshot(routeId: String, sessionId: String, epoch: Long): HeldSnapshot {
-        val held = HeldSnapshot(sessionId, canReadTasks(), resumeSource(routeId, sessionId)?.resumeBase())
+        val held = HeldSnapshot(sessionId, canReadTasks(), canReadContinuations(), resumeSource(routeId, sessionId)?.resumeBase())
         // The focus names the chat before its read goes out, so every event of it that the host
         // emits after the reply's revision reaches this phone. Another chat on screen detaches;
         // should this activation not select the new one, its end refocuses and resumes it.
@@ -2798,7 +2839,7 @@ class DefaultRemoteRepository(
                 request(
                     "session.snapshot",
                     epoch,
-                    *snapshotFields(sessionId, held.includeTasks),
+                    *snapshotFields(sessionId, held.includeTasks, held.includeContinuations),
                     requestId = firstPageRequestId(held.base),
                 )
             }
@@ -2832,7 +2873,7 @@ class DefaultRemoteRepository(
         leaving.detached = true
         val key = DraftKey(routeId, sessionId)
         detachedTimelines.remove(key)
-        detachedTimelines[key] = DetachedTimeline(leaving, state.value.tasks)
+        detachedTimelines[key] = DetachedTimeline(leaving, state.value.tasks, state.value.continuations)
         val ofRoute = detachedTimelines.keys.filter { it.routeId == routeId }
         ofRoute.take(maxOf(0, ofRoute.size - DETACHED_TIMELINES)).forEach { detachedTimelines.remove(it) }
     }
@@ -3114,7 +3155,7 @@ class DefaultRemoteRepository(
             // snapshot.required needs the fresh state.
             val need = current.eventNeed(event, heard)
             if (need != SnapshotNeed.NONE) {
-                update { it.copy(tasks = staleTasks(it.tasks)) }
+                update { it.copy(tasks = staleTasks(it.tasks), continuations = staleContinuations(it.continuations)) }
                 if (!resynchronizing && snapshotPending !== current)
                     snapshotAsync(intent = if (need == SnapshotNeed.GAP) SnapshotIntent.RESUME else SnapshotIntent.FRESH)
             }
@@ -4162,12 +4203,14 @@ class DefaultRemoteRepository(
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         held: Deferred<Result<JsonObject>>? = null,
         heldIncludesTasks: Boolean = false,
+        heldIncludesContinuations: Boolean = false,
         heldBase: ResumeBase? = null,
         intent: SnapshotIntent = SnapshotIntent.FRESH,
         dropOlderPages: Boolean = false,
         retryStaleCursor: Boolean = true,
     ) {
         val current = timeline ?: return
+        val confirmations = if (older) emptyMap() else continuationStopAttempts.filterValues { it.awaitingConfirmation }
         // A reconnect clears list tracking, but a continued Timeline still proves its own
         // snapshot epoch. Preserve that evidence before a new first page can replace it.
         if (!older && current.hasSnapshot) current.journalEpoch?.let { prior ->
@@ -4182,8 +4225,9 @@ class DefaultRemoteRepository(
         // Cleared before anything else: activation relies on it once the snapshot started.
         if (snapshotPending === current) snapshotPending = null
         resynchronizing = true
-        if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
+        if (!older) update { it.copy(tasks = staleTasks(it.tasks), continuations = staleContinuations(it.continuations)) }
         var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
+        var includedContinuations = if (held != null && cursor == null) heldIncludesContinuations else !older && canReadContinuations()
         // A Timeline whose focus lapsed takes a fresh first page read with its session in focus
         // again, its events held, in place of what it applied meanwhile; see [syncFocus].
         val reread = !older && held == null && current.focusLapsed && inSentFocus(current.sessionId)
@@ -4234,6 +4278,7 @@ class DefaultRemoteRepository(
                         // came fails as any other would.
                         if (failed.requestKind != RemoteRequestException.Kind.HOST_ERROR) throw failed
                         includedTasks = canReadTasks()
+                        includedContinuations = canReadContinuations()
                         base = if (heldBase != null) current.resumeBase() else null
                         if (base != null) {
                             current.awaitReply()
@@ -4242,7 +4287,7 @@ class DefaultRemoteRepository(
                         request(
                             "session.snapshot",
                             epoch,
-                            *snapshotFields(current.sessionId, includedTasks),
+                            *snapshotFields(current.sessionId, includedTasks, includedContinuations),
                             requestId = firstPageRequestId(base),
                             timeoutMillis = timeoutMillis,
                         )
@@ -4251,7 +4296,7 @@ class DefaultRemoteRepository(
                     request(
                         "session.snapshot",
                         epoch,
-                        *snapshotFields(current.sessionId, includedTasks),
+                        *snapshotFields(current.sessionId, includedTasks, includedContinuations),
                         requestId = firstPageRequestId(base),
                         timeoutMillis = timeoutMillis,
                     )
@@ -4316,6 +4361,19 @@ class DefaultRemoteRepository(
                     } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
                         taskRefreshPending = true
                     }
+                    if (accepted && includedContinuations && !current.needsSnapshot) {
+                        continuationRefreshPending = false
+                        val parsed = parseSessionContinuations(data["continuations"])
+                        current.continuationsKnown = parsed.freshness == ContinuationFreshness.LIVE
+                        update {
+                            val value = if (current.continuationsKnown) parsed
+                                else if (it.continuations.items.isNotEmpty()) staleContinuations(it.continuations) else parsed
+                            it.copy(continuations = value)
+                        }
+                        finishContinuationConfirmations(confirmations, if (current.continuationsKnown) parsed else null)
+                    } else if ((includedContinuations && outdated) || (!older && !includedContinuations && canReadContinuations())) {
+                        continuationRefreshPending = true
+                    }
                     current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
                     if (!older) recheckFollowUps(current.sessionId)
                     publishTimeline(persist = !older)
@@ -4339,6 +4397,7 @@ class DefaultRemoteRepository(
             throw e
         } finally {
             if (!older) nativeFirstPagesInFlight--
+            if (!older && !answered && epoch == selectionEpoch) finishContinuationConfirmations(confirmations)
             // A reply that never came or was not taken: the events held for it apply now.
             val heldArrivals = awaited && current.heldArrivals
             val drained = awaited && current.endAwaiting()
@@ -4383,6 +4442,7 @@ class DefaultRemoteRepository(
             }
             if (refetch || current.needsSnapshot && !rejectedPage) {
                 taskRefreshPending = false
+                continuationRefreshPending = false
                 snapshotAsync()
             } else if (!older && current === timeline && activityGeneration == generation && (
                     (!rejectedPage && current.sessionId !in state.value.executionActivity.sessions && activitySnapshotAllowed(current.sessionId, "baseline")) ||
@@ -4488,6 +4548,11 @@ class DefaultRemoteRepository(
                 taskRefreshPending = false
                 update { it.copy(tasks = liveTasks(it.tasks)) }
             } else if (canReadTasks()) taskRefreshPending = true
+            val continuationFreshness = state.value.continuations.freshness
+            if (current.continuationsKnown && (continuationFreshness == ContinuationFreshness.LIVE || continuationFreshness == ContinuationFreshness.STALE)) {
+                continuationRefreshPending = false
+                update { it.copy(continuations = liveContinuations(it.continuations)) }
+            } else if (canReadContinuations()) continuationRefreshPending = true
         }
         publishTimeline(persist = true)
         if (result.fits) {
@@ -4708,6 +4773,11 @@ class DefaultRemoteRepository(
                     if (sameSession) staleTasks(it.tasks)
                     else if (resumed != null) staleTasks(checkNotNull(kept).tasks)
                     else SessionTasks(),
+                continuations = if (sameSession) staleContinuations(it.continuations)
+                    else if (resumed != null) staleContinuations(checkNotNull(kept).continuations)
+                    else SessionContinuations(),
+                continuationStopping = emptySet(),
+                continuationStopFailed = emptySet(),
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
@@ -5122,6 +5192,7 @@ class DefaultRemoteRepository(
                     epoch,
                     held = heldReply,
                     heldIncludesTasks = held?.includeTasks == true,
+                    heldIncludesContinuations = held?.includeContinuations == true,
                     heldBase = taken?.base,
                     intent = SnapshotIntent.RESUME,
                 )
@@ -5902,7 +5973,7 @@ class DefaultRemoteRepository(
             }
         update {
             val shown =
-                if (keep) it.copy(stale = true, staleSince = it.staleSince ?: now(), tasks = staleTasks(it.tasks))
+                if (keep) it.copy(stale = true, staleSince = it.staleSince ?: now(), tasks = staleTasks(it.tasks), continuations = staleContinuations(it.continuations), continuationStopping = emptySet(), continuationStopFailed = emptySet())
                 else lastKnownCleared(it)
             shown.copy(
                 connected = false,
@@ -6120,6 +6191,49 @@ class DefaultRemoteRepository(
         retry?.cancel()
         retry = null
         if (state.value.reconnectAt != null) update { it.copy(reconnectAt = null) }
+    }
+
+    override fun stopContinuation(id: String) {
+        val before = state.value
+        val sessionId = before.selection.sessionId ?: return
+        val owner = before.continuations.owner ?: return
+        if (!before.connected || before.stale || !canReadContinuations() ||
+            before.continuations.freshness != ContinuationFreshness.LIVE ||
+            before.continuations.items.none { it.id == id } || id in before.continuationStopping) return
+        if (id in continuationStopAttempts) return
+        val attempt = ContinuationStopAttempt()
+        continuationStopAttempts[id] = attempt
+        val epoch = selectionEpoch
+        val connection = generation
+        val selection = before.selection
+        update { it.copy(continuationStopping = it.continuationStopping + id, continuationStopFailed = it.continuationStopFailed - id) }
+        scope.launch {
+            fun current() = epoch == selectionEpoch && connection == generation && state.value.selection == selection && continuationStopAttempts[id] === attempt
+            try {
+                val result = request("session.continuations.cancel", epoch,
+                    "sessionId" to sessionId, "owner" to owner, "id" to id,
+                    requestId = Wire.random(),
+                    validateBeforeSend = {
+                        check(current() && state.value.continuations.freshness == ContinuationFreshness.LIVE &&
+                            state.value.continuations.owner == owner && state.value.continuations.items.any { it.id == id })
+                    })
+                if (!current()) return@launch
+                check(result.optionalText("kind") == "continuations.cancelled" && result.optionalText("sessionId") == sessionId)
+                when (result.optionalText("outcome")) {
+                    "cancelled", "not_found" -> attempt.awaitingConfirmation = true
+                    "stale", "unavailable" -> {
+                        update { it.copy(continuations = staleContinuations(it.continuations)) }
+                        finishContinuationStop(id, attempt, failed = true)
+                    }
+                    else -> error("Invalid continuation cancellation outcome")
+                }
+                snapshot(epoch, intent = SnapshotIntent.FRESH)
+                if (current()) finishContinuationStop(id, attempt, failed = true)
+            } catch (e: Exception) {
+                if (current()) finishContinuationStop(id, attempt, failed = true)
+                if (e is CancellationException) throw e
+            }
+        }
     }
 
     override fun refresh() {

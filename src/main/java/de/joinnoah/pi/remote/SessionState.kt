@@ -284,6 +284,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
      * which no replay spans, so a replay keeps such tasks.
      */
     var tasksKnown = false
+    var continuationsKnown = false
 
     /** The events [replay] or [drainPending] applies while it runs, in order; null otherwise. */
     private var applying: MutableList<JsonObject>? = null
@@ -323,6 +324,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         handedOverFrom = previous.handedOverFrom
         journalEpoch = previous.journalEpoch
         tasksKnown = previous.tasksKnown
+        continuationsKnown = previous.continuationsKnown
         // A resync the previous Timeline still owed is owed by this one.
         unknownKindSeen = previous.unknownKindSeen
         retained = emptyList()
@@ -372,6 +374,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         hasSnapshot = false
         journalEpoch = null
         tasksKnown = false
+        continuationsKnown = false
         awaitingReply = false
         detached = false
         if (messages.isNotEmpty()) retain(messages, nextCursor, cursorRevision)
@@ -446,6 +449,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         status = incomingStatus
         journalEpoch = epoch
         tasksKnown = false
+        continuationsKnown = false
         val page = data.array("messages")
         // A resync of the same session keeps the older pages loaded before it: they end where the
         // new page begins, so the prefix before its oldest message and the cursor before them stay.
@@ -511,6 +515,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         cursorRevision = -1L
         hasSnapshot = false
         tasksKnown = false
+        continuationsKnown = false
         pendingEvents.clear()
         heldThrough = -1L
         // Their revisions count in the old epoch.
@@ -657,7 +662,10 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         val required = event.text("kind") == "snapshot.required"
         if (revision < applicableFrom || required) {
             // What changed is unknown until the snapshot, tasks included.
-            if (required) tasksKnown = false
+            if (required) {
+                tasksKnown = false
+                continuationsKnown = false
+            }
             buffer(event)
             // A live event the gap holds back: the resume that fills the gap carries it again.
             if (heard && !replaying) hear(event.long("revision"))

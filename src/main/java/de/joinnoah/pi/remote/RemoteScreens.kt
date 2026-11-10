@@ -4092,7 +4092,7 @@ internal fun RemoteScreen(
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
                             subagentChipShown(strip, insightSheet == InsightSheetKind.SUBAGENTS) ||
                             jobsChipShown(chipJobs, insightSheet == InsightSheetKind.JOBS) || state.pullRequest != null ||
-                            taskInsightShown(state.tasks)
+                            taskInsightShown(state.tasks) || continuationInsightShown(state.continuations)
                     // The chips sit in their own row above the composer, never inside it. While the chat is
                     // compact the row also holds the status chip that stands in for the banners.
                     val pullRequest = state.pullRequest
@@ -4174,6 +4174,7 @@ internal fun RemoteScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             TaskInsightPill(state.tasks) { openInsightSheet(InsightSheetKind.TASKS) }
+                            SessionContinuationPill(state) { openInsightSheet(InsightSheetKind.SCHEDULE) }
                             statusChipLine?.let { line ->
                                 if (line == R.string.remote_context_full_title && shownOffer != null)
                                     ChatStatusChip(
@@ -4549,6 +4550,11 @@ internal fun RemoteScreen(
                     autoFollow = savedViewport?.following ?: false
                 }
             }, onDismiss = { insightSheet = null })
+            InsightSheetKind.SCHEDULE -> SessionContinuationSheet(
+                state,
+                onStop = { id -> chatModel?.stopContinuation(id) },
+                onDismiss = { insightSheet = null },
+            )
             InsightSheetKind.TASKS -> TaskInsightSheet(
                 state.tasks, state.session?.optionalText("title")?.let { displayTitle(it).text }?.takeIf(String::isNotBlank),
                 onDismiss = { insightSheet = null },
@@ -5734,7 +5740,7 @@ private fun rememberTouchExploring(): State<Boolean> {
     return exploring
 }
 
-internal enum class InsightSheetKind { FILES, ERRORS, TASKS, JOBS, SUBAGENTS }
+internal enum class InsightSheetKind { FILES, ERRORS, TASKS, SCHEDULE, JOBS, SUBAGENTS }
 
 internal fun taskInsightShown(tasks: SessionTasks): Boolean =
     tasks.items.isNotEmpty() && tasks.freshness in setOf(TaskFreshness.LIVE, TaskFreshness.STALE)
