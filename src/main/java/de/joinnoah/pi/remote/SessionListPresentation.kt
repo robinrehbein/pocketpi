@@ -56,6 +56,12 @@ internal data class SessionListItem(
     val compacting: Boolean = false,
     /** What the first prompt attached, when the title carried only that (see [displayTitle]). */
     val titleAttachment: TitleAttachment? = null,
+    /**
+     * The context fill the host last reported for a live session (see [sessionListContext]); null
+     * when unknown, on a row that is offline, last known or not yet confirmed, and while a
+     * compaction of the session shows.
+     */
+    val context: SessionContextUsage? = null,
 )
 
 data class ProjectChatSummary(
@@ -181,6 +187,10 @@ internal data class QuickChats(
     val runningTotal: Int = 0,
     /** The names of the projects the running chats belong to, each once, in the order of their first chat. */
     val runningProjects: List<String> = emptyList(),
+    /** How many ready chats each project has, uncut: the "N done" of its Done card. */
+    val readyCounts: Map<String, Int> = emptyMap(),
+    /** How many chats the Recently used group holds, uncut and whether folded or not: its heading's count. */
+    val recentTotal: Int = 0,
 )
 
 /**
@@ -198,7 +208,8 @@ internal fun isReadyRow(status: String?, origin: String?, parentSessionId: Strin
  * Running chats are listed only while their group is expanded ([showRunningAll]); folded, the group is counted
  * ([QuickChats.runningTotal], [QuickChats.runningProjects]). Everything else is recent: offline, unverified, last-known and history chats,
  * orphaned idle subagents and chats of unknown status. Ready chats list unread ones first (by
- * [marks]; a chat without a mark counts as read), then the most recently updated.
+ * [marks]; a chat without a mark counts as read), then the most recently updated. The recent group lists
+ * nothing while it is folded ([showRecent]); [QuickChats.recentTotal] counts it either way.
  */
 internal fun quickChats(
     chats: List<ProjectChatSummary>,
@@ -207,6 +218,7 @@ internal fun quickChats(
     showRecentAll: Boolean,
     marks: Map<String, SessionMark> = emptyMap(),
     showReadyAll: Boolean = false,
+    showRecent: Boolean = true,
 ): QuickChats {
     fun ProjectChatSummary.live() = verified && connected
     fun ProjectChatSummary.status() = session.optionalText("status")
@@ -229,11 +241,13 @@ internal fun quickChats(
         ready = ready.take(if (showReadyAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
         readyExpandable = ready.size > QUICK_CHAT_LIMIT,
         running = if (showRunningAll) running else emptyList(),
-        recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
-        recentExpandable = recent.size > QUICK_CHAT_LIMIT,
+        recent = if (!showRecent) emptyList() else recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        recentExpandable = showRecent && recent.size > QUICK_CHAT_LIMIT,
         readyQueue = ready.filterNot { chat -> chat.session.optionalText("id")?.let(marks::get)?.pinned == true },
         runningTotal = running.size,
         runningProjects = running.distinctBy { it.projectId }.map { it.projectName },
+        readyCounts = ready.groupingBy { it.projectId }.eachCount(),
+        recentTotal = recent.size,
     )
 }
 
@@ -262,19 +276,39 @@ internal fun readyIsOld(updatedAt: Long?, now: Long): Boolean = updatedAt != nul
 data class SessionCounts(val waiting: Int = 0, val running: Int = 0)
 
 /**
- * How many of [sessions] are ready (open, idle, top-level, the Ready group's rule) and unread by
- * [marks]: their result is one the user has not seen yet. This is the "N new" badge of a project
- * row. It lives apart from [SessionCounts] because unread is phone-local (see [sessionUnread]):
- * the repository counts by the Mac's list alone, so the view applies the marks. A session
+ * A project's done chats and how many of them are unread: the "N done" and "N new" badges of its row and the
+ * count of its Done card. One pass by the Done group's rule: a busy subagent lends its main session its
+ * status first ([mainSessionChats]), then a session counts when it is open, idle and top-level ([isReadyRow])
+ * and not hidden on this phone, so "new" never exceeds "done".
+ */
+internal data class ReadyCounts(val done: Int = 0, val unread: Int = 0)
+
+/**
+ * The [ReadyCounts] of a project's [sessions]. Unread is phone-local (see [sessionUnread]), so it lives apart
+ * from [SessionCounts]: the repository counts by the Mac's list alone and the view applies [marks]. A session
  * without a mark counts as read.
  */
-internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
-    sessions.count {
-        val mark = it.optionalText("id")?.let(marks::get)
-        isReadyRow(it.optionalText("status"), it.optionalText("origin"), it.optionalText("parentSessionId")) &&
-            sessionUnread(mark, it["updatedAt"]?.jsonPrimitive?.longOrNull, open = false) &&
-            !sessionHidden(mark, it.optionalText("status"), sessionUpdatedAt(it))
+internal fun readyCounts(sessions: List<JsonObject>, marks: Map<String, SessionMark>): ReadyCounts {
+    var done = 0
+    var unread = 0
+    for (chat in mainSessionChats(sessions.map { ProjectChatSummary("", "", it) })) {
+        val session = chat.session
+        val status = session.optionalText("status")
+        val mark = session.optionalText("id")?.let(marks::get)
+        if (!isReadyRow(status, session.optionalText("origin"), session.optionalText("parentSessionId"))) continue
+        if (sessionHidden(mark, status, sessionUpdatedAt(session))) continue
+        done++
+        if (sessionUnread(mark, session["updatedAt"]?.jsonPrimitive?.longOrNull, open = false)) unread++
     }
+    return ReadyCounts(done, unread)
+}
+
+/** How many of [sessions] are ready and unread by [marks]; see [readyCounts]. */
+internal fun unreadReadyCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int =
+    readyCounts(sessions, marks).unread
+
+/** How many of a project's [sessions] are done, read or unread; see [readyCounts]. */
+internal fun doneCount(sessions: List<JsonObject>, marks: Map<String, SessionMark>): Int = readyCounts(sessions, marks).done
 
 /**
  * A project's sessions for views across projects, such as an activity board, badges or a
@@ -415,6 +449,10 @@ internal fun sessionListItem(
         compacting = connected && confirmed && !loading &&
             availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&
             compactionVisible(compaction, nowMillis),
+        // Like compacting: only a confirmed live row shows it, and a compaction voids it until the next read.
+        context = sessionListContext(session).takeIf {
+            connected && confirmed && !loading && availability != SessionAvailability.OFFLINE && compaction == null
+        },
     )
 }
 

@@ -71,6 +71,23 @@ class FloatingSurfaceTest {
     }
 
     @Test
+    fun sheetBannerIsNeutralAndKeepsTextAndButtonContrast() {
+        for (dark in listOf(false, true)) for (synthwave in listOf(false, true)) {
+            val scheme = remoteColorScheme(dark, synthwave)
+            val tint = sheetBannerColor(scheme)
+            assertTrue(tint.alpha < 1f)
+            assertEquals(scheme.surfaceContainer, tint.copy(alpha = 1f))
+            for (backdrop in listOf(Color.Black, Color.White)) {
+                val sheet = scheme.background.copy(alpha = GLASS_TINT_ALPHA).compositeOver(backdrop)
+                val shown = tint.compositeOver(sheet)
+                val ratio = contrast(shown, scheme.onSurface)
+                assertTrue("dark=$dark synthwave=$synthwave backdrop=$backdrop ratio=$ratio", ratio >= 4.5f)
+            }
+            assertTrue(contrast(scheme.onSurface, scheme.surfaceContainer) >= 4.5f)
+        }
+    }
+
+    @Test
     fun glassTintKeepsAccentsAndCallerAlpha() {
         val scheme = remoteColorScheme(dark = false)
         // Colors keep alpha in 8 bits, so 0.88f reads back as 224/255.

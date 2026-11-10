@@ -250,7 +250,7 @@ internal fun ReadyReviewSheet(
  * card replaces it: the review's only announcement per step.
  */
 @Composable
-private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Long, old: Boolean) {
+internal fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Long, old: Boolean) {
     val title = sessionTitleLabel(item)
     val age =
         item.updatedAt?.let {
@@ -258,6 +258,8 @@ private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Lon
         }
     val oldLabel = stringResource(R.string.remote_session_old)
     val compactingLabel = stringResource(R.string.remote_status_compacting)
+    val contextFill = contextFill(item.context)
+    val contextLabel = contextFillDescription(contextFill)
     val description =
         listOfNotNull(
             title,
@@ -266,52 +268,60 @@ private fun ReadyReviewCard(item: SessionListItem, projectName: String, now: Lon
             oldLabel.takeIf { old },
             compactingLabel.takeIf { item.compacting },
             item.preview,
+            contextLabel,
         ).joinToString(", ")
-    SheetSection(
-        Modifier.testTag("readyReviewCard").clearAndSetSemantics {
-            contentDescription = description
-            liveRegion = LiveRegionMode.Polite
-        }
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                projectName,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (age != null)
+    SheetSection {
+        Column {
+            Column(
+                Modifier.testTag("readyReviewCard")
+                    .clearAndSetSemantics {
+                        contentDescription = description
+                        liveRegion = LiveRegionMode.Polite
+                    }
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = if (contextFill != null) 0.dp else 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    projectName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (age != null)
+                        Text(
+                            age,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    if (item.compacting)
+                        Text(
+                            compactingLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    if (old)
+                        ProjectCountBadge(
+                            oldLabel,
+                            MaterialTheme.colorScheme.surfaceContainerHighest,
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                            "readyReviewOld",
+                            Modifier,
+                        )
+                }
+                if (item.preview != null)
                     Text(
-                        age,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                if (item.compacting)
-                    Text(
-                        compactingLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                if (old)
-                    ProjectCountBadge(
-                        oldLabel,
-                        MaterialTheme.colorScheme.surfaceContainerHighest,
-                        MaterialTheme.colorScheme.onSurfaceVariant,
-                        "readyReviewOld",
-                        Modifier,
+                        item.preview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp).testTag("readyReviewPreview"),
                     )
             }
-            if (item.preview != null)
-                Text(
-                    item.preview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 6,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 4.dp).testTag("readyReviewPreview"),
-                )
+            // Outside the described node, which clears its children; the description says the fill.
+            if (contextFill != null) ContextFillBar(contextFill, Modifier.padding(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 16.dp))
         }
     }
 }

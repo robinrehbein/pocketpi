@@ -492,7 +492,7 @@ class RemoteRepositoryTest {
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
             assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1:"))
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -6984,6 +6984,123 @@ class RemoteRepositoryTest {
         assertEquals(JsonPrimitive(true), transport.sent.last { it.text("type") == "sessions.list" }["includeCompaction"])
     }
 
+    private fun sessionWithContext(id: String) = JsonObject(session(id) + ("context" to Wire.objectOf(
+        "usedTokens" to 164_000, "contextWindow" to 200_000, "percent" to 82,
+    )))
+
+    /** Strips the advertisement from `projects.list` replies on the routes [stripped] names, so discovery falls back. */
+    private fun strippingRoutes(transport: Transport, vararg stripped: String) {
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && stripped.any { request.text("requestId").startsWith("$it:") })
+                JsonObject(checkNotNull(result) - "capabilities")
+            else result
+        }
+    }
+
+    @Test
+    fun listContextOptInNeedsTheV3AdvertisementAndCombinesWithCompaction() = runTest {
+        for (compaction in listOf(false, true)) {
+            val transport = Transport()
+            configure(transport, sessions = listOf(sessionWithContext("other")))
+            advertising(transport, JsonArray(listOfNotNull(
+                SESSION_LIST_CONTEXT_CAPABILITY, SESSION_COMPACTION_LIST_CAPABILITY.takeIf { compaction },
+            ).map(::JsonPrimitive)))
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            assertTrue(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+            val request = transport.sent.last { it.text("type") == "sessions.list" }
+            assertEquals(JsonPrimitive(true), request["includeContext"])
+            assertEquals(if (compaction) JsonPrimitive(true) else null, request["includeCompaction"])
+            val row = repository.state.value.sessions.single { it.text("id") == "other" }
+            assertEquals(82.0, sessionListItem(row, connected = true, loading = false, confirmed = true).context?.percent)
+            repository.disconnect()
+        }
+    }
+
+    @Test
+    fun listContextIsNeverRequestedOnV1OrV2RoutesOrFromTheHandshake() = runTest {
+        for (stripped in listOf(listOf("capabilities.v3"), listOf("capabilities.v3", "capabilities.v2"))) {
+            val transport = Transport()
+            configure(transport)
+            advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY))))
+            strippingRoutes(transport, *stripped.toTypedArray())
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:") })
+            assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+            val lists = transport.sent.filter { it.text("type") == "sessions.list" }
+            assertTrue(lists.isNotEmpty())
+            assertTrue(lists.none { it.containsKey("includeContext") })
+            repository.disconnect()
+        }
+        // Authentication never grants a v3-only capability.
+        val handshake = Transport().also { it.capabilities = setOf(SESSION_LIST_CONTEXT_CAPABILITY) }
+        configure(handshake)
+        val repository = repository(handshake)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+        val lists = handshake.sent.filter { it.text("type") == "sessions.list" }
+        assertTrue(lists.isNotEmpty())
+        assertTrue(lists.none { it.containsKey("includeContext") })
+    }
+
+    @Test
+    fun aCompactionEventDropsTheListedFillUntilTheNextRead() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(sessionWithContext("other")))
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertTrue("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        transport.deliver(Wire.objectOf(
+            "type" to "event", "kind" to "session.compaction", "sessionId" to "other",
+            "revision" to 5, "state" to "done",
+        ))
+        runCurrent()
+        assertFalse("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        advanceTimeBy(5_001)
+        repository.refreshSessions()
+        runCurrent()
+        assertTrue("context" in repository.state.value.sessions.single { it.text("id") == "other" })
+        repository.disconnect()
+    }
+
+    @Test
+    fun listContextStopsAfterTheHostDowngrades() = runTest {
+        val transport = Transport()
+        configure(transport)
+        var advertised = true
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (advertised && request.text("type") == "projects.list" && result != null)
+                JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(SESSION_LIST_CONTEXT_CAPABILITY)))))
+            else result
+        }
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project")
+        repository.activate(selection)
+        runCurrent()
+        assertEquals(JsonPrimitive(true), transport.sent.last { it.text("type") == "sessions.list" }["includeContext"])
+        advertised = false
+        val before = transport.sent.size
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
+        repository.activate(selection)
+        runCurrent()
+        val after = transport.sent.drop(before).filter { it.text("type") == "sessions.list" }
+        assertTrue(after.isNotEmpty())
+        assertTrue(after.none { it.containsKey("includeContext") })
+        repository.disconnect()
+    }
+
     @Test
     fun compactionEventsDuringListRefreshWinOverStaleMetadata() = runTest {
         val transport = Transport().also { it.capabilities = setOf(SESSION_COMPACTION_LIST_CAPABILITY) }
@@ -7432,6 +7549,116 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(82.0, repository.state.value.contextUsage?.percent)
         assertFalse(repository.state.value.contextUsageStale)
+    }
+
+    private val handoverFixture: JsonObject by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/session-handover-v1.json")!!.readText()).jsonObject
+    }
+
+    private fun handoverPayload(name: String) =
+        handoverFixture.getValue("wireValid").jsonArray.map { it.jsonObject }
+            .single { it.text("name") == name }.getValue("payload").jsonObject
+
+    /** A host worker `old-session` on a v3 host that advertises the handover. */
+    private fun handoverHost(transport: Transport) {
+        val worker = session("old-session", origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> JsonObject(
+                    data("projects", listOf(project)) + ("capabilities" to
+                        JsonArray(listOf(SESSION_HANDOVER_CAPABILITY, HOST_WORKER_V2_CAPABILITY, COMPACT_CAPABILITY).map(::JsonPrimitive)))
+                )
+                "session.handover" -> Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+                else -> original(request)
+            }
+        }
+    }
+
+    @Test
+    fun aHandoverRunsFromTheFixtureRequestToTheNewChat() = runTest {
+        val transport = Transport()
+        handoverHost(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "old-session"))
+        runCurrent()
+        assertTrue(handoverAvailable(repository.state.value))
+        repository.startHandover()
+        runCurrent()
+        val sent = transport.sent.single { it.text("type") == "session.handover" }
+        assertEquals(JsonObject(handoverPayload("handover") - "requestId"), JsonObject(sent - "requestId"))
+        val requestId = sent.text("requestId")
+        // Accepted: the progress shows before the first event, and the chat takes no prompt.
+        val accepted = repository.state.value
+        assertFalse(accepted.handoverRequesting)
+        assertEquals(SessionHandover(requestId, HandoverState.SUMMARIZING, live = true), accepted.handover)
+        assertFalse(canSendDraft(accepted.copy(draft = "x")))
+
+        fun event(name: String, revision: Int) = transport.deliver(
+            JsonObject(handoverPayload(name) + ("requestId" to JsonPrimitive(requestId)) + ("revision" to JsonPrimitive(revision)))
+        )
+        event("event-summarizing", 1)
+        event("event-switching", 2)
+        runCurrent()
+        assertEquals(HandoverState.SWITCHING, repository.state.value.handover?.state)
+        val lists = transport.sent.count { it.text("type") == "sessions.list" }
+        event("event-done", 3)
+        runCurrent()
+        assertEquals(SessionHandover(requestId, HandoverState.DONE, "new-session", live = true), repository.state.value.handover)
+        // The list learns the new chat at once.
+        assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > lists)
+    }
+
+    @Test
+    fun aHandoverRefusalIsCachedOrReported() = runTest {
+        for ((code, message) in listOf(
+            "unsupported" to "Handover is available only in chats started from the phone",
+            "unsupported" to EXTENSION_CONTROL_REFUSAL_MESSAGE,
+            "busy" to "Session is busy",
+            "internal" to HANDOVER_NOTHING_MESSAGE,
+            "offline" to "Session is offline",
+        )) {
+            val transport = Transport()
+            handoverHost(transport)
+            transport.failure = { if (it.text("type") == "session.handover") code else null }
+            transport.failureMessage = { message }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "old-session"))
+            runCurrent()
+            repository.startHandover()
+            runCurrent()
+            val state = repository.state.value
+            assertFalse(state.handoverRequesting)
+            assertNull(state.handover)
+            val expected = when (code) {
+                "unsupported" -> R.string.remote_handover_unsupported
+                "busy" -> R.string.remote_handover_busy
+                "internal" -> R.string.remote_handover_nothing
+                else -> R.string.remote_handover_error
+            }
+            assertEquals(message, expected, state.error)
+            // Either unsupported sentence hides the action for this session.
+            assertEquals(message, code != "unsupported", handoverAvailable(state))
+        }
+    }
+
+    @Test
+    fun theOldChatsSnapshotTellsTheOutcomeAfterAReopen() = runTest {
+        val transport = Transport()
+        handoverHost(transport)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot")
+                JsonObject(handoverPayload("snapshot-source-done").getValue("data").jsonObject + ("revision" to JsonPrimitive(0)))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "old-session"))
+        runCurrent()
+        // Only the snapshot reports it: the phone offers the way to the new chat, it does not move.
+        assertEquals(SessionHandover("handover:1", HandoverState.DONE, "new-session"), repository.state.value.handover)
+        assertFalse(handoverBusy(repository.state.value))
     }
 
     private fun forking(
@@ -9413,6 +9640,11 @@ class RemoteRepositoryTest {
         val repo = repository(transport, pagedEditorTestGate = true, pagedEditorStorage = storage, positiveOutcomeTestGate = true)
         repo.activate(RemoteSelection("host", "project", "session")); repo.flush(); runCurrent()
         assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").contains("question_editor_positive_outcome.v1") })
+        // The longest opt-in list still fits the host's 256-byte request ID, nonce included.
+        for (id in transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }) {
+            assertTrue(id, id.toByteArray(Charsets.UTF_8).size <= 256)
+            assertTrue(id, id.substringAfterLast(':').length >= 16)
+        }
         val query = transport.sent.single { it.text("type") == "session.question.editor.outcome.get" }
         assertEquals(Wire.parse("""{"sessionId":"session","questionId":"e","ownerIncarnationId":"owner","grantId":"g","uploadId":"u","commitRequestId":"c","byteLength":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"""), query.obj("receipt"))
         assertTrue(storage.saved.attempts.isEmpty())
@@ -10871,7 +11103,7 @@ class RemoteRepositoryTest {
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
         val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1:"))
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
         assertTrue(ids[1].startsWith("capabilities.v2:"))
         assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
     }

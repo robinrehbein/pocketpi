@@ -243,7 +243,9 @@ internal fun compactAvailable(state: RemoteState): Boolean =
 internal fun canCompact(state: RemoteState, nowMillis: Long): Boolean =
     state.connected && !state.loading && state.status == "idle" &&
         !state.sending && state.answering.isEmpty() && !state.configurationChanging &&
-        !state.compactionRequesting && !compactionVisible(state.compaction, nowMillis)
+        !state.compactionRequesting && !compactionVisible(state.compaction, nowMillis) &&
+        // The old chat answers busy to everything while its handover runs.
+        !handoverBusy(state)
 
 /**
  * The session settings sheet is offered: the host advertises [SETTINGS_CAPABILITY] next to the

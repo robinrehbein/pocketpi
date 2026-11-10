@@ -66,7 +66,9 @@ private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
 private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
-private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+$SESSION_ACTIVITY_CAPABILITY:"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+$SESSION_ACTIVITY_CAPABILITY+$SUBAGENT_METADATA_CAPABILITY:"
+/** The host's bound on a request ID (parse.ts `opaqueId`); the opt-in route ID shortens its nonce to fit. */
+private const val MAX_REQUEST_ID_BYTES = 256
 
 /** Fresh snapshots that activity events may ask for per [ACTIVITY_SNAPSHOT_WINDOW_MILLIS]. */
 private const val MAX_ACTIVITY_SNAPSHOT_REQUESTS = 4
@@ -347,6 +349,8 @@ class DefaultRemoteRepository(
             PROMPT_DELIVERY_CAPABILITY,
             // Granted per connection and on route v3 only; see [executionActivityGranted].
             SESSION_ACTIVITY_CAPABILITY,
+            // Granted per connection and on route v3 only, to a request that opted in.
+            SUBAGENT_METADATA_CAPABILITY,
             QUESTION_DETAILS_CAPABILITY,
             QUESTION_EDITOR_CAPABILITY,
             NATIVE_EDITOR_CAPABILITY,
@@ -366,6 +370,8 @@ class DefaultRemoteRepository(
             // Only on capability route v3, never at authentication.
             SESSION_CLOSE_TERMINAL_CAPABILITY,
             HOST_STATS_CAPABILITY,
+            SESSION_HANDOVER_CAPABILITY,
+            SESSION_LIST_CONTEXT_CAPABILITY,
             GIT_CAPABILITY,
             GIT_WRITE_CAPABILITY,
             GIT_PUSH_CAPABILITY,
@@ -1385,7 +1391,7 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY),
+                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, SUBAGENT_METADATA_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -1904,10 +1910,12 @@ class DefaultRemoteRepository(
     private suspend fun readProjectList(routeId: String, project: JsonObject, connection: Long): List<JsonObject>? {
         if (connection != generation || activeHost?.routeId != routeId) return null
         val includeCompaction = SESSION_COMPACTION_LIST_CAPABILITY in state.value.capabilities
+        val includeContext = SESSION_LIST_CONTEXT_CAPABILITY in state.value.capabilities
         val compactionWatermark = sessionCompactions.watermark()
-        val sessions = connectionRequest("sessions.list", *sessionListFields(project.text("id"), includeCompaction)).array("items")
+        val sessions = connectionRequest("sessions.list", *sessionListFields(project.text("id"), includeCompaction, includeContext)).array("items")
         // A reply to a connection that is gone, or to another Mac, says nothing about this one.
         if (connection != generation || activeHost?.routeId != routeId) return null
+        if (includeContext) reportMalformedListContexts(sessions)
         if (includeCompaction) {
             sessionCompactions.list(sessions, compactionWatermark)
             update { it.copy(sessionCompactions = sessionCompactions.values) }
@@ -2416,6 +2424,7 @@ class DefaultRemoteRepository(
                 configurationChanging = false,
                 contextLoading = false,
                 compactionRequesting = false,
+                handoverRequesting = false,
                 commandsLoading = false,
                 // A reconnect re-activates the chat on screen, and select() decides what stays.
                 toolOutput = it.toolOutput?.takeIf { output -> it.stale && output.text != null },
@@ -2578,7 +2587,10 @@ class DefaultRemoteRepository(
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
+                handover = null,
+                handedOverFrom = null,
                 compactionRequesting = false,
+                handoverRequesting = false,
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 // A login goes on on the Mac; the same host recovers it once it is reachable.
@@ -2619,7 +2631,12 @@ class DefaultRemoteRepository(
             if (pagedConfigured) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN" +
                 (if (positiveConfigured) "+$QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN" else "") + ":" else QUESTION_DETAILS_OPT_IN
         } else ""
-        val id = if (type == "projects.list") "$capabilityRoute$optIn$requestId" else sessionsListRequestId(type, requestId)
+        // The full opt-in list leaves the random nonce at least 17 of its 22 characters.
+        val id = if (type == "projects.list") "$capabilityRoute$optIn".let {
+            check(it.length <= MAX_REQUEST_ID_BYTES - 16) { "Opt-in list leaves no room for a nonce" }
+            it + requestId.take(MAX_REQUEST_ID_BYTES - it.length)
+        }
+            else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         recordIssuedRequest(id)
         val completion = CompletableDeferred<JsonObject>()
@@ -2714,10 +2731,10 @@ class DefaultRemoteRepository(
                     (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
                 val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, SESSION_CONTINUATIONS_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, SESSION_CONTINUATIONS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) || revision == 3) && (it != SUBAGENT_METADATA_CAPABILITY || subagentMetadataOptedIn(id)) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 if (revision < 3)
-                    update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY)) }
+                    update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, SUBAGENT_METADATA_CAPABILITY)) }
                 val hadContinuations = canReadContinuations()
                 if (revision == 3 && SESSION_CONTINUATIONS_CAPABILITY in merged) continuationsCapabilityKnown = true
                 val hadTasks = canReadTasks()
@@ -2728,10 +2745,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 // A snapshot can arrive while capability discovery is still in flight.
                 if (promptDeliveryGeneration == generation) timeline?.let { current ->
@@ -3548,6 +3565,28 @@ class DefaultRemoteRepository(
         return true
     }
 
+    /**
+     * A compaction that started or ended makes the fill a list read reported for [sessionId] stale:
+     * its live rows drop it until the next `sessions.list` reports a new one.
+     */
+    private fun dropListContext(sessionId: String) {
+        fun dropped(row: JsonObject): JsonObject =
+            if (row.optionalText("id") == sessionId && "context" in row) JsonObject(row - "context") else row
+        if (state.value.sessions.any { it.optionalText("id") == sessionId && "context" in it })
+            update { it.copy(sessions = it.sessions.map(::dropped)) }
+        val routeId = activeHost?.routeId ?: return
+        if (projectChatCandidates.values.any { chats -> chats.any { it.session.optionalText("id") == sessionId && "context" in it.session } }) {
+            projectChatCandidates.replaceAll { _, chats -> chats.map { it.copy(session = dropped(it.session)) } }
+            publishProjectChats(routeId, persist = false)
+        }
+        if (projectSessionsRoute == routeId &&
+            projectSessionsAggregate.values.any { entry -> entry.sessions.any { it.optionalText("id") == sessionId && "context" in it } }
+        ) {
+            projectSessionsAggregate.replaceAll { _, entry -> entry.patched(::dropped) }
+            publishProjectSessions(routeId)
+        }
+    }
+
     private fun eventEffects(payload: JsonObject) {
         if (payload.text("kind") == "session.activity") sessionActivityEvent(payload)
         if (payload.text("kind") == "message.upsert") actorActivityEvent(payload)
@@ -3555,6 +3594,7 @@ class DefaultRemoteRepository(
         if (payload.text("kind") == "session.compaction" && eventEpochApplies(payload)) {
             sessionCompactions.event(payload)
             update { it.copy(sessionCompactions = sessionCompactions.values) }
+            payload.optionalText("sessionId")?.let(::dropListContext)
         }
         selectedChatHints(payload)
         if (payload.text("kind") == "advisor.status") {
@@ -3626,6 +3666,11 @@ class DefaultRemoteRepository(
         if (payload.text("kind") == "command.status") commandReceipt(payload)
         if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
         if (payload.text("kind") == "session.notice") sessionNotice(payload)
+        // A finished handover adds the new chat and takes the old one offline; after a timeout
+        // only the list tells whether the new chat exists.
+        if (payload.text("kind") == "session.handover") sessionHandoverEvent(payload)?.let { handover ->
+            if (handover.state == HandoverState.DONE || handover.error == HandoverError.TIMEOUT) readSessions()
+        }
     }
 
     /**
@@ -4085,19 +4130,17 @@ class DefaultRemoteRepository(
         sessionStatusOverrides.clear()
         sessionTitleOverrides.clear()
         val includeCompaction = SESSION_COMPACTION_LIST_CAPABILITY in state.value.capabilities
+        val includeContext = SESSION_LIST_CONTEXT_CAPABILITY in state.value.capabilities
         val compactionWatermark = sessionCompactions.watermark()
-        val items = request("sessions.list", epoch, *sessionListFields(projectId, includeCompaction)).array("items")
+        val items = request("sessions.list", epoch, *sessionListFields(projectId, includeCompaction, includeContext)).array("items")
         checkEpoch(epoch)
+        if (includeContext) reportMalformedListContexts(items)
         if (includeCompaction) {
             sessionCompactions.list(items, compactionWatermark)
             update { it.copy(sessionCompactions = sessionCompactions.values) }
         }
         return items.map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
     }
-
-    private fun sessionListFields(projectId: String, includeCompaction: Boolean): Array<Pair<String, Any?>> =
-        if (includeCompaction) arrayOf("projectId" to projectId, "includeCompaction" to true)
-        else arrayOf("projectId" to projectId)
 
     /**
      * [persist]: the chat's structure changed (a snapshot), so the navigation snapshot is written
@@ -4120,6 +4163,8 @@ class DefaultRemoteRepository(
                 compaction = t.compaction,
                 suggestion = t.suggestion,
                 pullRequest = t.pullRequest,
+                handover = t.handover,
+                handedOverFrom = t.handedOverFrom,
                 pendingSend = settledSend(it.pendingSend, it.messages),
             )
             else
@@ -4134,6 +4179,8 @@ class DefaultRemoteRepository(
                     compaction = t.compaction,
                     suggestion = t.suggestion,
                     pullRequest = t.pullRequest,
+                    handover = t.handover,
+                    handedOverFrom = t.handedOverFrom,
                     pendingSend = settledSend(it.pendingSend, t.messages),
                 )
         }
@@ -4734,7 +4781,10 @@ class DefaultRemoteRepository(
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
+                handover = null,
+                handedOverFrom = null,
                 compactionRequesting = false,
+                handoverRequesting = false,
                 // Only a download that can still finish, or has, stays; a stopped one would spin.
                 toolOutput = it.toolOutput?.takeIf { output ->
                     sameSession &&
@@ -4958,7 +5008,10 @@ class DefaultRemoteRepository(
                         compaction = null,
                         suggestion = null,
                         pullRequest = null,
+                        handover = null,
+                        handedOverFrom = null,
                         compactionRequesting = false,
+                        handoverRequesting = false,
                         // A finished download stays readable; a running one stopped above.
                         toolOutput = it.toolOutput?.takeIf { output -> reconnecting && output.text != null },
                     )
@@ -5562,6 +5615,8 @@ class DefaultRemoteRepository(
                         sessionCompactions = sessionCompactions.values,
                         suggestion = null,
                         pullRequest = null,
+                        handover = null,
+                        handedOverFrom = null,
                     )
                 }
                 if (previous.session != null) {
@@ -5926,7 +5981,10 @@ class DefaultRemoteRepository(
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
+                handover = null,
+                handedOverFrom = null,
                 compactionRequesting = false,
+                handoverRequesting = false,
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
@@ -6743,6 +6801,51 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch) update { it.copy(compactionRequesting = false) }
             }
         }
+    }
+
+    override fun startHandover() {
+        val current = state.value
+        val sessionId = current.selection.sessionId ?: return
+        if (!canHandover(current, now()) || current.configurationChanging || activeHost?.routeId != current.selection.routeId) return
+        val epoch = selectionEpoch
+        val requestId = Wire.random()
+        update { it.copy(handoverRequesting = true) }
+        scope.launch {
+            try {
+                val result = request("session.handover", epoch, "sessionId" to sessionId, requestId = requestId)
+                require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+                // The progress shows from here on, also before the first event arrives.
+                if (epoch == selectionEpoch) timeline?.takeIf { it.sessionId == sessionId }?.let {
+                    it.handoverAccepted(requestId)
+                    publishTimeline()
+                }
+            } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.startHandover", e)
+                if (epoch == selectionEpoch) {
+                    when {
+                        // Either sentence: a terminal or RPC session, or a worker whose pi has to
+                        // reload its extension first. The action goes for this session.
+                        e.isUnsupported -> {
+                            markSessionControlUnsupported(sessionId, ExtensionControl.HANDOVER)
+                            reportError(R.string.remote_handover_unsupported)
+                        }
+                        // pi started something meanwhile; the chat shows that, so a short notice is enough.
+                        e.hostCode == "busy" -> reportError(R.string.remote_handover_busy)
+                        e.hostCode == "internal" && (e as? RemoteRequestException)?.hostMessage == HANDOVER_NOTHING_MESSAGE ->
+                            reportError(R.string.remote_handover_nothing)
+                        else -> reportError(R.string.remote_handover_error)
+                    }
+                }
+            } finally {
+                if (epoch == selectionEpoch) update { it.copy(handoverRequesting = false) }
+            }
+        }
+    }
+
+    override fun handoverFollowed(requestId: String) {
+        val current = timeline?.takeIf { it.sessionId == state.value.selection.sessionId } ?: return
+        current.handoverFollowed(requestId)
+        publishTimeline()
     }
 
     private fun canChangeConfiguration(): Boolean =

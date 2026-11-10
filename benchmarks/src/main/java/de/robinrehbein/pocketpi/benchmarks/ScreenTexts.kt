@@ -1,6 +1,7 @@
 package de.robinrehbein.pocketpi.benchmarks
 
 import android.graphics.Rect
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
@@ -46,7 +47,7 @@ internal fun UiDevice.tapUntil(
             if (hasObject(expected)) return
             check(hasObject(By.res("projectsMacHeading"))) { "$what. Left Projects. " + screenTexts() }
             try {
-                projectRow(rowTag, trace)?.click()
+                projectRow(rowTag, trace)?.activateRow()
             } catch (_: StaleObjectException) {
                 return@repeat
             }
@@ -54,6 +55,27 @@ internal fun UiDevice.tapUntil(
         if (wait(Until.hasObject(expected), timeoutMs)) return
     }
     error("$what. " + screenTexts() + " Navigation: " + trace.joinToString(" | "))
+}
+
+/** Activate the checked identity, not coordinates that may belong to another row after layout. */
+private fun UiObject2.activateRow() {
+    // Featured-chat tags wrap a heading and the interactive session row. Find the nearest
+    // actionable descendant, without descending into its secondary controls (such as Close).
+    var level = listOf(accessibilityNodeInfo)
+    while (level.isNotEmpty()) {
+        val targets = level.filter { node ->
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
+        }
+        if (targets.isNotEmpty()) {
+            check(targets.size == 1) { "The checked row has ambiguous accessibility click targets" }
+            check(targets.single().performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                "The checked row did not accept its accessibility click action"
+            }
+            return
+        }
+        level = level.flatMap { node -> (0 until node.childCount).mapNotNull(node::getChild) }
+    }
+    error("The checked row has no accessibility click action")
 }
 
 /** The fixture project of src/benchmark/assets/connected-flow.json, as its Projects row is tagged. */
@@ -143,7 +165,7 @@ internal fun UiDevice.openProjectUntil(
         // The list finder must never scroll a chat, a host picker, or the system launcher.
         if (!hasObject(By.res("projectsMacHeading"))) return@repeat
         try {
-            projectRow(rowTag, trace)?.click()
+            projectRow(rowTag, trace)?.activateRow()
         } catch (_: StaleObjectException) {
             return@repeat
         }

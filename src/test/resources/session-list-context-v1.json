@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "capability": "session.list.context.v1",
+  "wireValid": [
+    {
+      "name": "list-request",
+      "payload": {
+        "type": "sessions.list",
+        "requestId": "list:1",
+        "projectId": "project",
+        "includeContext": true
+      }
+    },
+    {
+      "name": "list-request-with-compaction",
+      "payload": {
+        "type": "sessions.list",
+        "requestId": "host_worker.v1:list:2",
+        "projectId": "project",
+        "includeCompaction": true,
+        "includeContext": true
+      }
+    },
+    {
+      "name": "row-with-context",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": 200000,
+                "percent": 2.5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "row-after-compaction",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:list:2",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "worker",
+              "status": "idle",
+              "context": {
+                "usedTokens": null,
+                "contextWindow": 200000,
+                "percent": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "row-over-window",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 210000,
+                "contextWindow": 200000,
+                "percent": 105
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "row-without-context",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "saved",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "history",
+              "status": "offline"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": 200000,
+                "percent": 2.5,
+                "model": "anthropic/claude"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "missing-percent",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": 200000
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "negative-tokens",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": -1,
+                "contextWindow": 200000,
+                "percent": 2.5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fractional-tokens",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 1.5,
+                "contextWindow": 200000,
+                "percent": 2.5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "zero-window",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": 0,
+                "percent": 2.5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "null-window",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": null,
+                "percent": 2.5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "negative-percent",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": 200000,
+                "percent": -1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "string-percent",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": 5000,
+                "contextWindow": 200000,
+                "percent": "2.5"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "percent-without-tokens",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": {
+                "usedTokens": null,
+                "contextWindow": 200000,
+                "percent": 2.5
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "null-context",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "chat",
+              "projectId": "project",
+              "title": "Fix login",
+              "origin": "tui",
+              "status": "idle",
+              "context": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "request-flag-false",
+      "payload": {
+        "type": "sessions.list",
+        "requestId": "list:1",
+        "projectId": "project",
+        "includeContext": false
+      }
+    },
+    {
+      "name": "request-flag-on-create",
+      "payload": {
+        "type": "sessions.create",
+        "requestId": "create:1",
+        "projectId": "project",
+        "includeContext": true
+      }
+    },
+    {
+      "name": "context-outside-list",
+      "payload": {
+        "type": "result",
+        "requestId": "open:1",
+        "ok": true,
+        "data": {
+          "kind": "session",
+          "session": {
+            "id": "chat",
+            "projectId": "project",
+            "title": "Fix login",
+            "origin": "tui",
+            "status": "idle",
+            "context": {
+              "usedTokens": 5000,
+              "contextWindow": 200000,
+              "percent": 2.5
+            }
+          }
+        }
+      }
+    }
+  ]
+}

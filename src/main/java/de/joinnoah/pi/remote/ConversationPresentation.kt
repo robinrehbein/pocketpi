@@ -25,6 +25,8 @@ internal sealed interface ConversationItem {
         val pendingState: PendingSendState? = null,
         /** A terminal interruption, without implying who initiated it. */
         val interrupted: Boolean = false,
+        /** Set on the summary a handover started this chat with; it shows as a card, not a bubble. */
+        val handover: MessageHandover? = null,
     ) : ConversationItem
 
     /** A host-identified async answer, either a jump marker or a standalone history fallback. */
@@ -70,8 +72,25 @@ internal sealed interface ConversationItem {
         val truncated: Boolean,
         val toolCallId: String? = null,
         val outputMessageId: String? = null,
+        /** Original cards from one assistant tool-call batch; never includes chains. */
+        val constituents: List<Subagent> = emptyList(),
     ) : ConversationItem
 }
+
+/** The exact originating card and its local row index, for navigation and actor lookup. */
+internal fun ConversationItem.Subagent.rowSource(index: Int): Pair<ConversationItem.Subagent, Int> {
+    require(index in agents.indices)
+    if (constituents.isEmpty()) return this to index
+    var remaining = index
+    for (card in constituents) {
+        if (remaining < card.agents.size) return card.rowSource(remaining)
+        remaining -= card.agents.size
+    }
+    error("Missing constituent subagent row")
+}
+
+internal fun ConversationItem.Subagent.originalCards(): List<ConversationItem.Subagent> =
+    if (constituents.isEmpty()) listOf(this) else constituents.flatMap { it.originalCards() }
 
 internal data class AgentProgress(
     val name: String,
@@ -93,6 +112,8 @@ internal data class AgentProgress(
     val executionActivity: ActivitySnapshot? = null,
     /** The agent's own `needsInput: true` as recorded; like [executionActivity], not live proof. */
     val needsInput: Boolean = false,
+    /** Run-bound statistics (`subagent_metadata.v1`); shown only while the connection grants it. */
+    val metadata: AgentMetadata? = null,
 )
 
 /** Token usage of one assistant message; [cost] is USD when the host knew it. */
@@ -243,6 +264,8 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
         // invalid there rejects the message on the host, so here it drops the agent, never just the
         // field, so a bad instance or a `needsInput: false` cannot leave a live-looking row.
         val structured = structuredAgentFields(agent) ?: return@mapNotNull null
+        // `metadata` likewise: parse.ts rejects the message for an invalid one, so here the agent goes.
+        val metadata = if (!agent.containsKey("metadata")) null else parseAgentMetadata(agent["metadata"]) ?: return@mapNotNull null
         AgentProgress(
             name,
             state,
@@ -256,13 +279,14 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
             spawnToolCallId = structured.spawnToolCallId,
             executionActivity = structured.executionActivity,
             needsInput = structured.needsInput,
+            metadata = metadata,
         )
     }.orEmpty().let { agents ->
-        // An instance ID listed twice names no single run: neither row keeps its structured fields.
+        // An instance ID listed twice names no single run: neither row keeps its structured fields or metadata.
         val counts = agents.mapNotNull { it.instanceId }.groupingBy { it }.eachCount()
         agents.map {
             if (it.instanceId != null && counts.getValue(it.instanceId) > 1)
-                it.copy(instanceId = null, spawnToolCallId = null, executionActivity = null, needsInput = false)
+                it.copy(instanceId = null, spawnToolCallId = null, executionActivity = null, needsInput = false, metadata = null)
             else it
         }
     }
@@ -555,7 +579,7 @@ private class Segment(val links: MessageLinks, val context: MessageContext, val 
     /** File touches with their index in [items]. */
     val touches = items.withIndex().mapNotNull { (index, item) -> fileTouch(item)?.let { index to it } }
 
-    val subagents = items.filterIsInstance<ConversationItem.Subagent>()
+    val subagents = items.filterIsInstance<ConversationItem.Subagent>().flatMap { it.originalCards() }
 }
 
 /**
@@ -683,6 +707,16 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
     val timestamp = message.messageTimestamp()
     if (role == "user" && links.questionnaire != null) {
         add(ConversationItem.QuestionnaireAnswer(id, id, links.questionnaire, context.questionnaireTarget, timestamp, userMessageBody(message)))
+        return@buildList
+    }
+    // The summary is the message's whole text, Markdown the host wrote; it carries nothing else.
+    if (role == "user") messageHandover(message)?.let { handover ->
+        add(
+            ConversationItem.Bubble(
+                id, id, role, messageAuthor(message), message.optionalText("text").orEmpty(), null, truncated, timestamp,
+                handover = handover,
+            )
+        )
         return@buildList
     }
     if (role == "tool") {
@@ -850,6 +884,37 @@ private fun messageItems(links: MessageLinks, context: MessageContext): List<Con
                     )
                 )
             }
+        }
+    }
+    // Only this assistant message proves batch membership. Existing parallel/chain cards keep
+    // their own semantics; only single-agent calls share a common header.
+    if (role == "assistant") {
+        val members = filterIsInstance<ConversationItem.Subagent>().filter {
+            !it.legacy && it.mode == "single" && it.agents.size == 1
+        }
+        // Reserve the batch identity from the first progress result, even while other calls
+        // still render as placeholders. Otherwise the second result replaces the first card.
+        if (members.isNotEmpty()) {
+            val first = members.first()
+            val memberIds = members.mapTo(HashSet()) { it.id }
+            val grouped = first.copy(
+                // Progress may arrive out of order; identity belongs to the batch, not its first result.
+                id = "$id-agent-batch",
+                mode = "parallel",
+                agents = members.flatMap { it.agents },
+                output = null,
+                truncated = members.any { it.truncated },
+                constituents = members,
+            )
+            val combined = mapNotNull { entry ->
+                when {
+                    entry.id == first.id -> grouped
+                    entry.id in memberIds -> null
+                    else -> entry
+                }
+            }
+            clear()
+            addAll(combined)
         }
     }
     if (usage != null || interrupted) {

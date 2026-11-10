@@ -1,0 +1,490 @@
+{
+  "version": 1,
+  "capability": "session.handover.v1",
+  "wireValid": [
+    {
+      "name": "handover",
+      "payload": {
+        "type": "session.handover",
+        "requestId": "handover:1",
+        "sessionId": "old-session"
+      }
+    },
+    {
+      "name": "handover-accepted",
+      "payload": {
+        "type": "result",
+        "requestId": "handover:1",
+        "ok": true,
+        "data": {
+          "kind": "accepted",
+          "sessionId": "old-session"
+        }
+      }
+    },
+    {
+      "name": "handover-busy",
+      "payload": {
+        "type": "result",
+        "requestId": "handover:1",
+        "ok": false,
+        "error": {
+          "code": "busy",
+          "message": "Session is busy"
+        }
+      }
+    },
+    {
+      "name": "handover-unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "handover:1",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Handover is available only in chats started from the phone"
+        }
+      }
+    },
+    {
+      "name": "handover-unsupported-extension",
+      "payload": {
+        "type": "result",
+        "requestId": "handover:1",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Reload the pi remote extension to use this control"
+        }
+      }
+    },
+    {
+      "name": "handover-offline",
+      "payload": {
+        "type": "result",
+        "requestId": "handover:1",
+        "ok": false,
+        "error": {
+          "code": "offline",
+          "message": "Session is offline"
+        }
+      }
+    },
+    {
+      "name": "event-summarizing",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 7,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "summarizing"
+      }
+    },
+    {
+      "name": "event-switching",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 8,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "switching"
+      }
+    },
+    {
+      "name": "event-done",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 10,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "done",
+        "targetSessionId": "new-session"
+      }
+    },
+    {
+      "name": "event-done-partial",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 10,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "done",
+        "targetSessionId": "new-session",
+        "partial": true
+      }
+    },
+    {
+      "name": "event-failed-busy",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "busy"
+      }
+    },
+    {
+      "name": "event-failed-changed",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "changed"
+      }
+    },
+    {
+      "name": "event-failed-too-large",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "too_large"
+      }
+    },
+    {
+      "name": "event-failed-summary-failed",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "summary_failed"
+      }
+    },
+    {
+      "name": "event-failed-cancelled",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "cancelled"
+      }
+    },
+    {
+      "name": "event-failed-offline",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "offline"
+      }
+    },
+    {
+      "name": "event-failed-timeout",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "timeout"
+      }
+    },
+    {
+      "name": "snapshot-source-summarizing",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "old-session",
+          "revision": 7,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "handover": {
+            "requestId": "handover:1",
+            "state": "summarizing"
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-source-done",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:2",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "old-session",
+          "revision": 11,
+          "status": "offline",
+          "messages": [],
+          "pendingQuestions": [],
+          "handover": {
+            "requestId": "handover:1",
+            "state": "done",
+            "targetSessionId": "new-session"
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-target",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:3",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "new-session",
+          "revision": 0,
+          "status": "idle",
+          "messages": [
+            {
+              "id": "seed-1",
+              "role": "user",
+              "text": "## Goal\nShip the handover.\n\n## Next steps\n1. Run the checks.",
+              "state": "complete",
+              "timestamp": 1762272000000,
+              "handover": {
+                "sourceSessionId": "old-session"
+              }
+            }
+          ],
+          "pendingQuestions": [],
+          "handedOverFrom": {
+            "sourceSessionId": "old-session",
+            "seeded": true
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-target-partial",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:4",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "new-session",
+          "revision": 0,
+          "status": "idle",
+          "messages": [
+            {
+              "id": "seed-1",
+              "role": "user",
+              "text": "## Goal\nShip the handover.\n\n## Next steps\n1. Run the checks.",
+              "state": "complete",
+              "handover": {
+                "sourceSessionId": "old-session",
+                "partial": true
+              }
+            }
+          ],
+          "pendingQuestions": [],
+          "handedOverFrom": {
+            "sourceSessionId": "old-session",
+            "seeded": true
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-target-unseeded",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:5",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "new-session",
+          "revision": 0,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "handedOverFrom": {
+            "sourceSessionId": "old-session",
+            "seeded": false
+          }
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "handover-extra-key",
+      "payload": {
+        "type": "session.handover",
+        "requestId": "handover:1",
+        "sessionId": "old-session",
+        "instructions": "x"
+      }
+    },
+    {
+      "name": "handover-missing-session",
+      "payload": {
+        "type": "session.handover",
+        "requestId": "handover:1"
+      }
+    },
+    {
+      "name": "event-done-without-target",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 10,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "done"
+      }
+    },
+    {
+      "name": "event-failed-unknown-error",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "quota"
+      }
+    },
+    {
+      "name": "event-failed-with-target",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 9,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "failed",
+        "error": "busy",
+        "targetSessionId": "new-session"
+      }
+    },
+    {
+      "name": "event-summarizing-with-error",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 7,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "summarizing",
+        "error": "busy"
+      }
+    },
+    {
+      "name": "event-unknown-state",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 7,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "queued"
+      }
+    },
+    {
+      "name": "event-partial-false",
+      "payload": {
+        "type": "event",
+        "sessionId": "old-session",
+        "revision": 10,
+        "kind": "session.handover",
+        "requestId": "handover:1",
+        "state": "done",
+        "targetSessionId": "new-session",
+        "partial": false
+      }
+    },
+    {
+      "name": "snapshot-handed-over-without-seeded",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:5",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "new-session",
+          "revision": 0,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "handedOverFrom": {
+            "sourceSessionId": "old-session"
+          }
+        }
+      }
+    },
+    {
+      "name": "message-handover-on-assistant",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:3",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "new-session",
+          "revision": 0,
+          "status": "idle",
+          "messages": [
+            {
+              "id": "a-1",
+              "role": "assistant",
+              "text": "x",
+              "state": "complete",
+              "handover": {
+                "sourceSessionId": "old-session"
+              }
+            }
+          ],
+          "pendingQuestions": []
+        }
+      }
+    },
+    {
+      "name": "message-handover-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "snap:3",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "new-session",
+          "revision": 0,
+          "status": "idle",
+          "messages": [
+            {
+              "id": "seed-1",
+              "role": "user",
+              "text": "x",
+              "state": "complete",
+              "handover": {
+                "sourceSessionId": "old-session",
+                "nonce": "abcdefgh"
+              }
+            }
+          ],
+          "pendingQuestions": []
+        }
+      }
+    }
+  ]
+}

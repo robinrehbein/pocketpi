@@ -149,6 +149,11 @@ internal fun SessionListRow(
     /** The row is hidden on this phone and listed only because hidden rows are shown. */
     hidden: Boolean = false,
     compactionFrame: State<Int>? = null,
+    activity: ActivitySnapshot.Active? = null,
+    /** What the row paints over its swipe background: the page's background, or the colour of the card it sits in. */
+    containerColor: Color = MaterialTheme.colorScheme.background,
+    /** A control at the row's end, such as an inline Close; it moves with the row when swiped. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     fun available(action: SwipeAction): SessionSwipe =
         effectiveSessionSwipe(action, closeAvailable, onRename != null, onHide != null, onUnhide != null && hidden)
@@ -157,9 +162,18 @@ internal fun SessionListRow(
     val startToEnd = available(swipe.second)
     val title = sessionTitleLabel(item)
     val subagentLabel = stringResource(R.string.remote_subagent)
+    val liveActivity = activity.takeIf { !closing && !item.lastKnown && !item.compacting && item.availability == SessionAvailability.RUNNING }
+    val phaseLabel = when (liveActivity?.phase) {
+        ActivityPhase.Pending -> R.string.remote_subagent_phase_pending
+        ActivityPhase.Thinking -> R.string.remote_subagent_phase_thinking
+        ActivityPhase.Writing -> R.string.remote_subagent_phase_writing
+        ActivityPhase.Tool -> R.string.remote_subagent_phase_tool
+        null -> null
+    }
     val reported =
         stringResource(
-            if (item.compacting) R.string.remote_status_compacting
+            if (phaseLabel != null) phaseLabel
+            else if (item.compacting) R.string.remote_status_compacting
             else when (item.availability) {
                 SessionAvailability.IDLE -> R.string.remote_status_idle
                 SessionAvailability.RUNNING -> R.string.remote_status_running
@@ -173,7 +187,9 @@ internal fun SessionListRow(
         else if (item.lastKnown) stringResource(R.string.remote_status_last_known, reported)
         else reported
     val statusColor =
-        if (item.lastKnown) MaterialTheme.colorScheme.outline else sessionStatusColor(item.availability)
+        if (item.lastKnown) MaterialTheme.colorScheme.outline
+        else if (liveActivity != null) activityPhaseColor(liveActivity.phase, liveActivity.thinkingLevel)
+        else sessionStatusColor(item.availability)
     val copyExplanation = stringResource(R.string.remote_history_note)
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
@@ -235,6 +251,8 @@ internal fun SessionListRow(
                 DateUtils.getRelativeTimeSpanString(minOf(it, now), now, DateUtils.MINUTE_IN_MILLIS).toString()
             }
         else null
+    val contextFill = contextFill(item.context)
+    val contextLabel = contextFillDescription(contextFill)
     val rowDescription =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
@@ -249,6 +267,7 @@ internal fun SessionListRow(
             relativeAge,
             item.preview,
             status,
+            contextLabel,
         ).joinToString(", ")
     SnapBackSwipeBox(
         enableStartToEnd = startToEnd != SessionSwipe.NONE,
@@ -277,210 +296,220 @@ internal fun SessionListRow(
         },
     ) {
         Column(
-            Modifier.background(MaterialTheme.colorScheme.background)
+            Modifier.background(containerColor)
         ) {
-            Row(
-                modifier =
-                    Modifier.fillMaxWidth()
-                        // The press ripple follows the rounded selection instead of a square.
-                        .clip(MaterialTheme.shapes.medium)
-                        .then(
-                            if (selected)
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    MaterialTheme.shapes.medium,
-                                )
-                            else Modifier
-                        )
-                        .semantics {
-                            if (selected) this.selected = true
-                            contentDescription = rowDescription
-                            if (item.continuesAsCopy) stateDescription = copyExplanation
-                            customActions = buildList {
-                                if (onRename != null) add(CustomAccessibilityAction(renameLabel) {
-                                    onRename()
-                                    true
-                                })
-                                if (closeAvailable) add(CustomAccessibilityAction(closeLabel) {
-                                    onClose()
-                                    true
-                                })
-                                if (onHide != null) add(CustomAccessibilityAction(hideLabel) {
-                                    onHide()
-                                    true
-                                })
-                                if (hidden && onUnhide != null) add(CustomAccessibilityAction(unhideLabel) {
-                                    onUnhide()
-                                    true
-                                })
+            // The trailing control sits in the swiped content, so it moves with the row.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier =
+                        Modifier.weight(1f)
+                            // The press ripple follows the rounded selection instead of a square.
+                            .clip(MaterialTheme.shapes.medium)
+                            .then(
+                                if (selected)
+                                    Modifier.background(
+                                        MaterialTheme.colorScheme.secondaryContainer,
+                                        MaterialTheme.shapes.medium,
+                                    )
+                                else Modifier
+                            )
+                            .semantics {
+                                if (selected) this.selected = true
+                                contentDescription = rowDescription
+                                if (item.continuesAsCopy) stateDescription = copyExplanation
+                                customActions = buildList {
+                                    if (onRename != null) add(CustomAccessibilityAction(renameLabel) {
+                                        onRename()
+                                        true
+                                    })
+                                    if (closeAvailable) add(CustomAccessibilityAction(closeLabel) {
+                                        onClose()
+                                        true
+                                    })
+                                    if (onHide != null) add(CustomAccessibilityAction(hideLabel) {
+                                        onHide()
+                                        true
+                                    })
+                                    if (hidden && onUnhide != null) add(CustomAccessibilityAction(unhideLabel) {
+                                        onUnhide()
+                                        true
+                                    })
+                                }
+                            }
+                            .focusRing(MaterialTheme.shapes.medium)
+                            .then(regionChild)
+                            .contextMenu(menuAnchor, enabled) { menuItems() }
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .combinedClickable(
+                                enabled = enabled,
+                                role = Role.Button,
+                                onClick = onClick,
+                                onLongClick = { menuAnchor.open() },
+                                onLongClickLabel = showActionsLabel,
+                            )
+                            .padding(
+                                start = 4.dp + subagentIndent(item.depth),
+                                top = 12.dp,
+                                end = 4.dp,
+                                bottom = 12.dp,
+                            ),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(
+                        Modifier.size(44.dp)
+                            .testTag(if (item.compacting) "sessionCompactionAvatar" else "sessionStatusAvatar"),
+                    ) {
+                        // Layers: the avatar, then the context ring, then the badge on top; only the ring has semantics.
+                        Box(Modifier.matchParentSize().clearAndSetSemantics {}) {
+                            GlassAvatar(size = 44.dp) {
+                                // A subagent shows the robot mark; only the host's parentSessionId makes a
+                                // row one, nothing here guesses it from the title or origin.
+                                if (item.parentSessionId != null)
+                                    Icon(
+                                        Icons.Outlined.SmartToy,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(22.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                else
+                                    Text(
+                                        stringResource(R.string.remote_design_pi_mark),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
                             }
                         }
-                        .focusRing(MaterialTheme.shapes.medium)
-                        .then(regionChild)
-                        .contextMenu(menuAnchor, enabled) { menuItems() }
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .combinedClickable(
-                            enabled = enabled,
-                            role = Role.Button,
-                            onClick = onClick,
-                            onLongClick = { menuAnchor.open() },
-                            onLongClickLabel = showActionsLabel,
-                        )
-                        .padding(
-                            start = 4.dp + subagentIndent(item.depth),
-                            top = 12.dp,
-                            end = 4.dp,
-                            bottom = 12.dp,
-                        ),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Box(
-                    Modifier.size(44.dp)
-                        .testTag(if (item.compacting) "sessionCompactionAvatar" else "sessionStatusAvatar")
-                        .clearAndSetSemantics {},
-                ) {
-                    GlassAvatar(size = 44.dp) {
-                        // A subagent shows the robot mark; only the host's parentSessionId makes a
-                        // row one, nothing here guesses it from the title or origin.
-                        if (item.parentSessionId != null)
-                            Icon(
-                                Icons.Outlined.SmartToy,
-                                contentDescription = null,
-                                modifier = Modifier.size(22.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        else
-                            Text(
-                                stringResource(R.string.remote_design_pi_mark),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                    }
-                    // No backing disc. The badge straddles the avatar's edge, so half of it would sit
-                    // on the row background (secondaryContainer when selected). A thin contour in the
-                    // avatar's own color, following the badge's shape, keeps the badge on one known
-                    // color: the status colors are picked to reach 3:1 against surfaceContainerHighest.
-                    val halo = MaterialTheme.colorScheme.surfaceContainerHighest
-                    val badge = sessionBadgeGlyph(item.availability, item.lastKnown)
-                    if (item.compacting) {
-                        StatusGlyph(
-                            kind = StatusGlyphKind.COMPACTING,
-                            color = statusColor.copy(alpha = COMPACTION_GLYPH_ALPHA),
-                            modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).badgeHalo(halo),
-                            frameOverride = compactionFrame,
-                        )
-                    } else if (badge != null) {
-                        StatusGlyph(
-                            kind = badge,
-                            color = statusColor,
-                            modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).badgeHalo(halo),
-                        )
-                    } else {
-                        Box(
-                            Modifier.align(Alignment.BottomEnd)
-                                .padding(3.dp - BadgeHaloWidth)
-                                .size(10.dp + BadgeHaloWidth * 2)
-                                .background(halo, CircleShape)
-                                .padding(BadgeHaloWidth)
-                                .background(statusColor, CircleShape)
-                        )
-                    }
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Text(
-                            title,
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleMedium,
-                            // The Hidden chip and the row description say it; the muted title is a cue.
-                            color = if (hidden) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (item.pinned)
-                            Icon(
-                                Icons.Default.PushPin,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        if (item.unread)
-                            Box(
-                                Modifier.size(8.dp)
-                                    .align(Alignment.CenterVertically)
-                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-                            )
-                        if (item.liveMacTui)
-                            Icon(
-                                Icons.Default.LaptopMac,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        item.updatedAt?.let {
-                            val context = LocalContext.current
-                            Text(
-                                if (relativeAge != null) relativeAge
-                                else
-                                    (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
-                                        else DateFormat.getDateFormat(context))
-                                        .format(Date(it)),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        if (contextFill != null) ContextRing(contextFill, Modifier.matchParentSize())
+                        Box(Modifier.matchParentSize().clearAndSetSemantics {}) {
+                            // No backing disc. The badge straddles the avatar's edge, so half of it would sit
+                            // on the row background (secondaryContainer when selected). A thin contour in the
+                            // avatar's own color, following the badge's shape, keeps the badge on one known
+                            // color: the status colors are picked to reach 3:1 against surfaceContainerHighest.
+                            val halo = MaterialTheme.colorScheme.surfaceContainerHighest
+                            val badge = liveActivity?.let { activityGlyphKind(it.phase) }
+                                ?: sessionBadgeGlyph(item.availability, item.lastKnown)
+                            if (item.compacting) {
+                                StatusGlyph(
+                                    kind = StatusGlyphKind.COMPACTING,
+                                    color = statusColor.copy(alpha = COMPACTION_GLYPH_ALPHA),
+                                    modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).badgeHalo(halo),
+                                    frameOverride = compactionFrame,
+                                )
+                            } else if (badge != null) {
+                                StatusGlyph(
+                                    kind = badge,
+                                    color = statusColor,
+                                    modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).badgeHalo(halo),
+                                )
+                            } else {
+                                Box(
+                                    Modifier.align(Alignment.BottomEnd)
+                                        .padding(3.dp - BadgeHaloWidth)
+                                        .size(10.dp + BadgeHaloWidth * 2)
+                                        .background(halo, CircleShape)
+                                        .padding(BadgeHaloWidth)
+                                        .background(statusColor, CircleShape)
+                                )
+                            }
                         }
                     }
-                    item.preview?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (item.compacting) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
                             Text(
-                                status,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = statusColor,
+                                title,
+                                Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleMedium,
+                                // The Hidden chip and the row description say it; the muted title is a cue.
+                                color = if (hidden) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                        } else SessionStatusLabel(
-                            status,
-                            if (closing) SessionAvailability.IDLE
-                            else if (item.lastKnown) SessionAvailability.OFFLINE
-                            else item.availability,
-                            statusColor,
-                            Modifier,
-                        )
-                        if (old)
-                            ProjectCountBadge(
-                                oldLabel,
-                                MaterialTheme.colorScheme.surfaceContainerHighest,
-                                MaterialTheme.colorScheme.onSurfaceVariant,
-                                "sessionOld-${item.id}",
-                                Modifier,
-                            )
-                        if (metaLabels.isNotEmpty() || item.ticketRef != null)
+                            if (item.pinned)
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            if (item.unread)
+                                Box(
+                                    Modifier.size(8.dp)
+                                        .align(Alignment.CenterVertically)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                )
+                            if (item.liveMacTui)
+                                Icon(
+                                    Icons.Default.LaptopMac,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            item.updatedAt?.let {
+                                val context = LocalContext.current
+                                Text(
+                                    if (relativeAge != null) relativeAge
+                                    else
+                                        (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context)
+                                            else DateFormat.getDateFormat(context))
+                                            .format(Date(it)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        item.preview?.let {
                             Text(
-                                (listOfNotNull(item.ticketRef) + metaLabels).joinToString(separator = " · ", prefix = "· "),
-                                style = MaterialTheme.typography.labelMedium,
+                                it,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (item.compacting) {
+                                Text(
+                                    status,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = statusColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            } else SessionStatusLabel(
+                                status,
+                                if (closing) SessionAvailability.IDLE
+                                else if (item.lastKnown) SessionAvailability.OFFLINE
+                                else item.availability,
+                                statusColor,
+                                Modifier,
+                            )
+                            if (old)
+                                ProjectCountBadge(
+                                    oldLabel,
+                                    MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                    "sessionOld-${item.id}",
+                                    Modifier,
+                                )
+                            if (metaLabels.isNotEmpty() || item.ticketRef != null)
+                                Text(
+                                    (listOfNotNull(item.ticketRef) + metaLabels).joinToString(separator = " · ", prefix = "· "),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                        }
                     }
                 }
+                trailing?.invoke()
             }
             if (onToggleChildren != null) {
                 val toggleLabel = stringResource(

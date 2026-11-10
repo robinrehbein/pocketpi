@@ -15,4 +15,5 @@
     <string name="remote_thinking_medium">Mittel</string>
     <string name="remote_thinking_high">Hoch</string>
     <string name="remote_thinking_xhigh">Sehr hoch</string>
+    <string name="remote_thinking_max">Maximal</string>
 </resources>

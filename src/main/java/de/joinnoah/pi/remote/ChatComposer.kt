@@ -5,6 +5,9 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -63,6 +66,37 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collectLatest
+
+/** Part of the composer's measured, height-capped extras, never a separate floating overlay. */
+@Composable
+internal fun PreparedTextNotice(prepared: String) {
+    val clipboard = LocalClipboardManager.current
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("preparedTextNotice"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.remote_prepared_text_title),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            // Copies only: the current draft and the source session remain untouched.
+            TextButton(onClick = { clipboard.setText(AnnotatedString(prepared)) }) {
+                Text(stringResource(R.string.remote_prepared_text_copy))
+            }
+        }
+        SelectionContainer {
+            Text(prepared, Modifier.testTag("preparedText"), style = MaterialTheme.typography.bodyMedium)
+        }
+        Text(
+            stringResource(R.string.remote_prepared_text_explanation),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
 
 /** How long typing pauses before the composer gives its text to the repository. */
 internal const val COMPOSER_DRAFT_DEBOUNCE_MILLIS = 300L
@@ -726,6 +760,9 @@ internal fun ChatComposer(
                     ),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                state.preparedText?.takeIf(String::isNotEmpty)?.let { prepared ->
+                    PreparedTextNotice(prepared)
+                }
                 if (hasExtras)
                     Column(
                         Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -1068,7 +1105,8 @@ private const val COMPOSER_MAX_LINES = 14
  * [shellDraft]) needs a command and no other one running.
  */
 internal fun canSendDraft(state: RemoteState): Boolean =
-    (state.connected &&
+    // While the chat hands over to a new one, the host answers busy to every prompt.
+    !handoverBusy(state) && ((state.connected &&
         !state.loading &&
         state.status == "idle" &&
         !state.sending &&
@@ -1078,7 +1116,7 @@ internal fun canSendDraft(state: RemoteState): Boolean =
         state.bash?.running != true &&
         (shellDraft(state)?.let { shellDraftSendable(it, state) }
             ?: (state.draft.isNotBlank() || state.attachments.isNotEmpty()))) ||
-        canQueuePrompt(state)
+        canQueuePrompt(state))
 
 /**
  * The draft can wait for the connection: a plain prompt (no attachment, `/` command or draft whose
@@ -1228,6 +1266,9 @@ private fun QuestionComposer(
                 Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                state.preparedText?.takeIf(String::isNotEmpty)?.let { prepared ->
+                    PreparedTextNotice(prepared)
+                }
                 state.questions.forEach { question ->
                     val questionId = question.text("id")
                     QuestionCard(
