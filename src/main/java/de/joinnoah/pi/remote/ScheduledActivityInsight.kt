@@ -149,8 +149,7 @@ internal fun ScheduledActivityPill(presentation: ScheduledActivityPresentation, 
     val label = scheduledActivityLabelText(scheduledActivityLabel(presentation, now), presentation.items.size)
     InsightPillRow(Modifier.testTag("scheduledActivityPill").semantics { contentDescription = label }, onClick = onClick) {
         Icon(Icons.Outlined.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
-        Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false))
+        Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
