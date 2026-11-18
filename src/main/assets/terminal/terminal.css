@@ -1,4 +1,5 @@
 /* WebView may measure percentage root heights against a zero-height document. */
 html { height:100vh; }
-html,body,#terminal { width:100%; margin:0; overflow:hidden; background:#101010; }
+/* The colours come from /theme.css, which the app generates from TerminalTheme. */
+html,body,#terminal { width:100%; margin:0; overflow:hidden; background:var(--terminal-background); }
 body,#terminal { height:100%; }

@@ -5247,6 +5247,8 @@ class DefaultRemoteRepository(
             }
             if (mode == ActivationMode.RESTORE && previousSelection == canonical && state.value.selection == canonical && canOpenEmulator()) emulatorClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             refreshPanes()
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical && state.value.selection == canonical)
+                canonical.sessionId?.let(::resumeTerminal)
             outcome = "ok"
             return canonical
         } catch (e: CancellationException) {
@@ -11435,7 +11437,7 @@ class DefaultRemoteRepository(
         refreshCommands()
     }
 
-    // ---- Terminal v1: connection-owned, never automatically reattached -----------------------
+    // ---- Terminal v1: connection-owned; reattached once after a reconnect, input never replayed ---
     private data class PendingTerminal(val session: String, val connection: Long, val early: MutableList<TerminalEvent> = mutableListOf(), var bytes: Int = 0, var abandoned: Boolean = false)
     private var pendingTerminal: PendingTerminal? = null
     private var terminalAttachment: TerminalAttachment? = null
@@ -11445,6 +11447,14 @@ class DefaultRemoteRepository(
     private var terminalNextSendAt: Long? = null
     private var terminalResizeJob: Job? = null
     private var terminalResize: Pair<Int, Int>? = null
+    /** The size the terminal last asked for, which a reattach after a reconnect asks for again. */
+    private var terminalSize: Pair<Int, Int>? = null
+    /**
+     * Set when a lost connection ended a live terminal while reconnecting was enabled; the next
+     * restore of the same chat attaches once with this size (see [resumeTerminal]). Any other end
+     * and any attach clear it, so a closed pane never comes back.
+     */
+    private var terminalResumeSize: Pair<Int, Int>? = null
 
     private suspend fun paceTerminal() {
         val wait = terminalNextSendAt?.let { (it - terminalNow()).coerceIn(0, 125) } ?: 0
@@ -11472,6 +11482,8 @@ class DefaultRemoteRepository(
             current.session?.let(::isHostWorker) != true || cols !in 20..500 || rows !in 5..300 ||
             (takeoverGeneration != null && takeoverGeneration !in 0..9_007_199_254_740_991L) ||
             pendingTerminal != null || terminalAttachment != null) return false
+        terminalResumeSize = null
+        terminalSize = cols to rows
         val pending = PendingTerminal(session, generation)
         pendingTerminal = pending
         update { it.copy(terminal = TerminalView(session)) }
@@ -11565,7 +11577,11 @@ class DefaultRemoteRepository(
     }
     private fun endTerminal(reason: String, sendDetach: Boolean) {
         pendingTerminal?.abandoned = true
+        if (reason != "offline") terminalResumeSize = null
         val view = state.value.terminal ?: return
+        // Only the connection took this terminal away: it comes back once the connection does.
+        // An explicit disconnect turns reconnecting off first, so it is not resumed.
+        if (reason == "offline" && view.ended == null && reconnectEnabled) terminalResumeSize = terminalSize ?: (80 to 24)
         val attachment = terminalAttachment
         terminalAttachment = null
         terminalInputBusy = false
@@ -11578,6 +11594,20 @@ class DefaultRemoteRepository(
         if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = reason)) }
     }
     override fun detachTerminal() = endTerminal("detached", sendDetach = true)
+
+    /**
+     * After a reconnect restored [session], attaches once more to the terminal the lost connection
+     * ended, if its pane is still open (closing it detaches, which clears the resume). The host
+     * replays its bounded tail on attach; input queued or in flight at the disconnect stays dropped,
+     * as the new attachment starts its own input sequence.
+     */
+    private fun resumeTerminal(session: String) {
+        val size = terminalResumeSize ?: return
+        terminalResumeSize = null
+        val view = state.value.terminal
+        if (view?.sessionId != session || view.ended != "offline") return
+        attachTerminal(size.first, size.second)
+    }
     override fun takeTerminalOutput(): List<String> {
         val output = state.value.terminal?.output.orEmpty()
         update { it.copy(terminal = it.terminal?.copy(output = emptyList())) }
@@ -11625,6 +11655,7 @@ class DefaultRemoteRepository(
         val view = state.value.terminal ?: return false
         if (!state.value.connected || view.ended != null || cols !in 20..500 || rows !in 5..300) return false
         val connection = generation
+        terminalSize = cols to rows
         terminalResize = cols to rows
         if (terminalResizeJob?.isActive == true) return true
         terminalResizeJob = scope.launch {

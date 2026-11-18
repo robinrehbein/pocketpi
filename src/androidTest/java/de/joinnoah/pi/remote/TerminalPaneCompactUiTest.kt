@@ -11,16 +11,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasText
+import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -59,9 +59,9 @@ class TerminalPaneCompactUiTest {
             assertTrue("A 320 dp pane must leave at least 96 dp (approximately four rows) for the terminal; got $heightDp dp", heightDp >= 96f)
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_input)).assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_send)).assertIsDisplayed()
-        compose.onNodeWithText("Esc").assertIsDisplayed()
+        compose.onNodeWithTag("terminalInput").assertIsDisplayed()
+        compose.onNodeWithTag("terminalInputSend").assertIsDisplayed()
+        compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
     }
 
     @Test fun shortcutDialogAndResizePreserveDraftAndSelectedModifiers() {
@@ -76,9 +76,6 @@ class TerminalPaneCompactUiTest {
         val height = mutableStateOf(320.dp)
         lateinit var composeView: View
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val input = context.getString(R.string.remote_terminal_input)
-        val shortcuts = context.getString(R.string.remote_terminal_shortcuts)
-        val hide = context.getString(R.string.remote_terminal_hide_shortcuts)
         compose.setContent {
             composeView = LocalView.current
             MaterialTheme {
@@ -87,35 +84,35 @@ class TerminalPaneCompactUiTest {
                 }
             }
         }
-        compose.onNodeWithText(input).performTextInput("first line\nsecond line\nthird line\nfourth line")
+        compose.onNodeWithTag("terminalInput").performTextInput("first line\nsecond line\nthird line\nfourth line")
         captureEvidence("collapsed")
-        compose.onNodeWithText(shortcuts).performClick()
-        compose.onNode(hasText("Ctrl") and hasClickAction()).performClick().assertIsSelected()
-        compose.onNode(hasText("Alt") and hasClickAction()).performClick().assertIsSelected()
-        compose.onNode(hasText("Shift") and hasClickAction()).performClick().assertIsSelected()
-        compose.onNodeWithText("F12").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("terminalShortcuts").performClick()
+        compose.onNodeWithTag("terminalModifierKey_ctrl").performClick().assertIsOn()
+        compose.onNodeWithTag("terminalModifierKey_alt").performClick().assertIsOn()
+        compose.onNodeWithTag("terminalModifierKey_shift").performClick().assertIsOn()
+        compose.onNodeWithTag("terminalExtraKey_f12").performScrollTo().assertIsDisplayed()
         captureEvidence("expanded")
-        compose.onNodeWithText(hide).performClick()
-        compose.onNodeWithText("Ctrl+Alt+Shift").assertIsDisplayed()
-        compose.onNodeWithText(input).assertTextContains("first line\nsecond line\nthird line\nfourth line")
+        compose.onNodeWithTag("terminalHideShortcuts").performClick()
+        compose.onNodeWithTag("terminalSubtitle").assertTextEquals(allModifiers(context))
+        compose.onNodeWithTag("terminalInput").assertTextContains("first line\nsecond line\nthird line\nfourth line")
         compose.runOnIdle { height.value = 280.dp }
         compose.runOnIdle {
             val webView = checkNotNull(findWebView(composeView))
             val heightDp = webView.height / webView.resources.displayMetrics.density
             assertTrue("A 280 dp pane with draft and modifiers must leave 96 dp for the terminal; got $heightDp dp", heightDp >= 96f)
         }
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_send)).assertIsDisplayed()
-        compose.onNodeWithText("Esc").assertIsDisplayed()
-        compose.onNodeWithText("Ctrl+Alt+Shift").assertIsDisplayed()
-        compose.onNodeWithText(input).assertTextContains("first line\nsecond line\nthird line\nfourth line")
+        compose.onNodeWithTag("terminalInputSend").assertIsDisplayed()
+        compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
+        compose.onNodeWithTag("terminalSubtitle").assertTextEquals(allModifiers(context))
+        compose.onNodeWithTag("terminalInput").assertTextContains("first line\nsecond line\nthird line\nfourth line")
         captureEvidence("narrow")
         compose.runOnIdle { height.value = 500.dp }
-        compose.onNodeWithText(shortcuts).performClick()
-        compose.onNode(hasText("Ctrl") and hasClickAction()).assertIsSelected()
-        compose.onNode(hasText("Alt") and hasClickAction()).assertIsSelected()
-        compose.onNode(hasText("Shift") and hasClickAction()).assertIsSelected()
-        compose.onNodeWithText(hide).performClick()
-        compose.onNodeWithText(input).assertTextContains("first line\nsecond line\nthird line\nfourth line")
+        compose.onNodeWithTag("terminalShortcuts").performClick()
+        compose.onNodeWithTag("terminalModifierKey_ctrl").assertIsOn()
+        compose.onNodeWithTag("terminalModifierKey_alt").assertIsOn()
+        compose.onNodeWithTag("terminalModifierKey_shift").assertIsOn()
+        compose.onNodeWithTag("terminalHideShortcuts").performClick()
+        compose.onNodeWithTag("terminalInput").assertTextContains("first line\nsecond line\nthird line\nfourth line")
     }
 
     @Test fun compactPaneProtectsRendererWithMultilineDraftModifiersAndPendingInput() {
@@ -128,7 +125,6 @@ class TerminalPaneCompactUiTest {
         )
         val attachment = TerminalView("session", attaching = false, generation = 1, keysEnabled = true, inputPending = true)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val input = context.getString(R.string.remote_terminal_input)
         lateinit var composeView: View
         compose.setContent {
             composeView = LocalView.current
@@ -138,22 +134,22 @@ class TerminalPaneCompactUiTest {
                 }
             }
         }
-        compose.onNodeWithText(input).performTextInput("first line\nsecond line\nthird line\nfourth line")
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_shortcuts)).performClick()
-        compose.onNode(hasText("Ctrl") and hasClickAction()).performClick()
-        compose.onNode(hasText("Alt") and hasClickAction()).performClick()
-        compose.onNode(hasText("Shift") and hasClickAction()).performClick()
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_hide_shortcuts)).performClick()
-        compose.onNodeWithText("Ctrl+Alt+Shift").assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_sending)).assertIsDisplayed()
-        compose.onNodeWithText(input).assertTextContains("first line\nsecond line\nthird line\nfourth line")
+        compose.onNodeWithTag("terminalInput").performTextInput("first line\nsecond line\nthird line\nfourth line")
+        compose.onNodeWithTag("terminalShortcuts").performClick()
+        compose.onNodeWithTag("terminalModifierKey_ctrl").performClick()
+        compose.onNodeWithTag("terminalModifierKey_alt").performClick()
+        compose.onNodeWithTag("terminalModifierKey_shift").performClick()
+        compose.onNodeWithTag("terminalHideShortcuts").performClick()
+        compose.onNodeWithTag("terminalSubtitle").assertTextEquals(allModifiers(context))
+        compose.onNodeWithTag("terminalSending").assertIsDisplayed()
+        compose.onNodeWithTag("terminalInput").assertTextContains("first line\nsecond line\nthird line\nfourth line")
         compose.runOnIdle {
             val webView = checkNotNull(findWebView(composeView))
             val heightDp = webView.height / webView.resources.displayMetrics.density
             assertTrue("A 320 dp pane with a draft, modifiers and pending input must leave 96 dp for the terminal; got $heightDp dp", heightDp >= 96f)
         }
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_send)).assertIsDisplayed()
-        compose.onNodeWithText("Esc").assertIsDisplayed()
+        compose.onNodeWithTag("terminalInputSend").assertIsDisplayed()
+        compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
     }
 
     @Test fun capabilityLossHidesInactiveModifierBadgeAndPreservesDraft() {
@@ -166,8 +162,6 @@ class TerminalPaneCompactUiTest {
         )
         val attachment = mutableStateOf(TerminalView("session", attaching = false, generation = 1, keysEnabled = true))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val input = context.getString(R.string.remote_terminal_input)
-        val shortcuts = context.getString(R.string.remote_terminal_shortcuts)
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxWidth().height(320.dp)) {
@@ -175,16 +169,16 @@ class TerminalPaneCompactUiTest {
                 }
             }
         }
-        compose.onNodeWithText(input).performTextInput("retained draft")
-        compose.onNodeWithText(shortcuts).performClick()
-        compose.onNode(hasText("Ctrl") and hasClickAction()).performClick().assertIsSelected()
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_hide_shortcuts)).performClick()
-        compose.onNodeWithText("Ctrl").assertIsDisplayed()
+        compose.onNodeWithTag("terminalInput").performTextInput("retained draft")
+        compose.onNodeWithTag("terminalShortcuts").performClick()
+        compose.onNodeWithTag("terminalModifierKey_ctrl").performClick().assertIsOn()
+        compose.onNodeWithTag("terminalHideShortcuts").performClick()
+        compose.onNodeWithTag("terminalSubtitle").assertTextEquals(context.getString(R.string.remote_view_key_ctrl))
         compose.runOnIdle { attachment.value = attachment.value.copy(keysEnabled = false) }
-        compose.onNodeWithText(shortcuts).assertDoesNotExist()
-        compose.onNodeWithText("Ctrl").assertDoesNotExist()
-        compose.onNodeWithText(input).assertTextContains("retained draft")
-        compose.onNodeWithText("Esc").assertIsDisplayed()
+        compose.onNodeWithTag("terminalShortcuts").assertDoesNotExist()
+        compose.onNodeWithTag("terminalSubtitle").assertDoesNotExist()
+        compose.onNodeWithTag("terminalInput").assertTextContains("retained draft")
+        compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
     }
 
     @Test fun legacyHostDoesNotExposeStructuredShortcuts() {
@@ -203,9 +197,12 @@ class TerminalPaneCompactUiTest {
             }
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        compose.onNodeWithText(context.getString(R.string.remote_terminal_shortcuts)).assertDoesNotExist()
-        compose.onNodeWithText("Esc").assertIsDisplayed()
+        compose.onNodeWithTag("terminalShortcuts").assertDoesNotExist()
+        compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
     }
+
+    private fun allModifiers(context: Context) = listOf(R.string.remote_view_key_ctrl, R.string.remote_view_key_alt, R.string.remote_view_key_shift)
+        .joinToString("+") { context.getString(it) }
 
     private fun captureEvidence(state: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

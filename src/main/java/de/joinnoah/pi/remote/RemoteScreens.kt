@@ -952,7 +952,8 @@ internal fun RemoteScreen(
         when (tab) {
             InspectorTab.BROWSER -> { if (!browserOpen) chat.openBrowser() else { chat.setBrowserVisible(true); chat.refreshBrowser() } }
             InspectorTab.TERMINAL -> {
-                if (!terminalOpen && chat.attachTerminal(80, 24)) terminalOpen = true
+                // An open pane whose terminal ended attaches again; the pane resizes it once attached.
+                if (terminalOpenAttaches(terminalOpen, state.terminal) && chat.attachTerminal(80, 24)) terminalOpen = true
             }
             InspectorTab.CHANGES -> if (changesOpen == null) chat.openChanges(exclusive = !sideCapable)
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
@@ -4419,7 +4420,7 @@ internal fun RemoteScreen(
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
             PaneOverlays(
-                panesBeside, inspectorShown, tabs.active == InspectorTab.BROWSER,
+                panesBeside, inspectorShown, tabs.active == InspectorTab.BROWSER, tabs.active == InspectorTab.TERMINAL,
                 changesContent, filesContent, jobsContent, toolContent, terminalContent, browserContent,
             )
             }
@@ -5806,6 +5807,7 @@ private fun PaneOverlays(
     panesBeside: Boolean,
     inspectorShown: Boolean,
     browserActive: Boolean,
+    terminalActive: Boolean,
     changesContent: (@Composable () -> Unit)?,
     filesContent: (@Composable () -> Unit)?,
     jobsContent: (@Composable () -> Unit)?,
@@ -5821,7 +5823,8 @@ private fun PaneOverlays(
     if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
     if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
     if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
-    if (!panesBeside && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
+    val terminalPlacement = terminalOverlayPlacement(panesBeside, inspectorShown, terminalActive)
+    if (terminalPlacement == PaneOverlayPlacement.SHOWN && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
     if (!panesBeside && browserActive && browserContent != null) ProvideGlass(paneSurface) { browserContent() }
     if (browserContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && !browserActive))) {
         Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
@@ -5829,9 +5832,10 @@ private fun PaneOverlays(
             layout(placeable.width, placeable.height) { }
         }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { browserContent() } }
     }
-    // The inspector may be hidden while its tab remains open. Measure the terminal at
-    // a real size without placing it, so it receives neither input nor semantics.
-    if (panesBeside && !inspectorShown && terminalContent != null) {
+    // The inspector may be hidden while its tab remains open, or another pane shows over the
+    // chat. Measure the terminal at a real size without placing it, so it receives neither input
+    // nor semantics.
+    if (terminalPlacement == PaneOverlayPlacement.KEPT_HIDDEN && terminalContent != null) {
         Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
             val placeable = measurable.measure(constraints)
             layout(placeable.width, placeable.height) { }
