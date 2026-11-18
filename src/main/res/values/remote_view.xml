@@ -1,0 +1,54 @@
+<resources>
+    <!-- Shared by the remote view panes: terminal, browser, preview and emulator. -->
+    <string name="remote_view_close">Close</string>
+    <string name="remote_view_back">Back</string>
+    <string name="remote_view_reload">Reload</string>
+    <string name="remote_view_retry">Try again</string>
+    <string name="remote_view_send">Send</string>
+    <string name="remote_view_input">Text to send</string>
+    <!-- Placeholders in the viewport. -->
+    <string name="remote_view_opening">Opening…</string>
+    <string name="remote_view_waiting">Waiting for the first frame…</string>
+    <string name="remote_view_empty">Nothing to show yet.</string>
+    <!-- Notices under the header. -->
+    <string name="remote_view_reconnecting">Reconnecting…</string>
+    <string name="remote_view_disconnected">Disconnected.</string>
+    <string name="remote_view_failed">The request failed.</string>
+    <!-- Who controls a shared view. -->
+    <string name="remote_view_control_viewing">View only</string>
+    <string name="remote_view_control_you">You have control</string>
+    <string name="remote_view_control_other">Another participant has control</string>
+    <!-- %1$s names who holds control, such as "Mac". -->
+    <string name="remote_view_control_held_by">Control held by %1$s</string>
+    <string name="remote_view_take_control">Take control</string>
+    <string name="remote_view_release_control">Release control</string>
+    <string name="remote_view_hand_over">Hand over control</string>
+    <!-- %1$s names the participant who receives control. -->
+    <string name="remote_view_hand_over_to">Hand over control to %1$s</string>
+    <!-- Key labels, as printed on a keyboard. -->
+    <string name="remote_view_key_escape">Esc</string>
+    <string name="remote_view_key_tab">Tab</string>
+    <string name="remote_view_key_enter">Enter</string>
+    <string name="remote_view_key_ctrl">Ctrl</string>
+    <string name="remote_view_key_alt">Alt</string>
+    <string name="remote_view_key_shift">Shift</string>
+    <string name="remote_view_key_delete">Del</string>
+    <string name="remote_view_key_home">Home</string>
+    <string name="remote_view_key_end">End</string>
+    <string name="remote_view_key_page_up">PgUp</string>
+    <string name="remote_view_key_page_down">PgDn</string>
+    <!-- The Android navigation buttons of an emulator. -->
+    <string name="remote_view_key_android_home">Home</string>
+    <string name="remote_view_key_android_back">Back</string>
+    <!-- Spoken names of keys whose label is a symbol or an abbreviation. -->
+    <string name="remote_view_key_escape_description">Escape</string>
+    <string name="remote_view_key_backspace_description">Backspace</string>
+    <string name="remote_view_key_delete_description">Delete</string>
+    <string name="remote_view_key_up_description">Up arrow</string>
+    <string name="remote_view_key_down_description">Down arrow</string>
+    <string name="remote_view_key_left_description">Left arrow</string>
+    <string name="remote_view_key_right_description">Right arrow</string>
+    <string name="remote_view_key_page_up_description">Page up</string>
+    <string name="remote_view_key_page_down_description">Page down</string>
+    <string name="remote_view_key_android_home_description">Home screen</string>
+</resources>
