@@ -621,10 +621,10 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
-            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
-    override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
+    override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
     override fun openEmulator() = canOpenEmulator() && emulatorClient.open(requireNotNull(state.value.selection.sessionId), generation)
     override fun selectEmulatorProfile(id: String) = emulatorClient.selectProfile(id)
     override fun closeEmulator() = emulatorClient.close()
@@ -634,6 +634,8 @@ class DefaultRemoteRepository(
     override fun sendEmulatorInput(input: EmulatorInput) = emulatorClient.input(input)
     override fun refreshEmulator() = emulatorClient.refresh()
     override fun setEmulatorVisible(visible: Boolean) = emulatorClient.setVisible(visible)
+    override fun retryEmulator() = emulatorClient.retry()
+    override fun releaseEmulator() = emulatorClient.release()
     private val browserClient by lazy {
         BrowserClient(scope,
             { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },

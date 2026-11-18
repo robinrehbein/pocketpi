@@ -57,9 +57,11 @@ class EmulatorClientTest {
         assertEquals("true", watches.single()["recovery"]?.toString())
         repeat(4) { scope.testScheduler.advanceTimeBy(2_000); client.frame(waiting()); scope.runCurrent() }
         assertEquals(emptyList<Long>(), closed)
-        // Without a frame or another waiting event, the deadline still fails closed.
+        assertNull(client.view?.notice)
+        // Without a frame or another waiting event, the deadline still ends the stream, but only the stream.
         scope.testScheduler.advanceTimeBy(5_600); scope.runCurrent()
-        assertEquals(listOf(1L), closed)
+        assertEquals(emptyList<Long>(), closed)
+        assertEquals(EmulatorNotice.STREAM_RECOVERING, client.view?.notice)
     }
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun waitingForAnotherStreamOrWithoutRecoveryDoesNotExtendTheDeadline() {
@@ -72,7 +74,8 @@ class EmulatorClientTest {
             scope.testScheduler.advanceTimeBy(4_000)
             client.frame(if (recovery) waiting("other") else waiting()); scope.runCurrent()
             scope.testScheduler.advanceTimeBy(1_600); scope.runCurrent()
-            assertEquals(listOf(1L), closed)
+            assertEquals(EmulatorNotice.STREAM_RECOVERING, client.view?.notice)
+            assertEquals(emptyList<Long>(), closed)
         }
     }
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -168,6 +171,7 @@ class EmulatorClientTest {
                     if (host.deferWatches) CompletableDeferred<Unit>().also { host.watchReplies.add(it) }.await()
                     Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream$n") }
                 "emulator.unwatch" -> Wire.objectOf("kind" to "emulator.unwatched", "emulatorId" to "e", "streamId" to map["streamId"])
+                "emulator.release" -> { host.owner = null; Wire.objectOf("kind" to "emulator.released", "emulatorId" to "e", "generation" to host.generation) }
                 "emulator.acquire" -> host.acquireReply?.await() ?: host.busyOwner?.let { Wire.objectOf("kind" to "emulator.busy", "emulatorId" to "e", "generation" to host.generation, "owner" to it) } ?: run {
                     // The Host's identity of a device is per connection.
                     val me = Wire.objectOf("kind" to "device", "id" to "connection$c"); host.generation++; host.owner = me
@@ -237,9 +241,11 @@ class EmulatorClientTest {
         assertTrue(client.open("session", 1)); scope.runCurrent()
         assertTrue(client.selectProfile("p")); scope.runCurrent()
         assertTrue(client.acquire()); scope.runCurrent()
-        // No frame arrives: the deadline fails closed and drops the connection on purpose.
+        // No frame arrives: the deadline ends the stream and gives control back, the connection stays.
         scope.testScheduler.advanceTimeBy(5_600); scope.runCurrent()
-        assertEquals(listOf(1L), closed)
+        assertEquals(emptyList<Long>(), closed)
+        assertEquals(1, host.count("emulator.release"))
+        assertFalse(requireNotNull(client.view).ownsControl)
         client.disconnected(); connection = 2; host.generation++; host.owner = null
         assertTrue(client.resumeIfDisconnected("session", 2)); scope.runCurrent()
         assertEquals(0, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
@@ -277,7 +283,7 @@ class EmulatorClientTest {
         assertEquals(1, host.calls.count { it.first == 2L && it.second == "emulator.watch" })
         assertEquals(0, host.calls.count { it.first == 2L && it.second == "emulator.unwatch" })
         // The user did not ask for control, so the automatic attempt shows no busy notice.
-        assertEquals("disconnected", client.view?.notice)
+        assertNull(client.view?.notice)
         assertFalse(requireNotNull(client.view).ownsControl)
         // Someone else has control now: a later free state does not take it back.
         host.owner = null; host.busyOwner = null; host.generation++
@@ -341,12 +347,26 @@ class EmulatorClientTest {
         assertEquals(host.generation.toString(), host.calls.last { it.second == "emulator.watch" }.third["generation"].toString())
     }
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    @Test fun aWatchRefusedWithoutAnAcquireStillFailsClosed() {
+    @Test fun aWatchTheHostRefusesEndsOnlyTheStream() {
         val scope = TestScope(); val host = FakeHost().apply { deferWatches = true }; val closed = mutableListOf<Long>()
         val client = hostClient(scope, host, { 1L }, closed)
         assertTrue(client.open("session", 1)); scope.runCurrent()
         assertTrue(client.selectProfile("p")); scope.runCurrent()
-        host.watchReplies.single().completeExceptionally(IllegalStateException("forbidden")); scope.runCurrent()
+        host.watchReplies.single().completeExceptionally(RemoteRequestException("forbidden")); scope.runCurrent()
+        assertEquals(emptyList<Long>(), closed)
+        assertEquals(EmulatorNotice.STREAM_RECOVERING, client.view?.notice)
+        // The re-watch follows after the backoff.
+        host.deferWatches = false
+        scope.testScheduler.advanceTimeBy(EMULATOR_STREAM_BACKOFF_MS + 10); scope.runCurrent()
+        assertEquals(2, host.count("emulator.watch"))
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aWatchWithoutAReplyStillFailsClosed() {
+        val scope = TestScope(); val host = FakeHost().apply { deferWatches = true }; val closed = mutableListOf<Long>()
+        val client = hostClient(scope, host, { 1L }, closed)
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        host.watchReplies.single().completeExceptionally(RemoteRequestException.timeout()); scope.runCurrent()
         assertEquals(listOf(1L), closed)
     }
 }

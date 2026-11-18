@@ -34,9 +34,16 @@ back once with a single automatic acquire (PocketPi #215). It does so only for t
 ID and incarnation, while the pane is visible and not opening, and once the Host shows no owner.
 While the Host still lists the dropped connection as owner, the app waits for a state without an
 owner. Another owner, a Busy reply (shown without a busy notice), close, stop or handoff cancels
-the re-acquire. There is no re-acquire after a deliberate fail-closed (`fail()`, for example a
-frame deadline) or after a drop with an input in flight, which is uncertain; input is never
-replayed. Frames use bounded PNG chunks and acknowledgements.
+the re-acquire. There is no re-acquire after a deliberate fail-closed (`fail()`: a request
+without a reply, a malformed reply, a failed input) or after a drop with an input in flight, which
+is uncertain; input is never replayed. A stream-level failure (no frame within the deadline, a
+malformed or mismatched frame, a watch or frame acknowledgement the Host refuses) ends only the
+stream: the app releases its lease explicitly, keeps the connection and the chat, and watches again
+up to three times in a row before it offers a manual retry. It never re-acquires; an input in
+flight is then reported as uncertain and not replayed, and the pane's Reopen re-opens the profile
+as a reader. While an input is in flight the app keeps at most one newer input and sends it after
+the acknowledgement, unless the generation or geometry changed meanwhile. Frames use bounded PNG
+chunks and acknowledgements.
 
 ## Current evidence
 

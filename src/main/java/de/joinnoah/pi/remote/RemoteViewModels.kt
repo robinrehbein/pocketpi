@@ -403,6 +403,8 @@ internal class ChatViewModel(
     fun sendEmulatorInput(input: EmulatorInput) = repository.sendEmulatorInput(input)
     fun refreshEmulator() = repository.refreshEmulator()
     fun setEmulatorVisible(visible: Boolean) = repository.setEmulatorVisible(visible)
+    fun retryEmulator() = repository.retryEmulator()
+    fun releaseEmulator() = repository.releaseEmulator()
     fun canOpenBrowser() = repository.canOpenBrowser()
     fun openBrowser() = repository.openBrowser()
     fun closeBrowser() = repository.closeBrowser()

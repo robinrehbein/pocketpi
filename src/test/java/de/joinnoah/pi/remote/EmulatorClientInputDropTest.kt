@@ -14,7 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-// Robolectric decodes the frame's PNG, which input needs before it is allowed.
+// A real PNG frame, which input needs before it is allowed.
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class EmulatorClientInputDropTest {
@@ -56,7 +56,7 @@ class EmulatorClientInputDropTest {
         assertTrue(requireNotNull(client.view).inputPending)
         // Whether the tap landed is unknown: the resume must not take control again on its own.
         client.disconnected(); connection = 2; generation++; owner = null
-        assertEquals("uncertain", client.view?.notice)
+        assertEquals(EmulatorNotice.UNCERTAIN, client.view?.notice)
         assertTrue(client.resumeIfDisconnected("session", 2)); scope.runCurrent()
         assertEquals(0, calls.count { it.first == 2L && it.second == "emulator.acquire" })
         assertFalse(requireNotNull(client.view).ownsControl)

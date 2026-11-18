@@ -854,15 +854,26 @@
     <string name="preview_hide">Hide</string>
     <string name="emulator_title">Emulator</string>
     <string name="emulator_select_profile">Choose a profile</string>
-    <string name="emulator_acquire">Take control</string>
     <string name="emulator_stop">Stop emulator</string>
     <string name="emulator_stop_confirm">Stop this emulator?</string>
-    <string name="emulator_handoff">Give control to %1$s %2$s</string>
-    <string name="emulator_screen">Screen</string>
-    <string name="emulator_busy">Another participant has control</string>
-    <string name="emulator_disconnected">Disconnected</string>
-    <string name="emulator_uncertain">The last operation may have completed. Reconnect to continue.</string>
-    <string name="emulator_failed">Emulator request failed</string>
+    <string name="emulator_screen">Emulator screen</string>
+    <string name="emulator_reopen">Reopen</string>
+    <string name="emulator_notice_busy">Another participant has control.</string>
+    <string name="emulator_notice_uncertain">The last input may or may not have reached the emulator. Reopen it to continue as a viewer.</string>
+    <string name="emulator_notice_stream_recovering">The screen stopped updating. Reconnecting the stream…</string>
+    <string name="emulator_notice_stream_failed">The screen stopped updating.</string>
+    <string name="emulator_frame_unreadable">The screen image could not be shown.</string>
+    <string name="emulator_input_busy">Sending input…</string>
+    <!-- %1$s is the end of the participant's id, to tell two apart. -->
+    <string name="emulator_participant_device">Device %1$s</string>
+    <!-- %1$s is the end of the participant's id, to tell two apart. -->
+    <string name="emulator_participant_agent">Pi agent %1$s</string>
+    <!-- Key labels as printed on a keyboard; the keys' spoken names are the shared remote_view ones. -->
+    <string name="emulator_key_backspace">⌫</string>
+    <string name="emulator_key_up">↑</string>
+    <string name="emulator_key_down">↓</string>
+    <string name="emulator_key_left">←</string>
+    <string name="emulator_key_right">→</string>
     <string name="remote_question_details_needed">Load the complete details before approving.</string>
     <string name="remote_question_details_failed">Could not verify the details.</string>
     <string name="remote_question_details_loading">Loading details…</string>

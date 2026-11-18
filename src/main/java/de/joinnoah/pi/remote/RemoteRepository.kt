@@ -378,6 +378,8 @@ interface RemoteRepository {
     fun sendEmulatorInput(input: EmulatorInput): Boolean = false
     fun refreshEmulator(): Boolean = false
     fun setEmulatorVisible(visible: Boolean) {}
+    fun retryEmulator(): Boolean = false
+    fun releaseEmulator(): Boolean = false
     fun canOpenBrowser(): Boolean = false
     fun openBrowser(): Boolean = false
     fun closeBrowser() {}
