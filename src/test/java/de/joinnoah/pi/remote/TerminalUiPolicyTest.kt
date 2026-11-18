@@ -125,4 +125,90 @@ class TerminalUiPolicyTest {
         assertEquals(listOf(TerminalInput.Key("escape")), terminalInputForKey("", "escape"))
     }
 
+
+    @Test fun sendQueuesTheDraftThenEnterSoTheCommandRuns() {
+        assertEquals(listOf(TerminalInput.Text("ls"), TerminalInput.Key("enter")), terminalInputForSend("ls"))
+        assertEquals(listOf(TerminalInput.Text("ls"), TerminalInput.Chord("enter")), terminalInputForSend("ls", structured = true))
+        // An empty draft still presses Enter.
+        assertEquals(listOf(TerminalInput.Key("enter")), terminalInputForSend(""))
+        // A multi-line draft keeps the paste rules: one Paste, then Enter.
+        assertEquals(listOf(TerminalInput.Paste("one\ntwo"), TerminalInput.Key("enter")), terminalInputForSend("one\r\ntwo"))
+        assertNull(terminalInputForSend("bad\u001b[200~"))
+        // Draft and Enter are reserved together, consuming the draft, or not at all.
+        val rendered = TerminalView("s", attaching = false, generation = 3)
+        val accepted = terminalPrepareEnqueue(TerminalDraftQueue("ls", emptyList()), rendered, rendered, 0, terminalInputForSend("ls")!!, consumesDraft = true)
+        assertEquals(TerminalEnqueueDecision.ACCEPTED, accepted.decision)
+        assertEquals(TerminalDraftQueue("", listOf(TerminalInput.Text("ls"), TerminalInput.Key("enter"))), accepted.state)
+        val busy = terminalPrepareEnqueue(TerminalDraftQueue("ls", emptyList()), rendered, rendered.copy(inputPending = true), 0, terminalInputForSend("ls")!!, consumesDraft = true)
+        assertEquals(TerminalDraftQueue("ls", emptyList()), busy.state)
+    }
+
+    @Test fun insertSendsOnlyTheDraftWithoutEnter() {
+        assertEquals(listOf(TerminalInput.Text("git status")), terminalInputForInsert("git status"))
+        assertEquals(listOf(TerminalInput.Paste("one\ntwo")), terminalInputForInsert("one\ntwo"))
+        assertNull(terminalInputForInsert(""))
+        assertNull(terminalInputForInsert("bad\u001b"))
+    }
+
+    @Test fun everyEndReasonHasItsOwnTextAndRecovery() {
+        fun end(reason: String, code: Int? = null) = terminalEnd(reason, code)
+        assertEquals(TerminalEnd(R.string.remote_terminal_exit_code, TerminalEndKind.INFO, 2), end("exit", 2))
+        assertEquals(TerminalEnd(R.string.remote_terminal_exit, TerminalEndKind.INFO), end("exit"))
+        assertEquals(R.string.remote_terminal_slow, end("slow").text)
+        assertEquals(R.string.remote_terminal_forbidden, end("forbidden").text)
+        assertEquals(R.string.remote_terminal_unsupported, end("unsupported").text)
+        assertEquals(R.string.remote_terminal_overflow, end("overflow").text)
+        assertEquals(R.string.remote_terminal_connection_problem, end("protocol").text)
+        assertEquals(R.string.remote_terminal_connection_problem, end("sequence").text)
+        assertEquals(R.string.remote_terminal_connection_problem, end("resize_failed").text)
+        assertEquals(R.string.remote_terminal_input_failed, end("input_failed").text)
+        assertEquals(R.string.remote_terminal_failed, end("failed").text)
+        assertEquals(R.string.remote_terminal_offline, end("offline").text)
+        assertEquals(R.string.remote_terminal_revoked, end("ownership").text)
+        assertEquals(R.string.remote_terminal_detached, end("left").text)
+        assertEquals(R.string.remote_terminal_stopped, end("something new").text)
+        for (reason in listOf("offline", "slow", "overflow", "protocol", "sequence", "input_failed", "resize_failed", "failed"))
+            assertEquals(reason, TerminalEndKind.RETRY, end(reason).kind)
+        for (reason in listOf("exit", "revoked", "idle", "detached", "left", "ownership"))
+            assertEquals(reason, TerminalEndKind.INFO, end(reason).kind)
+        // Attaching again cannot change a refusal.
+        for (reason in listOf("forbidden", "unsupported")) assertFalse(reason, end(reason).canReattach)
+    }
+
+    @Test fun openingAnEndedTerminalAttachesAgain() {
+        val live = TerminalView("s", attaching = false, generation = 3)
+        assertTrue(terminalOpenAttaches(open = false, view = null))
+        assertFalse(terminalOpenAttaches(open = true, view = live))
+        assertFalse(terminalOpenAttaches(open = true, view = TerminalView("s")))
+        assertTrue(terminalOpenAttaches(open = true, view = live.copy(ended = "exit", exitCode = 0)))
+        assertTrue(terminalOpenAttaches(open = true, view = live.copy(ended = "offline")))
+        assertFalse(terminalOpenAttaches(open = true, view = live.copy(ended = "forbidden")))
+    }
+
+    @Test fun aNewAttachmentDropsOldOutputAndStartsOnAResetScreen() {
+        val first = TerminalView("s", attaching = false, generation = 3)
+        var (rendered, pending) = terminalPendingWrites(null, first, emptyList())
+        assertEquals(TerminalRenderedAttachment("s", 3), rendered)
+        assertEquals(listOf(TERMINAL_RESET), pending)
+        // The same attachment keeps its unwritten output, also once it ended.
+        assertEquals(rendered to listOf("a", "b"), terminalPendingWrites(rendered, first, listOf("a", "b")))
+        assertEquals(rendered to listOf("a"), terminalPendingWrites(rendered, first.copy(ended = "offline"), listOf("a")))
+        // Attaching again forgets the old attachment; the next one resets the screen first.
+        val attaching = terminalPendingWrites(rendered, TerminalView("s"), listOf("old"))
+        assertNull(attaching.first)
+        pending = terminalPendingWrites(attaching.first, first.copy(generation = 4), attaching.second).second
+        assertEquals(listOf(TERMINAL_RESET), pending)
+        // Even without the attaching state in between, a new generation never mixes with the old output.
+        assertEquals(TerminalRenderedAttachment("s", 4) to listOf(TERMINAL_RESET), terminalPendingWrites(rendered, first.copy(generation = 4), listOf("old")))
+        // A held terminal shows nothing of its own.
+        assertEquals(rendered to listOf("a"), terminalPendingWrites(rendered, first.copy(generation = 9, holder = "mac"), listOf("a")))
+    }
+
+    @Test fun overTheChatTheTerminalShowsOnlyAsTheActiveTab() {
+        assertEquals(PaneOverlayPlacement.SHOWN, terminalOverlayPlacement(panesBeside = false, inspectorShown = false, active = true))
+        // A Files or Changes pane opened after it is not covered; the terminal stays composed.
+        assertEquals(PaneOverlayPlacement.KEPT_HIDDEN, terminalOverlayPlacement(panesBeside = false, inspectorShown = false, active = false))
+        assertEquals(PaneOverlayPlacement.KEPT_HIDDEN, terminalOverlayPlacement(panesBeside = true, inspectorShown = false, active = true))
+        assertEquals(PaneOverlayPlacement.INSPECTOR, terminalOverlayPlacement(panesBeside = true, inspectorShown = true, active = false))
+    }
 }

@@ -115,3 +115,87 @@ internal fun terminalTouchChord(name: String, ctrl: Boolean, alt: Boolean, shift
     if (ctrl || alt || shift || name.startsWith("f") || name == "shift_tab")
         TerminalInput.Chord(if (name == "shift_tab") "tab" else name, ctrl, alt, shift || name == "shift_tab")
     else null
+
+/** The Send button: the draft and then Enter as one ordered batch, so a typed command runs. */
+internal fun terminalInputForSend(draft: String, structured: Boolean = false): List<TerminalInput>? =
+    terminalInputForKey(draft, "enter", structured)
+
+/** Insert without Enter: only the draft, under the same paste rules as Send. */
+internal fun terminalInputForInsert(draft: String): List<TerminalInput>? =
+    if (draft.isEmpty()) null else terminalInputForDraft(draft)?.let(::listOf)
+
+/** What the pane offers once its attachment ended. */
+internal enum class TerminalEndKind {
+    /** An ordinary end (exit, close, idle, taken over elsewhere): a status line; the header can reattach. */
+    INFO,
+
+    /** A failure that attaching again can fix. */
+    RETRY,
+
+    /** A refusal that attaching again cannot change. */
+    FAILURE,
+}
+
+/** [text] is a string resource; with [exitCode] it takes the code as its argument. */
+internal data class TerminalEnd(val text: Int, val kind: TerminalEndKind, val exitCode: Int? = null) {
+    val canReattach: Boolean get() = kind != TerminalEndKind.FAILURE
+}
+
+/** The user's view of a terminal that ended with [reason] (the host's reason or the app's own). */
+internal fun terminalEnd(reason: String, exitCode: Int?): TerminalEnd = when (reason) {
+    "exit" -> if (exitCode != null) TerminalEnd(R.string.remote_terminal_exit_code, TerminalEndKind.INFO, exitCode)
+        else TerminalEnd(R.string.remote_terminal_exit, TerminalEndKind.INFO)
+    "revoked", "ownership" -> TerminalEnd(R.string.remote_terminal_revoked, TerminalEndKind.INFO)
+    "idle" -> TerminalEnd(R.string.remote_terminal_idle, TerminalEndKind.INFO)
+    "detached", "left" -> TerminalEnd(R.string.remote_terminal_detached, TerminalEndKind.INFO)
+    "offline" -> TerminalEnd(R.string.remote_terminal_offline, TerminalEndKind.RETRY)
+    "slow" -> TerminalEnd(R.string.remote_terminal_slow, TerminalEndKind.RETRY)
+    "overflow" -> TerminalEnd(R.string.remote_terminal_overflow, TerminalEndKind.RETRY)
+    "protocol", "sequence", "resize_failed" -> TerminalEnd(R.string.remote_terminal_connection_problem, TerminalEndKind.RETRY)
+    "input_failed" -> TerminalEnd(R.string.remote_terminal_input_failed, TerminalEndKind.RETRY)
+    "failed" -> TerminalEnd(R.string.remote_terminal_failed, TerminalEndKind.RETRY)
+    "forbidden" -> TerminalEnd(R.string.remote_terminal_forbidden, TerminalEndKind.FAILURE)
+    "unsupported" -> TerminalEnd(R.string.remote_terminal_unsupported, TerminalEndKind.FAILURE)
+    else -> TerminalEnd(R.string.remote_terminal_stopped, TerminalEndKind.RETRY)
+}
+
+/** Opening the terminal attaches when no pane is open, or again when the open pane's terminal ended. */
+internal fun terminalOpenAttaches(open: Boolean, view: TerminalView?): Boolean =
+    !open || view?.ended?.let { terminalEnd(it, view.exitCode).canReattach } == true
+
+/** Sent to the renderer before a new attachment's output: a full reset (RIS) clears screen and scrollback. */
+internal const val TERMINAL_RESET = "\u001bc"
+
+/** The attachment whose output the renderer shows. */
+internal data class TerminalRenderedAttachment(val sessionId: String, val generation: Long)
+
+/**
+ * The renderer's unwritten output once [view] arrives, and the attachment it now shows. A new
+ * attachment drops what an older one left unwritten and starts on a reset screen, so its replayed
+ * tail never mixes with the old output.
+ */
+internal fun terminalPendingWrites(
+    rendered: TerminalRenderedAttachment?,
+    view: TerminalView?,
+    pending: List<String>,
+): Pair<TerminalRenderedAttachment?, List<String>> {
+    if (view == null || view.attaching) return null to pending
+    val generation = view.generation
+    if (view.holder != null || generation == null) return rendered to pending
+    val current = TerminalRenderedAttachment(view.sessionId, generation)
+    return if (current == rendered) rendered to pending else current to listOf(TERMINAL_RESET)
+}
+
+/** Where a pane laid over the chat goes; beside the chat the inspector draws it. */
+internal enum class PaneOverlayPlacement { INSPECTOR, SHOWN, KEPT_HIDDEN }
+
+/**
+ * Over the chat the terminal shows only as the active tab, like the browser, so a pane opened
+ * after it is not covered; otherwise it stays composed but unplaced, keeping its renderer and
+ * attachment.
+ */
+internal fun terminalOverlayPlacement(panesBeside: Boolean, inspectorShown: Boolean, active: Boolean): PaneOverlayPlacement = when {
+    panesBeside && inspectorShown -> PaneOverlayPlacement.INSPECTOR
+    !panesBeside && active -> PaneOverlayPlacement.SHOWN
+    else -> PaneOverlayPlacement.KEPT_HIDDEN
+}
