@@ -266,7 +266,7 @@ internal data class HomeInputs(
     val projectChats: List<ProjectChatSummary> = emptyList(),
 )
 
-private val HOME_SESSION_FIELDS = setOf("id", "origin", "title", "status", "updatedAt", "harness")
+private val HOME_SESSION_FIELDS = setOf("id", "origin", "title", "status", "updatedAt")
 private val HOME_PROJECT_FIELDS = setOf("id", "name")
 
 private fun JsonObject.only(fields: Set<String>) =

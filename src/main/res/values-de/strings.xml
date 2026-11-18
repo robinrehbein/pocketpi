@@ -807,7 +807,7 @@
     <string name="remote_new_session_harness">Agent</string>
     <string name="remote_session_harness_pi">pi</string>
     <string name="remote_session_harness_claude">Claude Code</string>
-    <string name="remote_new_session_claude_unavailable">Claude Code ist auf deinem Rechner nicht verfügbar. Installiere dort die Claude Code CLI und versuch es noch einmal.</string>
+    <string name="remote_new_session_claude_unavailable">Claude Code ist auf deinem Mac nicht verfügbar. Installiere dort die Claude Code CLI und versuch es noch einmal.</string>
     <string name="remote_terminal_title">Terminal</string>
     <string name="remote_terminal_unavailable">Terminal auf diesem Gerät nicht verfügbar.</string>
     <string name="remote_terminal_takeover">Übernehmen</string>

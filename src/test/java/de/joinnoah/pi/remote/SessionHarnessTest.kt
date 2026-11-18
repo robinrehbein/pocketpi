@@ -149,7 +149,7 @@ class SessionHarnessTest {
 
         assertEquals(RemoteSelection("host", "project"), repository.createSession("host", "project", SessionHarness.CLAUDE))
         assertTrue(transport.creates().isEmpty())
-        assertEquals(R.string.remote_new_session_claude_unavailable, repository.state.value.error)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
     }
 
     @Test

@@ -1397,7 +1397,7 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, SUBAGENT_METADATA_CAPABILITY),
+                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, SUBAGENT_METADATA_CAPABILITY, SESSION_HARNESS_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -5328,7 +5328,8 @@ class DefaultRemoteRepository(
         // Never send `harness` to a host that does not list it: it would reject the request.
         val fields = sessionCreateFields(projectId, harness, state.value.capabilities)
         if (fields == null) {
-            reportError(R.string.remote_new_session_claude_unavailable)
+            // The host lost the capability (older build, or a reconnect still confirming it).
+            reportError(R.string.remote_request_error)
             return state.value.selection
         }
         cancelSelection()
