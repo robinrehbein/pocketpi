@@ -8333,6 +8333,135 @@ class RemoteRepositoryTest {
         assertEquals(3L, repo.state.value.terminal?.generation)
     }
 
+    /** A worker with a terminal whose attach answers with a new generation each time. */
+    private fun terminalReconnecting(transport: Transport, failAttach: (Int) -> Boolean = { false }) {
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        var attaches = 0
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session",
+                "attachmentGeneration" to 3 + attaches++, "cols" to request.long("cols"), "rows" to request.long("rows"))
+            "session.terminal.resize" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            // Input is never answered: it is in flight when the connection drops.
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        var attachRequests = 0
+        transport.failure = { request -> if (request.text("type") == "session.terminal.attach" && failAttach(attachRequests++)) "internal" else null }
+    }
+
+    @Test
+    fun reconnectReattachesAnOpenTerminalOnceAndNeverReplaysInput() = runTest {
+        val transport = Transport()
+        terminalReconnecting(transport)
+        val repo = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repo.activate(selection, ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.resizeTerminal(100, 30)); advanceTimeBy(126); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x"))); advanceTimeBy(126); runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        advanceTimeBy(1_001); runCurrent()
+        assertTrue(repo.state.value.connected)
+        assertEquals(selection, repo.state.value.selection)
+        val attaches = transport.sent.filter { it.text("type") == "session.terminal.attach" }
+        assertEquals(2, attaches.size)
+        // The size the pane last asked for, without a takeover.
+        assertEquals(100L, attaches.last().long("cols"))
+        assertEquals(30L, attaches.last().long("rows"))
+        assertNull(attaches.last()["takeover"])
+        val terminal = repo.state.value.terminal!!
+        assertEquals(4L, terminal.generation)
+        assertNull(terminal.ended)
+        assertFalse(terminal.inputPending)
+        // The input in flight at the disconnect is not sent again; new input starts the new sequence.
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("y"))); advanceTimeBy(126); runCurrent()
+        val inputs = transport.sent.filter { it.text("type") == "session.terminal.input" }
+        assertEquals(listOf("x", "y"), inputs.map { it.text("text") })
+        assertEquals(0L, inputs.last().long("inputSeq"))
+    }
+
+    @Test
+    fun aReconnectInTheBackgroundReattachesTheTerminalOnlyOnceTheAppIsInFront() = runTest {
+        val transport = Transport()
+        terminalReconnecting(transport)
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        repo.setForeground(false); runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        // A push wakes the connection in the background: the terminal stays ended meanwhile, since
+        // the pane, whose activity is stopped, could not tell its queued input from the new attachment's.
+        repo.pushWake("host"); advanceTimeBy(1_001); runCurrent()
+        assertTrue(repo.state.value.connected)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        // In front again, the armed resume attaches once.
+        repo.setForeground(true); runCurrent(); advanceTimeBy(1_001); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertNull(repo.state.value.terminal?.ended)
+        assertEquals(4L, repo.state.value.terminal?.generation)
+        repo.setForeground(false); runCurrent(); repo.setForeground(true); runCurrent(); advanceTimeBy(1_001); runCurrent()
+        assertEquals("at most once per reconnect", 2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+    }
+
+    @Test
+    fun aFailedReattachIsNotRetriedOnTheNextReconnect() = runTest {
+        val transport = Transport()
+        terminalReconnecting(transport, failAttach = { it == 1 })
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_001); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertEquals("failed", repo.state.value.terminal?.ended)
+        // Past the short-lived window, so the next loss reconnects as the first one did.
+        advanceTimeBy(6_000); runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(5_001); runCurrent()
+        assertTrue(repo.state.value.connected)
+        assertEquals(2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        // The pane's own Reattach still works.
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertNull(repo.state.value.terminal?.ended)
+    }
+
+    @Test
+    fun reconnectLeavesAClosedOrEndedTerminalAlone() = runTest {
+        for (case in listOf("closed", "exited")) {
+            val transport = Transport()
+            terminalReconnecting(transport)
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+            repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+            assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+            if (case == "exited")
+                transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.detached", "sessionId" to "session",
+                    "attachmentGeneration" to 3, "reason" to "exit", "exitCode" to 0))
+            transport.listener.failed(true, R.string.remote_connection_error)
+            // Closing the pane while offline detaches, which cancels the resume.
+            if (case == "closed") repo.detachTerminal()
+            advanceTimeBy(1_001); runCurrent()
+            assertTrue(case, repo.state.value.connected)
+            assertEquals(case, 1, transport.sent.count { it.text("type") == "session.terminal.attach" })
+            repo.disconnect()
+        }
+    }
+
     private fun bashing(transport: Transport, origin: String = "rpc", advertise: Boolean = true) {
         configure(transport, sessions = listOf(session(origin = origin)), opened = session(origin = origin))
         if (advertise) advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BASH_CAPABILITY))))

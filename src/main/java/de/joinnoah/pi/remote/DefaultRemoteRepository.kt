@@ -621,10 +621,10 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
-            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
-    override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
+    override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
     override fun openEmulator() = canOpenEmulator() && emulatorClient.open(requireNotNull(state.value.selection.sessionId), generation)
     override fun selectEmulatorProfile(id: String) = emulatorClient.selectProfile(id)
     override fun closeEmulator() = emulatorClient.close()
@@ -634,6 +634,8 @@ class DefaultRemoteRepository(
     override fun sendEmulatorInput(input: EmulatorInput) = emulatorClient.input(input)
     override fun refreshEmulator() = emulatorClient.refresh()
     override fun setEmulatorVisible(visible: Boolean) = emulatorClient.setVisible(visible)
+    override fun retryEmulator() = emulatorClient.retry()
+    override fun releaseEmulator() = emulatorClient.release()
     private val browserClient by lazy {
         BrowserClient(scope,
             { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
@@ -645,10 +647,10 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
-            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
-    override fun canOpenBrowser(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities
+    override fun canOpenBrowser(): Boolean = browserOpenable(state.value, capabilityRevision(capabilityRoute))
     override fun openBrowser(): Boolean = canOpenBrowser() && browserClient.open(requireNotNull(state.value.selection.sessionId), generation)
     override fun closeBrowser() = browserClient.close()
     override fun acquireBrowser() = browserClient.acquire()
@@ -661,6 +663,7 @@ class DefaultRemoteRepository(
     override fun sendBrowserInput(input: BrowserInput) = browserClient.input(input)
     override fun refreshBrowser() = browserClient.refresh()
     override fun setBrowserVisible(visible: Boolean) = browserClient.setVisible(visible)
+    override fun dropBrowserControl() = browserClient.dropControl()
     private val previewClient by lazy {
         BrowserClient(scope,
             { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
@@ -672,10 +675,10 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
-            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
-    override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
+    override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
     override fun openPreview(port: Int): Boolean = canOpenPreview() && port in 1..65535 && previewClient.open(requireNotNull(state.value.selection.sessionId), generation, port)
     override fun closePreview() = previewClient.close()
     override fun acquirePreview() = previewClient.acquire()
@@ -688,6 +691,7 @@ class DefaultRemoteRepository(
     override fun sendPreviewInput(input: BrowserInput) = previewClient.input(input)
     override fun refreshPreview() = previewClient.refresh()
     override fun setPreviewVisible(visible: Boolean) = previewClient.setVisible(visible)
+    override fun dropPreviewControl() = previewClient.dropControl()
     private val detailsAuthority = QuestionDetailsAuthority()
     private var detailsQuestion: JsonObject? = null
     private var editorAuthorityGeneration = 0L
@@ -5247,6 +5251,8 @@ class DefaultRemoteRepository(
             }
             if (mode == ActivationMode.RESTORE && previousSelection == canonical && state.value.selection == canonical && canOpenEmulator()) emulatorClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             refreshPanes()
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical && state.value.selection == canonical)
+                canonical.sessionId?.let(::resumeTerminal)
             outcome = "ok"
             return canonical
         } catch (e: CancellationException) {
@@ -6336,6 +6342,10 @@ class DefaultRemoteRepository(
         if (!state.value.loading) syncFocus()
         // After the tier: a reconnect it starts lists the jobs once ready, so this one does not.
         jobsController.setForeground(true)
+        // A terminal resume that a reconnect in the background kept armed (see [resumeTerminal]);
+        // a reconnect the tier started runs it from its own restore instead.
+        if (terminalResumeSize != null && !state.value.loading && canAttachTerminal())
+            state.value.selection.sessionId?.let(::resumeTerminal)
     }
 
     override fun pushWake(routeId: String) {
@@ -11435,7 +11445,7 @@ class DefaultRemoteRepository(
         refreshCommands()
     }
 
-    // ---- Terminal v1: connection-owned, never automatically reattached -----------------------
+    // ---- Terminal v1: connection-owned; reattached once after a reconnect, input never replayed ---
     private data class PendingTerminal(val session: String, val connection: Long, val early: MutableList<TerminalEvent> = mutableListOf(), var bytes: Int = 0, var abandoned: Boolean = false)
     private var pendingTerminal: PendingTerminal? = null
     private var terminalAttachment: TerminalAttachment? = null
@@ -11445,6 +11455,14 @@ class DefaultRemoteRepository(
     private var terminalNextSendAt: Long? = null
     private var terminalResizeJob: Job? = null
     private var terminalResize: Pair<Int, Int>? = null
+    /** The size the terminal last asked for, which a reattach after a reconnect asks for again. */
+    private var terminalSize: Pair<Int, Int>? = null
+    /**
+     * Set when a lost connection ended a live terminal while reconnecting was enabled; the next
+     * restore of the same chat attaches once with this size (see [resumeTerminal]). Any other end
+     * and any attach clear it, so a closed pane never comes back.
+     */
+    private var terminalResumeSize: Pair<Int, Int>? = null
 
     private suspend fun paceTerminal() {
         val wait = terminalNextSendAt?.let { (it - terminalNow()).coerceIn(0, 125) } ?: 0
@@ -11472,6 +11490,8 @@ class DefaultRemoteRepository(
             current.session?.let(::isHostWorker) != true || cols !in 20..500 || rows !in 5..300 ||
             (takeoverGeneration != null && takeoverGeneration !in 0..9_007_199_254_740_991L) ||
             pendingTerminal != null || terminalAttachment != null) return false
+        terminalResumeSize = null
+        terminalSize = cols to rows
         val pending = PendingTerminal(session, generation)
         pendingTerminal = pending
         update { it.copy(terminal = TerminalView(session)) }
@@ -11565,7 +11585,11 @@ class DefaultRemoteRepository(
     }
     private fun endTerminal(reason: String, sendDetach: Boolean) {
         pendingTerminal?.abandoned = true
+        if (reason != "offline") terminalResumeSize = null
         val view = state.value.terminal ?: return
+        // Only the connection took this terminal away: it comes back once the connection does.
+        // An explicit disconnect turns reconnecting off first, so it is not resumed.
+        if (reason == "offline" && view.ended == null && reconnectEnabled) terminalResumeSize = terminalSize ?: (80 to 24)
         val attachment = terminalAttachment
         terminalAttachment = null
         terminalInputBusy = false
@@ -11578,6 +11602,25 @@ class DefaultRemoteRepository(
         if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = reason)) }
     }
     override fun detachTerminal() = endTerminal("detached", sendDetach = true)
+
+    /**
+     * After a reconnect restored [session], attaches once more to the terminal the lost connection
+     * ended, if its pane is still open (closing it detaches, which clears the resume). The host
+     * replays its bounded tail on attach; input queued or in flight at the disconnect stays dropped,
+     * as the new attachment starts its own input sequence.
+     *
+     * In the background (a push wake reconnects there) the resume stays armed until the app is in
+     * front again ([setForeground]): the pane sees no state while its activity is stopped, so it
+     * could not tell its queued input from the new attachment's.
+     */
+    private fun resumeTerminal(session: String) {
+        val size = terminalResumeSize ?: return
+        if (inBackground) return
+        terminalResumeSize = null
+        val view = state.value.terminal
+        if (view?.sessionId != session || view.ended != "offline") return
+        attachTerminal(size.first, size.second)
+    }
     override fun takeTerminalOutput(): List<String> {
         val output = state.value.terminal?.output.orEmpty()
         update { it.copy(terminal = it.terminal?.copy(output = emptyList())) }
@@ -11625,6 +11668,7 @@ class DefaultRemoteRepository(
         val view = state.value.terminal ?: return false
         if (!state.value.connected || view.ended != null || cols !in 20..500 || rows !in 5..300) return false
         val connection = generation
+        terminalSize = cols to rows
         terminalResize = cols to rows
         if (terminalResizeJob?.isActive == true) return true
         terminalResizeJob = scope.launch {

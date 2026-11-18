@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.dp
 internal enum class InspectorTab(@StringRes val labelRes: Int) {
     TERMINAL(R.string.remote_terminal_title),
     BROWSER(R.string.browser_title),
+    /** The shared Android emulator; like the browser it stays composed while hidden. */
+    EMULATOR(R.string.emulator_title),
     CHANGES(R.string.remote_inspector_tab_changes),
     FILES(R.string.remote_inspector_tab_files),
     JOBS(R.string.remote_inspector_tab_jobs),
@@ -201,7 +203,7 @@ internal fun InspectorHost(
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // Keep the terminal composed while another tab is selected: its connection,
                 // renderer and unsent input belong to the open tab, not just the visible one.
-                for (retained in listOf(InspectorTab.TERMINAL, InspectorTab.BROWSER).filter { it in tabs.open }) {
+                for (retained in listOf(InspectorTab.TERMINAL, InspectorTab.BROWSER, InspectorTab.EMULATOR).filter { it in tabs.open }) {
                     val body = content(retained)
                     if (body != null) {
                         val visible = active == retained
@@ -217,7 +219,7 @@ internal fun InspectorHost(
                     }
                 }
                 val tab = active ?: return@Box
-                if (tab !in setOf(InspectorTab.TERMINAL, InspectorTab.BROWSER)) {
+                if (tab !in setOf(InspectorTab.TERMINAL, InspectorTab.BROWSER, InspectorTab.EMULATOR)) {
                     val body = content(tab) ?: return@Box
                     holder.SaveableStateProvider(tab.name) { body() }
                 }

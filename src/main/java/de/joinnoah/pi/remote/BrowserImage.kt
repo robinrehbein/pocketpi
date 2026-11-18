@@ -50,3 +50,24 @@ internal fun browserImagePoint(fit: BrowserImageFit, x: Float, y: Float, cssWidt
     if (relativeX < 0.0 || relativeY < 0.0 || relativeX >= fit.width.toDouble() || relativeY >= fit.height.toDouble()) return null
     return (relativeX / fit.width * cssWidth) to (relativeY / fit.height * cssHeight)
 }
+
+/**
+ * A movement of [dx], [dy] view pixels over the fitted image as CSS pixels, by the same scale as
+ * [browserImagePoint]; the letterbox bars do not count.
+ */
+internal fun browserImageDelta(fit: BrowserImageFit, dx: Float, dy: Float, cssWidth: Int, cssHeight: Int): Pair<Double, Double>? {
+    if (!fit.width.isFinite() || !fit.height.isFinite() || fit.width <= 0f || fit.height <= 0f ||
+        !dx.isFinite() || !dy.isFinite() || cssWidth <= 0 || cssHeight <= 0
+    ) return null
+    return (dx.toDouble() / fit.width * cssWidth) to (dy.toDouble() / fit.height * cssHeight)
+}
+
+/** The largest wheel delta the protocol carries in one event, in CSS pixels. */
+internal const val BROWSER_WHEEL_MAX_DELTA = 4096.0
+
+/**
+ * The wheel a finger drag of [dx], [dy] CSS pixels sends at ([x], [y]): natural direction, so the
+ * content follows the finger. A drag upwards scrolls the page down.
+ */
+internal fun browserTouchWheel(x: Double, y: Double, dx: Double, dy: Double): BrowserInput.Wheel =
+    BrowserInput.Wheel(x, y, (-dx).coerceIn(-BROWSER_WHEEL_MAX_DELTA, BROWSER_WHEEL_MAX_DELTA) + 0.0, (-dy).coerceIn(-BROWSER_WHEEL_MAX_DELTA, BROWSER_WHEEL_MAX_DELTA) + 0.0)

@@ -116,8 +116,9 @@ class MainActivityCustomTerminalEndToEndTest {
             }
             assertEquals("A locally held terminal is required to exercise confirmation", "mac", repository.state.value.terminal?.holder)
             val takeover = app.getString(R.string.remote_terminal_takeover)
-            waitFor("takeover action") { textExists(takeover) }
-            compose.onNodeWithText(takeover).performClick()
+            // The control bar's take action asks for a confirmation that names the takeover.
+            waitFor("takeover action") { tagExists("terminalAcquire") }
+            compose.onNodeWithTag("terminalAcquire").performClick()
             waitFor("takeover confirmation") { textExists(app.getString(R.string.remote_terminal_takeover_confirm)) }
             val confirmTakeover = hasText(takeover) and hasClickAction() and hasAnyAncestor(isDialog())
             compose.onAllNodes(confirmTakeover).assertCountEquals(1)
@@ -267,12 +268,12 @@ class MainActivityCustomTerminalEndToEndTest {
             assertTrue("Terminal software bitmap must have a dark opaque background", pixels.get().second > pixels.get().third / 2)
             proof.put("screenPixelsVerified", true)
             record("rendered")
-            compose.onNodeWithText("↓").performScrollTo().performClick()
+            compose.onNodeWithTag("terminalKey_down").performScrollTo().performClick()
             waitFor("down input settled") { repository.state.value.terminal?.inputPending == false }
-            compose.onNodeWithText("Enter").performScrollTo().performClick()
+            compose.onNodeWithTag("terminalKey_enter").performScrollTo().performClick()
             waitFor("native custom result") { status().optBoolean("resultVerified") }
             record("result-verified")
-            compose.onNodeWithText(app.getString(R.string.remote_terminal_close)).performClick()
+            compose.onNodeWithTag("terminalClose").performClick()
             waitFor("terminal released") { repository.state.value.terminal?.let { it.ended != null } != false }
             submit(followup)
             waitFor("same worker followup") {

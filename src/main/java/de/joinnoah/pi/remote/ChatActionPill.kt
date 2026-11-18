@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
@@ -53,7 +54,8 @@ private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
-        ChatAction.BROWSER, ChatAction.PREVIEW, ChatAction.EMULATOR -> Icons.Default.Language
+        ChatAction.BROWSER, ChatAction.PREVIEW -> Icons.Default.Language
+        ChatAction.EMULATOR -> Icons.Default.PhoneAndroid
         ChatAction.JOBS, ChatAction.TERMINAL -> Icons.Outlined.Terminal
         ChatAction.TREE -> Icons.Default.AccountTree
         ChatAction.ARTIFACTS -> Icons.Default.Collections

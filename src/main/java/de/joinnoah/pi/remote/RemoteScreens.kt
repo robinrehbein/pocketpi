@@ -863,6 +863,7 @@ internal fun RemoteScreen(
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
     val browserOpen = state.browser?.sessionId == state.selection.sessionId && state.browser != null
+    val emulatorOpen = state.emulator?.sessionId == state.selection.sessionId && state.emulator != null
     var previewShown by rememberSaveable(key) { mutableStateOf(false) }
     var previewInstance by rememberSaveable(key) { mutableStateOf(0) }
     val previewSavedState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
@@ -951,8 +952,10 @@ internal fun RemoteScreen(
         showTab(tab)
         when (tab) {
             InspectorTab.BROWSER -> { if (!browserOpen) chat.openBrowser() else { chat.setBrowserVisible(true); chat.refreshBrowser() } }
+            InspectorTab.EMULATOR -> { if (!emulatorOpen) chat.openEmulator() else { chat.setEmulatorVisible(true); chat.refreshEmulator() } }
             InspectorTab.TERMINAL -> {
-                if (!terminalOpen && chat.attachTerminal(80, 24)) terminalOpen = true
+                // An open pane whose terminal ended attaches again; the pane resizes it once attached.
+                if (terminalOpenAttaches(terminalOpen, state.terminal) && chat.attachTerminal(80, 24)) terminalOpen = true
             }
             InspectorTab.CHANGES -> if (changesOpen == null) chat.openChanges(exclusive = !sideCapable)
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
@@ -973,6 +976,8 @@ internal fun RemoteScreen(
         inspectorTabs = inspectorTabs.close(tab)
         when (tab) {
             InspectorTab.BROWSER -> { browserHasUnsent = false; chatModel?.closeBrowser() }
+            // Closing detaches this device; stopping the emulator is the pane's own confirmed action.
+            InspectorTab.EMULATOR -> chatModel?.closeEmulator()
             InspectorTab.TERMINAL -> { terminalOpen = false; chatModel?.detachTerminal() }
             InspectorTab.CHANGES -> chatModel?.closeChanges()
             InspectorTab.FILES -> chatModel?.closeFiles()
@@ -1640,7 +1645,7 @@ internal fun RemoteScreen(
             ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
             ChatAction.FILES -> openInspector(InspectorTab.FILES)
             ChatAction.BROWSER -> openInspector(InspectorTab.BROWSER)
-            ChatAction.EMULATOR -> { if (state.emulator == null) chatModel?.openEmulator() }
+            ChatAction.EMULATOR -> openInspector(InspectorTab.EMULATOR)
             ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.TERMINAL -> openInspector(InspectorTab.TERMINAL)
@@ -1862,7 +1867,7 @@ internal fun RemoteScreen(
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
                         if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
-                        if (state.emulator != null || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
+                        if (emulatorOpen || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
                         if (chatModel?.canAttachTerminal() == true) add(ChatAction.TERMINAL)
                         // Render capture is local diagnostics, offered only while recording is on.
                         if (renderOptions.recording) add(ChatAction.RENDER_CAPTURE)
@@ -2265,7 +2270,7 @@ internal fun RemoteScreen(
                 open = model::openBrowser, acquire = model::acquireBrowser, refresh = model::refreshBrowser,
                 newTab = model::newBrowserTab, navigate = model::navigateBrowser, selectTab = model::selectBrowserTab,
                 closeTab = model::closeBrowserTab, handoff = model::handoffBrowser, resize = model::resizeBrowser,
-                input = model::sendBrowserInput, visible = model::setBrowserVisible,
+                input = model::sendBrowserInput, visible = model::setBrowserVisible, dropControl = model::dropBrowserControl,
             ) }
             BrowserPane(browser, actions, close, unsent)
         }
@@ -2273,9 +2278,26 @@ internal fun RemoteScreen(
     val browserContent: (@Composable () -> Unit)? = if (browserOpen && chatModel != null) ({
         movableBrowser(state.browser, chatModel, { closeTab(InspectorTab.BROWSER) }, { browserHasUnsent = it })
     }) else null
+    // Like the browser, one emulator pane moves between the inspector and the phone overlay and
+    // stays composed, hidden, while another tab shows: hidden it keeps the session and the lease.
+    val movableEmulator = remember(key) {
+        movableContentOf<EmulatorView, ChatViewModel, () -> Unit> { emulator, model, close ->
+            val actions = remember(model) { EmulatorPaneActions(
+                select = model::selectEmulatorProfile, acquire = model::acquireEmulator, handoff = model::handoffEmulator,
+                stop = model::stopEmulator, input = model::sendEmulatorInput, refresh = model::refreshEmulator,
+                visible = model::setEmulatorVisible, retry = model::retryEmulator, release = model::releaseEmulator,
+            ) }
+            EmulatorPane(emulator, actions, close)
+        }
+    }
+    val emulatorView = state.emulator
+    val emulatorContent: (@Composable () -> Unit)? = if (emulatorOpen && emulatorView != null && chatModel != null) ({
+        movableEmulator(emulatorView, chatModel, { closeTab(InspectorTab.EMULATOR) })
+    }) else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
             InspectorTab.BROWSER -> browserContent
+            InspectorTab.EMULATOR -> emulatorContent
             InspectorTab.TERMINAL -> terminalContent
             InspectorTab.CHANGES -> changesContent
             InspectorTab.FILES -> filesContent
@@ -2291,6 +2313,7 @@ internal fun RemoteScreen(
     val availableTabs =
         buildList {
             if (browserContent != null) add(InspectorTab.BROWSER)
+            if (emulatorContent != null) add(InspectorTab.EMULATOR)
             if (terminalContent != null) add(InspectorTab.TERMINAL)
             if (changesContent != null) add(InspectorTab.CHANGES)
             if (filesContent != null) add(InspectorTab.FILES)
@@ -2383,7 +2406,7 @@ internal fun RemoteScreen(
     // does an expanded inspector that leaves the chat only a strip.
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
-            (browserOpen || terminalOpen || jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
+            (browserOpen || emulatorOpen || terminalOpen || jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
     // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
     val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
@@ -4419,8 +4442,9 @@ internal fun RemoteScreen(
             // Beside the chat these are the inspector's tabs. The jobs stay open through a
             // reconnect, which clears the capabilities for a moment.
             PaneOverlays(
-                panesBeside, inspectorShown, tabs.active == InspectorTab.BROWSER,
+                panesBeside, inspectorShown, tabs.active == InspectorTab.BROWSER, tabs.active == InspectorTab.TERMINAL,
                 changesContent, filesContent, jobsContent, toolContent, terminalContent, browserContent,
+                emulatorActive = tabs.active == InspectorTab.EMULATOR, emulatorContent = emulatorContent,
             )
             }
             }
@@ -4438,36 +4462,30 @@ internal fun RemoteScreen(
             val port = previewPortText.toIntOrNull()
             if (port != null && previewPortText.all { it in '0'..'9' } && port in 1..65535 && chatModel?.openPreview(port) == true) { previewPortDialog = false; previewInstance++; previewShown = true }
         }, Modifier.testTag("previewOpen"), enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
-        dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
-    val currentEmulator = state.emulator
-    if (currentEmulator != null && chatModel != null && currentEmulator.sessionId == state.selection.sessionId) androidx.compose.ui.window.Dialog(onDismissRequest = { chatModel.closeEmulator() }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-            val actions = remember(chatModel) { EmulatorPaneActions(chatModel::selectEmulatorProfile, chatModel::acquireEmulator, chatModel::handoffEmulator, chatModel::stopEmulator, chatModel::sendEmulatorInput, chatModel::refreshEmulator, chatModel::setEmulatorVisible) }
-            EmulatorPane(currentEmulator, actions, chatModel::closeEmulator)
-        }
-    }
-    if (previewShown && state.previewBrowser != null && chatModel != null) androidx.compose.ui.window.Dialog(onDismissRequest = {
+    if (previewShown && state.previewBrowser != null && chatModel != null) PreviewDialog(onDismissRequest = {
         if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
-    }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-            val actions = remember(chatModel) { BrowserPaneActions(
-                acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
-                newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
-                closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
-                input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible,
-            ) }
-            previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
-                BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
-            }
+    }) {
+        val previewPort by rememberUpdatedState(state.previewBrowser?.previewPort)
+        val actions = remember(chatModel) { BrowserPaneActions(
+            // Retry after a failed open opens the same port again.
+            open = { previewPort?.let(chatModel::openPreview) ?: false },
+            acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
+            newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
+            closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
+            input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible, dropControl = chatModel::dropPreviewControl,
+        ) }
+        previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
+            BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
         }
     }
     if (previewCloseConfirm) AlertDialog(
         onDismissRequest = { previewCloseConfirm = false },
         title = { Text(stringResource(R.string.browser_discard_title)) },
         text = { Text(stringResource(R.string.browser_discard_body)) },
-        confirmButton = { TextButton(onClick = { previewCloseConfirm = false; previewHasUnsent = false; chatModel?.closePreview() }) { Text(stringResource(R.string.browser_close)) } },
-        dismissButton = { TextButton(onClick = { previewCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        confirmButton = { TextButton(onClick = { previewCloseConfirm = false; previewHasUnsent = false; chatModel?.closePreview() }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { previewCloseConfirm = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (terminalLeave != null) AlertDialog(
         onDismissRequest = { terminalLeave?.second?.invoke(); terminalLeave = null },
@@ -4477,15 +4495,15 @@ internal fun RemoteScreen(
             val action = terminalLeave
             terminalLeave = null
             action?.first?.invoke()
-        }) { Text(stringResource(R.string.remote_terminal_close)) } },
-        dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (browserCloseConfirm) AlertDialog(
         onDismissRequest = { browserCloseConfirm = false },
         title = { Text(stringResource(R.string.browser_discard_title)) },
         text = { Text(stringResource(R.string.browser_discard_body)) },
-        confirmButton = { TextButton(onClick = { browserCloseConfirm = false; browserHasUnsent = false; closeTab(InspectorTab.BROWSER) }) { Text(stringResource(R.string.browser_close)) } },
-        dismissButton = { TextButton(onClick = { browserCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        confirmButton = { TextButton(onClick = { browserCloseConfirm = false; browserHasUnsent = false; closeTab(InspectorTab.BROWSER) }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { browserCloseConfirm = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (terminalCloseConfirm) AlertDialog(
         onDismissRequest = { terminalCloseConfirm = false },
@@ -4495,8 +4513,8 @@ internal fun RemoteScreen(
             terminalCloseConfirm = false
             terminalHasUnsent = false
             closeTab(InspectorTab.TERMINAL)
-        }) { Text(stringResource(R.string.remote_terminal_close)) } },
-        dismissButton = { TextButton(onClick = { terminalCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { terminalCloseConfirm = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     val hideOfflineLabel = stringResource(R.string.remote_hide_offline_sessions)
     if (tuiInfoOpen && key is RemoteNavKey.Chat && state.session?.optionalText("origin") == "tui")
@@ -5806,12 +5824,15 @@ private fun PaneOverlays(
     panesBeside: Boolean,
     inspectorShown: Boolean,
     browserActive: Boolean,
+    terminalActive: Boolean,
     changesContent: (@Composable () -> Unit)?,
     filesContent: (@Composable () -> Unit)?,
     jobsContent: (@Composable () -> Unit)?,
     toolContent: (@Composable () -> Unit)?,
     terminalContent: (@Composable () -> Unit)?,
     browserContent: (@Composable () -> Unit)?,
+    emulatorActive: Boolean = false,
+    emulatorContent: (@Composable () -> Unit)? = null,
 ) {
     // Each pane covers the chat, so its pills blur its own lists, not the chat beneath it.
     // One call each, so a pane keeps its state while another comes or goes. The panes draw
@@ -5821,7 +5842,8 @@ private fun PaneOverlays(
     if (!panesBeside && filesContent != null) ProvideGlass(paneSurface) { filesContent() }
     if (!panesBeside && jobsContent != null) ProvideGlass(paneSurface) { jobsContent() }
     if (!panesBeside && toolContent != null) ProvideGlass(paneSurface) { toolContent() }
-    if (!panesBeside && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
+    val terminalPlacement = terminalOverlayPlacement(panesBeside, inspectorShown, terminalActive)
+    if (terminalPlacement == PaneOverlayPlacement.SHOWN && terminalContent != null) ProvideGlass(paneSurface) { terminalContent() }
     if (!panesBeside && browserActive && browserContent != null) ProvideGlass(paneSurface) { browserContent() }
     if (browserContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && !browserActive))) {
         Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
@@ -5829,9 +5851,19 @@ private fun PaneOverlays(
             layout(placeable.width, placeable.height) { }
         }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { browserContent() } }
     }
-    // The inspector may be hidden while its tab remains open. Measure the terminal at
-    // a real size without placing it, so it receives neither input nor semantics.
-    if (panesBeside && !inspectorShown && terminalContent != null) {
+    // The emulator follows the browser's rule: over the chat while its tab is active, otherwise
+    // composed unplaced and hidden, so it keeps its session and lease.
+    if (!panesBeside && emulatorActive && emulatorContent != null) ProvideGlass(paneSurface) { emulatorContent() }
+    if (emulatorContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && !emulatorActive))) {
+        Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { }
+        }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { emulatorContent() } }
+    }
+    // The inspector may be hidden while its tab remains open, or another pane shows over the
+    // chat. Measure the terminal at a real size without placing it, so it receives neither input
+    // nor semantics.
+    if (terminalPlacement == PaneOverlayPlacement.KEPT_HIDDEN && terminalContent != null) {
         Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
             val placeable = measurable.measure(constraints)
             layout(placeable.width, placeable.height) { }

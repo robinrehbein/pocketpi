@@ -65,4 +65,26 @@ class BrowserImageTest {
         assertNull(browserImagePoint(fit, Float.NaN, 100f, 400, 800))
         assertNull(browserImagePoint(fit, 100f, 100f, 0, 800))
     }
+
+    @Test fun dragDeltaUsesTheFittedImageScaleAndScrollsInNaturalDirection() {
+        // A 400x200 frame of an 800x400 CSS viewport, letterboxed in a 1000x1000 view: 1000x500 at y=250.
+        val fit = requireNotNull(browserImageFit(1000f, 1000f, 400, 200))
+        assertEquals(BrowserImageFit(0f, 250f, 1000f, 500f), fit)
+        val delta = requireNotNull(browserImageDelta(fit, 50f, -100f, 800, 400))
+        assertEquals(40.0, delta.first, 1e-9)
+        assertEquals(-80.0, delta.second, 1e-9)
+        // The same scale as a point: two points 100px apart are delta apart in CSS pixels.
+        val a = requireNotNull(browserImagePoint(fit, 500f, 600f, 800, 400))
+        val b = requireNotNull(browserImagePoint(fit, 550f, 500f, 800, 400))
+        assertEquals(b.first - a.first, delta.first, 1e-9)
+        assertEquals(b.second - a.second, delta.second, 1e-9)
+        // The finger moved up and right: the page scrolls down and left.
+        val wheel = browserTouchWheel(10.0, 20.0, delta.first, delta.second)
+        assertEquals(BrowserInput.Wheel(10.0, 20.0, -40.0, 80.0), wheel)
+        assertEquals(BROWSER_WHEEL_MAX_DELTA, browserTouchWheel(0.0, 0.0, 0.0, -1e6).deltaY, 0.0)
+        // No negative zero on the wire.
+        assertEquals(0.0.toRawBits(), browserTouchWheel(0.0, 0.0, 0.0, 0.0).deltaY.toRawBits())
+        assertNull(browserImageDelta(fit, Float.NaN, 0f, 800, 400))
+        assertNull(browserImageDelta(fit, 1f, 1f, 0, 400))
+    }
 }

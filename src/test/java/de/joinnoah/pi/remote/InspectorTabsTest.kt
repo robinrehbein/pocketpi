@@ -86,5 +86,7 @@ class InspectorTabsTest {
         assertEquals(tabs, InspectorTabs.Saver.restore(saved))
         val empty = with(InspectorTabs.Saver) { scope.save(InspectorTabs()) }!!
         assertEquals(InspectorTabs(), InspectorTabs.Saver.restore(empty))
+        val emulator = InspectorTabs().open(InspectorTab.BROWSER).open(InspectorTab.EMULATOR)
+        assertEquals(emulator, InspectorTabs.Saver.restore(with(InspectorTabs.Saver) { scope.save(emulator) }!!))
     }
 }

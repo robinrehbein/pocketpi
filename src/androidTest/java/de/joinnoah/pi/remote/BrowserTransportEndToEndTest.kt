@@ -217,8 +217,8 @@ class BrowserTransportEndToEndTest {
         } catch (failure: Exception) {
             throw AssertionError("Linux text not observed: attempts=${observedTransport.inputAttempts.get()}, receipt=${view()?.receipt}, pending=${view()?.inputPending}, moving=${view()?.moving}, viewport=${view()?.viewportRevision}, posts=${status()?.optInt("inputPosts")}", failure)
         }
-        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
-        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserKey_Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithTag("browserKey_Enter").performClick()
         try {
             compose.waitUntil(30_000) { status()?.optString("submitted") == value }
         } catch (failure: Exception) {
@@ -305,8 +305,8 @@ class BrowserTransportEndToEndTest {
         }
         compose.onNodeWithTag("browserSendText").performClick()
         compose.waitUntil(30_000) { status()?.optString("input") == submitted && repository.state.value.previewBrowser?.inputPending == false }
-        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
-        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserKey_Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithTag("browserKey_Enter").performClick()
         compose.waitUntil(30_000) { status()?.optString("submitted") == submitted }
         fixtureAction("preview-update")
         compose.waitUntil(30_000) {
@@ -446,11 +446,11 @@ class BrowserTransportEndToEndTest {
                 } == true
             }
             compose.waitUntil(30_000) {
-                runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false)
+                runCatching { compose.onNodeWithTag("browserKey_Enter").assertIsEnabled(); true }.getOrDefault(false)
             }
             val beforeEnterReceipt = repository.state.value.browser?.receipt
             beforeSubmit = repository.state.value.browser?.image?.frameId
-            compose.onNodeWithText("Enter").performClick()
+            compose.onNodeWithTag("browserKey_Enter").performClick()
             compose.waitUntil(30_000) {
                 repository.state.value.browser?.let {
                     !it.inputPending && it.receipt != null && it.receipt != beforeEnterReceipt && it.receipt.status == "accepted"
@@ -660,7 +660,7 @@ class BrowserTransportEndToEndTest {
             val agentGeneration = requireNotNull(repository.state.value.browser).generation
             fixtureAction("handoff-to-device")
             compose.waitUntil(30_000) { status()?.optJSONObject("combined")?.optString("stage") == "handed-to-device" }
-            compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+            clickBrowserSync()
             compose.waitUntil(30_000) { (repository.state.value.browser?.generation ?: 0) > agentGeneration }
             compose.onNodeWithTag("browserAcquire").performClick()
         }
@@ -687,8 +687,8 @@ class BrowserTransportEndToEndTest {
         }
         val beforeLogin = requireNotNull(repository.state.value.browser)
         compose.onNodeWithTag("browserText").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
-        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
-        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserKey_Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithTag("browserKey_Enter").performClick()
         compose.waitUntil(60_000) {
             val browser = repository.state.value.browser
             status()?.optJSONObject("combined")?.optBoolean("loginAccepted") == true &&
@@ -703,7 +703,7 @@ class BrowserTransportEndToEndTest {
             val pending = fixture.getString("pendingValue")
             val unsent = "Unsent after reconnect ${java.util.UUID.randomUUID()}"
             if (deviceOnly) {
-                compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+                clickBrowserSync()
                 compose.waitUntil(30_000) {
                     status()?.optJSONObject("reconnect")?.optBoolean("deviceOnlyParticipantsVerified") == true &&
                         repository.state.value.browser?.participants?.let { participants ->
@@ -801,10 +801,10 @@ class BrowserTransportEndToEndTest {
         // The device-only fixture first joins Pi after observing the offline gap.
         val agentId = requireNotNull(status()).getJSONObject("combined").getString("agentParticipantId")
         // Return ownership through the actual pane, then let Pi prove that its same tab has the cookie.
-        compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+        clickBrowserSync()
         compose.waitUntil(30_000) { repository.state.value.browser?.participants?.any { it.kind == "agent" && it.id == agentId } == true }
-        compose.onNodeWithText(compose.activity.getString(R.string.browser_handoff)).performClick()
-        compose.onNodeWithText("agent: $agentId").performClick()
+        compose.onNodeWithTag("browserHandoff").performClick()
+        compose.onNodeWithTag("browserHandoff_$agentId").performClick()
         compose.waitUntil(30_000) { repository.state.value.browser?.ownsControl == false }
         fixtureAction("verify-login")
         compose.waitUntil(30_000) { status()?.optJSONObject("combined")?.optString("stage") == "verified" }
@@ -826,6 +826,11 @@ class BrowserTransportEndToEndTest {
         }
     }
 
+    /** The header's "Update status", inline or in its "more" menu on a narrow header. */
+    private fun clickBrowserSync() {
+        if (compose.onAllNodesWithTag("browserSync").fetchSemanticsNodes().isEmpty()) compose.onNodeWithTag("browserMoreActions").performClick()
+        compose.onNodeWithTag("browserSync").performClick()
+    }
     private fun fixtureAction(action: String) {
         val body = JSONObject().put("action", action).toString().toRequestBody("application/json".toMediaType())
         client.newCall(Request.Builder().url(fixture.getString("actionUrl")).post(body).build()).execute().use {

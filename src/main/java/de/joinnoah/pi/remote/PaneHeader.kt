@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,6 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
@@ -48,8 +50,20 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** One prompt or choice in a [PaneAction]'s menu. */
-internal class PaneMenuItem(val label: String, val tag: String, val onClick: () -> Unit)
+/**
+ * One prompt or choice in a [PaneAction]'s menu. A non-null [selected] makes it one of several
+ * choices (such as a browser tab), checked while selected; [close] adds a close button at its end.
+ */
+internal class PaneMenuItem(
+    val label: String,
+    val tag: String,
+    val selected: Boolean? = null,
+    val close: PaneMenuClose? = null,
+    val onClick: () -> Unit,
+)
+
+/** The close button of a [PaneMenuItem]: [label] is its spoken name, [tag] its test tag. */
+internal class PaneMenuClose(val label: String, val tag: String, val onClick: () -> Unit)
 
 /**
  * A button in a [PaneHeader] beside its refresh button. With [checked] it is a toggle; with
@@ -94,8 +108,16 @@ internal fun PaneHeader(
     titleFocus: FocusRequester? = null,
     /** False greys out the back or close button, for a step that must not be left halfway. */
     leaveEnabled: Boolean = true,
+    /**
+     * A short pane: the header is exactly one 48dp row, the pills without padding above and
+     * below. The subtitle shares the title's line, both cut off with an ellipsis, and actions that
+     * do not fit go into the "more" menu as they always do.
+     */
+    compact: Boolean = false,
+    /** False where Esc does not leave the pane: the back or close button's tooltip then names no key. */
+    escapeLeaves: Boolean = true,
 ) {
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compact) 0.dp else 8.dp)) {
         val hasTrailingPill = onReload != null || actions.isNotEmpty()
         val reloadWidth = if (onReload == null) 0.dp else 48.dp
         // Leading padding, back/close button, title gap and trailing padding: 8 + 48 + 12 + 20.
@@ -105,28 +127,46 @@ internal fun PaneHeader(
         val inline = actions.isNotEmpty() && maxWidth - reserved - 48.dp * actions.size >= PANE_TITLE_MIN_ROOM
         val actionsWidth = if (actions.isEmpty()) 0.dp else 48.dp * (if (inline) actions.size else 1)
         val textWidth = (maxWidth - reserved - actionsWidth).coerceAtLeast(0.dp)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().then(if (compact) Modifier.height(48.dp) else Modifier),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             FloatingSurface(Modifier.weight(1f, fill = false).testTag("${tag}HeaderPill"), shape = CircleShape) {
                 Row(Modifier.padding(start = 8.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // Esc runs the same step as this button (see PaneBackHandler).
-                    ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE) {
+                    // Esc runs the same step as this button (see PaneBackHandler), where it leaves the pane.
+                    ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE.takeIf { escapeLeaves }) {
                         IconButton(onClick = if (nested) onBack else onClose, enabled = leaveEnabled, modifier = Modifier.size(48.dp).testTag(if (nested) "${tag}Back" else "${tag}Close")) {
                             Icon(if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close, if (nested) backLabel else closeLabel)
                         }
                     }
                     Spacer(Modifier.width(12.dp))
-                    Column(Modifier.widthIn(max = textWidth)) {
+                    val titleText: @Composable (Modifier) -> Unit = { widthModifier ->
                         Text(
                             title,
-                            Modifier.widthIn(min = minOf(48.dp, textWidth))
+                            widthModifier
                                 .then(if (titleFocus == null) Modifier else Modifier.focusRequester(titleFocus).focusable())
                                 .testTag("${tag}Title").semantics { heading() },
                             style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (subtitle != null)
-                            Text(subtitle, Modifier.testTag("${tag}Subtitle"), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = if (nested) FontFamily.Monospace else null,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    val subtitleText: @Composable (String, Modifier) -> Unit = { text, widthModifier ->
+                        Text(text, widthModifier.testTag("${tag}Subtitle"), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = if (nested) FontFamily.Monospace else null,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (compact && subtitle != null)
+                        // One line: the title keeps at most 60% of it, the subtitle takes the rest.
+                        Row(Modifier.widthIn(max = textWidth), verticalAlignment = Alignment.CenterVertically) {
+                            val titleMin = minOf(48.dp, textWidth)
+                            titleText(Modifier.widthIn(min = titleMin, max = maxOf(titleMin, textWidth * 0.6f)))
+                            Spacer(Modifier.width(8.dp))
+                            subtitleText(subtitle, Modifier.weight(1f, fill = false))
+                        }
+                    else
+                        Column(Modifier.widthIn(max = textWidth)) {
+                            titleText(Modifier.widthIn(min = minOf(48.dp, textWidth)))
+                            if (subtitle != null) subtitleText(subtitle, Modifier)
+                        }
                     if (nested)
                         ShortcutTooltip(closeLabel) {
                             IconButton(onClick = onClose, modifier = Modifier.size(48.dp).testTag("${tag}Close"), enabled = leaveEnabled) {
@@ -181,13 +221,29 @@ private fun InlineAction(action: PaneAction) {
 
 @Composable
 private fun MenuEntry(item: PaneMenuItem, dismiss: () -> Unit) {
+    val selected = item.selected
+    val close = item.close
     DropdownMenuItem(
-        text = { Text(item.label) },
+        text = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         onClick = {
             dismiss()
             item.onClick()
         },
-        modifier = Modifier.testTag(item.tag),
+        modifier = Modifier.testTag(item.tag).then(if (selected != null) Modifier.semantics { this.selected = selected } else Modifier),
+        leadingIcon = if (selected != null) { { if (selected) Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) } } else null,
+        trailingIcon = if (close != null) {
+            {
+                IconButton(
+                    onClick = {
+                        dismiss()
+                        close.onClick()
+                    },
+                    modifier = Modifier.size(48.dp).testTag(close.tag),
+                ) {
+                    Icon(Icons.Default.Close, close.label, Modifier.size(18.dp))
+                }
+            }
+        } else null,
     )
 }
 

@@ -413,11 +413,11 @@ class TwoPaneNavigationTest {
         }
         showPreview()
         compose.onNodeWithTag("browserText").performTextInput("keep preview draft")
-        compose.onNodeWithText(label(R.string.preview_hide)).performClick()
+        compose.onNodeWithTag("browserHide").performClick()
         compose.onNodeWithText("Second session").performClick()
         compose.onNodeWithText(label(R.string.browser_discard_title)).assertIsDisplayed()
         compose.onNodeWithText(label(R.string.browser_discard_body)).assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_terminal_cancel)).performClick()
+        compose.onNodeWithText(label(R.string.remote_cancel)).performClick()
         showPreview()
         compose.onNodeWithTag("browserText").assertTextContains("keep preview draft")
     }

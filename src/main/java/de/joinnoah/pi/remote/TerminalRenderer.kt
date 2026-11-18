@@ -7,6 +7,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -14,6 +16,23 @@ import org.json.JSONObject
 
 private const val TERMINAL_ORIGIN = "https://terminal.pocketpi.invalid"
 private const val TERMINAL_URL = "$TERMINAL_ORIGIN/index.html"
+
+/**
+ * The terminal's colours, set here only: the renderer reads them from the generated `theme.css`
+ * and the pane paints its viewport with them, so there is no seam between the two. The terminal
+ * stays dark in either app theme, as terminals conventionally are and ANSI colours assume.
+ */
+internal object TerminalTheme {
+    const val BACKGROUND_HEX = "#101010"
+    const val FOREGROUND_HEX = "#ffffff"
+    val Background = cssColor(BACKGROUND_HEX)
+    val Foreground = cssColor(FOREGROUND_HEX)
+
+    /** Served as `/theme.css`; terminal.css and terminal.js read these variables. */
+    val css = ":root{--terminal-background:$BACKGROUND_HEX;--terminal-foreground:$FOREGROUND_HEX}"
+
+    private fun cssColor(hex: String) = Color(0xFF000000L or hex.removePrefix("#").toLong(16))
+}
 
 internal interface TerminalRendererCallbacks {
     fun onReady()
@@ -56,6 +75,8 @@ internal fun createTerminalWebView(context: Context, callbacks: TerminalRenderer
         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
     )
+    // The page's background before it loads, so opening the pane never flashes white.
+    view.setBackgroundColor(TerminalTheme.Background.toArgb())
     val renderer = TerminalRenderer(view, callbacks)
     view.settings.apply {
         javaScriptEnabled = true
@@ -74,7 +95,9 @@ internal fun createTerminalWebView(context: Context, callbacks: TerminalRenderer
             val uri = request.url
             val paths = mapOf("/index.html" to "text/html", "/terminal.css" to "text/css", "/terminal.js" to "text/javascript", "/lib/xterm.js" to "text/javascript", "/css/xterm.css" to "text/css")
             val mime = paths[uri.path]
-            if (uri.scheme == "https" && uri.host == "terminal.pocketpi.invalid" && uri.port == -1 && uri.query == null && mime != null) {
+            val ours = uri.scheme == "https" && uri.host == "terminal.pocketpi.invalid" && uri.port == -1 && uri.query == null
+            if (ours && uri.path == "/theme.css") return WebResourceResponse("text/css", "UTF-8", TerminalTheme.css.byteInputStream())
+            if (ours && mime != null) {
                 return WebResourceResponse(mime, "UTF-8", context.assets.open("terminal${uri.path}"))
             }
             return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArray(0).inputStream())

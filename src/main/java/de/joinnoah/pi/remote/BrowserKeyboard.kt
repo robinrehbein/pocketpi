@@ -48,3 +48,13 @@ internal fun browserRepeatableKey(event: KeyEvent): Boolean = event.keyCode in s
     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
     KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
 )
+
+/**
+ * The keys of the pane's key strip, by their DOM key name, which is also their DOM code. Each is
+ * sent as one press: a down and an up, admitted together.
+ */
+internal val BROWSER_STRIP_KEYS = listOf(
+    "Escape", "Tab", "Enter", "Backspace",
+    "ArrowLeft", "ArrowUp", "ArrowDown", "ArrowRight",
+    "Delete", "Home", "End", "PageUp", "PageDown",
+)
