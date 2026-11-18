@@ -284,15 +284,16 @@ internal data class RemoteViewEdges(val left: Float, val top: Float, val right: 
  * The part of the window [insets] that overlaps [pane], at each edge on its own. [pane] is in the
  * window's coordinates and the window is [windowWidth] by [windowHeight]; an inset covers the band
  * of its width along its window edge. At each edge that is the inset less the distance from that
- * window edge to the pane's edge, `max(0, inset - distance)`, and never more than the pane is wide
- * or high.
+ * window edge to the pane's edge, `max(0, inset - distance)`, never more than the inset itself (a
+ * pane edge beyond the window edge, such as a page sliding in, gets the inset, not more) and never
+ * more than the pane is wide or high.
  */
 internal fun remoteViewInsetsOverlap(pane: Rect, windowWidth: Float, windowHeight: Float, insets: RemoteViewEdges): RemoteViewEdges =
     RemoteViewEdges(
-        left = (insets.left - pane.left).coerceIn(0f, pane.width.coerceAtLeast(0f)),
-        top = (insets.top - pane.top).coerceIn(0f, pane.height.coerceAtLeast(0f)),
-        right = (insets.right - (windowWidth - pane.right)).coerceIn(0f, pane.width.coerceAtLeast(0f)),
-        bottom = (insets.bottom - (windowHeight - pane.bottom)).coerceIn(0f, pane.height.coerceAtLeast(0f)),
+        left = (insets.left - pane.left).coerceAtMost(insets.left).coerceIn(0f, pane.width.coerceAtLeast(0f)),
+        top = (insets.top - pane.top).coerceAtMost(insets.top).coerceIn(0f, pane.height.coerceAtLeast(0f)),
+        right = (insets.right - (windowWidth - pane.right)).coerceAtMost(insets.right).coerceIn(0f, pane.width.coerceAtLeast(0f)),
+        bottom = (insets.bottom - (windowHeight - pane.bottom)).coerceAtMost(insets.bottom).coerceIn(0f, pane.height.coerceAtLeast(0f)),
     )
 
 /** Where a pane lies in its window, and the window's size, in pixels. */
@@ -351,12 +352,13 @@ private object RemoteViewportSlot
 
 /**
  * The bars of a [RemoteViewPane] that give way where the bars at their minimum heights and the
- * viewport's floor together are taller than the pane, in this order: informational notices, the
- * control bar, failure notices (they offer Retry), and the key strip last (a terminal's Esc, Tab
- * and arrows). The lowest bar of a kind goes first. A bar without a mark, such as the header, an
- * input bar or the address bar, always stays.
+ * viewport's floor together are taller than the pane, in this order: a disabled key strip (it does
+ * nothing, so it never pushes out the control bar that offers "Take control"), informational
+ * notices, the control bar, failure notices (they offer Retry), and an enabled key strip last (a
+ * terminal's Esc, Tab and arrows). The lowest bar of a kind goes first. A bar without a mark, such
+ * as the header, an input bar or the address bar, always stays.
  */
-internal enum class RemoteViewShed { INFO, CONTROL, FAILURE, KEYS }
+internal enum class RemoteViewShed { IDLE_KEYS, INFO, CONTROL, FAILURE, KEYS }
 
 /** A bar's mark; [RemoteViewColumn] sets [shed] while it leaves the bar out. */
 private class RemoteViewShedSlot(val kind: RemoteViewShed) {
@@ -672,6 +674,8 @@ internal data class RemoteKey(
 /**
  * A row of key chips that scrolls sideways. Each chip is at least 48dp wide and high and grows
  * with its label, so no label clips at a large font scale. [enabled] false disables every key.
+ * [sheds] marks the strip as a bar of a [RemoteViewPane] that gives way, as
+ * [RemoteViewShed.KEYS] while [enabled] and as [RemoteViewShed.IDLE_KEYS], the first to go, while not.
  *
  * Test tags: `<tag>Keys`, and `<tag>Key_<id>` per chip.
  */
@@ -682,10 +686,12 @@ internal fun RemoteKeyStrip(
     tag: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    sheds: Boolean = false,
     contentPadding: PaddingValues = remoteViewBarPadding(),
 ) {
+    val marked = if (sheds) Modifier.remoteViewShed(if (enabled) RemoteViewShed.KEYS else RemoteViewShed.IDLE_KEYS).then(modifier) else modifier
     Row(
-        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(contentPadding).testTag("${tag}Keys"),
+        marked.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(contentPadding).testTag("${tag}Keys"),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

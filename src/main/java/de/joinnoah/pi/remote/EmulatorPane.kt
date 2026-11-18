@@ -310,8 +310,8 @@ internal fun EmulatorPane(
                 emulatorKeys(),
                 onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
                 tag = "emulator",
-                modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS),
                 enabled = view.ownsControl && displayed && !view.opening,
+                sheds = true,
             )
         }
     }

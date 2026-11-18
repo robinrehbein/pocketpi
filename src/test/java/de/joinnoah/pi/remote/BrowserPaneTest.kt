@@ -739,6 +739,21 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserText").assertExists()
     }
 
+    @Test fun withoutControlACompactPaneShedsTheKeyStripBeforeTheControlBarWithTakeControl() {
+        var acquired = 0
+        // A 360dp-short phone in landscape: header 48 + control 48 + address 56 + keys 48 + text 56
+        // and the 96dp floor are 352dp in 312. The key strip, disabled without control, goes first.
+        compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(312.dp)) {
+            BrowserPane(BrowserView("s", opening = false, browserId = "b", owner = BrowserOwner("agent", "a"), generation = 1, viewportRevision = 1),
+                BrowserPaneActions(acquire = { acquired++; true }), {})
+        } } }
+        compose.onNodeWithTag("browserKeys").assertIsNotDisplayed()
+        compose.onNodeWithTag("browserControlBar").assertIsDisplayed()
+        compose.onNodeWithTag("browserAcquire").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, acquired) }
+        compose.onNodeWithTag("browserViewport").assertHeightIsAtLeast(96.dp)
+    }
+
     @Test fun theFocusedTextBarStaysWhenTheKeyboardMakesThePaneCompact() {
         var height by mutableStateOf(500.dp)
         compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(height)) {

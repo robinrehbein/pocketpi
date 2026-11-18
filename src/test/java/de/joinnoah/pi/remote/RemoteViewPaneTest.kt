@@ -531,7 +531,7 @@ class RemoteViewPaneTest {
                     RemoteViewPane("Terminal", "terminal", onClose = {}, subtitle = "Ctrl+Alt+Shift",
                         actions = listOf(PaneAction("Shortcuts", Icons.Default.Keyboard, "terminalShortcuts"))) {
                         RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth(), busy = true)
-                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab"), RemoteKey("enter", "Enter")) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL), onKey = {}, tag = "terminal", modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS))
+                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab"), RemoteKey("enter", "Enter")) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL), onKey = {}, tag = "terminal", sheds = true)
                         RemoteInputBar("first line\nsecond line\nthird line\nfourth line", {}, onSend = {}, tag = "terminalInput") {
                             androidx.compose.material3.IconButton(onClick = {}, Modifier.width(48.dp).height(48.dp)) {}
                         }
@@ -571,7 +571,7 @@ class RemoteViewPaneTest {
                 Box(Modifier.fillMaxWidth().height(180.dp)) {
                     RemoteViewPane("Terminal", "terminal", onClose = {}) {
                         RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth())
-                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab")), onKey = {}, tag = "terminal", modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS))
+                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab")), onKey = {}, tag = "terminal", sheds = true)
                         RemoteInputBar("", {}, onSend = {}, tag = "terminalInput")
                     }
                 }
@@ -622,8 +622,8 @@ class RemoteViewPaneTest {
         assertEquals(0.dp, height("viewport"))
     }
 
-    @Test fun aCompactViewportFloorShedsInfoThenControlThenFailuresThenKeysBeforeItShrinks() {
-        var height by mutableStateOf(344.dp)
+    @Test fun aCompactViewportFloorShedsIdleKeysThenInfoThenControlThenFailuresThenKeysBeforeItShrinks() {
+        var height by mutableStateOf(360.dp)
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxWidth().height(height)) {
@@ -633,6 +633,7 @@ class RemoteViewPaneTest {
                         Box(Modifier.fillMaxWidth().height(32.dp).remoteViewShed(RemoteViewShed.CONTROL).testTag("control"))
                         Box(Modifier.fillMaxWidth().height(40.dp).remoteViewShed(RemoteViewShed.FAILURE).testTag("failure"))
                         Box(Modifier.weight(1f).fillMaxWidth().testTag("viewport"))
+                        Box(Modifier.fillMaxWidth().height(16.dp).remoteViewShed(RemoteViewShed.IDLE_KEYS).testTag("idle"))
                         Box(Modifier.fillMaxWidth().height(48.dp).remoteViewShed(RemoteViewShed.KEYS).testTag("keys"))
                         Box(Modifier.fillMaxWidth().height(56.dp).testTag("input"))
                     }
@@ -640,13 +641,17 @@ class RemoteViewPaneTest {
             }
         }
         fun height(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.bottom - it.top }
-        fun shown(vararg tags: String) = listOf("info", "control", "failure", "keys").forEach {
+        fun shown(vararg tags: String) = listOf("idle", "info", "control", "failure", "keys").forEach {
             if (it in tags) compose.onNodeWithTag(it).assertIsDisplayed() else compose.onNodeWithTag(it).assertIsNotDisplayed()
         }
-        // 248dp of bars and the 96dp floor fit exactly.
-        shown("info", "control", "failure", "keys")
+        // 264dp of bars and the 96dp floor fit exactly.
+        shown("idle", "info", "control", "failure", "keys")
         assertEquals(96.dp, height("viewport"))
-        // Each step down sheds the next bar in order while the floor holds.
+        // Each step down sheds the next bar in order while the floor holds: a disabled key strip
+        // first, though it is below the others.
+        compose.runOnIdle { height = 356.dp }
+        shown("info", "control", "failure", "keys")
+        assertEquals(108.dp, height("viewport"))
         compose.runOnIdle { height = 340.dp }
         shown("control", "failure", "keys")
         assertEquals(116.dp, height("viewport"))
@@ -668,8 +673,50 @@ class RemoteViewPaneTest {
         assertEquals(0.dp, height("viewport"))
         assertEquals(56.dp, height("input"))
         // Room again: everything comes back.
-        compose.runOnIdle { height = 344.dp }
-        shown("info", "control", "failure", "keys")
+        compose.runOnIdle { height = 360.dp }
+        shown("idle", "info", "control", "failure", "keys")
+    }
+
+    /**
+     * A compact pane's column as the browser's without a tab row: the header, the control bar with
+     * "Take control", the address bar, the viewport, the key strip and the text bar, 312dp high (a
+     * 360dp-short phone in landscape).
+     */
+    @androidx.compose.runtime.Composable
+    private fun BrowserLikeColumn(keysEnabled: Boolean, onTake: () -> Unit) {
+        Box(Modifier.fillMaxWidth().height(312.dp)) {
+            RemoteViewPane("Browser", "browser", onClose = {}) {
+                RemoteControlBar(RemoteControlState.VIEWING, "browser", Modifier.remoteViewShed(RemoteViewShed.CONTROL), onTake = onTake)
+                RemoteInputBar("", {}, onSend = {}, tag = "browserAddress")
+                RemoteViewport("browserViewport", Modifier.weight(1f).fillMaxWidth())
+                RemoteKeyStrip(listOf(RemoteKey("Escape", "Esc"), RemoteKey("Tab", "Tab")), onKey = {}, tag = "browser", enabled = keysEnabled, sheds = true)
+                RemoteInputBar("", {}, onSend = {}, tag = "browserText")
+            }
+        }
+    }
+
+    // Native graphics: the legacy text metrics ignore maxLines (see above).
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun aDisabledKeyStripGivesWayBeforeTheControlBarThatOffersTakeControl() {
+        var taken = 0
+        compose.setContent { MaterialTheme { BrowserLikeColumn(keysEnabled = false, onTake = { taken++ }) } }
+        // Header 48 + control 48 + address 56 + keys 48 + text 56 = 256, + the 96dp floor = 352 > 312.
+        // The disabled strip goes first: 208 + 96 = 304 fits, so the control bar stays.
+        compose.onNodeWithTag("browserKeys").assertIsNotDisplayed()
+        compose.onNodeWithTag("browserControlBar").assertIsDisplayed()
+        compose.onNodeWithTag("browserAcquire").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, taken) }
+        compose.onNodeWithTag("browserViewport").assertHeightIsAtLeast(REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT)
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun anEnabledKeyStripStaysAndTheControlBarGivesWayFirstAsTheExistingRuleSays() {
+        compose.setContent { MaterialTheme { BrowserLikeColumn(keysEnabled = true, onTake = {}) } }
+        // The same 352dp in 312: the control bar goes (CONTROL before KEYS) and 304 fits.
+        compose.onNodeWithTag("browserControlBar").assertIsNotDisplayed()
+        compose.onNodeWithTag("browserKeys").assertIsDisplayed()
+        compose.onNodeWithTag("browserKey_Escape").assertIsEnabled()
+        compose.onNodeWithTag("browserViewport").assertHeightIsAtLeast(REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT)
     }
 
     @Test fun aCompactTerminalShedsItsNoticeForTheFloorAndKeepsTheKeyStrip() {
@@ -788,6 +835,14 @@ class RemoteViewPaneTest {
     @Test fun aPaneThatReachesIntoTheNavigationBarPadsByTheOverlapOnly() {
         // 700 - (731.4 - 48) = 16.6dp of the pane lie over the navigation bar.
         assertEdges(RemoteViewEdges(0f, 0f, 0f, 16.6f), overlap(androidx.compose.ui.geometry.Rect(0f, 400f, windowWidth, 700f)))
+    }
+
+    @Test fun aPaneBeyondTheWindowEdgePadsByNoMoreThanTheInset() {
+        // A page sliding in by offset, 40dp of it below the window's bottom edge.
+        val beyond = androidx.compose.ui.geometry.Rect(0f, 400f, windowWidth, windowHeight + 40f)
+        assertEdges(RemoteViewEdges(0f, 0f, 0f, 48f), overlap(beyond))
+        // With no inset there it pads nothing.
+        assertEdges(RemoteViewEdges(0f, 0f, 0f, 0f), overlap(beyond, bars.copy(bottom = 0f)))
     }
 
     @Test fun aPaneBesideTheChatPadsOnlyTheEdgeAtTheCutout() {

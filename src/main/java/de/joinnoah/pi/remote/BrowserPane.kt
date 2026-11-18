@@ -631,8 +631,8 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 keys = browserStripKeys(),
                 onKey = { key -> latestPress(BrowserInput.Key("down", key.id, key.id), BrowserInput.Key("up", key.id, key.id)) },
                 tag = "browser",
-                modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS),
                 enabled = canTextKeys,
+                sheds = true,
             )
             // Always composed, also in a compact pane (one line there): the soft keyboard opening
             // shrinks the pane, and a bar that left composition then would take the focus with it.

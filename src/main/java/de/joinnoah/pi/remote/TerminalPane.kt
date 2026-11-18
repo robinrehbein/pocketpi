@@ -239,7 +239,7 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
             // Always composed: removing the view would end the renderer.
             AndroidView(factory = { renderer.view }, modifier = Modifier.fillMaxSize().semantics { contentDescription = screenLabel })
         }
-        RemoteKeyStrip(keys, onKey = { sendTouchKey(it.id) }, tag = "terminal", modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS), enabled = live)
+        RemoteKeyStrip(keys, onKey = { sendTouchKey(it.id) }, tag = "terminal", enabled = live, sheds = true)
         RemoteInputBar(
             value = draft,
             onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) },
