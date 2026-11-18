@@ -77,6 +77,9 @@ private fun browserUrl(s: String, newTab: Boolean = false): String {
     require(uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty() && uri.rawUserInfo == null)
     return s
 }
+/** Whether opening [url] again reloads its page: a valid http(s) address without a fragment. */
+internal fun browserReloadable(url: String): Boolean =
+    try { browserUrl(url); URI(url).rawFragment == null } catch (_: Exception) { false }
 private fun parseBrowserInput(o: JsonObject): BrowserInput = when (o.text("kind")) {
     "pointer" -> { Wire.keys(o, setOf("kind", "x", "y", "action", "button")); BrowserInput.Pointer(o.number("x", 0.0, 2048.0), o.number("y", 0.0, 2048.0), o.choice("action", "down", "up", "move"), o.choice("button", "left", "middle", "right")) }
     "wheel" -> { Wire.keys(o, setOf("kind", "x", "y", "deltaX", "deltaY")); BrowserInput.Wheel(o.number("x", 0.0, 2048.0), o.number("y", 0.0, 2048.0), o.number("deltaX", -4096.0, 4096.0), o.number("deltaY", -4096.0, 4096.0)) }

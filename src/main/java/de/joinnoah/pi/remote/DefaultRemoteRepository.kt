@@ -648,7 +648,7 @@ class DefaultRemoteRepository(
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
-    override fun canOpenBrowser(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities
+    override fun canOpenBrowser(): Boolean = browserOpenable(state.value, capabilityRevision(capabilityRoute))
     override fun openBrowser(): Boolean = canOpenBrowser() && browserClient.open(requireNotNull(state.value.selection.sessionId), generation)
     override fun closeBrowser() = browserClient.close()
     override fun acquireBrowser() = browserClient.acquire()

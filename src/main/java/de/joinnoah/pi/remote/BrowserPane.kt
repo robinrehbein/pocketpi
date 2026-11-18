@@ -1,37 +1,69 @@
 package de.joinnoah.pi.remote
 
+import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.RequestDisallowInterceptTouchEvent
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
+import kotlin.math.hypot
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal data class BrowserPaneActions(
@@ -49,6 +81,98 @@ private class BrowserFrameKey(private val image: BrowserImage?) {
     override fun hashCode(): Int = System.identityHashCode(image)
 }
 
+/**
+ * The shortest pause between two wheel inputs. Wheel deltas that arrive meanwhile add up in the
+ * queued wheel, so a long finger drag stays far below the relay's per-device message limit.
+ */
+private const val BROWSER_WHEEL_INTERVAL_MS = 50L
+
+private enum class BrowserTouchMode {
+    /** No finger gesture, or one that was given up (a second finger, a refused press). */
+    NONE,
+
+    /** The finger is down and has not moved past the touch slop: a tap or a long press so far. */
+    PENDING,
+
+    /** The finger moved before the long-press timeout: the page scrolls with it. */
+    SCROLL,
+
+    /** The finger moved after a long press: a left-button mouse drag. */
+    DRAG,
+}
+
+/** The one finger a touch gesture on the viewport follows, in view pixels and CSS pixels. */
+private class BrowserTouch {
+    var mode = BrowserTouchMode.NONE
+    var pointerId = -1
+    var downX = 0f
+    var downY = 0f
+    var lastX = 0f
+    var lastY = 0f
+    var downTime = 0L
+    /** Where the finger went down, as CSS coordinates: the tap, long press and wheel position. */
+    var point: Pair<Double, Double>? = null
+    /** The image fit and CSS size at the down, so one scroll keeps one scale. */
+    var fit: BrowserImageFit? = null
+    var cssWidth = 0
+    var cssHeight = 0
+
+    fun reset() {
+        mode = BrowserTouchMode.NONE
+        pointerId = -1
+        point = null
+        fit = null
+    }
+}
+
+/** A finger or a stylus on a touchscreen; a mouse or a touchpad keeps its mouse semantics. */
+private fun browserTouchEvent(event: MotionEvent): Boolean {
+    val tool = event.getToolType(event.actionIndex)
+    return (tool == MotionEvent.TOOL_TYPE_FINGER || tool == MotionEvent.TOOL_TYPE_STYLUS) && !event.isFromSource(InputDevice.SOURCE_MOUSE)
+}
+
+private fun browserInputId(input: BrowserInput): String? = when (input) {
+    is BrowserInput.Pointer -> "pointer:${input.button}"
+    is BrowserInput.Key -> "key:${input.code}"
+    else -> null
+}
+
+/** What the pane shows for a participant of a shared browser, such as "Pi agent 4f2a91". */
+@Composable
+private fun browserParticipantLabel(participant: BrowserOwner): String =
+    stringResource(
+        if (participant.kind == "agent") R.string.browser_participant_agent else R.string.browser_participant_device,
+        participant.id.takeLast(6),
+    )
+
+@Composable
+private fun browserStripKeys(): List<RemoteKey> = BROWSER_STRIP_KEYS.map { key ->
+    when (key) {
+        "Escape" -> RemoteKey(key, stringResource(R.string.remote_view_key_escape), stringResource(R.string.remote_view_key_escape_description))
+        "Tab" -> RemoteKey(key, stringResource(R.string.remote_view_key_tab))
+        "Enter" -> RemoteKey(key, stringResource(R.string.remote_view_key_enter))
+        "Backspace" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_backspace_description), icon = Icons.AutoMirrored.Filled.Backspace)
+        "Delete" -> RemoteKey(key, stringResource(R.string.remote_view_key_delete), stringResource(R.string.remote_view_key_delete_description))
+        "ArrowLeft" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_left_description), icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft)
+        "ArrowUp" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_up_description), icon = Icons.Default.KeyboardArrowUp)
+        "ArrowDown" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_down_description), icon = Icons.Default.KeyboardArrowDown)
+        "ArrowRight" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_right_description), icon = Icons.AutoMirrored.Filled.KeyboardArrowRight)
+        "Home" -> RemoteKey(key, stringResource(R.string.remote_view_key_home))
+        "End" -> RemoteKey(key, stringResource(R.string.remote_view_key_end))
+        "PageUp" -> RemoteKey(key, stringResource(R.string.remote_view_key_page_up), stringResource(R.string.remote_view_key_page_up_description))
+        "PageDown" -> RemoteKey(key, stringResource(R.string.remote_view_key_page_down), stringResource(R.string.remote_view_key_page_down_description))
+        else -> error("Unknown strip key $key")
+    }
+}
+
+/**
+ * The remote browser, and the same pane for a dev-server preview ([BrowserView.previewPort]).
+ *
+ * Touch input follows phone conventions: a tap clicks, a one-finger drag scrolls the page (wheel
+ * input, the content follows the finger), and a long press clicks the right button or, followed
+ * by a drag, drags with the left button (text selection, drag and drop). A mouse or touchpad keeps
+ * plain mouse semantics.
+ */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClose: () -> Unit, onUnsentChanged: (Boolean) -> Unit = {}, onHide: (() -> Unit)? = null, decodeImage: suspend (BrowserImage) -> android.graphics.Bitmap? = { decodeBrowserImage(it) }) {
@@ -62,6 +186,13 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var pointerPosition by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var pointerButton by remember { mutableStateOf("left") }
     var heldRevision by remember { mutableStateOf<Long?>(null) }
+    val touch = remember { BrowserTouch() }
+    val lastWheelAt = remember { longArrayOf(0L) }
+    val disallowIntercept = remember { RequestDisallowInterceptTouchEvent() }
+    val touchScope = rememberCoroutineScope()
+    var longPressFeedback by remember { mutableStateOf<Job?>(null) }
+    val haptic = LocalHapticFeedback.current
+    val viewConfiguration = LocalViewConfiguration.current
     val latestActions by rememberUpdatedState(actions)
     val latestUnsent by rememberUpdatedState(onUnsentChanged)
     DisposableEffect(active) {
@@ -82,8 +213,9 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var goRefused by remember(view?.sessionId, view?.previewPort, view?.selectedTabId, view?.ownsControl) { mutableStateOf(false) }
     LaunchedEffect(selected?.id, selected?.url) { if (!urlDirty) url = selected?.url.orEmpty() }
     LaunchedEffect(view?.generation, view?.ownsControl, active, view?.sessionId, view?.documentEpoch) {
-        queue.clear(); flight = null; held.clear(); heldKeys.clear(); releasing.clear(); pointerPosition = null; heldRevision = null
+        queue.clear(); flight = null; held.clear(); heldKeys.clear(); releasing.clear(); pointerPosition = null; heldRevision = null; touch.reset()
     }
+    val latestView by rememberUpdatedState(view)
     LaunchedEffect(view?.receipt, view?.inputPending, view?.ownsControl, flight, queue.size) {
         val f = flight
         if (f != null && view?.inputPending == false && view.receipt != null && view.receipt != f.baseline) {
@@ -99,8 +231,16 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             } else { queue.clear(); flight = null; held.clear(); heldKeys.clear(); releasing.clear(); pointerPosition = null; heldRevision = null }
         }
         if (flight == null && view?.ownsControl == true && !view.inputPending && active && queue.isNotEmpty()) {
+            if (queue[0].input is BrowserInput.Wheel) {
+                // Deltas that arrive during the pause add up in this wheel (see enqueue).
+                val wait = lastWheelAt[0] + BROWSER_WHEEL_INTERVAL_MS - SystemClock.uptimeMillis()
+                if (wait > 0) delay(wait)
+            }
+            val current = latestView
+            if (flight != null || queue.isEmpty() || current?.ownsControl != true || current.inputPending) return@LaunchedEffect
             val next = queue.removeAt(0)
-            flight = BrowserFlight(next, view.receipt)
+            if (next.input is BrowserInput.Wheel) lastWheelAt[0] = SystemClock.uptimeMillis()
+            flight = BrowserFlight(next, current.receipt)
             if (!latestActions.input(next.input)) {
                 queue.clear(); flight = null
                 if (next.submittedText != null) textSendRefused = true
@@ -108,7 +248,9 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             }
         }
     }
-    SideEffect { latestUnsent(urlDirty || draft.isNotEmpty() || queue.isNotEmpty() || flight != null) }
+    // Read here, not only in the scaffold's content: a change must recompose this scope to report it.
+    val unsent = urlDirty || draft.isNotEmpty() || queue.isNotEmpty() || flight != null
+    SideEffect { latestUnsent(unsent) }
     DisposableEffect(Unit) { onDispose { latestUnsent(false) } }
     LaunchedEffect(size, density, view?.ownsControl, view?.generation, view?.selectedTabId, active, held.size) {
         if (active && view?.ownsControl == true && held.isEmpty() && size.width > 0 && size.height > 0) {
@@ -152,15 +294,10 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val latestCanInput by rememberUpdatedState(canInput)
     val latestCanWheel by rememberUpdatedState(canWheel)
     val latestCanTextKeys by rememberUpdatedState(canTextKeys)
-    val latestView by rememberUpdatedState(view)
     val latestImage by rememberUpdatedState(image)
     fun enqueue(item: PendingBrowserInput): Boolean {
         val input = item.input
-        val id = when (input) {
-            is BrowserInput.Pointer -> "pointer:${input.button}"
-            is BrowserInput.Key -> "key:${input.code}"
-            else -> null
-        }
+        val id = browserInputId(input)
         val down = when (input) { is BrowserInput.Pointer -> input.action == "down"; is BrowserInput.Key -> input.action == "down"; else -> false }
         val up = when (input) { is BrowserInput.Pointer -> input.action == "up"; is BrowserInput.Key -> input.action == "up"; else -> false }
         val allowed = when (input) {
@@ -178,6 +315,18 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 return true
             }
         }
+        if (input is BrowserInput.Wheel) {
+            // While one input is in flight, wheel deltas add up in the queued wheel at the latest position.
+            val last = queue.lastOrNull()?.input
+            if (last is BrowserInput.Wheel) {
+                val deltaX = last.deltaX + input.deltaX
+                val deltaY = last.deltaY + input.deltaY
+                if (abs(deltaX) <= BROWSER_WHEEL_MAX_DELTA && abs(deltaY) <= BROWSER_WHEEL_MAX_DELTA) {
+                    queue[queue.lastIndex] = PendingBrowserInput(input.copy(deltaX = deltaX, deltaY = deltaY))
+                    return true
+                }
+            }
+        }
         val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
         if (!up && occupied + (if (down) 2 else 1) > 32) return false
         if (down && id != null) {
@@ -189,6 +338,21 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         queue.add(item); return true
     }
     val latestEnqueue by rememberUpdatedState<(PendingBrowserInput) -> Boolean>({ enqueue(it) })
+    // A press admits its down and its up together, so a refusal can never leave the key or button down.
+    fun press(down: BrowserInput, up: BrowserInput): Boolean {
+        val id = browserInputId(down) ?: return false
+        val allowed = if (down is BrowserInput.Pointer) latestCanInput else latestCanTextKeys
+        if (!allowed || !latestCanRelease || id in held) return false
+        val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
+        if (occupied + 2 > 32) return false
+        if (held.isEmpty()) heldRevision = latestView?.viewportRevision
+        held.add(id)
+        if (down is BrowserInput.Key) heldKeys[id] = down
+        releasing.add(id)
+        queue.add(PendingBrowserInput(down)); queue.add(PendingBrowserInput(up))
+        return true
+    }
+    val latestPress by rememberUpdatedState<(BrowserInput, BrowserInput) -> Boolean>({ down, up -> press(down, up) })
     fun repeatKey(input: BrowserInput.Key): Boolean {
         val id = "key:${input.code}"
         val original = heldKeys[id] ?: return false
@@ -204,104 +368,270 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         return true
     }
     val latestRepeatKey by rememberUpdatedState<(BrowserInput.Key) -> Boolean>({ repeatKey(it) })
-    // On a phone the pane overlays the chat: its background hides the chat and taps on empty
-    // parts of the pane stop here instead of reaching it.
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
-        .pointerInput(Unit) { detectTapGestures {} }.testTag("browserPane")) {
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = { latestActions.refresh() }) { Text(stringResource(R.string.browser_refresh)) }
-            if (onHide != null) TextButton(onClick = onHide) { Text(stringResource(R.string.preview_hide)) }
-            TextButton(onClick = onClose, Modifier.testTag("browserClose")) { Text(stringResource(R.string.browser_close)) }
+
+    // Touch gestures (see BrowserPane's documentation).
+    fun currentPoint(x: Float, y: Float): Pair<Double, Double>? {
+        val frame = latestImage ?: return null
+        val fit = browserImageFit(size.width.toFloat(), size.height.toFloat(), frame.width, frame.height) ?: return null
+        return browserImagePoint(fit, x, y, frame.cssWidth, frame.cssHeight)
+    }
+    fun scrollTo(x: Float, y: Float) {
+        val fit = touch.fit ?: return
+        val at = touch.point ?: return
+        val delta = browserImageDelta(fit, x - touch.lastX, y - touch.lastY, touch.cssWidth, touch.cssHeight) ?: return
+        if (delta.first == 0.0 && delta.second == 0.0) return
+        // A refused wheel (a full queue) keeps its distance for the next move.
+        if (latestEnqueue(PendingBrowserInput(browserTouchWheel(at.first, at.second, delta.first, delta.second)))) {
+            touch.lastX = x; touch.lastY = y
         }
-        if (view == null || view.opening) {
-            Text(stringResource(R.string.browser_opening)); return@Column
-        }
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (view.ownsControl) stringResource(R.string.browser_control_you) else stringResource(R.string.browser_control_readonly), Modifier.weight(1f))
-            if (!view.ownsControl) TextButton(onClick = { latestActions.acquire() }, modifier = Modifier.testTag("browserAcquire")) { Text(stringResource(R.string.browser_acquire)) }
-            if (view.ownsControl && view.participants.any { it != view.owner }) {
-                var expanded by remember { mutableStateOf(false) }
-                Box { TextButton(onClick = { expanded = true }) { Text(stringResource(R.string.browser_handoff)) }
-                    GlassDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        view.participants.filter { it != view.owner }.forEach { participant -> DropdownMenuItem(text = { Text("${participant.kind}: ${participant.id}") }, onClick = { expanded = false; latestActions.handoff(participant.id) }) }
-                    }
-                }
-            }
-        }
-        if (view.notice != null) Text(stringResource(when (view.notice) {
-            BrowserNotice.BUSY -> R.string.browser_busy; BrowserNotice.UNCERTAIN -> if (view.ownsControl) R.string.browser_uncertain_control_retained else R.string.browser_uncertain
-            BrowserNotice.DISCONNECTED -> R.string.browser_disconnected; BrowserNotice.FAILED -> R.string.browser_failed
-            BrowserNotice.FRAME_FAILED -> R.string.browser_frame_failed
-        }), color = MaterialTheme.colorScheme.error)
-        if (textSendRefused) Text(stringResource(R.string.browser_send_refused), Modifier.testTag("browserSendRefused"), color = MaterialTheme.colorScheme.error)
-        if (goRefused) Text(stringResource(R.string.browser_go_refused), Modifier.testTag("browserGoRefused"), color = MaterialTheme.colorScheme.error)
-        Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-            view.tabs.forEach { tab ->
-                TextButton(onClick = { latestActions.selectTab(tab.id) }, enabled = held.isEmpty()) { Text(if (tab.title.isBlank()) tab.url else tab.title) }
-                if (view.ownsControl) {
-                    val closeLabel = stringResource(R.string.browser_close_tab, if (tab.title.isBlank()) tab.url else tab.title)
-                    TextButton(onClick = { latestActions.closeTab(tab.id) }, enabled = held.isEmpty(), modifier = Modifier.semantics { contentDescription = closeLabel }) { Text("×") }
-                }
-            }
-            if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, Modifier.testTag("browserNewTab"), enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
-        }
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(url, { url = it; urlDirty = true; goRefused = false }, Modifier.weight(1f).testTag("browserAddress"), singleLine = true, enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_address)) })
-            TextButton(onClick = {
-                // With no tab open, the address opens in a new one instead of going nowhere.
-                val sent = if (view.selectedTabId == null) latestActions.newTab(url) else latestActions.navigate(url)
-                if (sent) urlDirty = false
-                goRefused = !sent
-            }, Modifier.testTag("browserGo"), enabled = view.ownsControl && held.isEmpty() && url.isNotBlank()) { Text(stringResource(R.string.browser_go)) }
-        }
-        Box(Modifier.weight(1f).fillMaxWidth().testTag("browserViewport").background(Color.Black).onSizeChanged { size = it }
-            .onFocusChanged {
-                focusOwner?.update(focusToken, active && it.hasFocus)
-                if (!it.hasFocus) {
-                    heldKeys.values.toList().forEach { key -> latestEnqueue(PendingBrowserInput(key.copy(action = "up"))) }
-                }
-            }
-            .onPreviewKeyEvent { event ->
-                val pressedCodes = held.filter { it.startsWith("key:") }.map { it.removePrefix("key:") }.toSet()
-                val input = browserHardwareInput(event.nativeKeyEvent, latestCanTextKeys || latestCanRelease && (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP || event.nativeKeyEvent.repeatCount > 0), pressedCodes)
-                when {
-                    input is BrowserInput.Key && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && event.nativeKeyEvent.repeatCount > 0 ->
-                        if (browserRepeatableKey(event.nativeKeyEvent) && "key:${input.code}" in held) {
-                            latestRepeatKey(input)
-                            true // A full queue drops repeats without moving Android focus.
-                        } else false
-                    input is BrowserInput.Key && input.action == "up" -> {
-                        val original = heldKeys["key:${input.code}"]
-                        latestEnqueue(PendingBrowserInput(if (original == null) input else input.copy(key = original.key)))
-                    }
-                    input != null -> latestEnqueue(PendingBrowserInput(input))
-                    else -> false
-                }
-            }.focusRequester(focusRequester).focusable(enabled = canRelease)
-            .pointerInteropFilter { event ->
-                val frame = latestImage; val current = latestView
+    }
+    fun dragTo(x: Float, y: Float) {
+        val point = currentPoint(x, y) ?: return
+        pointerPosition = point
+        latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "move", pointerButton)))
+    }
+    fun startDrag(x: Float, y: Float) {
+        val at = touch.point ?: return
+        if (latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(at.first, at.second, "down", "left")))) {
+            touch.mode = BrowserTouchMode.DRAG
+            pointerPosition = at; pointerButton = "left"
+            disallowIntercept(true)
+            dragTo(x, y)
+        } else touch.mode = BrowserTouchMode.NONE
+    }
+    fun endDrag() {
+        val at = pointerPosition ?: touch.point ?: return
+        latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(at.first, at.second, "up", pointerButton)))
+        pointerPosition = null
+    }
+    fun onTouch(event: MotionEvent): Boolean {
+        val longPress = viewConfiguration.longPressTimeoutMillis
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                longPressFeedback?.cancel()
+                touch.reset()
+                val frame = latestImage
                 val fit = frame?.let { browserImageFit(size.width.toFloat(), size.height.toFloat(), it.width, it.height) }
-                val rawPoint = if (fit != null && frame != null) browserImagePoint(fit, event.x, event.y, frame.cssWidth, frame.cssHeight) else null
-                val point = rawPoint ?: if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) pointerPosition else null
-                if (current == null || point == null) false else {
-                    val button = when { event.buttonState and MotionEvent.BUTTON_SECONDARY != 0 -> "right"; event.buttonState and MotionEvent.BUTTON_TERTIARY != 0 -> "middle"; else -> "left" }
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS -> { focusRequester.requestFocus(); pointerPosition = point; pointerButton = button; latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "down", button))) }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_BUTTON_RELEASE -> { val sent = latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "up", pointerButton))); pointerPosition = null; sent }
-                        MotionEvent.ACTION_MOVE -> { pointerPosition = point; latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "move", pointerButton))) }
-                        MotionEvent.ACTION_SCROLL -> latestEnqueue(PendingBrowserInput(BrowserInput.Wheel(point.first, point.second, (-event.getAxisValue(MotionEvent.AXIS_HSCROLL) * 48).toDouble(), (-event.getAxisValue(MotionEvent.AXIS_VSCROLL) * 48).toDouble())))
-                        else -> false
+                val point = if (frame != null && fit != null) browserImagePoint(fit, event.x, event.y, frame.cssWidth, frame.cssHeight) else null
+                if (latestView?.ownsControl != true || frame == null || fit == null || point == null) return false
+                focusRequester.requestFocus()
+                touch.mode = BrowserTouchMode.PENDING
+                touch.pointerId = event.getPointerId(0)
+                touch.downX = event.x; touch.downY = event.y; touch.lastX = event.x; touch.lastY = event.y
+                touch.downTime = event.eventTime
+                touch.point = point; touch.fit = fit; touch.cssWidth = frame.cssWidth; touch.cssHeight = frame.cssHeight
+                val downTime = event.eventTime
+                // Only feedback: whether it was a long press is read from the event times.
+                longPressFeedback = touchScope.launch {
+                    delay(longPress)
+                    if (touch.mode == BrowserTouchMode.PENDING && touch.downTime == downTime) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val index = event.findPointerIndex(touch.pointerId)
+                if (index < 0) return true
+                val x = event.getX(index)
+                val y = event.getY(index)
+                when (touch.mode) {
+                    BrowserTouchMode.PENDING -> if (hypot(x - touch.downX, y - touch.downY) > viewConfiguration.touchSlop) {
+                        longPressFeedback?.cancel()
+                        if (event.eventTime - touch.downTime >= longPress) startDrag(x, y)
+                        else {
+                            touch.mode = BrowserTouchMode.SCROLL
+                            disallowIntercept(true)
+                            scrollTo(x, y)
+                        }
+                    }
+                    BrowserTouchMode.SCROLL -> scrollTo(x, y)
+                    BrowserTouchMode.DRAG -> dragTo(x, y)
+                    BrowserTouchMode.NONE -> Unit
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                longPressFeedback?.cancel()
+                when (touch.mode) {
+                    BrowserTouchMode.PENDING -> touch.point?.let { (x, y) ->
+                        val button = if (event.eventTime - touch.downTime >= longPress) "right" else "left"
+                        latestPress(BrowserInput.Pointer(x, y, "down", button), BrowserInput.Pointer(x, y, "up", button))
+                    }
+                    BrowserTouchMode.DRAG -> endDrag()
+                    else -> Unit
+                }
+                touch.reset()
+            }
+            // A second finger (pinch is not supported) or a cancelled gesture ends the gesture
+            // without a click; a drag releases its button.
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> {
+                longPressFeedback?.cancel()
+                if (touch.mode == BrowserTouchMode.DRAG) endDrag()
+                touch.reset()
+            }
+        }
+        return true
+    }
+    val latestOnTouch by rememberUpdatedState<(MotionEvent) -> Boolean>({ onTouch(it) })
+
+    val title = if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title)
+    val subtitle = selected?.let { tab -> tab.title.ifBlank { tab.url } }?.takeIf { it.isNotBlank() }
+    // The protocol has no reload command and browser shortcuts do not reach headless Chromium:
+    // a reload opens the tab's current address again, which only works for a real document URL.
+    val reloadUrl = selected?.url?.takeIf { view?.ownsControl == true && browserReloadable(it) }
+    val headerActions = buildList {
+        if (view != null && !view.opening)
+            add(PaneAction(stringResource(R.string.browser_sync), Icons.Default.Sync, "browserSync", onClick = { latestActions.refresh() }))
+        if (onHide != null) add(PaneAction(stringResource(R.string.preview_hide), Icons.Default.VisibilityOff, "browserHide", onClick = onHide))
+    }
+    val notices = buildList {
+        when (view?.notice) {
+            BrowserNotice.BUSY -> add(RemoteViewNotice.Info(stringResource(R.string.remote_view_control_other), "browserNotice"))
+            BrowserNotice.UNCERTAIN -> add(RemoteViewNotice.Failure(stringResource(if (view.ownsControl) R.string.browser_uncertain_control_retained else R.string.browser_uncertain), "browserNotice"))
+            BrowserNotice.DISCONNECTED -> add(RemoteViewNotice.Info(stringResource(R.string.remote_view_disconnected), "browserNotice"))
+            BrowserNotice.FAILED -> add(RemoteViewNotice.Failure(stringResource(R.string.remote_view_failed), "browserNotice",
+                onRetry = { if (latestView?.browserId == null) latestActions.open() else latestActions.refresh() }))
+            BrowserNotice.FRAME_FAILED -> add(RemoteViewNotice.Failure(stringResource(R.string.browser_frame_failed), "browserNotice", onRetry = { latestActions.refresh() }))
+            null -> Unit
+        }
+        if (textSendRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_send_refused), "browserSendRefused"))
+        if (goRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_go_refused), "browserGoRefused"))
+    }
+    RemoteViewPane(
+        title = title,
+        tag = "browser",
+        onClose = onClose,
+        subtitle = subtitle,
+        busy = held.isNotEmpty(),
+        onReload = if (reloadUrl != null) ({ latestActions.navigate(reloadUrl) }) else null,
+        actions = headerActions,
+        notices = notices,
+    ) {
+        if (view == null || view.opening) {
+            RemoteViewport("browserViewport", Modifier.weight(1f).fillMaxWidth(), placeholder = RemoteViewPlaceholder(stringResource(R.string.remote_view_opening)))
+        } else {
+            RemoteControlBar(
+                state = when {
+                    view.ownsControl -> RemoteControlState.CONTROLLING
+                    view.owner != null -> RemoteControlState.HELD
+                    else -> RemoteControlState.VIEWING
+                },
+                tag = "browser",
+                holder = view.owner?.let { browserParticipantLabel(it) },
+                onTake = { latestActions.acquire() },
+                handoffTargets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, browserParticipantLabel(it)) },
+                onHandOff = { latestActions.handoff(it) },
+            )
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                view.tabs.forEach { tab ->
+                    val tabLabel = tab.title.ifBlank { tab.url }
+                    val current = tab.id == view.selectedTabId
+                    TextButton(onClick = { latestActions.selectTab(tab.id) }, Modifier.widthIn(max = 220.dp).semantics { this.selected = current }, enabled = held.isEmpty()) {
+                        Text(tabLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (current) FontWeight.SemiBold else null)
+                    }
+                    if (view.ownsControl) {
+                        val closeLabel = stringResource(R.string.browser_close_tab, tabLabel)
+                        IconButton(onClick = { latestActions.closeTab(tab.id) }, Modifier.size(48.dp).semantics { contentDescription = closeLabel }, enabled = held.isEmpty()) {
+                            Icon(Icons.Default.Close, null, Modifier.size(18.dp))
+                        }
                     }
                 }
-            }, contentAlignment = Alignment.Center) {
-            if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = stringResource(R.string.browser_image), modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-            else Text(stringResource(if (image != null && failedImage === image) R.string.browser_frame_failed else R.string.browser_waiting), color = Color.White)
+                if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, Modifier.testTag("browserNewTab"), enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
+            }
+            RemoteInputBar(
+                value = url,
+                onValueChange = { url = it; urlDirty = true; goRefused = false },
+                onSend = {
+                    // With no tab open, the address opens in a new one instead of going nowhere.
+                    val sent = if (view.selectedTabId == null) latestActions.newTab(url) else latestActions.navigate(url)
+                    if (sent) urlDirty = false
+                    goRefused = !sent
+                },
+                tag = "browserAddress",
+                label = stringResource(R.string.browser_address),
+                enabled = view.ownsControl,
+                sendEnabled = view.ownsControl && held.isEmpty() && url.isNotBlank(),
+                sendLabel = stringResource(R.string.browser_go),
+                sendIcon = Icons.AutoMirrored.Filled.ArrowForward,
+                sendTag = "browserGo",
+                maxLines = 1,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
+            )
+            RemoteViewport(
+                "browserViewport",
+                Modifier.weight(1f).fillMaxWidth().onSizeChanged { size = it }
+                    .onFocusChanged {
+                        focusOwner?.update(focusToken, active && it.hasFocus)
+                        if (!it.hasFocus) {
+                            heldKeys.values.toList().forEach { key -> latestEnqueue(PendingBrowserInput(key.copy(action = "up"))) }
+                            // A button held by a drag is released too; a gesture in progress ends.
+                            val at = pointerPosition
+                            if (at != null && "pointer:$pointerButton" in held) {
+                                latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(at.first, at.second, "up", pointerButton)))
+                                pointerPosition = null
+                            }
+                            touch.reset()
+                        }
+                    }
+                    .onPreviewKeyEvent { event ->
+                        val pressedCodes = held.filter { it.startsWith("key:") }.map { it.removePrefix("key:") }.toSet()
+                        val input = browserHardwareInput(event.nativeKeyEvent, latestCanTextKeys || latestCanRelease && (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP || event.nativeKeyEvent.repeatCount > 0), pressedCodes)
+                        when {
+                            input is BrowserInput.Key && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && event.nativeKeyEvent.repeatCount > 0 ->
+                                if (browserRepeatableKey(event.nativeKeyEvent) && "key:${input.code}" in held) {
+                                    latestRepeatKey(input)
+                                    true // A full queue drops repeats without moving Android focus.
+                                } else false
+                            input is BrowserInput.Key && input.action == "up" -> {
+                                val original = heldKeys["key:${input.code}"]
+                                latestEnqueue(PendingBrowserInput(if (original == null) input else input.copy(key = original.key)))
+                            }
+                            input != null -> latestEnqueue(PendingBrowserInput(input))
+                            else -> false
+                        }
+                    }.focusRequester(focusRequester).focusable(enabled = canRelease)
+                    .pointerInteropFilter(disallowIntercept) { event ->
+                        if (browserTouchEvent(event)) return@pointerInteropFilter latestOnTouch(event)
+                        // A mouse or touchpad: plain mouse semantics.
+                        val frame = latestImage; val current = latestView
+                        val fit = frame?.let { browserImageFit(size.width.toFloat(), size.height.toFloat(), it.width, it.height) }
+                        val rawPoint = if (fit != null && frame != null) browserImagePoint(fit, event.x, event.y, frame.cssWidth, frame.cssHeight) else null
+                        val point = rawPoint ?: if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) pointerPosition else null
+                        if (current == null || point == null) false else {
+                            val button = when { event.buttonState and MotionEvent.BUTTON_SECONDARY != 0 -> "right"; event.buttonState and MotionEvent.BUTTON_TERTIARY != 0 -> "middle"; else -> "left" }
+                            when (event.actionMasked) {
+                                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS -> { focusRequester.requestFocus(); pointerPosition = point; pointerButton = button; latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "down", button))) }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_BUTTON_RELEASE -> { val sent = latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "up", pointerButton))); pointerPosition = null; sent }
+                                MotionEvent.ACTION_MOVE -> { pointerPosition = point; latestEnqueue(PendingBrowserInput(BrowserInput.Pointer(point.first, point.second, "move", pointerButton))) }
+                                MotionEvent.ACTION_SCROLL -> latestEnqueue(PendingBrowserInput(BrowserInput.Wheel(point.first, point.second, (-event.getAxisValue(MotionEvent.AXIS_HSCROLL) * 48).toDouble(), (-event.getAxisValue(MotionEvent.AXIS_VSCROLL) * 48).toDouble())))
+                                else -> false
+                            }
+                        }
+                    },
+                placeholder = when {
+                    bitmap != null -> null
+                    image != null && failedImage === image -> RemoteViewPlaceholder(stringResource(R.string.browser_frame_failed), busy = false)
+                    else -> RemoteViewPlaceholder(stringResource(R.string.remote_view_waiting))
+                },
+            ) {
+                if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = stringResource(R.string.browser_image), modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            }
+            RemoteKeyStrip(
+                keys = browserStripKeys(),
+                onKey = { key -> latestPress(BrowserInput.Key("down", key.id, key.id), BrowserInput.Key("up", key.id, key.id)) },
+                tag = "browser",
+                enabled = canTextKeys,
+            )
+            RemoteInputBar(
+                value = draft,
+                onValueChange = { draft = it },
+                onSend = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) },
+                tag = "browserText",
+                enabled = view.ownsControl,
+                sendEnabled = canTextKeys && draft.isNotBlank() && flight == null && queue.isEmpty(),
+                sendTag = "browserSendText",
+            )
         }
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(draft, { draft = it }, Modifier.weight(1f).testTag("browserText"), enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_text)) })
-            TextButton(onClick = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) }, enabled = canTextKeys && draft.isNotBlank() && flight == null && queue.isEmpty(), modifier = Modifier.testTag("browserSendText")) { Text(stringResource(R.string.browser_send)) }
-        }
-        Row(Modifier.padding(horizontal = 12.dp)) { listOf("Enter", "Tab", "Escape").forEach { key -> TextButton(onClick = { enqueue(PendingBrowserInput(BrowserInput.Key("down", key, key))); enqueue(PendingBrowserInput(BrowserInput.Key("up", key, key))) }, enabled = canTextKeys) { Text(key) } } }
     }
 }

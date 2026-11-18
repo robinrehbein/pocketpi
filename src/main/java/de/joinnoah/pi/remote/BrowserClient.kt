@@ -10,6 +10,27 @@ import kotlinx.serialization.json.jsonPrimitive
 public data class BrowserInputReceipt(val sequence: Long, val status: String)
 public enum class BrowserNotice { BUSY, UNCERTAIN, DISCONNECTED, FAILED, FRAME_FAILED }
 public data class BrowserImage(val jpeg: ByteArray, val width: Int, val height: Int, val cssWidth: Int, val cssHeight: Int, val deviceScale: Double, val scrollX: Double, val scrollY: Double, val frameId: Long, val viewportRevision: Long)
+/** How long a watched stream may stay silent before the client counts it as stalled. */
+internal const val BROWSER_FRAME_DEADLINE_MS = 5500L
+/** Consecutive automatic re-watches of a stalled stream before the pane shows a failure with Retry. */
+internal const val BROWSER_STALL_REWATCHES = 3
+/** The wait before the n-th automatic re-watch is n times this. */
+internal const val BROWSER_STALL_BACKOFF_MS = 500L
+
+/**
+ * Whether the selected session can open the remote browser now. The chat header asks it through
+ * the repository, with the negotiated capability route's [capabilityRevision]; the palette asks it
+ * with null, since [RemoteState] does not carry the revision. The conditions are the emulator's.
+ */
+internal fun browserOpenable(state: RemoteState, capabilityRevision: Int?): Boolean =
+    state.connected && !state.stale && state.capabilitiesKnown && (capabilityRevision == null || capabilityRevision >= 3) &&
+        state.selection.sessionId != null && state.session?.optionalText("id") == state.selection.sessionId &&
+        SESSION_BROWSER_CAPABILITY in state.capabilities && SESSION_BROWSER_CAPABILITY !in state.unavailableCapabilities
+
+/** Whether the chat offers the browser: open for the selected session, or [browserOpenable]. */
+internal fun browserActionAvailable(state: RemoteState, capabilityRevision: Int?): Boolean =
+    state.browser != null && state.browser.sessionId == state.selection.sessionId || browserOpenable(state, capabilityRevision)
+
 public data class BrowserView(val sessionId: String, val opening: Boolean = true, val browserId: String? = null, val incarnation: String? = null, val generation: Long = 0, val viewportRevision: Long = 0, val owner: BrowserOwner? = null, val participants: List<BrowserOwner> = emptyList(), val tabs: List<BrowserTab> = emptyList(), val selectedTabId: String? = null, val ownsControl: Boolean = false, val inputPending: Boolean = false, val receipt: BrowserInputReceipt? = null, val notice: BrowserNotice? = null, val image: BrowserImage? = null, val moving: Boolean = false, val documentEpoch: Long = 0, val previewPort: Int? = null)
 
 /** Selection and connection identity travel with every asynchronous operation. */
@@ -48,6 +69,16 @@ internal class BrowserClient(
     private var recovery = false
     private var disconnectedView = false
     private var interruptedInput = false
+    // Set when the pane is hidden while this device holds control: hiding releases control, and
+    // showing the pane again takes it back once, unless someone else took it meanwhile.
+    // [lostOwner] is this device's identity as the Host showed it, which a refresh may still
+    // report until the release lands. A handoff, close, disconnect or failure clears it.
+    private var reacquire = false
+    private var lostOwner: BrowserOwner? = null
+    // Consecutive automatic re-watches of a stalled stream; a full frame resets it.
+    private var stalls = 0
+    // A stall is being recovered: only releases go out until a frame arrives.
+    private var stalled = false
     private data class Size(val tab: String, val width: Int, val height: Int, val scale: Double, val orientation: String)
     private var resizeActive: Size? = null
     private var resizeNext: Size? = null
@@ -63,7 +94,7 @@ internal class BrowserClient(
         if (previewPort != null && previewPort !in 1..65535) return false
         if (!current(session, c)) return false
         if (isDisconnectedFor(session) && view?.previewPort == previewPort) return resumeIfDisconnected(session, c)
-        close(); connection = c; val t = ++token; visible = true; recovery = recoveryEnabled()
+        close(); connection = c; val t = ++token; visible = true; recovery = recoveryEnabled(); stalls = 0; stalled = false
         set(BrowserView(session, previewPort = previewPort))
         requestOpen(session, c, t)
         return true
@@ -126,23 +157,38 @@ internal class BrowserClient(
         if (l != null && v != null) release(v, l, connection, token, refreshAfter)
     }
     private fun frameFailed() {
-        token++; resetPending(preserveControl = true); dropStream(); detach(refreshAfter = false)
+        token++; resetPending(preserveControl = true); stalls = 0; stalled = false; reacquire = false; dropStream(); detach(refreshAfter = false)
         view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null, notice = BrowserNotice.FRAME_FAILED)) }
     }
-    fun close() { dropStream(); detach(); token++; resetPending(); disconnectedView = false; interruptedInput = false; set(null) }
+    fun close() { reacquire = false; stalls = 0; stalled = false; dropStream(); detach(); token++; resetPending(); disconnectedView = false; interruptedInput = false; set(null) }
     fun disconnected() {
         interruptedInput = interruptedInput || view?.inputPending == true
         disconnectedView = view != null
+        reacquire = false; stalls = 0; stalled = false
         dropStream(); lease = null; token++; resetPending()
         view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = BrowserNotice.DISCONNECTED)) }
     }
     private fun resetPending(preserveControl: Boolean = false) { if (!preserveControl) { controlOperation++; controlPending = false }; refreshPending = false; refreshAgain = false; resizeActive = null; resizeNext = null; resizeApplied = null }
     fun setVisible(value: Boolean) {
         visible = value
-        if (!value) { if (view?.opening != true) { token++; resetPending() }; dropStream(); detach(); view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null)) } }
-        else watch()
+        if (!value) {
+            // Hidden, the pane releases control so Pi or another device can use the browser. An input
+            // whose outcome is still open is never followed by an automatic re-acquire.
+            if (lease != null) { reacquire = view?.inputPending != true; lostOwner = view?.owner }
+            if (view?.opening != true) { token++; resetPending() }; dropStream(); detach(); view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null)) }
+        } else { watch(); if (reacquire) refresh() }
     }
-    fun acquire(): Boolean {
+    private fun reacquireIfFree(owner: BrowserOwner?) {
+        if (!reacquire || view?.opening == true) return
+        if (lease != null) { reacquire = false; return }
+        // Only a shown pane takes control back; a hidden one waits until it is shown.
+        if (!visible) return
+        // While the release is in flight acquire() refuses; the refresh after the release asks again.
+        if (owner == null) { if (acquire(automatic = true)) reacquire = false } else if (owner != lostOwner) reacquire = false
+    }
+    // [automatic] is the re-acquire of a pane shown again: a Busy reply then shows no notice, since
+    // the user did not ask.
+    fun acquire(automatic: Boolean = false): Boolean {
         val v = view ?: return false; val b = v.browserId ?: return false
         if (!current(v.sessionId, connection) || lease != null || connection in acquiringConnections || controlPending || releaseInFlight > 0 || !visible) return false
         val t = token; val c = connection
@@ -153,13 +199,13 @@ internal class BrowserClient(
                     is BrowserResult.Lease -> {
                         val self = r.owner.kind == "device"
                         if (valid(t, v.sessionId, c) && r.browserId == b && self && visible && r.generation >= (view?.generation ?: 0)) {
-                            interruptedInput = false
+                            interruptedInput = false; reacquire = false
                             lease = r.leaseId; sequence = -1L; confirmedNextSequence = 0L; resizeApplied = null; dropStream(); set(view?.copy(generation = r.generation, viewportRevision = r.viewportRevision, owner = r.owner, ownsControl = true, notice = null, image = null)); watch()
                         } else if (self && r.browserId == b && connectionAlive(c)) {
                             release(v.copy(generation = r.generation), r.leaseId, c, t)
                         }
                     }
-                    is BrowserResult.Busy -> if (valid(t, v.sessionId, c) && r.browserId == b && r.generation >= (view?.generation ?: 0)) set(view?.copy(generation = r.generation, owner = r.owner, notice = BrowserNotice.BUSY))
+                    is BrowserResult.Busy -> if (valid(t, v.sessionId, c) && r.browserId == b && r.generation >= (view?.generation ?: 0)) { reacquire = false; set(view?.copy(generation = r.generation, owner = r.owner, notice = if (automatic) view?.notice else BrowserNotice.BUSY)) }
                     else -> error("Unexpected result")
                 }
             } catch (_: Exception) {
@@ -170,7 +216,7 @@ internal class BrowserClient(
     }
     private fun uncertain() {
         val v = view; val l = lease; val c = connection; val t = token
-        lease = null; dropStream(); v?.let { set(it.copy(ownsControl = false, inputPending = false, notice = BrowserNotice.UNCERTAIN, image = null)) }
+        lease = null; reacquire = false; dropStream(); v?.let { set(it.copy(ownsControl = false, inputPending = false, notice = BrowserNotice.UNCERTAIN, image = null)) }
         if (v != null && l != null) release(v, l, c, t)
         else if (connectionAlive(c)) closeConnection(c)
     }
@@ -190,7 +236,7 @@ internal class BrowserClient(
     }
     fun handoff(owner: String): Boolean {
         val ok = mutate({ v,b,l -> BrowserCommand.Handoff(Wire.random(), v.sessionId,b,l,v.generation,owner) }) { refresh() }
-        if (ok) { lease = null; dropStream(); view?.let { set(it.copy(ownsControl = false, image = null)) } }
+        if (ok) { lease = null; reacquire = false; dropStream(); view?.let { set(it.copy(ownsControl = false, image = null)) } }
         return ok
     }
     private fun stopPageStream() { metadataEpoch++; dropStream(); set(view?.copy(image = null)) }
@@ -228,7 +274,7 @@ internal class BrowserClient(
     }
     fun input(input: BrowserInput): Boolean {
         val v = view ?: return false; if (v.inputPending || sequence >= 9007199254740991L) return false
-        if (v.moving && input !is BrowserInput.Wheel && !(input is BrowserInput.Pointer && input.action == "up") && !(input is BrowserInput.Key && input.action == "up")) return false
+        if ((v.moving || stalled) && input !is BrowserInput.Wheel && !(input is BrowserInput.Pointer && input.action == "up") && !(input is BrowserInput.Key && input.action == "up")) return false
         val next = sequence + 1
         sequence = next
         set(v.copy(inputPending = true, receipt = null))
@@ -255,6 +301,7 @@ internal class BrowserClient(
             if (opened.generation != current.generation) lease = null
             if (changed) { resizeApplied = null; dropStream() }
             set(current.copy(generation = opened.generation, viewportRevision = opened.viewportRevision, owner = opened.owner, tabs = opened.tabs, participants = participants.participants, selectedTabId = selected, ownsControl = lease != null, image = if (changed) null else current.image)); watch()
+            reacquireIfFree(opened.owner)
         } catch (_: Exception) { if (valid(t,v.sessionId,c)) frameFailed() }
           finally { if (t == token) { refreshPending = false; val again = refreshAgain; refreshAgain = false; if (again) refresh() } } }; return true
     }
@@ -279,10 +326,34 @@ internal class BrowserClient(
     private fun armWatchDeadline(id: String, t: Long, w: Long, session: String, c: Long) {
         watchDeadline?.cancel()
         watchDeadline = scope.launch {
-            delay(5500)
+            delay(BROWSER_FRAME_DEADLINE_MS)
             if (stream == id && watchToken == w && valid(t, session, c)) {
-                frameFailed()
+                watchDeadline = null
+                streamStalled()
             }
+        }
+    }
+    /**
+     * The Host can end a stream without telling the client, for example after a main-frame
+     * navigation. A silent stream is watched again from fresh metadata, a bounded number of times
+     * in a row with a growing pause; then the pane shows the failure and offers Retry. Control is
+     * kept meanwhile, but only releases go out until a frame shows the page again.
+     */
+    private fun streamStalled() {
+        val v = view ?: return
+        if (stalls >= BROWSER_STALL_REWATCHES) { frameFailed(); return }
+        val attempt = ++stalls
+        stalled = true
+        dropStream()
+        set(v.copy(image = null, moving = false))
+        val t = token; val c = connection; val session = v.sessionId
+        scope.launch {
+            delay(BROWSER_STALL_BACKOFF_MS * attempt)
+            if (!valid(t, session, c) || !visible || stalls != attempt) return@launch
+            refresh()
+            delay(BROWSER_FRAME_DEADLINE_MS)
+            // A watch that started arms its own deadline; this covers a refresh that started none.
+            if (valid(t, session, c) && visible && stalls == attempt && stream == null && !watching) streamStalled()
         }
     }
     fun frame(payload: JsonObject) {
@@ -309,7 +380,7 @@ internal class BrowserClient(
             val receipt = a.accept(payload)
             armWatchDeadline(id, t, w, v.sessionId, c)
             scope.launch { try { streamRequest(c,"browser.frame.ack","sessionId" to v.sessionId,"browserId" to v.browserId,"streamId" to id,"frameId" to receipt.frameId,"chunkIndex" to receipt.chunkIndex) } catch (_: Exception) { if (stream == id && w == watchToken && valid(t, v.sessionId, c)) { frameFailed() } } }
-            receipt.frame?.let { f -> val m = f.metadata; set(view?.copy(moving = false, notice = view?.notice?.takeUnless { it == BrowserNotice.FRAME_FAILED }, image = BrowserImage(f.jpeg,m.width,m.height,m.cssWidth,m.cssHeight,m.deviceScale,m.scrollX,m.scrollY,f.frameId,v.viewportRevision))) }
+            receipt.frame?.let { f -> val m = f.metadata; stalls = 0; stalled = false; set(view?.copy(moving = false, notice = view?.notice?.takeUnless { it == BrowserNotice.FRAME_FAILED }, image = BrowserImage(f.jpeg,m.width,m.height,m.cssWidth,m.cssHeight,m.deviceScale,m.scrollX,m.scrollY,f.frameId,v.viewportRevision))) }
         } catch (_: Exception) { frameFailed() }
     }
     private fun document(payload: JsonObject) {
