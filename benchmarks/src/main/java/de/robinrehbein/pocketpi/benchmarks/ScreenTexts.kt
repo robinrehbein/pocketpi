@@ -68,9 +68,9 @@ private fun UiObject2.activateRow() {
         }
         if (targets.isNotEmpty()) {
             check(targets.size == 1) { "The checked row has ambiguous accessibility click targets" }
-            check(targets.single().performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                "The checked row did not accept its accessibility click action"
-            }
+            // A node that went stale between lookup and click refuses the action instead of
+            // throwing. Report it as stale, so the callers' bounded retries find the row again.
+            if (!targets.single().performAction(AccessibilityNodeInfo.ACTION_CLICK)) throw StaleObjectException()
             return
         }
         level = level.flatMap { node -> (0 until node.childCount).mapNotNull(node::getChild) }
