@@ -5,6 +5,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.OnBackPressedDispatcher
 import androidx.compose.ui.semantics.Role
@@ -532,17 +539,18 @@ class RemoteViewPaneTest {
                 }
             }
         }
-        // On a device the header is 48dp (its pills, no padding), the key strip 48 and the input bar
-        // 56: 152dp, plus 24dp of status bar over a pane at the top of the window, leaves 104dp of
-        // 280 (the androidTest TerminalPaneCompactUiTest asserts that on a Pixel 2). Robolectric's
-        // fonts and window differ from the device's, so this checks the rules that budget rests
-        // on: no padding around the header, no bar below its minimum (the input bar's is one line),
-        // and the viewport floor out of the room above those minimums.
+        // On a device the header is 48dp (one row whatever its subtitle), the key strip 48 and the
+        // input bar 56: 152dp, plus 24dp of status bar over a pane at the top of the window, leaves
+        // 104dp of 280 (the androidTest TerminalPaneCompactUiTest asserts at least 96 on a Pixel 2).
+        // Robolectric's fonts and window differ from the device's, so this checks the rules that
+        // budget rests on: a header of exactly 48dp, no bar below its minimum (the input bar's is
+        // one line), and the viewport floor out of the room above those minimums.
         fun bounds(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
         fun height(tag: String) = bounds(tag).let { it.bottom - it.top }
         val pane = bounds("terminalPane")
         val header = bounds("terminalHeaderPill")
         assertEquals(pane.top, header.top)
+        assertEquals(48.dp, height("terminalHeaderPill"))
         val column = bounds("terminalInput").bottom - header.top
         val minimums = height("terminalHeaderPill") + height("terminalKeys") + 56.dp
         val viewport = height("terminalViewport")
@@ -577,14 +585,14 @@ class RemoteViewPaneTest {
         assertTrue("viewport=$viewport", viewport.bottom - viewport.top < REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT)
     }
 
-    @Test fun barsThatDoNotFitGiveWayKeysFirstThenNoticesAndTheOthersKeepTheirHeight() {
+    @Test fun barsThatDoNotFitGiveWayNoticesBeforeTheKeyStripAndTheOthersKeepTheirHeight() {
         var height by mutableStateOf(300.dp)
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxWidth().height(height)) {
                     RemoteViewColumn(Modifier.fillMaxSize()) {
                         Box(Modifier.fillMaxWidth().height(48.dp).testTag("header"))
-                        Box(Modifier.fillMaxWidth().height(40.dp).remoteViewShed(RemoteViewShed.NOTICES).testTag("notice"))
+                        Box(Modifier.fillMaxWidth().height(40.dp).remoteViewShed(RemoteViewShed.FAILURE).testTag("notice"))
                         Box(Modifier.weight(1f).fillMaxWidth().testTag("viewport"))
                         Box(Modifier.fillMaxWidth().height(48.dp).remoteViewShed(RemoteViewShed.KEYS).testTag("keys"))
                         Box(Modifier.fillMaxWidth().height(56.dp).testTag("input"))
@@ -596,21 +604,147 @@ class RemoteViewPaneTest {
         // Everything fits: the viewport gets the rest (300 - 192).
         assertEquals(108.dp, height("viewport"))
         compose.onNodeWithTag("keys").assertIsDisplayed()
-        // 192dp of bars in 180: the key strip goes, the rest keep their heights.
+        // 192dp of bars in 180: the notice goes, the key strip and the rest keep their heights.
         compose.runOnIdle { height = 180.dp }
-        compose.onNodeWithTag("keys").assertIsNotDisplayed()
-        compose.onNodeWithTag("notice").assertIsDisplayed()
-        assertEquals(36.dp, height("viewport"))
+        compose.onNodeWithTag("notice").assertIsNotDisplayed()
+        compose.onNodeWithTag("keys").assertIsDisplayed()
+        assertEquals(28.dp, height("viewport"))
         assertEquals(56.dp, height("input"))
         assertEquals(180.dp, compose.onNodeWithTag("input").getUnclippedBoundsInRoot().bottom)
-        // 144dp in 130: the notice goes too.
+        // 152dp in 130: the key strip goes too.
         compose.runOnIdle { height = 130.dp }
-        compose.onNodeWithTag("notice").assertIsNotDisplayed()
+        compose.onNodeWithTag("keys").assertIsNotDisplayed()
         assertEquals(26.dp, height("viewport"))
         // Nothing else gives way: the header and the input bar are never squeezed.
         compose.runOnIdle { height = 90.dp }
         assertEquals(48.dp, height("header"))
         assertEquals(56.dp, height("input"))
         assertEquals(0.dp, height("viewport"))
+    }
+
+    @Test fun aCompactViewportFloorShedsInfoThenControlThenFailuresThenKeysBeforeItShrinks() {
+        var height by mutableStateOf(344.dp)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(height)) {
+                    RemoteViewColumn(Modifier.fillMaxSize(), viewportMinHeight = REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT) {
+                        Box(Modifier.fillMaxWidth().height(48.dp).testTag("header"))
+                        Box(Modifier.fillMaxWidth().height(24.dp).remoteViewShed(RemoteViewShed.INFO).testTag("info"))
+                        Box(Modifier.fillMaxWidth().height(32.dp).remoteViewShed(RemoteViewShed.CONTROL).testTag("control"))
+                        Box(Modifier.fillMaxWidth().height(40.dp).remoteViewShed(RemoteViewShed.FAILURE).testTag("failure"))
+                        Box(Modifier.weight(1f).fillMaxWidth().testTag("viewport"))
+                        Box(Modifier.fillMaxWidth().height(48.dp).remoteViewShed(RemoteViewShed.KEYS).testTag("keys"))
+                        Box(Modifier.fillMaxWidth().height(56.dp).testTag("input"))
+                    }
+                }
+            }
+        }
+        fun height(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        fun shown(vararg tags: String) = listOf("info", "control", "failure", "keys").forEach {
+            if (it in tags) compose.onNodeWithTag(it).assertIsDisplayed() else compose.onNodeWithTag(it).assertIsNotDisplayed()
+        }
+        // 248dp of bars and the 96dp floor fit exactly.
+        shown("info", "control", "failure", "keys")
+        assertEquals(96.dp, height("viewport"))
+        // Each step down sheds the next bar in order while the floor holds.
+        compose.runOnIdle { height = 340.dp }
+        shown("control", "failure", "keys")
+        assertEquals(116.dp, height("viewport"))
+        compose.runOnIdle { height = 310.dp }
+        shown("failure", "keys")
+        assertEquals(118.dp, height("viewport"))
+        compose.runOnIdle { height = 280.dp }
+        shown("keys")
+        assertEquals(128.dp, height("viewport"))
+        compose.runOnIdle { height = 240.dp }
+        shown()
+        assertEquals(136.dp, height("viewport"))
+        // Nothing left to shed: only now does the floor shrink, the header and input bar stay whole.
+        compose.runOnIdle { height = 180.dp }
+        assertEquals(76.dp, height("viewport"))
+        assertEquals(48.dp, height("header"))
+        assertEquals(56.dp, height("input"))
+        compose.runOnIdle { height = 90.dp }
+        assertEquals(0.dp, height("viewport"))
+        assertEquals(56.dp, height("input"))
+        // Room again: everything comes back.
+        compose.runOnIdle { height = 344.dp }
+        shown("info", "control", "failure", "keys")
+    }
+
+    @Test fun aCompactTerminalShedsItsNoticeForTheFloorAndKeepsTheKeyStrip() {
+        // A Pixel 2 pane of 280dp under the 24dp status bar: header, a notice with a Retry button,
+        // the key strip and the input bar in 256dp.
+        var height by mutableStateOf(400.dp)
+        val retry = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(height)) {
+                    RemoteViewColumn(Modifier.fillMaxSize(), viewportMinHeight = REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT) {
+                        Box(Modifier.fillMaxWidth().height(48.dp).testTag("header"))
+                        Box(Modifier.fillMaxWidth().height(48.dp).remoteViewShed(RemoteViewShed.FAILURE).testTag("notice")) {
+                            Box(Modifier.size(48.dp).focusRequester(retry).focusable().testTag("retry"))
+                        }
+                        Box(Modifier.weight(1f).fillMaxWidth().testTag("viewport"))
+                        Box(Modifier.fillMaxWidth().height(48.dp).remoteViewShed(RemoteViewShed.KEYS).testTag("keys"))
+                        Box(Modifier.fillMaxWidth().height(56.dp).testTag("input"))
+                    }
+                }
+            }
+        }
+        val hidden = SemanticsMatcher.keyIsDefined(SemanticsProperties.HideFromAccessibility)
+        compose.onNodeWithTag("notice").assertIsDisplayed().assert(!hidden)
+        compose.runOnIdle { retry.requestFocus() }
+        compose.onNodeWithTag("retry").assertIsFocused()
+        compose.runOnIdle { height = 256.dp }
+        // 200dp of bars leave 56: the notice goes, so the floor holds (256 - 152 = 104).
+        compose.onNodeWithTag("notice").assertIsNotDisplayed().assert(hidden)
+        compose.onNodeWithTag("retry").assertIsNotFocused()
+        compose.onNodeWithTag("keys").assertIsDisplayed()
+        compose.onNodeWithTag("viewport").assertHeightIsEqualTo(104.dp)
+        compose.onNodeWithTag("input").assertHeightIsEqualTo(56.dp)
+        compose.runOnIdle { height = 400.dp }
+        compose.onNodeWithTag("notice").assertIsDisplayed().assert(!hidden)
+    }
+
+    // Native graphics: real text metrics for the title and subtitle.
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun aCompactHeaderIsOne48dpRowWithALongSubtitleAndTwoActions() {
+        var width by mutableStateOf(411.dp)
+        var compact by mutableStateOf(true)
+        val subtitle = "Ctrl+Alt+Shift · a long subtitle that cannot fit beside the title on a phone"
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.width(width).testTag("frame")) {
+                    PaneHeader(
+                        title = "A rather long page title", subtitle = subtitle, nested = false, busy = false, tag = "pane",
+                        backLabel = "Back", closeLabel = "Close", reloadLabel = "Reload", onBack = {}, onClose = {}, onReload = {},
+                        actions = listOf(
+                            PaneAction("Shortcuts", Icons.Default.Keyboard, "paneShortcuts"),
+                            PaneAction("Tabs", Icons.Default.Keyboard, "paneTabs"),
+                        ),
+                        compact = compact,
+                    )
+                }
+            }
+        }
+        // 411dp: both actions fit beside the title.
+        compose.onNodeWithTag("frame").assertHeightIsEqualTo(48.dp)
+        compose.onNodeWithTag("paneShortcuts").assertIsDisplayed()
+        compose.onNodeWithTag("paneTabs").assertIsDisplayed()
+        compose.onNodeWithTag("paneSubtitle").assertTextEquals(subtitle)
+        compose.onNodeWithTag("paneTitle").assertIsDisplayed()
+        // 320dp: they go into the "more" menu instead of taking a second row.
+        compose.runOnIdle { width = 320.dp }
+        compose.onNodeWithTag("frame").assertHeightIsEqualTo(48.dp)
+        compose.onNodeWithTag("paneMoreActions").assertIsDisplayed()
+        compose.onNodeWithTag("paneShortcuts").assertDoesNotExist()
+        compose.onNodeWithTag("paneSubtitle").assertTextEquals(subtitle)
+        // A pane that is not compact keeps its padding and its subtitle under the title.
+        compose.runOnIdle { compact = false; width = 411.dp }
+        val title = compose.onNodeWithTag("paneTitle").getUnclippedBoundsInRoot()
+        val sub = compose.onNodeWithTag("paneSubtitle").getUnclippedBoundsInRoot()
+        assertTrue("title=$title subtitle=$sub", sub.top >= title.bottom - 0.5.dp)
+        compose.onNodeWithTag("frame").assertHeightIsAtLeast(64.dp)
     }
 }

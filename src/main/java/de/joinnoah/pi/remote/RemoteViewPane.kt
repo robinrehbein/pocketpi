@@ -8,6 +8,8 @@ import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.WindowInsetsRulers
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.composed
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -80,6 +82,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -109,8 +112,9 @@ private fun remoteViewBarPadding(): PaddingValues =
 
 /**
  * The height a compact pane keeps for its viewport (about four terminal rows, see
- * docs/testing/android-terminal-compact.md) out of the room the bars leave above their minimum
- * heights: [RemoteViewColumn] never squeezes a bar below its minimum for it.
+ * docs/testing/android-terminal-compact.md). The bars that can give way ([RemoteViewShed]) give
+ * way for it first; the header and the input bars are never squeezed below their minimums for it
+ * ([RemoteViewColumn]).
  */
 internal val REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT = 96.dp
 
@@ -185,9 +189,9 @@ internal fun RemoteViewNoticeLine(notice: RemoteViewNotice, modifier: Modifier =
  * nothing (it does not reach the chat behind); beside the chat with focus elsewhere it runs the
  * chat's own steps (see [PaneBackHandler]). The header's close button then names no shortcut.
  *
- * [compactActions] join [actions] in a compact pane only. The pane provides
- * [LocalRemoteViewCompact] to [content]; its notices give way first where the bars do not fit
- * ([RemoteViewShed]).
+ * [compactActions] join [actions] in a compact pane only, where the header is one 48dp row
+ * (see [PaneHeader]'s `compact`). The pane provides [LocalRemoteViewCompact] to [content]; its
+ * notices give way where the bars and the viewport's floor do not fit ([RemoteViewShed]).
  */
 @Composable
 internal fun RemoteViewPane(
@@ -253,7 +257,10 @@ internal fun RemoteViewPane(
                         compact = compact,
                         escapeLeaves = escapeCloses,
                     )
-                    notices.forEach { RemoteViewNoticeLine(it, Modifier.remoteViewShed(RemoteViewShed.NOTICES)) }
+                    notices.forEach {
+                        val shed = if (it is RemoteViewNotice.Info) RemoteViewShed.INFO else RemoteViewShed.FAILURE
+                        RemoteViewNoticeLine(it, Modifier.remoteViewShed(shed))
+                    }
                     content()
                 }
             }
@@ -264,17 +271,31 @@ internal fun RemoteViewPane(
 private object RemoteViewportSlot
 
 /**
- * The bars of a [RemoteViewPane] that give way where the bars together, at their minimum heights,
- * are taller than the pane, in this order: the key strip first, then the notices, then the control
- * bar. The lowest bar of a kind goes first. A bar without a mark, such as the header, an input bar
- * or the address bar, always stays.
+ * The bars of a [RemoteViewPane] that give way where the bars at their minimum heights and the
+ * viewport's floor together are taller than the pane, in this order: informational notices, the
+ * control bar, failure notices (they offer Retry), and the key strip last (a terminal's Esc, Tab
+ * and arrows). The lowest bar of a kind goes first. A bar without a mark, such as the header, an
+ * input bar or the address bar, always stays.
  */
-internal enum class RemoteViewShed { KEYS, NOTICES, CONTROL }
+internal enum class RemoteViewShed { INFO, CONTROL, FAILURE, KEYS }
 
-private data class RemoteViewShedSlot(val shed: RemoteViewShed)
+/** A bar's mark; [RemoteViewColumn] sets [shed] while it leaves the bar out. */
+private class RemoteViewShedSlot(val kind: RemoteViewShed) {
+    var shed by mutableStateOf(false)
+}
 
-/** Marks a bar of a [RemoteViewPane]'s content as one that gives way ([RemoteViewShed]). */
-internal fun Modifier.remoteViewShed(shed: RemoteViewShed): Modifier = layoutId(RemoteViewShedSlot(shed))
+/**
+ * Marks a bar of a [RemoteViewPane]'s content as one that gives way ([RemoteViewShed]). A bar left
+ * out stays composed (a focused field in it keeps its state) but is not placed, so it takes no
+ * touches; it is hidden from accessibility services and none of its controls can take keyboard
+ * focus, which also takes the focus from one that had it.
+ */
+internal fun Modifier.remoteViewShed(shed: RemoteViewShed): Modifier = composed {
+    val slot = remember(shed) { RemoteViewShedSlot(shed) }
+    layoutId(slot).then(
+        if (slot.shed) Modifier.focusProperties { canFocus = false }.semantics { hideFromAccessibility() } else Modifier
+    )
+}
 
 private data class RemoteViewFlexSlot(val minHeight: Dp)
 
@@ -295,10 +316,11 @@ private object RemoteViewColumnScope : ColumnScope {
 /**
  * A column like [Column] whose weighted children (the viewport) share what the others, the bars,
  * leave. No bar is squeezed below its minimum height: that is its own height, or for an input bar
- * ([RemoteInputBar]) the height of one line. The viewport keeps [viewportMinHeight] only out of
- * the room above those minimums, `min(viewportMinHeight, total - sum of the minimums)`, so a
- * focused input bar never shrinks out of sight for it. Where the minimums alone do not fit, the
- * bars marked with [remoteViewShed] are left out in [RemoteViewShed]'s order until the rest fit.
+ * ([RemoteInputBar]) the height of one line. Where the minimums and [viewportMinHeight] together
+ * do not fit, the bars marked with [remoteViewShed] are left out in [RemoteViewShed]'s order until
+ * they do. Only when every such bar is out does the viewport's floor shrink, to the room the
+ * remaining minimums leave, `min(viewportMinHeight, total - sum of the minimums)`, so a focused
+ * input bar never shrinks out of sight for it.
  *
  * A bar's minimum is not asked as an intrinsic height: [PaneHeader] and [RemoteControlBar] are
  * subcomposed (BoxWithConstraints), which answers no intrinsic measurement, and a text field's
@@ -321,17 +343,22 @@ internal fun RemoteViewColumn(modifier: Modifier, viewportMinHeight: Dp = 0.dp, 
             used += placeable.height
         }
         var laterMins = flexMin.sumOf { it.coerceAtLeast(0) }
+        val weighted = measurables.count { it.layoutId === RemoteViewportSlot }
+        val floorWanted = if (bounded && weighted > 0) viewportMinHeight.roundToPx() else 0
+        val shed = BooleanArray(measurables.size)
         if (bounded)
-            for (shed in RemoteViewShed.entries) {
+            for (kind in RemoteViewShed.entries) {
                 for (index in measurables.indices.reversed()) {
-                    if (used + laterMins <= total) break
-                    if ((measurables[index].layoutId as? RemoteViewShedSlot)?.shed != shed) continue
+                    if (used + laterMins + floorWanted <= total) break
+                    if ((measurables[index].layoutId as? RemoteViewShedSlot)?.kind != kind) continue
                     used -= placeables[index]?.height ?: 0
                     placeables[index] = null
+                    shed[index] = true
                 }
             }
-        val weighted = measurables.count { it.layoutId === RemoteViewportSlot }
-        val floor = if (bounded && weighted > 0) minOf(viewportMinHeight.roundToPx(), total - used - laterMins).coerceAtLeast(0) else 0
+        // Tells each marked bar whether it is out (a no-op while that does not change).
+        measurables.forEachIndexed { index, child -> (child.layoutId as? RemoteViewShedSlot)?.shed = shed[index] }
+        val floor = if (bounded && weighted > 0) minOf(floorWanted, total - used - laterMins).coerceAtLeast(0) else 0
         // Then the input bars, top to bottom: each gets what is left above the floor and the
         // minimums of those below it, and never less than its own minimum.
         measurables.forEachIndexed { index, child ->
