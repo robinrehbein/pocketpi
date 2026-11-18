@@ -338,7 +338,9 @@ with `terminal revoke <deviceId> <projectId>` or turn terminal control off.
 
 The chat's Terminal action opens a phone overlay or a tablet inspector tab. Another writer requires
 an explicit takeover. Closing the terminal releases input ownership and keeps the worker running.
-After a disconnect, open it explicitly again; inputs are never automatically replayed. Externally
+When the app reconnects after losing the connection, an open terminal reattaches once on its own
+(only while the app is in the foreground); input that was queued or in flight is dropped, never
+replayed into the new attachment. Otherwise the pane's Reattach attaches again. Externally
 started terminal sessions and RPC sessions do not offer this view.
 
 Hosts advertising `session.terminal.keys.v1` also offer Ctrl, Alt, Shift and F1-F12 controls.

@@ -544,15 +544,18 @@ internal val LocalChatKeyTarget = staticCompositionLocalOf<ChatKeyTarget?> { nul
 
 /**
  * Back for a pane over or beside the chat (a tool detail, Files, Changes, jobs, history). Esc
- * runs the same action through [LocalChatKeyTarget], newest pane first like Back.
+ * runs the same action through [LocalChatKeyTarget], newest pane first like Back. With
+ * [escapeCloses] false the pane still takes Esc's turn, so Esc neither closes it nor reaches the
+ * chat behind it (where Esc, Esc would stop pi), but does nothing: for a remote terminal or
+ * browser, where Esc is the remote's key.
  */
 @Composable
-internal fun PaneBackHandler(enabled: Boolean = true, onBack: () -> Unit) {
+internal fun PaneBackHandler(enabled: Boolean = true, escapeCloses: Boolean = true, onBack: () -> Unit) {
     BackHandler(enabled = enabled, onBack = onBack)
     val target = LocalChatKeyTarget.current ?: return
     val latest by rememberUpdatedState(onBack)
-    DisposableEffect(target, enabled) {
-        val close = { latest() }
+    DisposableEffect(target, enabled, escapeCloses) {
+        val close: () -> Unit = if (escapeCloses) ({ latest() }) else ({})
         if (enabled) target.addPane(close)
         onDispose { target.removePane(close) }
     }

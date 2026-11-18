@@ -1,11 +1,7 @@
 <resources>
     <string name="browser_title">Browser</string>
-    <!-- Fetches the tabs, who has control and the participants again, and restarts the picture. It does not reload the page. -->
-    <string name="browser_sync">Update tabs and control</string>
-    <string name="browser_close">Close</string>
     <string name="browser_uncertain">Input outcome is uncertain. Take control again before continuing.</string>
     <string name="browser_uncertain_control_retained">Input outcome is uncertain. Check the page before sending again.</string>
-    <string name="browser_frame_failed">Could not display the browser image.</string>
     <string name="browser_new_tab">New tab</string>
     <string name="browser_address">Address</string>
     <string name="browser_go">Go</string>
@@ -15,7 +11,4 @@
     <string name="browser_discard_title">Discard browser input?</string>
     <string name="browser_discard_body">The address or text you have not sent will be discarded.</string>
     <string name="browser_close_tab">Close tab %1$s</string>
-    <!-- A participant of a shared browser. %1$s is the end of its opaque ID, to tell several apart. -->
-    <string name="browser_participant_agent">Pi agent %1$s</string>
-    <string name="browser_participant_device">Device %1$s</string>
 </resources>

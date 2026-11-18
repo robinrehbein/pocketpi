@@ -367,6 +367,8 @@ interface RemoteRepository {
     fun sendPreviewInput(input: BrowserInput): Boolean = false
     fun refreshPreview(): Boolean = false
     fun setPreviewVisible(visible: Boolean) {}
+    /** Gives up this device's control of the preview without taking it back later (see [BrowserClient.dropControl]). */
+    fun dropPreviewControl() {}
 
     fun canOpenEmulator(): Boolean = false
     fun openEmulator(): Boolean = false
@@ -393,6 +395,8 @@ interface RemoteRepository {
     fun sendBrowserInput(input: BrowserInput): Boolean = false
     fun refreshBrowser(): Boolean = false
     fun setBrowserVisible(visible: Boolean) {}
+    /** Gives up this device's control of the browser without taking it back later (see [BrowserClient.dropControl]). */
+    fun dropBrowserControl() {}
 
     suspend fun activate(
         selection: RemoteSelection,

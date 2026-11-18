@@ -818,6 +818,98 @@ class BrowserClientTest {
         }
     }
 
+    @Test fun theFailSafeDropGivesUpControlAndNeverTakesItBack() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = acquiredClient(calls, backgroundScope); runCurrent()
+        calls.answer("browser.open", opened()); runCurrent()
+        assertTrue(client.acquire()); runCurrent(); calls.answer("browser.acquire", lease()); runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        client.dropControl(); runCurrent()
+        assertFalse(client.view!!.ownsControl)
+        calls.answer("browser.detach", Wire.objectOf("kind" to "browser.released", "browserId" to "b", "generation" to 2)); runCurrent()
+        // The refresh after the release finds control free and leaves it so.
+        calls.answer("browser.open", openedAt(2)); runCurrent()
+        calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        assertTrue(calls.none { it.first == "browser.acquire" })
+        // Hiding and showing afterwards does not take it either: there is no lease to come back to.
+        client.setVisible(false); runCurrent(); client.setVisible(true); runCurrent()
+        calls.firstOrNull { it.first == "browser.open" }?.let { calls.answer("browser.open", openedAt(2)); runCurrent(); calls.answer("browser.participants", participantsAt(2)); runCurrent() }
+        assertTrue(calls.none { it.first == "browser.acquire" })
+    }
+
+    @Test fun anUncertainOutcomeIsNotClearedByHidingAndShowingThePane() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, { "device" }, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.answer("browser.open", opened()); runCurrent()
+        calls.answer("browser.watch", watching()); runCurrent()
+        assertTrue(client.acquire()); runCurrent(); calls.answer("browser.acquire", lease()); runCurrent()
+        calls.answer("browser.watch", watching()); runCurrent()
+        assertTrue(client.input(BrowserInput.Text("outcome open"))); runCurrent()
+        // A document change keeps the lease but leaves the input's outcome uncertain.
+        client.frame(document()); runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        assertEquals(BrowserNotice.UNCERTAIN, client.view!!.notice)
+        client.setVisible(false); runCurrent()
+        calls.answer("browser.detach", Wire.objectOf("kind" to "browser.released", "browserId" to "b", "generation" to 2)); runCurrent()
+        val free = JsonObject(openedAt(2) + ("viewportRevision" to JsonPrimitive(2)))
+        calls.answer("browser.open", free); runCurrent(); calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        client.setVisible(true); runCurrent()
+        assertTrue(client.refresh()); runCurrent()
+        calls.answer("browser.open", free); runCurrent(); calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        assertTrue("control is not taken back on its own", calls.none { it.first == "browser.acquire" })
+        assertEquals(BrowserNotice.UNCERTAIN, client.view!!.notice)
+    }
+
+    @Test fun theChanceToTakeControlBackEndsWithTheFirstRefreshAfterShowing() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = acquiredClient(calls, backgroundScope); runCurrent()
+        calls.answer("browser.open", opened()); runCurrent()
+        assertTrue(client.acquire()); runCurrent(); calls.answer("browser.acquire", lease()); runCurrent()
+        hideAndRelease(client, calls)
+        client.setVisible(true); runCurrent()
+        // The Host still names this device's old identity: nothing is taken, and the chance is over.
+        calls.answer("browser.open", openedAt(2, Wire.objectOf("kind" to "device", "id" to "device"))); runCurrent()
+        calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        assertTrue(calls.none { it.first == "browser.acquire" })
+        // A much later sync with control free is a sync like any other.
+        assertTrue(client.refresh()); runCurrent()
+        calls.answer("browser.open", openedAt(2)); runCurrent()
+        calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        assertTrue(calls.none { it.first == "browser.acquire" })
+    }
+
+    @Test fun showingThePaneWhileTheReleaseIsInFlightTakesControlBackAfterIt() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = acquiredClient(calls, backgroundScope); runCurrent()
+        calls.answer("browser.open", opened()); runCurrent()
+        assertTrue(client.acquire()); runCurrent(); calls.answer("browser.acquire", lease()); runCurrent()
+        client.setVisible(false); runCurrent()
+        client.setVisible(true); runCurrent()
+        // The refresh of showing comes back first: acquire waits for the release.
+        calls.answer("browser.open", openedAt(1)); runCurrent()
+        calls.answer("browser.participants", participantsAt(1)); runCurrent()
+        assertTrue(calls.none { it.first == "browser.acquire" })
+        calls.answer("browser.detach", Wire.objectOf("kind" to "browser.released", "browserId" to "b", "generation" to 2)); runCurrent()
+        calls.answer("browser.open", openedAt(2)); runCurrent()
+        calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        assertTrue(calls.any { it.first == "browser.acquire" })
+    }
+
+    @Test fun whileAStallIsRecoveredOnlyReleasesGoOutNotWheels() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, { "device" })
+        client.open("session", 1); runCurrent(); calls.answer("browser.open", opened()); runCurrent()
+        calls.answer("browser.watch", watching()); runCurrent()
+        assertTrue(client.acquire()); runCurrent(); calls.answer("browser.acquire", lease()); runCurrent()
+        calls.answer("browser.watch", watching()); runCurrent()
+        assertTrue(client.input(BrowserInput.Pointer(10.0, 10.0, "down", "left"))); runCurrent()
+        calls.answer("browser.input", Wire.objectOf("kind" to "browser.input.ack", "browserId" to "b", "generation" to 1, "sequence" to 0, "status" to "accepted")); runCurrent()
+        advanceTimeBy(BROWSER_FRAME_DEADLINE_MS + 100); runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        assertFalse(client.input(BrowserInput.Wheel(10.0, 10.0, 0.0, 40.0)))
+        assertTrue(client.input(BrowserInput.Pointer(10.0, 10.0, "up", "left")))
+    }
+
     // One gate for the chat header and the palette.
 
     @Test fun browserGateMatchesTheEmulatorsConditionsInHeaderAndPalette() {

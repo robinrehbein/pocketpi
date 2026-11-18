@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.platform.app.InstrumentationRegistry
 import java.security.KeyStore
@@ -123,7 +124,7 @@ class EmulatorTransportEndToEndTest {
             }
             assertEquals(acquisitions + 1, requireNotNull(status()).getInt("deviceAcquireRequests"))
             fixtureAction("prepare-home")
-            compose.onNodeWithText("Home").performClick()
+            compose.onNodeWithTag("emulatorKey_Home").performClick()
             compose.waitUntil(30_000) { status()?.let { it.optInt("deviceInputRequests") == inputs + 1 && it.optBoolean("homeObserved") && it.optString("deviceInputStatus") == "accepted" } == true && repository.state.value.emulator?.inputPending == false }
 
             fixtureAction("agent-join")
@@ -151,7 +152,7 @@ class EmulatorTransportEndToEndTest {
                 val acquireBaseline = cut.getInt("acquireBaseline")
                 assertEquals(armed.getInt("deviceInputRequests") + 1, inputBaseline)
                 assertEquals(armed.getInt("deviceAcquireRequests"), acquireBaseline)
-                compose.onNodeWithText("Home").performClick()
+                compose.onNodeWithTag("emulatorKey_Home").performClick()
                 compose.waitUntil(60_000) {
                     val snapshot = status()
                     val reconnect = snapshot?.optJSONObject("reconnect")

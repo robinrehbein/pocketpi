@@ -2270,7 +2270,7 @@ internal fun RemoteScreen(
                 open = model::openBrowser, acquire = model::acquireBrowser, refresh = model::refreshBrowser,
                 newTab = model::newBrowserTab, navigate = model::navigateBrowser, selectTab = model::selectBrowserTab,
                 closeTab = model::closeBrowserTab, handoff = model::handoffBrowser, resize = model::resizeBrowser,
-                input = model::sendBrowserInput, visible = model::setBrowserVisible,
+                input = model::sendBrowserInput, visible = model::setBrowserVisible, dropControl = model::dropBrowserControl,
             ) }
             BrowserPane(browser, actions, close, unsent)
         }
@@ -4462,7 +4462,7 @@ internal fun RemoteScreen(
             val port = previewPortText.toIntOrNull()
             if (port != null && previewPortText.all { it in '0'..'9' } && port in 1..65535 && chatModel?.openPreview(port) == true) { previewPortDialog = false; previewInstance++; previewShown = true }
         }, Modifier.testTag("previewOpen"), enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
-        dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (previewShown && state.previewBrowser != null && chatModel != null) androidx.compose.ui.window.Dialog(onDismissRequest = {
         if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
@@ -4475,7 +4475,7 @@ internal fun RemoteScreen(
                 acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
                 newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
                 closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
-                input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible,
+                input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible, dropControl = chatModel::dropPreviewControl,
             ) }
             previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
                 BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
@@ -4486,8 +4486,8 @@ internal fun RemoteScreen(
         onDismissRequest = { previewCloseConfirm = false },
         title = { Text(stringResource(R.string.browser_discard_title)) },
         text = { Text(stringResource(R.string.browser_discard_body)) },
-        confirmButton = { TextButton(onClick = { previewCloseConfirm = false; previewHasUnsent = false; chatModel?.closePreview() }) { Text(stringResource(R.string.browser_close)) } },
-        dismissButton = { TextButton(onClick = { previewCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        confirmButton = { TextButton(onClick = { previewCloseConfirm = false; previewHasUnsent = false; chatModel?.closePreview() }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { previewCloseConfirm = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (terminalLeave != null) AlertDialog(
         onDismissRequest = { terminalLeave?.second?.invoke(); terminalLeave = null },
@@ -4497,15 +4497,15 @@ internal fun RemoteScreen(
             val action = terminalLeave
             terminalLeave = null
             action?.first?.invoke()
-        }) { Text(stringResource(R.string.remote_terminal_close)) } },
-        dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (browserCloseConfirm) AlertDialog(
         onDismissRequest = { browserCloseConfirm = false },
         title = { Text(stringResource(R.string.browser_discard_title)) },
         text = { Text(stringResource(R.string.browser_discard_body)) },
-        confirmButton = { TextButton(onClick = { browserCloseConfirm = false; browserHasUnsent = false; closeTab(InspectorTab.BROWSER) }) { Text(stringResource(R.string.browser_close)) } },
-        dismissButton = { TextButton(onClick = { browserCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        confirmButton = { TextButton(onClick = { browserCloseConfirm = false; browserHasUnsent = false; closeTab(InspectorTab.BROWSER) }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { browserCloseConfirm = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     if (terminalCloseConfirm) AlertDialog(
         onDismissRequest = { terminalCloseConfirm = false },
@@ -4515,8 +4515,8 @@ internal fun RemoteScreen(
             terminalCloseConfirm = false
             terminalHasUnsent = false
             closeTab(InspectorTab.TERMINAL)
-        }) { Text(stringResource(R.string.remote_terminal_close)) } },
-        dismissButton = { TextButton(onClick = { terminalCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+        }) { Text(stringResource(R.string.remote_view_close)) } },
+        dismissButton = { TextButton(onClick = { terminalCloseConfirm = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
     val hideOfflineLabel = stringResource(R.string.remote_hide_offline_sessions)
     if (tuiInfoOpen && key is RemoteNavKey.Chat && state.session?.optionalText("origin") == "tui")

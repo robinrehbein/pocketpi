@@ -148,7 +148,7 @@ internal fun terminalEnd(reason: String, exitCode: Int?): TerminalEnd = when (re
     "revoked", "ownership" -> TerminalEnd(R.string.remote_terminal_revoked, TerminalEndKind.INFO)
     "idle" -> TerminalEnd(R.string.remote_terminal_idle, TerminalEndKind.INFO)
     "detached", "left" -> TerminalEnd(R.string.remote_terminal_detached, TerminalEndKind.INFO)
-    "offline" -> TerminalEnd(R.string.remote_terminal_offline, TerminalEndKind.RETRY)
+    "offline" -> TerminalEnd(R.string.remote_view_disconnected, TerminalEndKind.RETRY)
     "slow" -> TerminalEnd(R.string.remote_terminal_slow, TerminalEndKind.RETRY)
     "overflow" -> TerminalEnd(R.string.remote_terminal_overflow, TerminalEndKind.RETRY)
     "protocol", "sequence", "resize_failed" -> TerminalEnd(R.string.remote_terminal_connection_problem, TerminalEndKind.RETRY)
@@ -184,6 +184,33 @@ internal fun terminalPendingWrites(
     if (view.holder != null || generation == null) return rendered to pending
     val current = TerminalRenderedAttachment(view.sessionId, generation)
     return if (current == rendered) rendered to pending else current to listOf(TERMINAL_RESET)
+}
+
+/** What the pane keeps once [terminalAttachmentUpdate] saw a view. */
+internal data class TerminalAttachmentUpdate(
+    val attachment: TerminalRenderedAttachment?,
+    val output: List<String>,
+    val input: List<TerminalInput>,
+    /** Queued input was dropped: the pane says some input was not sent. */
+    val inputDropped: Boolean,
+)
+
+/**
+ * The pane's renderer output and queued input once [view] arrives. Both belong to the attachment
+ * they were made for: a new attachment (or none, while attaching) drops the old one's unwritten
+ * output, as [terminalPendingWrites] does, and its queued input too. Input is never replayed into
+ * another attachment, also when the pane never saw the old one end (its activity was stopped
+ * while the connection dropped and the terminal reattached).
+ */
+internal fun terminalAttachmentUpdate(
+    rendered: TerminalRenderedAttachment?,
+    view: TerminalView?,
+    output: List<String>,
+    input: List<TerminalInput>,
+): TerminalAttachmentUpdate {
+    val (attachment, pending) = terminalPendingWrites(rendered, view, output)
+    return if (attachment == rendered) TerminalAttachmentUpdate(rendered, output, input, inputDropped = false)
+    else TerminalAttachmentUpdate(attachment, pending, emptyList(), inputDropped = input.isNotEmpty())
 }
 
 /** Where a pane laid over the chat goes; beside the chat the inspector draws it. */

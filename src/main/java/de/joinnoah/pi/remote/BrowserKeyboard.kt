@@ -54,7 +54,7 @@ internal fun browserRepeatableKey(event: KeyEvent): Boolean = event.keyCode in s
  * sent as one press: a down and an up, admitted together.
  */
 internal val BROWSER_STRIP_KEYS = listOf(
-    "Escape", "Tab", "Enter", "Backspace", "Delete",
+    "Escape", "Tab", "Enter", "Backspace",
     "ArrowLeft", "ArrowUp", "ArrowDown", "ArrowRight",
-    "Home", "End", "PageUp", "PageDown",
+    "Delete", "Home", "End", "PageUp", "PageDown",
 )

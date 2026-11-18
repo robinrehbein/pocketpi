@@ -1,6 +1,15 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.layout.VerticalAlignmentLine
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measured
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -17,24 +26,34 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -47,6 +66,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +86,8 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /*
@@ -78,6 +100,36 @@ import androidx.compose.ui.unit.dp
 /** The gutter of a remote view's bars, the same as [PaneHeader]'s. */
 private val REMOTE_VIEW_GUTTER = 16.dp
 private val REMOTE_VIEW_BAR_PADDING = PaddingValues(horizontal = REMOTE_VIEW_GUTTER, vertical = 4.dp)
+/** A compact pane's bars sit edge to edge: every dp goes to the viewport. */
+private val REMOTE_VIEW_COMPACT_BAR_PADDING = PaddingValues(horizontal = REMOTE_VIEW_GUTTER)
+
+/** The padding of a remote view's bars, tighter in a compact pane. */
+@Composable
+private fun remoteViewBarPadding(): PaddingValues =
+    if (LocalRemoteViewCompact.current) REMOTE_VIEW_COMPACT_BAR_PADDING else REMOTE_VIEW_BAR_PADDING
+
+/**
+ * The height a compact pane keeps for its viewport (about four terminal rows) before anything
+ * else: the bars around it yield first (see docs/testing/android-terminal-compact.md).
+ */
+internal val REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT = 96.dp
+
+/** Below this height a remote view pane is compact (see [LocalRemoteViewCompact]). */
+internal val REMOTE_VIEW_COMPACT_HEIGHT = 400.dp
+
+/** Whether a remote view pane [height] high is compact: a phone in landscape, a small window. */
+internal fun remoteViewCompact(height: Dp): Boolean = height < REMOTE_VIEW_COMPACT_HEIGHT
+
+/**
+ * True inside a compact [RemoteViewPane], one less than [REMOTE_VIEW_COMPACT_HEIGHT] high. There
+ * every pane keeps the viewport as large as it can: the header and the bars lose their padding
+ * above and below (their 48dp controls stay), input bars are single lines (the default of
+ * [RemoteInputBar]), the viewport keeps at least [REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT] while the
+ * bars yield, and a pane leaves out what it can do without (the browser its tab row and an empty
+ * text to send; the address bar and key strip stay). An input on its way shows as the viewport's
+ * busy bar, never as a notice row.
+ */
+internal val LocalRemoteViewCompact = compositionLocalOf { false }
 
 /** A line of status under a remote view's header. [tag] is its test tag. */
 internal sealed interface RemoteViewNotice {
@@ -105,14 +157,14 @@ internal fun RemoteViewNoticeLine(notice: RemoteViewNotice, modifier: Modifier =
     val tagged = if (notice.tag == null) modifier else modifier.testTag(notice.tag!!)
     when (notice) {
         is RemoteViewNotice.Info ->
-            PaneNotice(notice.text, tagged.semantics { liveRegion = LiveRegionMode.Polite }, REMOTE_VIEW_BAR_PADDING)
+            PaneNotice(notice.text, tagged.semantics { liveRegion = LiveRegionMode.Polite }, remoteViewBarPadding())
         is RemoteViewNotice.Failure ->
             PaneFailureNotice(
                 notice.text,
                 notice.retryLabel ?: stringResource(R.string.remote_view_retry),
                 notice.onRetry,
                 tagged,
-                REMOTE_VIEW_BAR_PADDING,
+                remoteViewBarPadding(),
             )
     }
 }
@@ -127,7 +179,11 @@ internal fun RemoteViewNoticeLine(notice: RemoteViewNotice, modifier: Modifier =
  * [tag] prefixes the test tags: `<tag>Pane`, and the header's `<tag>Close`, `<tag>Reload`,
  * `<tag>Back` and `<tag>Title`. With [onBack] the header shows a back arrow beside its close
  * button, and Back and Esc run it instead of [onClose]. A pane that stays composed while another
- * inspector tab shows does not take Back or Esc.
+ * inspector tab shows does not take Back or Esc. With [escapeCloses] false a hardware Esc does
+ * nothing to the pane (nor reaches the chat behind it), while Back still closes it: Esc is a key
+ * of the terminal and of the page, which a habit press must not close.
+ *
+ * The pane provides [LocalRemoteViewCompact] to [content].
  */
 @Composable
 internal fun RemoteViewPane(
@@ -145,32 +201,121 @@ internal fun RemoteViewPane(
     notices: List<RemoteViewNotice> = emptyList(),
     /** False leaves Back and Esc to whatever is under the pane. */
     backEnabled: Boolean = true,
+    escapeCloses: Boolean = true,
     closeLabel: String = stringResource(R.string.remote_view_close),
     reloadLabel: String = stringResource(R.string.remote_view_reload),
     backLabel: String = stringResource(R.string.remote_view_back),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // A terminal or browser tab stays composed while another tab shows; Back is not its to take.
-    PaneBackHandler(enabled = backEnabled && LocalTerminalKeyboardActive.current, onBack = onBack ?: onClose)
+    PaneBackHandler(enabled = backEnabled && LocalTerminalKeyboardActive.current, escapeCloses = escapeCloses, onBack = onBack ?: onClose)
     // The page background, as the other panes have. A Surface also keeps taps off the chat under it.
     Surface(modifier.fillMaxSize().testTag("${tag}Pane"), color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            PaneHeader(
-                title = title,
-                subtitle = subtitle,
-                nested = onBack != null,
-                busy = busy,
-                tag = tag,
-                backLabel = backLabel,
-                closeLabel = closeLabel,
-                reloadLabel = reloadLabel,
-                onBack = onBack ?: onClose,
-                onClose = onClose,
-                onReload = onReload,
-                actions = actions,
-            )
-            notices.forEach { RemoteViewNoticeLine(it) }
-            content()
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val compact = remoteViewCompact(maxHeight)
+            CompositionLocalProvider(LocalRemoteViewCompact provides compact) {
+                RemoteViewColumn(
+                    Modifier.fillMaxSize().remoteViewInsetsPadding(),
+                    viewportMinHeight = if (compact) REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT else 0.dp,
+                ) {
+                    PaneHeader(
+                        title = title,
+                        subtitle = subtitle,
+                        nested = onBack != null,
+                        busy = busy,
+                        tag = tag,
+                        backLabel = backLabel,
+                        closeLabel = closeLabel,
+                        reloadLabel = reloadLabel,
+                        onBack = onBack ?: onClose,
+                        onClose = onClose,
+                        onReload = onReload,
+                        actions = actions,
+                        compact = compact,
+                    )
+                    notices.forEach { RemoteViewNoticeLine(it) }
+                    content()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Pads by the part of the safe drawing insets (system bars, cutout, keyboard) that overlaps this
+ * layout in its window. A pane over the whole screen keeps clear of all of them; one that ends
+ * above the navigation bar or the keyboard (a parent made room already, or a test host draws it
+ * in a smaller box) loses no height to them.
+ */
+@Composable
+private fun Modifier.remoteViewInsetsPadding(): Modifier {
+    val insets = WindowInsets.safeDrawing
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    // The layout's bounds and the size of the root it lies in, which fills the window.
+    var bounds by remember { mutableStateOf<Pair<androidx.compose.ui.geometry.Rect, androidx.compose.ui.unit.IntSize>?>(null) }
+    val known = bounds?.first
+    val window = bounds?.second ?: androidx.compose.ui.unit.IntSize.Zero
+    val (left, right) = insets.getLeft(density, direction) to insets.getRight(density, direction)
+    val top = insets.getTop(density); val bottom = insets.getBottom(density)
+    val padding = with(density) {
+        if (known == null || window.width <= 0 || window.height <= 0)
+            PaddingValues.Absolute(left.toDp(), top.toDp(), right.toDp(), bottom.toDp())
+        else PaddingValues.Absolute(
+            left = (left - known.left).coerceAtLeast(0f).toDp(),
+            top = (top - known.top).coerceAtLeast(0f).toDp(),
+            right = (right - (window.width - known.right)).coerceAtLeast(0f).toDp(),
+            bottom = (bottom - (window.height - known.bottom)).coerceAtLeast(0f).toDp(),
+        )
+    }
+    // The bounds are the layout's own, outside its padding, so the padding cannot move them.
+    return onGloballyPositioned { bounds = it.boundsInRoot() to it.findRootCoordinates().size }.padding(padding)
+}
+
+private object RemoteViewportSlot
+
+/** [ColumnScope] of [RemoteViewColumn]: a weight marks the viewport; alignment is the start. */
+private object RemoteViewColumnScope : ColumnScope {
+    override fun Modifier.weight(weight: Float, fill: Boolean): Modifier = layoutId(RemoteViewportSlot)
+    override fun Modifier.align(alignment: Alignment.Horizontal): Modifier = this
+    override fun Modifier.alignBy(alignmentLine: VerticalAlignmentLine): Modifier = this
+    override fun Modifier.alignBy(alignmentLineBlock: (Measured) -> Int): Modifier = this
+}
+
+/**
+ * A column like [Column] whose weighted children (the viewport) share what the others leave,
+ * but keep at least [viewportMinHeight]: the other children, measured top to bottom, get only
+ * the height above that floor, so they yield before the viewport does.
+ */
+@Composable
+private fun RemoteViewColumn(modifier: Modifier, viewportMinHeight: Dp, content: @Composable ColumnScope.() -> Unit) {
+    Layout(content = { RemoteViewColumnScope.content() }, modifier = modifier) { measurables, constraints ->
+        val total = if (constraints.hasBoundedHeight) constraints.maxHeight else Constraints.Infinity
+        val weighted = measurables.count { it.layoutId === RemoteViewportSlot }
+        val floor = if (weighted > 0) viewportMinHeight.roundToPx() else 0
+        var used = 0
+        val placeables = arrayOfNulls<androidx.compose.ui.layout.Placeable>(measurables.size)
+        measurables.forEachIndexed { index, child ->
+            if (child.layoutId === RemoteViewportSlot) return@forEachIndexed
+            val room = if (total == Constraints.Infinity) Constraints.Infinity else (total - used - floor).coerceAtLeast(0)
+            val placeable = child.measure(Constraints(maxWidth = constraints.maxWidth, maxHeight = room))
+            placeables[index] = placeable
+            used += placeable.height
+        }
+        val left = if (total == Constraints.Infinity) floor else (total - used).coerceAtLeast(0)
+        var shared = 0
+        var seen = 0
+        measurables.forEachIndexed { index, child ->
+            if (child.layoutId !== RemoteViewportSlot) return@forEachIndexed
+            seen++
+            val height = if (seen == weighted) left - shared else left / weighted
+            shared += height
+            placeables[index] = child.measure(Constraints(minWidth = 0, maxWidth = constraints.maxWidth, minHeight = height, maxHeight = height))
+        }
+        val height = if (total == Constraints.Infinity) used + left else total
+        layout(constraints.maxWidth, height) {
+            var y = 0
+            placeables.forEach { placeable -> placeable?.let { it.placeRelative(0, y); y += it.height } }
         }
     }
 }
@@ -193,7 +338,10 @@ internal data class RemoteViewPlaceholder(val label: String, val busy: Boolean =
  * the focus, key and pointer modifiers of the view. [content] stays composed under a
  * [placeholder], which covers it and lets pointer input through to [modifier].
  *
- * Test tags: [tag], and `<tag>Placeholder`.
+ * While [busy] (an input of this device is on its way) a thin progress bar runs along its top
+ * edge; TalkBack calls it [busyLabel]. A pane shows no other "sending" state.
+ *
+ * Test tags: [tag], `<tag>Placeholder` and `<tag>Busy`.
  */
 @Composable
 internal fun RemoteViewport(
@@ -202,11 +350,18 @@ internal fun RemoteViewport(
     placeholder: RemoteViewPlaceholder? = null,
     color: Color = RemoteViewportDefaults.Background,
     contentColor: Color = RemoteViewportDefaults.Content,
+    busy: Boolean = false,
+    busyLabel: String = stringResource(R.string.remote_view_sending),
     content: @Composable BoxScope.() -> Unit = {},
 ) {
     Box(modifier.testTag(tag).background(color), contentAlignment = Alignment.Center) {
         CompositionLocalProvider(LocalContentColor provides contentColor) {
             content()
+            if (busy)
+                LinearProgressIndicator(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth().height(2.dp).testTag("${tag}Busy")
+                        .semantics { contentDescription = busyLabel },
+                )
             if (placeholder != null)
                 Column(
                     Modifier.matchParentSize().background(color).padding(24.dp).testTag("${tag}Placeholder"),
@@ -237,6 +392,14 @@ internal enum class RemoteControlState {
     HELD,
 }
 
+/**
+ * A participant of a shared view (browser, preview, emulator) as the panes name it: what it is,
+ * and the end of its opaque [id] to tell two apart, such as "Pi agent 4f2a91".
+ */
+@Composable
+internal fun remoteParticipantLabel(kind: String, id: String): String =
+    stringResource(if (kind == "agent") R.string.remote_view_participant_agent else R.string.remote_view_participant_device, id.takeLast(6))
+
 /** A participant control can be handed to; [label] is what the list shows for [id]. */
 internal data class RemoteControlTarget(val id: String, val label: String)
 
@@ -249,7 +412,8 @@ internal data class RemoteControlTarget(val id: String, val label: String)
  * and [onRelease] and the [handoffTargets] list (calling [onHandOff] with an id) while it has.
  * [enabled] false greys them out, while a request is on its way.
  *
- * The terminal's takeover is `state = HELD, label = <held by Mac>, takeLabel = <Take over>`.
+ * The terminal says who holds it the same way, `state = HELD, holder = <the Mac>`; its take
+ * action asks for a confirmation first.
  *
  * Test tags: `<tag>ControlBar`, `<tag>ControlState`, `<tag>Acquire`, `<tag>Release`,
  * `<tag>Handoff` and `<tag>Handoff_<id>`.
@@ -287,7 +451,7 @@ internal fun RemoteControlBar(
     val release = onRelease.takeIf { controlling }
     val targets = handoffTargets.takeIf { controlling }.orEmpty()
     val hasActions = take != null || release != null || targets.isNotEmpty()
-    BoxWithConstraints(modifier.fillMaxWidth().padding(REMOTE_VIEW_BAR_PADDING)) {
+    BoxWithConstraints(modifier.fillMaxWidth().padding(remoteViewBarPadding())) {
         // Beside the state where both fit; under it on a narrow pane or with enlarged fonts.
         val stacked = hasActions && maxWidth < 360.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
         val stateLine: @Composable (Modifier) -> Unit = { lineModifier ->
@@ -371,7 +535,7 @@ internal fun RemoteKeyStrip(
     tag: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    contentPadding: PaddingValues = REMOTE_VIEW_BAR_PADDING,
+    contentPadding: PaddingValues = remoteViewBarPadding(),
 ) {
     Row(
         modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(contentPadding).testTag("${tag}Keys"),
@@ -382,33 +546,120 @@ internal fun RemoteKeyStrip(
     }
 }
 
+/**
+ * The glass chip of the remote views' strips: a key of a [RemoteKeyStrip] or a tab of a
+ * [RemoteTabStrip]. [selected] colours it as chosen; [behaviour] makes it clickable, toggleable or
+ * selectable. At least 48dp wide and high, it grows with its content.
+ */
 @Composable
-private fun RemoteKeyChip(key: RemoteKey, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
+private fun RemoteChip(
+    selected: Boolean,
+    enabled: Boolean,
+    behaviour: Modifier,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
-    val selected = key.selected
-    val color = if (selected == true) scheme.secondaryContainer else scheme.surfaceContainer
-    val contentColor = (if (selected == true) scheme.onSecondaryContainer else scheme.onSurface).copy(alpha = if (enabled) 1f else 0.38f)
-    val shape = MaterialTheme.shapes.small
-    val interaction = remember { MutableInteractionSource() }
+    val color = if (selected) scheme.secondaryContainer else scheme.surfaceContainer
+    val contentColor = (if (selected) scheme.onSecondaryContainer else scheme.onSurface).copy(alpha = if (enabled) 1f else 0.38f)
     // The chips sit in a scrolling row, which would cut a shadow: the rim alone, as in the composer.
-    FloatingSurface(shape = shape, color = color, contentColor = contentColor, blur = false, shadowElevation = 0.dp) {
+    FloatingSurface(modifier, shape = MaterialTheme.shapes.small, color = color, contentColor = contentColor, blur = false, shadowElevation = 0.dp) {
         Row(
-            modifier
-                .then(
-                    if (selected != null)
-                        Modifier.toggleable(selected, interaction, ripple(), enabled, Role.Switch) { onClick() }
-                    else Modifier.clickable(interaction, ripple(), enabled, role = Role.Button, onClick = onClick)
-                )
-                .semantics { contentDescription = key.description }
-                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+            behaviour.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (key.icon != null) Icon(key.icon, null, Modifier.size(18.dp))
-            // The chip speaks its description; the label is what it shows.
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun RemoteKeyChip(key: RemoteKey, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    val selected = key.selected
+    val interaction = remember { MutableInteractionSource() }
+    RemoteChip(
+        selected = selected == true,
+        enabled = enabled,
+        behaviour = modifier
+            .then(
+                if (selected != null)
+                    Modifier.toggleable(selected, interaction, ripple(), enabled, Role.Switch) { onClick() }
+                else Modifier.clickable(interaction, ripple(), enabled, role = Role.Button, onClick = onClick)
+            )
+            .semantics { contentDescription = key.description },
+    ) {
+        if (key.icon != null) Icon(key.icon, null, Modifier.size(18.dp))
+        // The chip speaks its description; the label is what it shows. An icon chip has none.
+        if (key.label.isNotEmpty())
             Text(key.label, Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false)
+    }
+}
+
+/** The ids a pane sends for the navigation keys of [remoteNavigationKeys]. */
+internal data class RemoteNavigationIds(val backspace: String, val left: String, val up: String, val down: String, val right: String) {
+    companion object {
+        /** The browser's and the emulator's: DOM key names. */
+        val DOM = RemoteNavigationIds("Backspace", "ArrowLeft", "ArrowUp", "ArrowDown", "ArrowRight")
+
+        /** The terminal's key names. */
+        val TERMINAL = RemoteNavigationIds("backspace", "left", "up", "down", "right")
+    }
+}
+
+/**
+ * Backspace and the arrow keys, the same in every remote view: Backspace, then ← ↑ ↓ →, each an
+ * icon chip with its spoken name.
+ */
+@Composable
+internal fun remoteNavigationKeys(ids: RemoteNavigationIds = RemoteNavigationIds.DOM): List<RemoteKey> = listOf(
+    RemoteKey(ids.backspace, "", stringResource(R.string.remote_view_key_backspace_description), icon = Icons.AutoMirrored.Filled.Backspace),
+    RemoteKey(ids.left, "", stringResource(R.string.remote_view_key_left_description), icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft),
+    RemoteKey(ids.up, "", stringResource(R.string.remote_view_key_up_description), icon = Icons.Default.KeyboardArrowUp),
+    RemoteKey(ids.down, "", stringResource(R.string.remote_view_key_down_description), icon = Icons.Default.KeyboardArrowDown),
+    RemoteKey(ids.right, "", stringResource(R.string.remote_view_key_right_description), icon = Icons.AutoMirrored.Filled.KeyboardArrowRight),
+)
+
+/** A tab of a [RemoteTabStrip]. [closeLabel], when set, is the spoken name of its close button. */
+internal data class RemoteTab(val id: String, val label: String, val selected: Boolean, val closeLabel: String? = null)
+
+/**
+ * A row of tabs as glass chips that scrolls sideways, with the bars' padding. The selected tab
+ * has the selected chip colour and TalkBack's tab semantics; a tab with a [RemoteTab.closeLabel]
+ * has a 48dp close button beside it. [trailing] follows the tabs, such as a new tab button.
+ * [enabled] false disables selecting and closing.
+ *
+ * Test tags: `<tag>Tabs`, `<tag>Tab_<id>` per tab and `<tag>TabClose_<id>` per close button.
+ */
+@Composable
+internal fun RemoteTabStrip(
+    tabs: List<RemoteTab>,
+    onSelect: (String) -> Unit,
+    tag: String,
+    modifier: Modifier = Modifier,
+    onClose: (String) -> Unit = {},
+    enabled: Boolean = true,
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
+    Row(
+        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(remoteViewBarPadding()).testTag("${tag}Tabs"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tabs.forEach { tab ->
+            RemoteChip(
+                selected = tab.selected,
+                enabled = enabled,
+                behaviour = Modifier.selectable(tab.selected, enabled = enabled, role = Role.Tab) { onSelect(tab.id) }.testTag("${tag}Tab_${tab.id}"),
+            ) {
+                Text(tab.label, Modifier.widthIn(max = 220.dp), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            val closeLabel = tab.closeLabel
+            if (closeLabel != null)
+                IconButton(onClick = { onClose(tab.id) }, Modifier.size(48.dp).testTag("${tag}TabClose_${tab.id}"), enabled = enabled) {
+                    Icon(Icons.Default.Close, closeLabel, Modifier.size(18.dp))
+                }
         }
+        trailing()
     }
 }
 
@@ -416,7 +667,7 @@ private fun RemoteKeyChip(key: RemoteKey, enabled: Boolean, onClick: () -> Unit,
  * A glass text field with a send button, for the text a remote view types on the host.
  *
  * [maxLines] 1 makes it a single line whose keyboard action sends; more lets it grow to that many
- * lines, where the keyboard's Enter is a line break unless [keyboardOptions] says otherwise. Any
+ * lines (by default 3, and 1 in a compact pane, see [LocalRemoteViewCompact]), where the keyboard's Enter is a line break unless [keyboardOptions] says otherwise. Any
  * keyboard action calls [onSend] while [sendEnabled]. [fieldModifier] goes on the field itself,
  * for key handling and focus. [actions] are buttons before the send button, in its pill.
  *
@@ -436,13 +687,13 @@ internal fun RemoteInputBar(
     sendLabel: String = stringResource(R.string.remote_view_send),
     sendIcon: ImageVector = Icons.AutoMirrored.Filled.Send,
     sendTag: String = "${tag}Send",
-    maxLines: Int = 3,
+    maxLines: Int = if (LocalRemoteViewCompact.current) 1 else 3,
     keyboardOptions: KeyboardOptions = KeyboardOptions(imeAction = if (maxLines == 1) ImeAction.Send else ImeAction.Default),
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val send = { if (sendEnabled) onSend() }
     Row(
-        modifier.fillMaxWidth().padding(REMOTE_VIEW_BAR_PADDING),
+        modifier.fillMaxWidth().padding(remoteViewBarPadding()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {

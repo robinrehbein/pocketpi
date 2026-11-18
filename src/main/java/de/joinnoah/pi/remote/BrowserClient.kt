@@ -72,7 +72,10 @@ internal class BrowserClient(
     // Set when the pane is hidden while this device holds control: hiding releases control, and
     // showing the pane again takes it back once, unless someone else took it meanwhile.
     // [lostOwner] is this device's identity as the Host showed it, which a refresh may still
-    // report until the release lands. A handoff, close, disconnect or failure clears it.
+    // report until the release lands. A handoff, close, disconnect, failure, document change or
+    // [dropControl] clears it, and so does the first refresh after showing that has no release in
+    // flight, whether it took control or not: a much later sync never takes control on its own.
+    // An uncertain input outcome never arms it, so its notice stays until the user acts.
     private var reacquire = false
     private var lostOwner: BrowserOwner? = null
     // Consecutive automatic re-watches of a stalled stream; a full frame resets it.
@@ -174,9 +177,22 @@ internal class BrowserClient(
         if (!value) {
             // Hidden, the pane releases control so Pi or another device can use the browser. An input
             // whose outcome is still open is never followed by an automatic re-acquire.
-            if (lease != null) { reacquire = view?.inputPending != true; lostOwner = view?.owner }
-            if (view?.opening != true) { token++; resetPending() }; dropStream(); detach(); view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null)) }
+            if (lease != null) { reacquire = view?.inputPending != true && view?.notice != BrowserNotice.UNCERTAIN; lostOwner = view?.owner }
+            giveUpControl()
         } else { watch(); if (reacquire) refresh() }
+    }
+    private fun giveUpControl() {
+        if (view?.opening != true) { token++; resetPending() }; dropStream(); detach(); view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null)) }
+    }
+    /**
+     * The pane's fail-safe while a key or button is held and an input was refused, or the viewport
+     * changed under it: gives up control at once, as hiding does, and keeps watching, but never
+     * takes control back on its own; the user takes it again.
+     */
+    fun dropControl() {
+        reacquire = false; lostOwner = null
+        giveUpControl()
+        watch()
     }
     private fun reacquireIfFree(owner: BrowserOwner?) {
         if (!reacquire || view?.opening == true) return
@@ -185,6 +201,9 @@ internal class BrowserClient(
         if (!visible) return
         // While the release is in flight acquire() refuses; the refresh after the release asks again.
         if (owner == null) { if (acquire(automatic = true)) reacquire = false } else if (owner != lostOwner) reacquire = false
+        // Only the refresh that showing started, or the one after the release still in flight, may
+        // take control back; a refresh after that is a sync like any other.
+        if (releaseInFlight == 0) reacquire = false
     }
     // [automatic] is the re-acquire of a pane shown again: a Busy reply then shows no notice, since
     // the user did not ask.
@@ -200,7 +219,7 @@ internal class BrowserClient(
                         val self = r.owner.kind == "device"
                         if (valid(t, v.sessionId, c) && r.browserId == b && self && visible && r.generation >= (view?.generation ?: 0)) {
                             interruptedInput = false; reacquire = false
-                            lease = r.leaseId; sequence = -1L; confirmedNextSequence = 0L; resizeApplied = null; dropStream(); set(view?.copy(generation = r.generation, viewportRevision = r.viewportRevision, owner = r.owner, ownsControl = true, notice = null, image = null)); watch()
+                            lease = r.leaseId; sequence = -1L; confirmedNextSequence = 0L; resizeApplied = null; dropStream(); set(view?.copy(generation = r.generation, viewportRevision = r.viewportRevision, owner = r.owner, ownsControl = true, notice = view?.notice?.takeIf { automatic && it == BrowserNotice.UNCERTAIN }, image = null)); watch()
                         } else if (self && r.browserId == b && connectionAlive(c)) {
                             release(v.copy(generation = r.generation), r.leaseId, c, t)
                         }
@@ -274,7 +293,9 @@ internal class BrowserClient(
     }
     fun input(input: BrowserInput): Boolean {
         val v = view ?: return false; if (v.inputPending || sequence >= 9007199254740991L) return false
-        if ((v.moving || stalled) && input !is BrowserInput.Wheel && !(input is BrowserInput.Pointer && input.action == "up") && !(input is BrowserInput.Key && input.action == "up")) return false
+        val release = (input is BrowserInput.Pointer && input.action == "up") || (input is BrowserInput.Key && input.action == "up")
+        // While the page moves a wheel still scrolls it; while a stall is recovered only releases go out.
+        if (!release && (stalled || (v.moving && input !is BrowserInput.Wheel))) return false
         val next = sequence + 1
         sequence = next
         set(v.copy(inputPending = true, receipt = null))
@@ -388,11 +409,14 @@ internal class BrowserClient(
         val v = view ?: return
         if (!current(v.sessionId, connection) || event.sessionId != v.sessionId || event.browserId != v.browserId || event.incarnation != v.incarnation || event.tabId != v.selectedTabId || event.generation != v.generation || event.revision <= v.viewportRevision) return
         if (event.fromRevision > v.viewportRevision) {
+            reacquire = false
             token++; metadataEpoch++; refreshPending = false; refreshAgain = false; resizeApplied = null; resizeNext = null
             dropStream(); detach(refreshAfter = false)
             set(v.copy(ownsControl = false, inputPending = false, receipt = null, image = null, moving = false, documentEpoch = v.documentEpoch + 1, notice = BrowserNotice.UNCERTAIN))
             return
         }
+        // A new document ends the chance to take control back on showing (see [reacquire]).
+        reacquire = false
         val knownLease = lease
         val continuity = knownLease != null && event.leaseId == knownLease && event.nextSequence != null && event.nextSequence >= confirmedNextSequence
         token++; metadataEpoch++; refreshPending = false; refreshAgain = false; resizeApplied = null; resizeNext = null

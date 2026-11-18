@@ -9,6 +9,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.Box
@@ -97,7 +101,7 @@ class BrowserPaneTest {
         val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = image())
         compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { pending.await() }) } }
         compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
-        compose.onNodeWithText("Could not display the browser image.").assertDoesNotExist()
+        compose.onNodeWithText("The picture could not be shown.").assertDoesNotExist()
         compose.runOnIdle { pending.complete(Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)) }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
     }
@@ -108,7 +112,7 @@ class BrowserPaneTest {
         compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { pending.await() }) } }
         compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
         compose.runOnIdle { pending.complete(null) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("The picture could not be shown.").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
     }
 
@@ -126,7 +130,7 @@ class BrowserPaneTest {
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
         unused.recycle()
         compose.runOnIdle { second.complete(null) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("The picture could not be shown.").fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test fun newGenerationHidesPreviouslyDecodedImageWhileNextFrameWaits() {
@@ -171,7 +175,7 @@ class BrowserPaneTest {
         compose.onNodeWithText("Waiting for the first frame…").assertDoesNotExist()
         compose.onNodeWithTag("browserSendText").assertIsEnabled()
         compose.runOnIdle { next.complete(null) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("The picture could not be shown.").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
         compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
     }
@@ -675,6 +679,99 @@ class BrowserPaneTest {
         compose.runOnIdle { view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, notice = BrowserNotice.FRAME_FAILED) }
         compose.onNodeWithText("Try again").performClick()
         compose.runOnIdle { assertEquals(1, refreshed) }
+    }
+
+    @Test fun aRefusedInputWhileAButtonIsHeldDropsControlWithoutHidingThePane() {
+        val sent = mutableListOf<BrowserInput>(); val visible = mutableListOf<Boolean>(); var drops = 0
+        val state = mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        compose.setContent { MaterialTheme { BrowserPane(state.value, BrowserPaneActions(
+            input = {
+                if (sent.isNotEmpty()) false
+                else { sent.add(it); state.value = state.value.copy(receipt = BrowserInputReceipt(1, "accepted")); true }
+            },
+            visible = { visible += it }, dropControl = { drops++ },
+        ), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserViewport").performMouseInput { moveTo(center); press() }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 1 } }
+        compose.onNodeWithTag("browserViewport").performMouseInput { moveBy(Offset(20f, 0f)) }
+        compose.waitUntil(5_000) { compose.runOnIdle { drops == 1 } }
+        // The drop is not a hide and show, which would take control back on its own.
+        compose.runOnIdle { assertEquals(listOf(true), visible) }
+    }
+
+    @Test fun tabsAreSelectableGlassChipsWithAFortyEightDpClose() {
+        val selected = mutableListOf<String>(); val closed = mutableListOf<String>()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1,
+            tabs = listOf(BrowserTab("t1", "First", "https://a.example"), BrowserTab("t2", "", "https://b.example")), selectedTabId = "t1"))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(selectTab = { selected += it }, closeTab = { closed += it; true }), {}) } }
+        compose.onNodeWithTag("browserTab_t1").assertIsSelected().assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+        compose.onNodeWithTag("browserTab_t2").assertIsNotSelected().assertTextEquals("https://b.example").performClick()
+        compose.onNodeWithTag("browserTabClose_t1").assertContentDescriptionEquals("Close tab First").assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
+        compose.runOnIdle { assertEquals(listOf("t2"), selected); assertEquals(listOf("t1"), closed) }
+        // Without control a tab can still be watched, but not closed.
+        compose.runOnIdle { view = view.copy(ownsControl = false) }
+        compose.onNodeWithTag("browserTabClose_t1").assertDoesNotExist()
+        compose.onNodeWithTag("browserTab_t1").assertExists()
+    }
+
+    @Test fun aCompactPaneLeavesOutTheTabRowAndAnEmptyTextBar() {
+        var height by mutableStateOf(360.dp)
+        compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(height)) {
+            BrowserPane(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1,
+                tabs = listOf(BrowserTab("t1", "First", "https://a.example")), selectedTabId = "t1"), BrowserPaneActions(), {})
+        } } }
+        compose.onNodeWithTag("browserTabs").assertDoesNotExist()
+        compose.onNodeWithTag("browserText").assertDoesNotExist()
+        compose.onNodeWithTag("browserAddress").assertExists()
+        compose.onNodeWithTag("browserKeys").assertExists()
+        compose.runOnIdle { height = 700.dp }
+        compose.onNodeWithTag("browserTabs").assertExists()
+        compose.onNodeWithTag("browserText").assertExists()
+    }
+
+    /** A controlling pane in a box [height] high, whose resize the Host applies at once. */
+    private fun showResizable(sent: MutableList<BrowserInput>, resizes: MutableList<Int>, height: MutableState<Int>): MutableState<BrowserView> {
+        val state = mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(height.value.dp)) { BrowserPane(state.value, BrowserPaneActions(
+            resize = { _, h, _, _ ->
+                resizes += h
+                val revision = state.value.viewportRevision + 1
+                state.value = state.value.copy(viewportRevision = revision, image = state.value.image?.copy(viewportRevision = revision))
+                true
+            },
+            input = { sent.add(it); state.value = state.value.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted")); true },
+        ), {}) } } }
+        compose.waitUntil(10_000) { compose.runOnIdle { resizes.isNotEmpty() } }
+        // The resize replaced the frame: wait for the new one to be decoded.
+        compose.waitForIdle()
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        return state
+    }
+
+    @Test fun theViewportDoesNotResizeUnderAFingerSoTheTapIsNotRefused() {
+        val sent = mutableListOf<BrowserInput>(); val resizes = mutableListOf<Int>(); val height = mutableStateOf(700)
+        showResizable(sent, resizes, height)
+        // The finger goes down; the soft keyboard hides and the viewport grows meanwhile.
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center) }
+        compose.runOnIdle { height.value = 600 }
+        settle()
+        compose.runOnIdle { assertEquals("no resize under the finger", 1, resizes.size) }
+        compose.onNodeWithTag("browserViewport").performTouchInput { up() }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.count { it is BrowserInput.Pointer } == 2 } }
+        compose.waitUntil(5_000) { compose.runOnIdle { resizes.size == 2 } }
+        compose.runOnIdle { assertEquals(listOf("down", "up"), sent.map { (it as BrowserInput.Pointer).action }) }
+    }
+
+    @Test fun aCancelledFingerGestureEndsSoTheViewportResizesAgain() {
+        val sent = mutableListOf<BrowserInput>(); val resizes = mutableListOf<Int>(); val height = mutableStateOf(700)
+        showResizable(sent, resizes, height)
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); cancel() }
+        compose.runOnIdle { height.value = 600 }
+        settle()
+        // The cancel reached the touch handling: the gesture ended, nothing was clicked.
+        compose.waitUntil(5_000) { compose.runOnIdle { resizes.size == 2 } }
+        compose.runOnIdle { assertTrue(sent.none { it is BrowserInput.Pointer }) }
     }
 
     @Test fun typingADraftReportsUnsentInput() {

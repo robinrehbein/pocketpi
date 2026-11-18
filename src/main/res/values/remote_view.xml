@@ -10,8 +10,6 @@
     <string name="remote_view_opening">Opening…</string>
     <string name="remote_view_waiting">Waiting for the first frame…</string>
     <string name="remote_view_empty">Nothing to show yet.</string>
-    <!-- Notices under the header. -->
-    <string name="remote_view_reconnecting">Reconnecting…</string>
     <string name="remote_view_disconnected">Disconnected.</string>
     <string name="remote_view_failed">The request failed.</string>
     <!-- Who controls a shared view. -->
@@ -51,4 +49,18 @@
     <string name="remote_view_key_page_up_description">Page up</string>
     <string name="remote_view_key_page_down_description">Page down</string>
     <string name="remote_view_key_android_home_description">Home screen</string>
+    <!-- The thin bar over the viewport while an input is on its way; TalkBack says it. -->
+    <string name="remote_view_sending">Sending input…</string>
+    <!-- Placeholder in the viewport where a picture failed, or the stream stopped. -->
+    <string name="remote_view_frame_failed">The picture could not be shown.</string>
+    <!-- Notice: the stream of pictures stopped and is not recovered automatically any more. -->
+    <string name="remote_view_stream_failed">The picture stopped updating.</string>
+    <!-- Header action: fetches who has control, the participants (and the browser's tabs) again. It reloads nothing. -->
+    <string name="remote_view_update_status">Update status</string>
+    <!-- A participant of a shared view. %1$s is the end of its opaque ID, to tell several apart. -->
+    <string name="remote_view_participant_agent">Pi agent %1$s</string>
+    <string name="remote_view_participant_device">Device %1$s</string>
+    <!-- Who holds a terminal, in "Control held by %1$s". -->
+    <string name="remote_view_holder_mac">the Mac</string>
+    <string name="remote_view_holder_phone">another phone</string>
 </resources>

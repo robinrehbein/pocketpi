@@ -647,7 +647,7 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
-            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
     override fun canOpenBrowser(): Boolean = browserOpenable(state.value, capabilityRevision(capabilityRoute))
@@ -663,6 +663,7 @@ class DefaultRemoteRepository(
     override fun sendBrowserInput(input: BrowserInput) = browserClient.input(input)
     override fun refreshBrowser() = browserClient.refresh()
     override fun setBrowserVisible(visible: Boolean) = browserClient.setVisible(visible)
+    override fun dropBrowserControl() = browserClient.dropControl()
     private val previewClient by lazy {
         BrowserClient(scope,
             { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
@@ -674,10 +675,10 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
-            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
-    override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
+    override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
     override fun openPreview(port: Int): Boolean = canOpenPreview() && port in 1..65535 && previewClient.open(requireNotNull(state.value.selection.sessionId), generation, port)
     override fun closePreview() = previewClient.close()
     override fun acquirePreview() = previewClient.acquire()
@@ -690,6 +691,7 @@ class DefaultRemoteRepository(
     override fun sendPreviewInput(input: BrowserInput) = previewClient.input(input)
     override fun refreshPreview() = previewClient.refresh()
     override fun setPreviewVisible(visible: Boolean) = previewClient.setVisible(visible)
+    override fun dropPreviewControl() = previewClient.dropControl()
     private val detailsAuthority = QuestionDetailsAuthority()
     private var detailsQuestion: JsonObject? = null
     private var editorAuthorityGeneration = 0L
@@ -6340,6 +6342,10 @@ class DefaultRemoteRepository(
         if (!state.value.loading) syncFocus()
         // After the tier: a reconnect it starts lists the jobs once ready, so this one does not.
         jobsController.setForeground(true)
+        // A terminal resume that a reconnect in the background kept armed (see [resumeTerminal]);
+        // a reconnect the tier started runs it from its own restore instead.
+        if (terminalResumeSize != null && !state.value.loading && canAttachTerminal())
+            state.value.selection.sessionId?.let(::resumeTerminal)
     }
 
     override fun pushWake(routeId: String) {
@@ -11602,9 +11608,14 @@ class DefaultRemoteRepository(
      * ended, if its pane is still open (closing it detaches, which clears the resume). The host
      * replays its bounded tail on attach; input queued or in flight at the disconnect stays dropped,
      * as the new attachment starts its own input sequence.
+     *
+     * In the background (a push wake reconnects there) the resume stays armed until the app is in
+     * front again ([setForeground]): the pane sees no state while its activity is stopped, so it
+     * could not tell its queued input from the new attachment's.
      */
     private fun resumeTerminal(session: String) {
         val size = terminalResumeSize ?: return
+        if (inBackground) return
         terminalResumeSize = null
         val view = state.value.terminal
         if (view?.sessionId != session || view.ended != "offline") return

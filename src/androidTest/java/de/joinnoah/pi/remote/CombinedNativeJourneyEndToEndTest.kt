@@ -929,7 +929,7 @@ class CombinedNativeJourneyEndToEndTest {
             // The Host starts the target AVD on the first open; its own startup limit is 120 s.
             compose.waitUntil(180_000) { repository.state.value.emulator?.let { !it.opening && it.profileId == profileId && it.emulatorId != null && it.image != null } == true }
             assertFalse("Opening joins as a reader", requireNotNull(repository.state.value.emulator).ownsControl)
-            compose.onNodeWithTag("emulatorAcquire").performScrollTo().performClick()
+            compose.onNodeWithTag("emulatorAcquire").performClick()
             compose.waitUntil(60_000) { repository.state.value.emulator?.let { it.ownsControl && it.image?.revision == it.geometry?.revision } == true }
             // Settings first, so the home activity afterwards can only come from the Home input.
             action("emulator-prepare-home")

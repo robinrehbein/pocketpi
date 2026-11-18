@@ -163,7 +163,7 @@ class TerminalUiPolicyTest {
         assertEquals(R.string.remote_terminal_connection_problem, end("resize_failed").text)
         assertEquals(R.string.remote_terminal_input_failed, end("input_failed").text)
         assertEquals(R.string.remote_terminal_failed, end("failed").text)
-        assertEquals(R.string.remote_terminal_offline, end("offline").text)
+        assertEquals(R.string.remote_view_disconnected, end("offline").text)
         assertEquals(R.string.remote_terminal_revoked, end("ownership").text)
         assertEquals(R.string.remote_terminal_detached, end("left").text)
         assertEquals(R.string.remote_terminal_stopped, end("something new").text)
@@ -183,6 +183,26 @@ class TerminalUiPolicyTest {
         assertTrue(terminalOpenAttaches(open = true, view = live.copy(ended = "exit", exitCode = 0)))
         assertTrue(terminalOpenAttaches(open = true, view = live.copy(ended = "offline")))
         assertFalse(terminalOpenAttaches(open = true, view = live.copy(ended = "forbidden")))
+    }
+
+    @Test fun queuedInputNeverGoesIntoANewAttachmentEvenWhenThePaneMissedTheOldOneEnding() {
+        // Send was [Text, Enter]; Enter is still queued when the app goes to the background.
+        val old = TerminalView("s", attaching = false, generation = 3)
+        val rendered = TerminalRenderedAttachment("s", 3)
+        val queued = listOf<TerminalInput>(TerminalInput.Key("enter"))
+        // Back in front, the first state the pane sees is the live reattachment: never the end.
+        val reattached = terminalAttachmentUpdate(rendered, old.copy(generation = 4), listOf("tail"), queued)
+        assertEquals(TerminalRenderedAttachment("s", 4), reattached.attachment)
+        assertEquals(emptyList<TerminalInput>(), reattached.input)
+        assertTrue("the pane says input was not sent", reattached.inputDropped)
+        assertEquals(listOf(TERMINAL_RESET), reattached.output)
+        // Attaching again (no attachment yet) drops it as well.
+        val attaching = terminalAttachmentUpdate(rendered, TerminalView("s"), emptyList(), queued)
+        assertTrue(attaching.inputDropped)
+        assertEquals(emptyList<TerminalInput>(), attaching.input)
+        // The same attachment keeps its queue; an empty queue drops nothing to report.
+        assertEquals(TerminalAttachmentUpdate(rendered, listOf("a"), queued, false), terminalAttachmentUpdate(rendered, old.copy(inputPending = true), listOf("a"), queued))
+        assertFalse(terminalAttachmentUpdate(rendered, old.copy(generation = 4), emptyList(), emptyList()).inputDropped)
     }
 
     @Test fun aNewAttachmentDropsOldOutputAndStartsOnAResetScreen() {

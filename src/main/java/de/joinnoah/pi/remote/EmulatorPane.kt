@@ -9,16 +9,16 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
@@ -41,7 +40,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlin.coroutines.CoroutineContext
@@ -116,13 +116,9 @@ internal fun decodeEmulatorImage(image: EmulatorImage): Bitmap? {
     }
 }
 
-/** A participant as the pane names it: what it is, and the end of its opaque id to tell two apart. */
+/** A participant as the pane names it (see [remoteParticipantLabel]). */
 @Composable
-internal fun emulatorParticipantLabel(owner: EmulatorOwner): String {
-    val id = owner.id.takeLast(6)
-    return if (owner.kind == "agent") stringResource(R.string.emulator_participant_agent, id)
-    else stringResource(R.string.emulator_participant_device, id)
-}
+internal fun emulatorParticipantLabel(owner: EmulatorOwner): String = remoteParticipantLabel(owner.kind, owner.id)
 
 @Composable
 private fun emulatorNotice(view: EmulatorView, retry: () -> Unit): RemoteViewNotice? {
@@ -130,10 +126,11 @@ private fun emulatorNotice(view: EmulatorView, retry: () -> Unit): RemoteViewNot
     val onRetry = retry.takeIf { !view.disconnected && !view.opening }
     return when (view.notice) {
         null -> null
-        EmulatorNotice.BUSY -> RemoteViewNotice.Info(stringResource(R.string.emulator_notice_busy), "emulatorNotice")
+        // The control bar names who holds control.
+        EmulatorNotice.BUSY -> null
         EmulatorNotice.DISCONNECTED -> RemoteViewNotice.Info(stringResource(R.string.remote_view_disconnected), "emulatorNotice")
         EmulatorNotice.STREAM_RECOVERING -> RemoteViewNotice.Info(stringResource(R.string.emulator_notice_stream_recovering), "emulatorNotice")
-        EmulatorNotice.STREAM_FAILED -> RemoteViewNotice.Failure(stringResource(R.string.emulator_notice_stream_failed), "emulatorNotice", onRetry = onRetry)
+        EmulatorNotice.STREAM_FAILED -> RemoteViewNotice.Failure(stringResource(R.string.remote_view_stream_failed), "emulatorNotice", onRetry = onRetry)
         EmulatorNotice.FAILED -> RemoteViewNotice.Failure(stringResource(R.string.remote_view_failed), "emulatorNotice", onRetry = onRetry)
         EmulatorNotice.UNCERTAIN -> RemoteViewNotice.Failure(
             stringResource(R.string.emulator_notice_uncertain), "emulatorNotice",
@@ -149,15 +146,10 @@ private fun emulatorKeys(): List<RemoteKey> = listOf(
     RemoteKey("Escape", stringResource(R.string.remote_view_key_escape), stringResource(R.string.remote_view_key_escape_description)),
     RemoteKey("Tab", stringResource(R.string.remote_view_key_tab)),
     RemoteKey("Enter", stringResource(R.string.remote_view_key_enter)),
-    RemoteKey("Backspace", stringResource(R.string.emulator_key_backspace), stringResource(R.string.remote_view_key_backspace_description)),
-    RemoteKey("ArrowLeft", stringResource(R.string.emulator_key_left), stringResource(R.string.remote_view_key_left_description)),
-    RemoteKey("ArrowUp", stringResource(R.string.emulator_key_up), stringResource(R.string.remote_view_key_up_description)),
-    RemoteKey("ArrowDown", stringResource(R.string.emulator_key_down), stringResource(R.string.remote_view_key_down_description)),
-    RemoteKey("ArrowRight", stringResource(R.string.emulator_key_right), stringResource(R.string.remote_view_key_right_description)),
-)
+) + remoteNavigationKeys()
 
 /**
- * The shared Android emulator: the profile choice, then the screen with the control bar and the
+ * The shared Android emulator: the profile choice, then the control bar, the screen and the
  * device keys. Kept composed while another inspector tab shows, it is hidden there
  * ([LocalTerminalKeyboardActive] false): the stream stops and the session and lease stay.
  *
@@ -212,15 +204,20 @@ internal fun EmulatorPane(
     DisposableEffect(Unit) {
         onDispose { retired.forEach { it.recycle() }; retired.clear(); decoded?.second?.recycle(); decoded = null }
     }
-    val bitmap = decoded?.second?.takeIf { image != null }
+    // A frame that failed to decode is not covered by the one before it: the pane says it failed.
+    val bitmap = decoded?.second?.takeIf { image != null && failedImage !== image }
     val displayed = bitmap != null && failedImage !== image
     val latestImage by rememberUpdatedState(image)
     val latestDisplayed by rememberUpdatedState(displayed)
 
     val stopLabel = stringResource(R.string.emulator_stop)
+    // No header reload: an emulator has nothing to reload. Updating who has control is an action.
     val paneActions =
         if (view.emulatorId != null)
-            listOf(PaneAction(stopLabel, Icons.Default.Stop, "emulatorStop", enabled = view.ownsControl && !view.opening) { confirmStop = true })
+            listOf(
+                PaneAction(stringResource(R.string.remote_view_update_status), Icons.Default.Sync, "emulatorSync", enabled = !view.opening) { latestActions.refresh() },
+                PaneAction(stopLabel, Icons.Default.Stop, "emulatorStop", enabled = view.ownsControl && !view.opening) { confirmStop = true },
+            )
         else emptyList()
     val notice = emulatorNotice(view) { latestActions.retry() }
     RemoteViewPane(
@@ -229,97 +226,90 @@ internal fun EmulatorPane(
         onClose = close,
         subtitle = view.label ?: view.profiles.firstOrNull { it.id == view.profileId }?.label,
         busy = view.opening,
-        onReload = if (view.emulatorId != null) ({ latestActions.refresh() }) else null,
         actions = paneActions,
         notices = listOfNotNull(notice),
     ) {
         if (view.emulatorId == null) {
             EmulatorProfilePicker(view, Modifier.weight(1f)) { latestActions.select(it) }
         } else {
-        val placeholder = when {
-            view.opening -> RemoteViewPlaceholder(stringResource(R.string.remote_view_opening))
-            image == null -> RemoteViewPlaceholder(stringResource(R.string.remote_view_waiting), busy = view.notice != EmulatorNotice.STREAM_FAILED)
-            failedImage === image && bitmap == null -> RemoteViewPlaceholder(stringResource(R.string.emulator_frame_unreadable), busy = false)
-            bitmap == null -> RemoteViewPlaceholder(stringResource(R.string.remote_view_waiting))
-            else -> null
-        }
-        RemoteViewport("emulatorViewport", Modifier.weight(1f).fillMaxWidth(), placeholder) {
-            if (bitmap != null) {
-                val geometry = image?.let { listOf(it.width, it.height, it.displayWidth, it.displayHeight, it.rotation, it.revision) }
-                Image(
-                    bitmap.asImageBitmap(),
-                    contentDescription = stringResource(R.string.emulator_screen),
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().testTag("emulatorScreen").pointerInput(geometry) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = true)
-                            val start = down.position; val startTime = down.uptimeMillis
-                            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-                            var last = start; var endTime = startTime
-                            var canceled = down.isConsumed; var finished = false; var moved = false; var longPressed = false
-                            fun point(at: Offset): Pair<Long, Long>? {
-                                val shown = latestImage ?: return null
-                                return emulatorImagePoint(size.width.toFloat(), size.height.toFloat(), shown, at.x, at.y)
-                            }
-                            fun canSend() = currentView.ownsControl && latestDisplayed
-                            while (!finished && !canceled) {
-                                // Until it moves, a held finger becomes a long press after the timeout.
-                                val waiting = !moved && !longPressed
-                                val event: PointerEvent? =
-                                    if (waiting) withTimeoutOrNull((longPressTimeout - (endTime - startTime)).coerceAtLeast(1)) { awaitPointerEvent() }
-                                    else awaitPointerEvent()
-                                if (event == null) {
-                                    longPressed = true
-                                    val a = point(start)
-                                    if (a != null && canSend()) latestActions.input(emulatorGesture(a, a, moved = false, longPress = true, durationMs = EMULATOR_LONG_PRESS_MS))
-                                    continue
+            val controlState = when {
+                view.ownsControl -> RemoteControlState.CONTROLLING
+                view.owner != null -> RemoteControlState.HELD
+                else -> RemoteControlState.VIEWING
+            }
+            RemoteControlBar(
+                state = controlState,
+                tag = "emulator",
+                holder = view.owner?.let { emulatorParticipantLabel(it) },
+                enabled = !view.opening,
+                onTake = { latestActions.acquire() },
+                onRelease = { latestActions.release() },
+                handoffTargets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, emulatorParticipantLabel(it)) },
+                onHandOff = { latestActions.handoff(it) },
+            )
+            // Nothing more comes on its own after these: the notice says what to do.
+            val stopped = view.notice == EmulatorNotice.STREAM_FAILED || view.notice == EmulatorNotice.FAILED || view.notice == EmulatorNotice.UNCERTAIN
+            val placeholder = when {
+                view.opening -> RemoteViewPlaceholder(stringResource(R.string.remote_view_opening))
+                image != null && failedImage === image -> RemoteViewPlaceholder(stringResource(R.string.remote_view_frame_failed), busy = false)
+                image == null && stopped -> RemoteViewPlaceholder(stringResource(R.string.remote_view_frame_failed), busy = false)
+                bitmap == null -> RemoteViewPlaceholder(stringResource(R.string.remote_view_waiting))
+                else -> null
+            }
+            RemoteViewport("emulatorViewport", Modifier.weight(1f).fillMaxWidth(), placeholder, busy = view.inputPending) {
+                if (bitmap != null) {
+                    val geometry = image?.let { listOf(it.width, it.height, it.displayWidth, it.displayHeight, it.rotation, it.revision) }
+                    Image(
+                        bitmap.asImageBitmap(),
+                        contentDescription = stringResource(R.string.emulator_screen),
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().testTag("emulatorScreen").pointerInput(geometry) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = true)
+                                val start = down.position; val startTime = down.uptimeMillis
+                                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                                var last = start; var endTime = startTime
+                                var canceled = down.isConsumed; var finished = false; var moved = false; var longPressed = false
+                                fun point(at: Offset): Pair<Long, Long>? {
+                                    val shown = latestImage ?: return null
+                                    return emulatorImagePoint(size.width.toFloat(), size.height.toFloat(), shown, at.x, at.y)
                                 }
-                                val change = event.changes.firstOrNull { it.id == down.id }
-                                if (change == null || change.isConsumed) { canceled = true; break }
-                                last = change.position; endTime = change.uptimeMillis
-                                if (!change.pressed) finished = true
-                                else if (abs(start.x - last.x) + abs(start.y - last.y) >= EMULATOR_TOUCH_SLOP_PX) { if (!longPressed) moved = true; change.consume() }
+                                fun canSend() = currentView.ownsControl && latestDisplayed
+                                while (!finished && !canceled) {
+                                    // Until it moves, a held finger becomes a long press after the timeout.
+                                    val waiting = !moved && !longPressed
+                                    val event: PointerEvent? =
+                                        if (waiting) withTimeoutOrNull((longPressTimeout - (endTime - startTime)).coerceAtLeast(1)) { awaitPointerEvent() }
+                                        else awaitPointerEvent()
+                                    if (event == null) {
+                                        longPressed = true
+                                        val a = point(start)
+                                        if (a != null && canSend()) latestActions.input(emulatorGesture(a, a, moved = false, longPress = true, durationMs = EMULATOR_LONG_PRESS_MS))
+                                        continue
+                                    }
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                    if (change == null || change.isConsumed) { canceled = true; break }
+                                    last = change.position; endTime = change.uptimeMillis
+                                    if (!change.pressed) finished = true
+                                    else if (abs(start.x - last.x) + abs(start.y - last.y) >= EMULATOR_TOUCH_SLOP_PX) { if (!longPressed) moved = true; change.consume() }
+                                }
+                                if (finished && !canceled && !longPressed) {
+                                    val a = point(start); val b = point(last)
+                                    // A press released after the timeout without the timer firing is still a long press.
+                                    val long = !moved && endTime - startTime >= longPressTimeout
+                                    if (a != null && b != null && canSend()) latestActions.input(emulatorGesture(a, b, moved, long, endTime - startTime))
+                                }
                             }
-                            if (finished && !canceled && !longPressed) {
-                                val a = point(start); val b = point(last)
-                                // A press released after the timeout without the timer firing is still a long press.
-                                val long = !moved && endTime - startTime >= longPressTimeout
-                                if (a != null && b != null && canSend()) latestActions.input(emulatorGesture(a, b, moved, long, endTime - startTime))
-                            }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             }
-            if (view.inputPending) {
-                val sending = stringResource(R.string.emulator_input_busy)
-                LinearProgressIndicator(
-                    Modifier.align(Alignment.TopCenter).fillMaxWidth().height(2.dp).testTag("emulatorInputBusy").semantics { contentDescription = sending },
-                )
-            }
-        }
-        val controlState = when {
-            view.ownsControl -> RemoteControlState.CONTROLLING
-            view.owner != null -> RemoteControlState.HELD
-            else -> RemoteControlState.VIEWING
-        }
-        val holder = view.owner?.let { emulatorParticipantLabel(it) }
-        val targets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, emulatorParticipantLabel(it)) }
-        RemoteControlBar(
-            state = controlState,
-            tag = "emulator",
-            holder = holder,
-            enabled = !view.opening,
-            onTake = { latestActions.acquire() },
-            onRelease = { latestActions.release() },
-            handoffTargets = targets,
-            onHandOff = { latestActions.handoff(it) },
-        )
-        RemoteKeyStrip(
-            emulatorKeys(),
-            onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
-            tag = "emulator",
-            enabled = view.ownsControl && displayed && !view.opening,
-        )
+            RemoteKeyStrip(
+                emulatorKeys(),
+                onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
+                tag = "emulator",
+                enabled = view.ownsControl && displayed && !view.opening,
+            )
         }
     }
     if (confirmStop) AlertDialog(
@@ -330,26 +320,31 @@ internal fun EmulatorPane(
     )
 }
 
-/** The emulator profiles the user may open, as a list of sheet rows. */
+/**
+ * The emulator profiles the user may open, as plain list rows like the Files pane's, under a
+ * heading; with none, the empty notice.
+ */
 @Composable
 private fun EmulatorProfilePicker(view: EmulatorView, modifier: Modifier, select: (String) -> Unit) {
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Top) {
         if (view.opening) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("emulatorProfilesLoading"))
         Text(
             stringResource(R.string.emulator_select_profile),
-            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp).semantics { heading() },
             style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        view.profiles.forEachIndexed { index, profile ->
-            SheetGroupRow(first = index == 0, last = index == view.profiles.lastIndex) {
-                ListItem(
-                    headlineContent = { Text(profile.label) },
-                    colors = sheetListItemColors(),
-                    modifier = Modifier.testTag("emulatorProfile_${profile.id}")
-                        .clickable(enabled = !view.opening) { select(profile.id) },
-                )
-            }
+        if (view.profiles.isEmpty() && !view.opening && view.notice == null)
+            PaneNotice(stringResource(R.string.remote_view_empty), Modifier.testTag("emulatorProfilesEmpty"))
+        view.profiles.forEach { profile ->
+            Text(
+                profile.label,
+                Modifier.fillMaxWidth()
+                    .clickable(enabled = !view.opening, role = Role.Button) { select(profile.id) }
+                    .defaultMinSize(minHeight = 48.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .testTag("emulatorProfile_${profile.id}"),
+                style = MaterialTheme.typography.bodyLarge,
+            )
         }
     }
 }

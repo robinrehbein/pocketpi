@@ -104,10 +104,10 @@ class EmulatorPaneTest {
         var view by mutableStateOf(controlled(image))
         compose.setContent { MaterialTheme { EmulatorPane(view, actions(), {}, decode) } }
         settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodesWithTag("emulatorInputBusy").assertCountEquals(0)
+        compose.onAllNodesWithTag("emulatorViewportBusy").assertCountEquals(0)
         // Recomposing for anything but a new frame decodes nothing.
         compose.runOnIdle { view = view.copy(inputPending = true) }
-        compose.onNodeWithTag("emulatorInputBusy").assertExists()
+        compose.onNodeWithTag("emulatorViewportBusy").assertContentDescriptionEquals("Sending input…")
         compose.runOnIdle { assertEquals(1, calls.get()) }
         compose.runOnIdle { view = view.copy(image = image.copy(frameId = 2)) }
         settle { calls.get() == 2 }
@@ -117,8 +117,39 @@ class EmulatorPaneTest {
     @Test fun anUndecodableFrameShowsItsPlaceholder() {
         val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
         compose.setContent { MaterialTheme { EmulatorPane(controlled(image), actions(), {}, { null }, EmptyCoroutineContext) } }
-        compose.onNodeWithText("The screen image could not be shown.").assertIsDisplayed()
+        compose.onNodeWithText("The picture could not be shown.").assertIsDisplayed()
         compose.onAllNodesWithTag("emulatorScreen").assertCountEquals(0)
+    }
+    @Test fun aFrameThatFailsAfterAGoodOneDoesNotLeaveTheOldFrameShowing() {
+        val first = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        var view by mutableStateOf(controlled(first))
+        compose.setContent { MaterialTheme { EmulatorPane(view, actions(), {}, { if (it.frameId == 1L) Bitmap.createBitmap(20, 30, Bitmap.Config.ARGB_8888) else null }, EmptyCoroutineContext) } }
+        compose.onNodeWithTag("emulatorScreen").assertExists()
+        compose.onNodeWithTag("emulatorKey_Home").assertIsEnabled()
+        compose.runOnIdle { view = view.copy(image = first.copy(frameId = 2)) }
+        compose.onNodeWithText("The picture could not be shown.").assertIsDisplayed()
+        compose.onAllNodesWithTag("emulatorScreen").assertCountEquals(0)
+        compose.onNodeWithTag("emulatorKey_Home").assertIsNotEnabled()
+    }
+    @Test fun aStoppedStreamShowsAFailedPlaceholderWithoutASpinner() {
+        compose.setContent { MaterialTheme { EmulatorPane(EmulatorView("s", opening = false, emulatorId = "e", notice = EmulatorNotice.STREAM_FAILED), actions(), {}) } }
+        compose.onNodeWithText("The picture stopped updating.").assertIsDisplayed()
+        compose.onNodeWithText("The picture could not be shown.").assertIsDisplayed()
+        compose.onNodeWithText("Waiting for the first frame…").assertDoesNotExist()
+    }
+    @Test fun theControlBarSitsDirectlyUnderTheNoticesAboveTheScreen() {
+        compose.setContent { MaterialTheme { EmulatorPane(controlled(EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)).copy(notice = EmulatorNotice.FAILED), actions(), {}, decodeContext = EmptyCoroutineContext) } }
+        val notice = compose.onNodeWithTag("emulatorNotice").getUnclippedBoundsInRoot()
+        val bar = compose.onNodeWithTag("emulatorControlBar").getUnclippedBoundsInRoot()
+        val viewport = compose.onNodeWithTag("emulatorViewport").getUnclippedBoundsInRoot()
+        assertTrue(bar.top >= notice.bottom && viewport.top >= bar.bottom)
+        // The header updates who has control; it has no reload, since nothing reloads.
+        compose.onNodeWithTag("emulatorReload").assertDoesNotExist()
+    }
+    @Test fun noProfilesShowTheEmptyNoticeUnderAHeading() {
+        compose.setContent { MaterialTheme { EmulatorPane(EmulatorView("s", opening = false), actions(), {}) } }
+        compose.onNodeWithText("Choose a profile").assert(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Heading))
+        compose.onNodeWithTag("emulatorProfilesEmpty").assertTextEquals("Nothing to show yet.")
     }
     @Test fun keysAreLabelledAndSendTheHostKeyNames() {
         val inputs = mutableListOf<EmulatorInput>()

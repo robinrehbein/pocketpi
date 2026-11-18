@@ -1515,6 +1515,9 @@ internal fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, target
     val chat = chatInView(twoPane)?.let(targets::chat)
     val native = event.nativeKeyEvent
     if (terminalInputFocus.focused) {
+        // A remote terminal's or browser's input keeps Esc: one it did not send must not become
+        // Back, which would close the pane.
+        if (event.key == Key.Escape && unhandled) return true
         val region = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
         if (region != Shortcut.NEXT_REGION && region != Shortcut.PREVIOUS_REGION) return false
     }

@@ -22,6 +22,7 @@ class EmulatorRecoveryTest {
         val calls = mutableListOf<Pair<String, Map<String, Any?>>>()
         val inputs = mutableListOf<CompletableDeferred<JsonObject>>()
         var watchFailure: (() -> Exception)? = null
+        var statusFailure: (() -> Exception)? = null
         fun count(type: String) = calls.count { it.first == type }
         fun inputsSent() = calls.filter { it.first == "emulator.input" }.map { it.second["input"].toString() }
     }
@@ -35,7 +36,7 @@ class EmulatorRecoveryTest {
             when (type) {
                 "emulator.list" -> Wire.objectOf("kind" to "emulator.profiles", "profiles" to JsonArray(listOf(Wire.objectOf("id" to "p", "label" to "Phone"))))
                 "emulator.open" -> Wire.objectOf("kind" to "emulator.opened", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to host.generation, "geometry" to geometry, *owner)
-                "emulator.status" -> Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to host.generation, "geometry" to geometry, *owner)
+                "emulator.status" -> host.statusFailure?.let { throw it() } ?: Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to host.generation, "geometry" to geometry, *owner)
                 "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to host.generation, "participants" to JsonArray(emptyList()))
                 "emulator.watch" -> { host.watchFailure?.let { throw it() }
                     Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream${host.count("emulator.watch")}") }
@@ -99,6 +100,32 @@ class EmulatorRecoveryTest {
         assertNotNull(client.view?.image)
         assertEquals(emptyList<Long>(), closed)
         assertEquals(0, host.count("emulator.acquire"))
+    }
+
+    @Test fun aRefusedRefreshDuringRecoveryCountsAsAFailedAttemptNotAsARequestFailure() {
+        val scope = TestScope(); val host = Host(); val closed = mutableListOf<Long>()
+        val client = scope.opened(host, closed)
+        host.statusFailure = { RemoteRequestException("forbidden") }
+        scope.testScheduler.advanceTimeBy(5_600); scope.runCurrent()
+        assertEquals(EmulatorNotice.STREAM_RECOVERING, client.view?.notice)
+        for (attempt in 1 until EMULATOR_STREAM_RETRIES) {
+            scope.testScheduler.advanceTimeBy(EMULATOR_STREAM_BACKOFF_MS * attempt + 10); scope.runCurrent()
+            assertEquals("attempt $attempt", EmulatorNotice.STREAM_RECOVERING, client.view?.notice)
+        }
+        scope.testScheduler.advanceTimeBy(EMULATOR_STREAM_BACKOFF_MS * EMULATOR_STREAM_RETRIES + 10); scope.runCurrent()
+        assertEquals(EmulatorNotice.STREAM_FAILED, client.view?.notice)
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun aRefusedRefreshNeverReplacesTheUncertainNotice() {
+        val scope = TestScope(); val host = Host(); val closed = mutableListOf<Long>()
+        val client = scope.controlling(host, closed)
+        assertTrue(client.input(EmulatorInput.Tap(1, 1))); scope.runCurrent()
+        scope.testScheduler.advanceTimeBy(5_600); scope.runCurrent()
+        assertEquals(EmulatorNotice.UNCERTAIN, client.view?.notice)
+        host.statusFailure = { RemoteRequestException("forbidden") }
+        assertTrue(client.refresh()); scope.runCurrent()
+        assertEquals(EmulatorNotice.UNCERTAIN, client.view?.notice)
     }
 
     @Test fun aMalformedOrMismatchedFrameEndsOnlyTheStream() {

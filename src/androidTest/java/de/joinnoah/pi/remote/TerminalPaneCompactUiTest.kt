@@ -141,7 +141,7 @@ class TerminalPaneCompactUiTest {
         compose.onNodeWithTag("terminalModifierKey_shift").performClick()
         compose.onNodeWithTag("terminalHideShortcuts").performClick()
         compose.onNodeWithTag("terminalSubtitle").assertTextEquals(allModifiers(context))
-        compose.onNodeWithTag("terminalSending").assertIsDisplayed()
+        compose.onNodeWithTag("terminalViewportBusy").assertIsDisplayed()
         compose.onNodeWithTag("terminalInput").assertTextContains("first line\nsecond line\nthird line\nfourth line")
         compose.runOnIdle {
             val webView = checkNotNull(findWebView(composeView))

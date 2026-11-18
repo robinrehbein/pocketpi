@@ -8391,6 +8391,33 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aReconnectInTheBackgroundReattachesTheTerminalOnlyOnceTheAppIsInFront() = runTest {
+        val transport = Transport()
+        terminalReconnecting(transport)
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        repo.setForeground(false); runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        // A push wakes the connection in the background: the terminal stays ended meanwhile, since
+        // the pane, whose activity is stopped, could not tell its queued input from the new attachment's.
+        repo.pushWake("host"); advanceTimeBy(1_001); runCurrent()
+        assertTrue(repo.state.value.connected)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        // In front again, the armed resume attaches once.
+        repo.setForeground(true); runCurrent(); advanceTimeBy(1_001); runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertNull(repo.state.value.terminal?.ended)
+        assertEquals(4L, repo.state.value.terminal?.generation)
+        repo.setForeground(false); runCurrent(); repo.setForeground(true); runCurrent(); advanceTimeBy(1_001); runCurrent()
+        assertEquals("at most once per reconnect", 2, transport.sent.count { it.text("type") == "session.terminal.attach" })
+    }
+
+    @Test
     fun aFailedReattachIsNotRetriedOnTheNextReconnect() = runTest {
         val transport = Transport()
         terminalReconnecting(transport, failAttach = { it == 1 })

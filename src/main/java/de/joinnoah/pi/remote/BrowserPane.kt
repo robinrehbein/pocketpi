@@ -5,33 +5,17 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.Backspace
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -49,15 +33,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +50,8 @@ internal data class BrowserPaneActions(
     val selectTab: (String) -> Unit = {}, val closeTab: (String) -> Boolean = { false },
     val handoff: (String) -> Boolean = { false }, val resize: (Int, Int, Double, String) -> Boolean = { _, _, _, _ -> false },
     val input: (BrowserInput) -> Boolean = { false }, val visible: (Boolean) -> Unit = {},
+    /** The fail-safe release while a key or button is held: gives up control, never taking it back. */
+    val dropControl: () -> Unit = {},
 )
 
 private data class PendingBrowserInput(val input: BrowserInput, val submittedText: String? = null, val repeatRelease: Boolean = false)
@@ -103,7 +83,8 @@ private enum class BrowserTouchMode {
 
 /** The one finger a touch gesture on the viewport follows, in view pixels and CSS pixels. */
 private class BrowserTouch {
-    var mode = BrowserTouchMode.NONE
+    /** State, so the pane sees a gesture begin and end (a resize waits for its end). */
+    var mode by mutableStateOf(BrowserTouchMode.NONE)
     var pointerId = -1
     var downX = 0f
     var downY = 0f
@@ -137,31 +118,24 @@ private fun browserInputId(input: BrowserInput): String? = when (input) {
     else -> null
 }
 
-/** What the pane shows for a participant of a shared browser, such as "Pi agent 4f2a91". */
 @Composable
-private fun browserParticipantLabel(participant: BrowserOwner): String =
-    stringResource(
-        if (participant.kind == "agent") R.string.browser_participant_agent else R.string.browser_participant_device,
-        participant.id.takeLast(6),
-    )
+private fun browserParticipantLabel(participant: BrowserOwner): String = remoteParticipantLabel(participant.kind, participant.id)
 
 @Composable
-private fun browserStripKeys(): List<RemoteKey> = BROWSER_STRIP_KEYS.map { key ->
-    when (key) {
+private fun browserStripKeys(): List<RemoteKey> {
+    val navigation = remoteNavigationKeys().associateBy { it.id }
+    return BROWSER_STRIP_KEYS.map { key ->
+    navigation[key] ?: when (key) {
         "Escape" -> RemoteKey(key, stringResource(R.string.remote_view_key_escape), stringResource(R.string.remote_view_key_escape_description))
         "Tab" -> RemoteKey(key, stringResource(R.string.remote_view_key_tab))
         "Enter" -> RemoteKey(key, stringResource(R.string.remote_view_key_enter))
-        "Backspace" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_backspace_description), icon = Icons.AutoMirrored.Filled.Backspace)
         "Delete" -> RemoteKey(key, stringResource(R.string.remote_view_key_delete), stringResource(R.string.remote_view_key_delete_description))
-        "ArrowLeft" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_left_description), icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft)
-        "ArrowUp" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_up_description), icon = Icons.Default.KeyboardArrowUp)
-        "ArrowDown" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_down_description), icon = Icons.Default.KeyboardArrowDown)
-        "ArrowRight" -> RemoteKey(key, "", stringResource(R.string.remote_view_key_right_description), icon = Icons.AutoMirrored.Filled.KeyboardArrowRight)
         "Home" -> RemoteKey(key, stringResource(R.string.remote_view_key_home))
         "End" -> RemoteKey(key, stringResource(R.string.remote_view_key_end))
         "PageUp" -> RemoteKey(key, stringResource(R.string.remote_view_key_page_up), stringResource(R.string.remote_view_key_page_up_description))
         "PageDown" -> RemoteKey(key, stringResource(R.string.remote_view_key_page_down), stringResource(R.string.remote_view_key_page_down_description))
         else -> error("Unknown strip key $key")
+    }
     }
 }
 
@@ -171,7 +145,7 @@ private fun browserStripKeys(): List<RemoteKey> = BROWSER_STRIP_KEYS.map { key -
  * Touch input follows phone conventions: a tap clicks, a one-finger drag scrolls the page (wheel
  * input, the content follows the finger), and a long press clicks the right button or, followed
  * by a drag, drags with the left button (text selection, drag and drop). A mouse or touchpad keeps
- * plain mouse semantics.
+ * plain mouse semantics. Hardware Esc is the page's key: it never closes the pane (Back does).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -244,7 +218,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             if (!latestActions.input(next.input)) {
                 queue.clear(); flight = null
                 if (next.submittedText != null) textSendRefused = true
-                if (held.isNotEmpty()) { latestActions.visible(false); latestActions.visible(true) }
+                if (held.isNotEmpty()) latestActions.dropControl()
             }
         }
     }
@@ -252,8 +226,11 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val unsent = urlDirty || draft.isNotEmpty() || queue.isNotEmpty() || flight != null
     SideEffect { latestUnsent(unsent) }
     DisposableEffect(Unit) { onDispose { latestUnsent(false) } }
-    LaunchedEffect(size, density, view?.ownsControl, view?.generation, view?.selectedTabId, active, held.size) {
-        if (active && view?.ownsControl == true && held.isEmpty() && size.width > 0 && size.height > 0) {
+    // A finger on the viewport counts as held: the soft keyboard hiding at its touch must not
+    // resize the page under the tap it is about to send.
+    val touching = touch.mode != BrowserTouchMode.NONE
+    LaunchedEffect(size, density, view?.ownsControl, view?.generation, view?.selectedTabId, active, held.size, touching) {
+        if (active && view?.ownsControl == true && held.isEmpty() && !touching && size.width > 0 && size.height > 0) {
             val width = (size.width / density).toInt().coerceIn(80, 2048)
             val height = (size.height / density).toInt().coerceIn(80, 2048)
             val scale = density.toDouble().coerceIn(0.5, 3.0)
@@ -265,9 +242,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     }
     LaunchedEffect(view?.viewportRevision) {
         if (resizeRevision != null && resizeRevision != view?.viewportRevision) resizeRevision = null
-        if (held.isNotEmpty() && heldRevision != null && heldRevision != view?.viewportRevision) {
-            latestActions.visible(false); latestActions.visible(true)
-        }
+        if (held.isNotEmpty() && heldRevision != null && heldRevision != view?.viewportRevision) latestActions.dropControl()
     }
     val image = view?.image?.takeIf { it.viewportRevision == view.viewportRevision }
     var decoded by remember(view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision, view?.documentEpoch, view?.previewPort) { mutableStateOf<Pair<BrowserImage, android.graphics.Bitmap>?>(null) }
@@ -478,17 +453,18 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val reloadUrl = selected?.url?.takeIf { view?.ownsControl == true && browserReloadable(it) }
     val headerActions = buildList {
         if (view != null && !view.opening)
-            add(PaneAction(stringResource(R.string.browser_sync), Icons.Default.Sync, "browserSync", onClick = { latestActions.refresh() }))
+            add(PaneAction(stringResource(R.string.remote_view_update_status), Icons.Default.Sync, "browserSync", onClick = { latestActions.refresh() }))
         if (onHide != null) add(PaneAction(stringResource(R.string.preview_hide), Icons.Default.VisibilityOff, "browserHide", onClick = onHide))
     }
     val notices = buildList {
         when (view?.notice) {
-            BrowserNotice.BUSY -> add(RemoteViewNotice.Info(stringResource(R.string.remote_view_control_other), "browserNotice"))
+            // The control bar names who holds control.
+            BrowserNotice.BUSY -> Unit
             BrowserNotice.UNCERTAIN -> add(RemoteViewNotice.Failure(stringResource(if (view.ownsControl) R.string.browser_uncertain_control_retained else R.string.browser_uncertain), "browserNotice"))
             BrowserNotice.DISCONNECTED -> add(RemoteViewNotice.Info(stringResource(R.string.remote_view_disconnected), "browserNotice"))
             BrowserNotice.FAILED -> add(RemoteViewNotice.Failure(stringResource(R.string.remote_view_failed), "browserNotice",
                 onRetry = { if (latestView?.browserId == null) latestActions.open() else latestActions.refresh() }))
-            BrowserNotice.FRAME_FAILED -> add(RemoteViewNotice.Failure(stringResource(R.string.browser_frame_failed), "browserNotice", onRetry = { latestActions.refresh() }))
+            BrowserNotice.FRAME_FAILED -> add(RemoteViewNotice.Failure(stringResource(R.string.remote_view_stream_failed), "browserNotice", onRetry = { latestActions.refresh() }))
             null -> Unit
         }
         if (textSendRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_send_refused), "browserSendRefused"))
@@ -503,7 +479,9 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         onReload = if (reloadUrl != null) ({ latestActions.navigate(reloadUrl) }) else null,
         actions = headerActions,
         notices = notices,
+        escapeCloses = false,
     ) {
+        val compact = LocalRemoteViewCompact.current
         if (view == null || view.opening) {
             RemoteViewport("browserViewport", Modifier.weight(1f).fillMaxWidth(), placeholder = RemoteViewPlaceholder(stringResource(R.string.remote_view_opening)))
         } else {
@@ -519,26 +497,20 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 handoffTargets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, browserParticipantLabel(it)) },
                 onHandOff = { latestActions.handoff(it) },
             )
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                view.tabs.forEach { tab ->
-                    val tabLabel = tab.title.ifBlank { tab.url }
-                    val current = tab.id == view.selectedTabId
-                    TextButton(onClick = { latestActions.selectTab(tab.id) }, Modifier.widthIn(max = 220.dp).semantics { this.selected = current }, enabled = held.isEmpty()) {
-                        Text(tabLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (current) FontWeight.SemiBold else null)
-                    }
-                    if (view.ownsControl) {
-                        val closeLabel = stringResource(R.string.browser_close_tab, tabLabel)
-                        IconButton(onClick = { latestActions.closeTab(tab.id) }, Modifier.size(48.dp).semantics { contentDescription = closeLabel }, enabled = held.isEmpty()) {
-                            Icon(Icons.Default.Close, null, Modifier.size(18.dp))
-                        }
-                    }
+            // A compact pane leaves the tab row out; the address bar still opens a page.
+            if (!compact)
+                RemoteTabStrip(
+                    tabs = view.tabs.map { tab ->
+                        val tabLabel = tab.title.ifBlank { tab.url }
+                        RemoteTab(tab.id, tabLabel, tab.id == view.selectedTabId, stringResource(R.string.browser_close_tab, tabLabel).takeIf { view.ownsControl })
+                    },
+                    onSelect = { latestActions.selectTab(it) },
+                    onClose = { latestActions.closeTab(it) },
+                    tag = "browser",
+                    enabled = held.isEmpty(),
+                ) {
+                    if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, Modifier.testTag("browserNewTab"), enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
                 }
-                if (view.ownsControl) TextButton(onClick = { latestActions.newTab("about:blank") }, Modifier.testTag("browserNewTab"), enabled = held.isEmpty()) { Text(stringResource(R.string.browser_new_tab)) }
-            }
             RemoteInputBar(
                 value = url,
                 onValueChange = { url = it; urlDirty = true; goRefused = false },
@@ -592,7 +564,10 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                         }
                     }.focusRequester(focusRequester).focusable(enabled = canRelease)
                     .pointerInteropFilter(disallowIntercept) { event ->
-                        if (browserTouchEvent(event)) return@pointerInteropFilter latestOnTouch(event)
+                        // A cancel the filter makes up itself carries no tool type: it ends a finger
+                        // gesture in progress like a real one.
+                        if (browserTouchEvent(event) || (event.actionMasked == MotionEvent.ACTION_CANCEL && touch.mode != BrowserTouchMode.NONE))
+                            return@pointerInteropFilter latestOnTouch(event)
                         // A mouse or touchpad: plain mouse semantics.
                         val frame = latestImage; val current = latestView
                         val fit = frame?.let { browserImageFit(size.width.toFloat(), size.height.toFloat(), it.width, it.height) }
@@ -611,9 +586,12 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                     },
                 placeholder = when {
                     bitmap != null -> null
-                    image != null && failedImage === image -> RemoteViewPlaceholder(stringResource(R.string.browser_frame_failed), busy = false)
+                    image != null && failedImage === image -> RemoteViewPlaceholder(stringResource(R.string.remote_view_frame_failed), busy = false)
+                    // The notice says the stream stopped; nothing more comes on its own.
+                    view.notice == BrowserNotice.FRAME_FAILED -> RemoteViewPlaceholder(stringResource(R.string.remote_view_frame_failed), busy = false)
                     else -> RemoteViewPlaceholder(stringResource(R.string.remote_view_waiting))
                 },
+                busy = view.inputPending || flight != null,
             ) {
                 if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = stringResource(R.string.browser_image), modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
@@ -623,7 +601,8 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 tag = "browser",
                 enabled = canTextKeys,
             )
-            RemoteInputBar(
+            // A compact pane leaves the text bar out unless it holds a draft, which never hides.
+            if (!compact || draft.isNotEmpty()) RemoteInputBar(
                 value = draft,
                 onValueChange = { draft = it },
                 onSend = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) },

@@ -94,8 +94,10 @@ internal fun PaneHeader(
     titleFocus: FocusRequester? = null,
     /** False greys out the back or close button, for a step that must not be left halfway. */
     leaveEnabled: Boolean = true,
+    /** A short pane: no padding above and below the pills, which keep their 48dp. */
+    compact: Boolean = false,
 ) {
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compact) 0.dp else 8.dp)) {
         val hasTrailingPill = onReload != null || actions.isNotEmpty()
         val reloadWidth = if (onReload == null) 0.dp else 48.dp
         // Leading padding, back/close button, title gap and trailing padding: 8 + 48 + 12 + 20.

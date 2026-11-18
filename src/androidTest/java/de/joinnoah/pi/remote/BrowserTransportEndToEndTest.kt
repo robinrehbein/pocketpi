@@ -826,7 +826,7 @@ class BrowserTransportEndToEndTest {
         }
     }
 
-    /** The header's "Update tabs and control", inline or in its "more" menu on a narrow header. */
+    /** The header's "Update status", inline or in its "more" menu on a narrow header. */
     private fun clickBrowserSync() {
         if (compose.onAllNodesWithTag("browserSync").fetchSemanticsNodes().isEmpty()) compose.onNodeWithTag("browserMoreActions").performClick()
         compose.onNodeWithTag("browserSync").performClick()

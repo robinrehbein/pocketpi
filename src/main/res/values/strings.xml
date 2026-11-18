@@ -806,23 +806,19 @@
     <string name="remote_new_session_model_failed">The chosen model could not be set.</string>
     <string name="remote_new_session_model_failed_kept">The chosen model could not be set, so your first message was not sent. It waits in the message field.</string>
     <string name="remote_terminal_title">Terminal</string>
-    <string name="remote_terminal_close">Close</string>
     <string name="remote_terminal_unavailable">Terminal unavailable on this device.</string>
-    <string name="remote_terminal_attaching">Connecting…</string>
     <string name="remote_terminal_takeover">Take over</string>
     <string name="remote_terminal_takeover_confirm">Take control of this terminal from the current holder?</string>
-    <string name="remote_terminal_sending">Sending…</string>
     <string name="remote_terminal_unsent">Some input was not sent.</string>
     <string name="remote_terminal_rejected">Input was not sent. Check it and try again.</string>
     <string name="remote_terminal_input">Terminal input</string>
-    <string name="remote_terminal_send">Send</string>
-    <string name="remote_terminal_cancel">Cancel</string>
+    <string name="remote_terminal_screen">Terminal screen</string>
+    <string name="remote_terminal_input_held">Draft only while the terminal is in use elsewhere…</string>
+    <string name="remote_terminal_input_ended">Draft only until you reattach…</string>
+    <string name="remote_terminal_input_closed">Draft only, the terminal is closed…</string>
     <string name="remote_terminal_overflow">Output exceeded the buffer. Terminal closed.</string>
-    <string name="remote_terminal_held_mac">Terminal is in use on the Mac.</string>
-    <string name="remote_terminal_held_phone">Terminal is in use on another phone.</string>
     <string name="remote_terminal_exit">The terminal process ended.</string>
     <string name="remote_terminal_revoked">Terminal control was taken over elsewhere.</string>
-    <string name="remote_terminal_offline">Connection lost.</string>
     <string name="remote_terminal_idle">Terminal closed after inactivity.</string>
     <string name="remote_terminal_detached">Terminal closed.</string>
     <string name="remote_terminal_stopped">Terminal is no longer available.</string>
@@ -867,22 +863,8 @@
     <string name="emulator_stop_confirm">Stop this emulator?</string>
     <string name="emulator_screen">Emulator screen</string>
     <string name="emulator_reopen">Reopen</string>
-    <string name="emulator_notice_busy">Another participant has control.</string>
     <string name="emulator_notice_uncertain">The last input may or may not have reached the emulator. Reopen it to continue as a viewer.</string>
     <string name="emulator_notice_stream_recovering">The screen stopped updating. Reconnecting the stream…</string>
-    <string name="emulator_notice_stream_failed">The screen stopped updating.</string>
-    <string name="emulator_frame_unreadable">The screen image could not be shown.</string>
-    <string name="emulator_input_busy">Sending input…</string>
-    <!-- %1$s is the end of the participant's id, to tell two apart. -->
-    <string name="emulator_participant_device">Device %1$s</string>
-    <!-- %1$s is the end of the participant's id, to tell two apart. -->
-    <string name="emulator_participant_agent">Pi agent %1$s</string>
-    <!-- Key labels as printed on a keyboard; the keys' spoken names are the shared remote_view ones. -->
-    <string name="emulator_key_backspace">⌫</string>
-    <string name="emulator_key_up">↑</string>
-    <string name="emulator_key_down">↓</string>
-    <string name="emulator_key_left">←</string>
-    <string name="emulator_key_right">→</string>
     <string name="remote_question_details_needed">Load the complete details before approving.</string>
     <string name="remote_question_details_failed">Could not verify the details.</string>
     <string name="remote_question_details_loading">Loading details…</string>

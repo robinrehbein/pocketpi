@@ -226,8 +226,20 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             val changedGeneration = r.generation != old.generation || r.geometry != old.geometry
             if (changedGeneration) { lease = null; dropStream() }
             set(old.copy(generation = r.generation, geometry = r.geometry, owner = r.owner, participants = p.participants, ownsControl = lease != null, image = if (changedGeneration) null else old.image)); watch()
-        } catch (e: Exception) { if (valid(t, v.sessionId, c)) { if (e.answeredByHost) set(view?.copy(notice = EmulatorNotice.FAILED)) else fail("refresh") } } }
+        } catch (e: Exception) { if (valid(t, v.sessionId, c)) { if (e.answeredByHost) refreshRefused() else fail("refresh") } } }
         return true
+    }
+    /**
+     * The Host refused a refresh. An uncertain input stays the notice, since it is the one that
+     * matters for safety; a refused refresh of a stream recovery counts as one more failed attempt
+     * (the next one follows, or the pane offers a manual retry); otherwise the request failed.
+     */
+    private fun refreshRefused() {
+        when (view?.notice) {
+            EmulatorNotice.UNCERTAIN -> Unit
+            EmulatorNotice.STREAM_RECOVERING -> streamFailed("refresh")
+            else -> set(view?.copy(notice = EmulatorNotice.FAILED))
+        }
     }
     // The token of an acquire in flight. Its generation bump can fail a watch sent just before it;
     // the acquire's reply then watches again, so that watch failure is not fatal.
@@ -257,7 +269,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             else -> error("unexpected")
         } } catch (e: Exception) { if (valid(t, v.sessionId, c)) {
             // The Host refused: no lease was granted, so nothing is in doubt.
-            if (e.answeredByHost) { reacquire = false; if (!automatic) set(view?.copy(notice = EmulatorNotice.FAILED)) } else fail("acquire")
+            // An uncertain input stays the notice (see [refreshRefused]).
+            if (e.answeredByHost) { reacquire = false; if (!automatic && view?.notice != EmulatorNotice.UNCERTAIN) set(view?.copy(notice = EmulatorNotice.FAILED)) } else fail("acquire")
         } } finally { if (acquiring == t) acquiring = null; if (valid(t, v.sessionId, c)) pending = false } }
         return true
     }

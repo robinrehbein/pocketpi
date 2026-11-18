@@ -3,6 +3,14 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.activity.OnBackPressedDispatcher
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,6 +27,8 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
@@ -175,14 +185,12 @@ class RemoteViewPaneTest {
         val enabled = mutableStateOf(false)
         compose.setContent {
             MaterialTheme {
-                RemoteControlBar(
-                    RemoteControlState.HELD, "terminal", label = "The terminal is in use on the Mac.",
-                    enabled = enabled.value, onTake = { taken++ }, takeLabel = "Take over",
-                )
+                RemoteControlBar(RemoteControlState.HELD, "terminal", holder = "the Mac", enabled = enabled.value, onTake = { taken++ })
             }
         }
-        compose.onNodeWithTag("terminalControlState").assertTextEquals("The terminal is in use on the Mac.")
-        compose.onNodeWithTag("terminalAcquire").assertTextEquals("Take over").assertIsNotEnabled()
+        // The same holder form and take action as the browser's and the emulator's.
+        compose.onNodeWithTag("terminalControlState").assertTextEquals("Control held by the Mac")
+        compose.onNodeWithTag("terminalAcquire").assertTextEquals("Take control").assertIsNotEnabled()
         compose.runOnIdle { enabled.value = true }
         compose.onNodeWithTag("terminalAcquire").assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(1, taken) }
@@ -304,5 +312,171 @@ class RemoteViewPaneTest {
         compose.runOnIdle { maxLines.value = 5 }
         val five = height()
         assertTrue("one=$one three=$three five=$five", one < three && three < five)
+    }
+
+    @Test fun hardwareEscDoesNotCloseAPaneThatKeepsItButBackDoes() {
+        var closed = 0
+        val target = ChatKeyTarget()
+        lateinit var dispatcher: OnBackPressedDispatcher
+        compose.setContent {
+            dispatcher = requireNotNull(LocalOnBackPressedDispatcherOwner.current).onBackPressedDispatcher
+            CompositionLocalProvider(LocalChatKeyTarget provides target) {
+                MaterialTheme { RemoteViewPane("Terminal", "terminal", onClose = { closed++ }, escapeCloses = false) {} }
+            }
+        }
+        compose.runOnIdle {
+            // Esc takes the pane's turn, so it neither closes it nor reaches the chat behind it.
+            target.running = true
+            target.escape(1_000L); target.escape(1_100L)
+            assertTrue(target.paneOpen)
+            assertEquals(0, closed)
+            dispatcher.onBackPressed()
+            assertEquals(1, closed)
+        }
+    }
+
+    @Test fun hardwareEscClosesAPaneByDefault() {
+        var closed = 0
+        val target = ChatKeyTarget()
+        compose.setContent {
+            CompositionLocalProvider(LocalChatKeyTarget provides target) {
+                MaterialTheme { RemoteViewPane("Emulator", "emulator", onClose = { closed++ }) {} }
+            }
+        }
+        compose.runOnIdle {
+            target.escape(1_000L)
+            assertEquals(1, closed)
+        }
+    }
+
+    @Test fun aPaneIsCompactBelowTheTerminalsThresholdAndItsInputBarIsThenOneLine() {
+        var height by mutableStateOf(380.dp)
+        var compact: Boolean? = null
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(height)) {
+                    RemoteViewPane("Browser", "browser", onClose = {}) {
+                        compact = LocalRemoteViewCompact.current
+                        RemoteInputBar("one\ntwo\nthree", {}, onSend = {}, tag = "input")
+                    }
+                }
+            }
+        }
+        fun inputHeight() = compose.onNodeWithTag("input").getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        compose.runOnIdle { assertEquals(true, compact) }
+        val one = inputHeight()
+        compose.runOnIdle { height = 600.dp }
+        compose.runOnIdle { assertEquals(false, compact) }
+        assertTrue(inputHeight() > one)
+        assertTrue(remoteViewCompact(399.dp))
+        assertTrue(!remoteViewCompact(400.dp))
+    }
+
+    @Test fun viewportShowsAThinBusyBarWhileInputIsOnItsWay() {
+        var busy by mutableStateOf(false)
+        compose.setContent {
+            MaterialTheme {
+                RemoteViewPane("Terminal", "terminal", onClose = {}) {
+                    RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth(), busy = busy)
+                }
+            }
+        }
+        compose.onAllNodesWithTag("terminalViewportBusy").assertCountEquals(0)
+        compose.runOnIdle { busy = true }
+        compose.onNodeWithTag("terminalViewportBusy").assertContentDescriptionEquals("Sending input…").assertHeightIsAtLeast(1.dp)
+        val bar = compose.onNodeWithTag("terminalViewportBusy").getUnclippedBoundsInRoot()
+        val viewport = compose.onNodeWithTag("terminalViewport").getUnclippedBoundsInRoot()
+        // Along the viewport's top edge (the node's bounds may include its touch area around the 2dp bar).
+        val centre = (bar.top + bar.bottom) / 2
+        assertTrue("bar=$bar viewport=$viewport", centre >= viewport.top && centre <= viewport.top + 3.dp)
+    }
+
+    @Test fun navigationKeysAreTheSameIconChipsInTheSameOrderEverywhere() {
+        val pressed = mutableListOf<String>()
+        compose.setContent {
+            MaterialTheme {
+                Column {
+                    RemoteKeyStrip(remoteNavigationKeys(RemoteNavigationIds.TERMINAL), onKey = { pressed += it.id }, tag = "terminal")
+                    RemoteKeyStrip(remoteNavigationKeys(), onKey = { pressed += it.id }, tag = "emulator")
+                }
+            }
+        }
+        val spoken = listOf("Backspace", "Left arrow", "Up arrow", "Down arrow", "Right arrow")
+        listOf("backspace", "left", "up", "down", "right").zip(spoken).forEach { (id, name) ->
+            compose.onNodeWithTag("terminalKey_$id").assertContentDescriptionEquals(name).assertWidthIsAtLeast(48.dp).performClick()
+        }
+        listOf("Backspace", "ArrowLeft", "ArrowUp", "ArrowDown", "ArrowRight").zip(spoken).forEach { (id, name) ->
+            compose.onNodeWithTag("emulatorKey_$id").assertContentDescriptionEquals(name)
+        }
+        compose.runOnIdle { assertEquals(listOf("backspace", "left", "up", "down", "right"), pressed) }
+        // Left of each other in that order, the same in both strips.
+        val left = listOf("left", "up", "down", "right").map { compose.onNodeWithTag("terminalKey_$it").getUnclippedBoundsInRoot().left }
+        assertEquals(left.sorted(), left)
+    }
+
+    @Test fun tabStripSelectsAndClosesTabsAsChips() {
+        val events = mutableListOf<String>()
+        var enabled by mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme {
+                RemoteTabStrip(
+                    listOf(RemoteTab("a", "Docs", selected = true, closeLabel = "Close tab Docs"), RemoteTab("b", "Mail", selected = false)),
+                    onSelect = { events += "select:$it" }, onClose = { events += "close:$it" }, tag = "browser", enabled = enabled,
+                ) { Text("New", Modifier.testTag("trailing")) }
+            }
+        }
+        compose.onNodeWithTag("browserTab_a").assertIsSelected().assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("browserTab_b").assertIsNotSelected().performClick()
+        compose.onNodeWithTag("browserTabClose_a").assertContentDescriptionEquals("Close tab Docs").assertWidthIsAtLeast(48.dp).performClick()
+        compose.onNodeWithTag("browserTabClose_b").assertDoesNotExist()
+        compose.onNodeWithTag("trailing").assertExists()
+        compose.runOnIdle { assertEquals(listOf("select:b", "close:a"), events); enabled = false }
+        compose.onNodeWithTag("browserTab_b").assertIsNotEnabled()
+    }
+
+    @Test fun aCompactPaneLeavesTheTerminalItsBudgetWithDraftModifiersAndPendingInput() {
+        // The terminal's chrome in its fullest compact state: header with the modifier subtitle and
+        // an action, the key strip, a four-line draft with the insert action, input on its way.
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(280.dp)) {
+                    RemoteViewPane("Terminal", "terminal", onClose = {}, subtitle = "Ctrl+Alt+Shift",
+                        actions = listOf(PaneAction("Shortcuts", Icons.Default.Keyboard, "terminalShortcuts"))) {
+                        RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth(), busy = true)
+                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab"), RemoteKey("enter", "Enter")) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL), onKey = {}, tag = "terminal")
+                        RemoteInputBar("first line\nsecond line\nthird line\nfourth line", {}, onSend = {}, tag = "terminalInput") {
+                            androidx.compose.material3.IconButton(onClick = {}, Modifier.width(48.dp).height(48.dp)) {}
+                        }
+                    }
+                }
+            }
+        }
+        // On a device the header is 48dp (its pills, no padding), the key strip 48 and the input bar
+        // 56: 152dp, plus 24dp of status bar over a pane at the top of the window, leaves 104dp of
+        // 280. Robolectric's legacy text metrics make text rows taller, so this checks the rules
+        // that budget rests on: no padding around the header, the viewport floor kept while the
+        // bars yield, and the controls the terminal needs still shown.
+        fun height(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        val pane = compose.onNodeWithTag("terminalPane").getUnclippedBoundsInRoot()
+        assertEquals(pane.top, compose.onNodeWithTag("terminalHeaderPill").getUnclippedBoundsInRoot().top)
+        assertTrue("viewport=${height("terminalViewport")}", height("terminalViewport") >= REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT)
+        compose.onNodeWithTag("terminalSubtitle").assertTextEquals("Ctrl+Alt+Shift")
+        compose.onNodeWithTag("terminalInputSend").assertIsDisplayed()
+        compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
+    }
+
+    @Test fun aCompactPaneKeepsTheViewportFloorAndTheBarsYieldFirst() {
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(260.dp)) {
+                    RemoteViewPane("Browser", "browser", onClose = {}) {
+                        RemoteViewport("browserViewport", Modifier.weight(1f).fillMaxWidth())
+                        Box(Modifier.fillMaxWidth().height(300.dp).testTag("tallBar"))
+                    }
+                }
+            }
+        }
+        val viewport = compose.onNodeWithTag("browserViewport").getUnclippedBoundsInRoot()
+        assertEquals(REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT, viewport.bottom - viewport.top)
     }
 }

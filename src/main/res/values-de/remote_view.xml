@@ -8,7 +8,6 @@
     <string name="remote_view_opening">Wird geöffnet…</string>
     <string name="remote_view_waiting">Warte auf das erste Bild…</string>
     <string name="remote_view_empty">Noch nichts anzuzeigen.</string>
-    <string name="remote_view_reconnecting">Verbindung wird wiederhergestellt…</string>
     <string name="remote_view_disconnected">Verbindung getrennt.</string>
     <string name="remote_view_failed">Die Anfrage ist fehlgeschlagen.</string>
     <string name="remote_view_control_viewing">Nur ansehen</string>
@@ -42,4 +41,12 @@
     <string name="remote_view_key_page_up_description">Bild auf</string>
     <string name="remote_view_key_page_down_description">Bild ab</string>
     <string name="remote_view_key_android_home_description">Startbildschirm</string>
+    <string name="remote_view_sending">Eingabe wird gesendet…</string>
+    <string name="remote_view_frame_failed">Das Bild konnte nicht angezeigt werden.</string>
+    <string name="remote_view_stream_failed">Das Bild wird nicht mehr aktualisiert.</string>
+    <string name="remote_view_update_status">Status aktualisieren</string>
+    <string name="remote_view_participant_agent">Pi-Agent %1$s</string>
+    <string name="remote_view_participant_device">Gerät %1$s</string>
+    <string name="remote_view_holder_mac">Der Mac</string>
+    <string name="remote_view_holder_phone">Ein anderes Gerät</string>
 </resources>
