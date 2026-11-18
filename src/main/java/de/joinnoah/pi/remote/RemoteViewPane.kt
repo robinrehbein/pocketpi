@@ -6,11 +6,18 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Measured
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.Placeable
-import androidx.compose.ui.layout.WindowInsetsRulers
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.composed
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.offset
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -24,7 +31,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fitInside
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -91,6 +99,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 /*
  * What the remote view panes (terminal, browser and preview, emulator) share: the pane with its
@@ -233,12 +242,12 @@ internal fun RemoteViewPane(
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = remoteViewCompact(maxHeight)
             CompositionLocalProvider(LocalRemoteViewCompact provides compact) {
-                // Pads, in the layout phase, by the part of the safe drawing insets (system bars,
-                // cutout, keyboard) that overlaps the pane in its window: a pane over the whole
-                // screen keeps clear of all of them, one that ends above the navigation bar or the
-                // keyboard loses no height to them. No recomposition while the keyboard animates.
+                // Pads by the part of the safe drawing insets (system bars, cutout, keyboard) that
+                // overlaps the pane in its window: a pane over the whole screen keeps clear of all
+                // of them, one that ends above the navigation bar or the keyboard loses no height
+                // to them (see [remoteViewInsetsPadding]).
                 RemoteViewColumn(
-                    Modifier.fillMaxSize().fitInside(WindowInsetsRulers.SafeDrawing.current),
+                    Modifier.fillMaxSize().remoteViewInsetsPadding(),
                     viewportMinHeight = if (compact) REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT else 0.dp,
                 ) {
                     PaneHeader(
@@ -264,6 +273,76 @@ internal fun RemoteViewPane(
                     content()
                 }
             }
+        }
+    }
+}
+
+/** Lengths at the four edges of a rectangle, in pixels: insets, or a padding. */
+internal data class RemoteViewEdges(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+/**
+ * The part of the window [insets] that overlaps [pane], at each edge on its own. [pane] is in the
+ * window's coordinates and the window is [windowWidth] by [windowHeight]; an inset covers the band
+ * of its width along its window edge. At each edge that is the inset less the distance from that
+ * window edge to the pane's edge, `max(0, inset - distance)`, and never more than the pane is wide
+ * or high.
+ */
+internal fun remoteViewInsetsOverlap(pane: Rect, windowWidth: Float, windowHeight: Float, insets: RemoteViewEdges): RemoteViewEdges =
+    RemoteViewEdges(
+        left = (insets.left - pane.left).coerceIn(0f, pane.width.coerceAtLeast(0f)),
+        top = (insets.top - pane.top).coerceIn(0f, pane.height.coerceAtLeast(0f)),
+        right = (insets.right - (windowWidth - pane.right)).coerceIn(0f, pane.width.coerceAtLeast(0f)),
+        bottom = (insets.bottom - (windowHeight - pane.bottom)).coerceIn(0f, pane.height.coerceAtLeast(0f)),
+    )
+
+/** Where a pane lies in its window, and the window's size, in pixels. */
+private data class RemoteViewPlacement(val pane: Rect, val windowWidth: Float, val windowHeight: Float)
+
+/**
+ * Pads by the part of the safe drawing insets (system bars, cutout, keyboard) that overlaps this
+ * layout in its window ([remoteViewInsetsOverlap]). A pane over the whole screen keeps clear of all
+ * of them; one that ends above the navigation bar or the keyboard (a parent made room already, or
+ * the pane is one part of the screen) loses no height to them.
+ *
+ * The pane's rectangle is taken in window coordinates, its corners mapped with
+ * [androidx.compose.ui.layout.LayoutCoordinates.localToWindow]: that is the space the window insets
+ * are measured in also where the pane's Compose root does not start at the window's corner (the
+ * Preview's dialog window), and unlike a clipped bounds rectangle it is the pane's whole extent.
+ * Until the pane has been placed once its position is unknown and it takes the full insets, so no
+ * control is ever drawn under a system bar; the frame after, it pads by the overlap.
+ *
+ * The insets and the position are read only in this modifier's measurement, so the keyboard's
+ * animation or the pane moving remeasures this layout without recomposing the pane's content.
+ */
+@Composable
+private fun Modifier.remoteViewInsetsPadding(): Modifier {
+    val insets = WindowInsets.safeDrawing
+    val window = LocalView.current.rootView
+    val placement = remember { mutableStateOf<RemoteViewPlacement?>(null) }
+    return onGloballyPositioned { coordinates ->
+        // The layout's own outer bounds: the padding below cannot move them.
+        val topLeft = coordinates.localToWindow(Offset.Zero)
+        val bottomRight = coordinates.localToWindow(Offset(coordinates.size.width.toFloat(), coordinates.size.height.toFloat()))
+        placement.value = RemoteViewPlacement(Rect(topLeft, bottomRight), window.width.toFloat(), window.height.toFloat())
+    }.layout { measurable, constraints ->
+        val all = RemoteViewEdges(
+            insets.getLeft(this, layoutDirection).toFloat(),
+            insets.getTop(this).toFloat(),
+            insets.getRight(this, layoutDirection).toFloat(),
+            insets.getBottom(this).toFloat(),
+        )
+        val known = placement.value
+        val padding =
+            if (known == null || known.windowWidth <= 0f || known.windowHeight <= 0f) all
+            else remoteViewInsetsOverlap(known.pane, known.windowWidth, known.windowHeight, all)
+        val left = padding.left.roundToInt()
+        val top = padding.top.roundToInt()
+        val horizontal = left + padding.right.roundToInt()
+        val vertical = top + padding.bottom.roundToInt()
+        val placeable = measurable.measure(constraints.offset(-horizontal, -vertical))
+        layout(constraints.constrainWidth(placeable.width + horizontal), constraints.constrainHeight(placeable.height + vertical)) {
+            // Absolute edges: the insets' left is the window's left in either layout direction.
+            placeable.place(left, top)
         }
     }
 }

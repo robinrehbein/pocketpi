@@ -747,4 +747,111 @@ class RemoteViewPaneTest {
         assertTrue("title=$title subtitle=$sub", sub.top >= title.bottom - 0.5.dp)
         compose.onNodeWithTag("frame").assertHeightIsAtLeast(64.dp)
     }
+
+    // ---- Window insets: a pane pads by the part of them over its own rectangle ------------------
+
+    /**
+     * The window of the Pixel 2 API 36 emulator the androidTest probe measured, in dp: 411.4 by
+     * 731.4, status bar 24 at the top, navigation bar 48 at the bottom, no cutout.
+     */
+    private val windowWidth = 411.4f
+    private val windowHeight = 731.4f
+    private val bars = RemoteViewEdges(left = 0f, top = 24f, right = 0f, bottom = 48f)
+
+    private fun overlap(pane: androidx.compose.ui.geometry.Rect, insets: RemoteViewEdges = bars) =
+        remoteViewInsetsOverlap(pane, windowWidth, windowHeight, insets)
+
+    private fun assertEdges(expected: RemoteViewEdges, actual: RemoteViewEdges) {
+        val message = "expected $expected, was $actual"
+        assertEquals(message, expected.left, actual.left, 0.01f)
+        assertEquals(message, expected.top, actual.top, 0.01f)
+        assertEquals(message, expected.right, actual.right, 0.01f)
+        assertEquals(message, expected.bottom, actual.bottom, 0.01f)
+    }
+
+    @Test fun aPaneAtTheTopOfTheWindowLosesTheStatusBarButNotTheNavigationBarItEndsAbove() {
+        // The probe's H = 320 pane: 24dp under the status bar, its bottom 363dp above the navigation bar.
+        assertEdges(RemoteViewEdges(0f, 24f, 0f, 0f), overlap(androidx.compose.ui.geometry.Rect(0f, 0f, windowWidth, 320f)))
+    }
+
+    @Test fun theKeyboardOverTheNavigationBarDoesNotPadAPaneThatEndsAboveIt() {
+        // The probe's H = 280 pane with the IME up: safe drawing is the union of the system bars and
+        // the IME, at the bottom the larger of the navigation bar's 48 and the IME's 48.
+        val withIme = bars.copy(bottom = maxOf(48f, 48f))
+        assertEdges(RemoteViewEdges(0f, 24f, 0f, 0f), overlap(androidx.compose.ui.geometry.Rect(0f, 0f, windowWidth, 280f), withIme))
+    }
+
+    @Test fun aPaneOverTheWholeWindowKeepsClearOfBothBars() {
+        assertEdges(RemoteViewEdges(0f, 24f, 0f, 48f), overlap(androidx.compose.ui.geometry.Rect(0f, 0f, windowWidth, windowHeight)))
+    }
+
+    @Test fun aPaneThatReachesIntoTheNavigationBarPadsByTheOverlapOnly() {
+        // 700 - (731.4 - 48) = 16.6dp of the pane lie over the navigation bar.
+        assertEdges(RemoteViewEdges(0f, 0f, 0f, 16.6f), overlap(androidx.compose.ui.geometry.Rect(0f, 400f, windowWidth, 700f)))
+    }
+
+    @Test fun aPaneBesideTheChatPadsOnlyTheEdgeAtTheCutout() {
+        val cutout = bars.copy(right = 30f)
+        assertEdges(RemoteViewEdges(0f, 24f, 30f, 48f), overlap(androidx.compose.ui.geometry.Rect(200f, 0f, windowWidth, windowHeight), cutout))
+        // The chat's column on the other side of the window would take a left cutout; this pane does not.
+        assertEdges(RemoteViewEdges(0f, 24f, 0f, 48f), overlap(androidx.compose.ui.geometry.Rect(200f, 0f, windowWidth, windowHeight), bars.copy(left = 30f)))
+    }
+
+    @Test fun aPaneInsideTheSafeAreaKeepsAllOfItsHeight() {
+        assertEdges(RemoteViewEdges(0f, 0f, 0f, 0f), overlap(androidx.compose.ui.geometry.Rect(16f, 100f, 395f, 600f), bars.copy(left = 10f, right = 10f)))
+    }
+
+    @Test fun anOverlapIsNeverMoreThanThePane() {
+        // A pane 30dp high lying wholly in the 48dp navigation bar pads by its own 30dp.
+        assertEdges(RemoteViewEdges(0f, 0f, 0f, 30f), overlap(androidx.compose.ui.geometry.Rect(0f, windowHeight - 30f, windowWidth, windowHeight)))
+    }
+
+    /** Sends the probe's bars, in this window's pixels, to [activity]'s window. */
+    private fun dispatchBars(activity: android.app.Activity, statusTop: Int, navigationBottom: Int) {
+        compose.runOnUiThread {
+            val window = activity.window
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(
+                window.decorView,
+                androidx.core.view.WindowInsetsCompat.Builder()
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.of(0, statusTop, 0, 0))
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars(), androidx.core.graphics.Insets.of(0, 0, 0, navigationBottom))
+                    .build(),
+            )
+        }
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h731dp")
+    fun thePaneModifierPadsByTheBarsOverThePaneAndNotByTheOthers() {
+        var full by mutableStateOf(false)
+        var activity: android.app.Activity? = null
+        compose.setContent {
+            activity = androidx.activity.compose.LocalActivity.current
+            MaterialTheme {
+                Box(if (full) Modifier.fillMaxSize() else Modifier.fillMaxWidth().height(320.dp)) {
+                    RemoteViewPane("Terminal", "terminal", onClose = {}) {
+                        RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth())
+                    }
+                }
+            }
+        }
+        val status = with(compose.density) { 24.dp.roundToPx() }
+        val navigation = with(compose.density) { 48.dp.roundToPx() }
+        dispatchBars(activity!!, status, navigation)
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        // At the top of the window, 320dp high: the status bar over its top 24dp pads it, the
+        // navigation bar 363dp below its bottom does not.
+        var pane = bounds("terminalPane")
+        assertEquals(pane.top.value + 24f, bounds("terminalHeaderPill").top.value, 0.5f)
+        assertEquals(pane.bottom.value, bounds("terminalViewport").bottom.value, 0.5f)
+        assertEquals(320f, pane.bottom.value - pane.top.value, 0.5f)
+        // Over the whole window both bars pad it. The pane is no longer compact there, so its header
+        // keeps its own padding below the status bar.
+        compose.runOnIdle { full = true }
+        pane = bounds("terminalPane")
+        assertTrue("pane=$pane header=${bounds("terminalHeaderPill")}", bounds("terminalHeaderPill").top.value >= pane.top.value + 24f - 0.5f)
+        assertEquals(pane.bottom.value - 48f, bounds("terminalViewport").bottom.value, 0.5f)
+    }
 }
