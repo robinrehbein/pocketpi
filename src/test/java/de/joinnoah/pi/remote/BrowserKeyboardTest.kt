@@ -30,4 +30,12 @@ class BrowserKeyboardTest {
         assertNull(browserHardwareInput(key(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A), false, emptySet(), 'a'.code))
         assertNull(browserHardwareInput(key(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F6), true, emptySet(), 0))
     }
+
+    @Test fun stripKeysAreNamedKeysTheHardwareMappingAlsoSends() {
+        val named = listOf(KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL,
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN)
+            .map { (browserHardwareInput(key(KeyEvent.ACTION_DOWN, it), true, emptySet(), 0) as BrowserInput.Key).code }
+        assertEquals(named, BROWSER_STRIP_KEYS)
+    }
 }

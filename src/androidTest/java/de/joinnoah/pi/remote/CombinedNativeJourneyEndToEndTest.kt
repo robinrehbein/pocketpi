@@ -805,8 +805,8 @@ class CombinedNativeJourneyEndToEndTest {
         compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false) }
         compose.onNodeWithTag("browserSendText").performClick()
         compose.waitUntil(30_000) { statusOrNull()?.getJSONObject("browser")?.optString("input") == nonce && repository.state.value.browser?.inputPending == false }
-        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
-        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserKey_Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithTag("browserKey_Enter").performClick()
         compose.waitUntil(30_000) { statusOrNull()?.getJSONObject("browser")?.optString("submitted") == nonce }
         // The page turns green on submit; the frame the phone shows must reflect it.
         compose.waitUntil(30_000) {
@@ -868,8 +868,8 @@ class CombinedNativeJourneyEndToEndTest {
             compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false) }
             compose.onNodeWithTag("browserSendText").performClick()
             compose.waitUntil(30_000) { statusOrNull()?.getJSONObject("preview")?.optString("input") == nonce && repository.state.value.previewBrowser?.inputPending == false }
-            compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
-            compose.onNodeWithText("Enter").performClick()
+            compose.waitUntil(30_000) { runCatching { compose.onNodeWithTag("browserKey_Enter").assertIsEnabled(); true }.getOrDefault(false) }
+            compose.onNodeWithTag("browserKey_Enter").performClick()
             compose.waitUntil(30_000) { statusOrNull()?.getJSONObject("preview")?.optString("submitted") == nonce }
             // The dev server pushes an update over its WebSocket; the page turns magenta and acknowledges.
             action("preview-update")

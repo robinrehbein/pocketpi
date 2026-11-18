@@ -4468,7 +4468,10 @@ internal fun RemoteScreen(
         if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
     }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
         androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            val previewPort by rememberUpdatedState(state.previewBrowser?.previewPort)
             val actions = remember(chatModel) { BrowserPaneActions(
+                // Retry after a failed open opens the same port again.
+                open = { previewPort?.let(chatModel::openPreview) ?: false },
                 acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
                 newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
                 closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,

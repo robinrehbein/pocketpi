@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.*
+import kotlin.math.abs
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,7 +30,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+@Config(sdk = [35], qualifiers = "w411dp-h891dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class BrowserPaneTest {
     @get:Rule val compose = createComposeRule()
@@ -94,8 +96,8 @@ class BrowserPaneTest {
         val pending = CompletableDeferred<Bitmap?>()
         val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = image())
         compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { pending.await() }) } }
-        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
-        compose.onNodeWithText("Could not display the browser image. Refresh to try again.").assertDoesNotExist()
+        compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
+        compose.onNodeWithText("Could not display the browser image.").assertDoesNotExist()
         compose.runOnIdle { pending.complete(Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)) }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
     }
@@ -104,9 +106,9 @@ class BrowserPaneTest {
         val pending = CompletableDeferred<Bitmap?>()
         val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = image())
         compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { pending.await() }) } }
-        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
         compose.runOnIdle { pending.complete(null) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image. Refresh to try again.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image.").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
     }
 
@@ -120,11 +122,11 @@ class BrowserPaneTest {
         compose.runOnIdle { view = view.copy(sessionId = "other", browserId = "new", generation = 2, image = secondImage) }
         val unused = Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)
         compose.runOnIdle { first.complete(unused) }
-        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
         unused.recycle()
         compose.runOnIdle { second.complete(null) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image. Refresh to try again.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image.").fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test fun newGenerationHidesPreviouslyDecodedImageWhileNextFrameWaits() {
@@ -136,7 +138,7 @@ class BrowserPaneTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
         compose.runOnIdle { view = view.copy(generation = 2, image = nextImage) }
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
-        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
         compose.runOnIdle { next.complete(null) }
     }
 
@@ -166,10 +168,10 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserText").performTextInput("draft")
         compose.runOnIdle { view = view.copy(image = nextImage) }
         compose.onNodeWithContentDescription("Remote browser image").assertIsDisplayed()
-        compose.onNodeWithText("Waiting for browser image…").assertDoesNotExist()
+        compose.onNodeWithText("Waiting for the first frame…").assertDoesNotExist()
         compose.onNodeWithTag("browserSendText").assertIsEnabled()
         compose.runOnIdle { next.complete(null) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image. Refresh to try again.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image.").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
         compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
     }
@@ -223,7 +225,7 @@ class BrowserPaneTest {
         }), {}, decodeImage = { if (it === first) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else pending.await() }) } }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
         compose.runOnIdle { view = view.copy(image = first.copy(frameId = 2)) }
-        compose.onNodeWithText("Enter").assertIsEnabled().performClick()
+        compose.onNodeWithTag("browserKey_Enter").assertIsEnabled().performClick()
         compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
         compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "Enter", "Enter"), BrowserInput.Key("up", "Enter", "Enter")), sent) }
     }
@@ -237,7 +239,7 @@ class BrowserPaneTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("browserText").performTextInput("draft")
         compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
-        compose.onNodeWithText("Enter").assertIsNotEnabled()
+        compose.onNodeWithTag("browserKey_Enter").assertIsNotEnabled()
     }
     @Test fun switchingBetweenBrowserAndPreviewKeepsDraftsSeparate() {
         var preview by mutableStateOf(false)
@@ -339,11 +341,12 @@ class BrowserPaneTest {
             sent.add(it); receipt++; view = view.copy(receipt = BrowserInputReceipt(receipt, "accepted")); true
         }), {}) } }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("browserViewport").performTouchInput { down(center) }
+        // A mouse button: a finger sends nothing before it lifts.
+        compose.onNodeWithTag("browserViewport").performMouseInput { moveTo(center); press() }
         compose.onNodeWithTag("browserViewport").assertIsFocused()
         compose.waitUntil(5_000) { compose.runOnIdle { sent.any { it is BrowserInput.Pointer && it.action == "down" } } }
         compose.runOnIdle { view = view.copy(image = null) }
-        compose.onNodeWithTag("browserViewport").performTouchInput { up() }
+        compose.onNodeWithTag("browserViewport").performMouseInput { release() }
         compose.waitUntil(5_000) { compose.runOnIdle { sent.any { it is BrowserInput.Pointer && it.action == "up" } } }
         compose.runOnIdle {
             val pointer = sent.filterIsInstance<BrowserInput.Pointer>()
@@ -482,4 +485,207 @@ class BrowserPaneTest {
         compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "ArrowDown", "ArrowDown")), sent.filterIsInstance<BrowserInput.Key>()) }
     }
 
+
+    // Touch gestures, key chips, reload and the shared scaffold.
+
+    /** Shows a controlling pane; its input is acknowledged at once while [acknowledge] says so. */
+    private fun showControlled(sent: MutableList<BrowserInput>, tabs: List<BrowserTab> = emptyList(), navigated: MutableList<String> = mutableListOf(), acknowledge: () -> Boolean = { true }): MutableState<BrowserView> {
+        val state = mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image(), tabs = tabs, selectedTabId = tabs.firstOrNull()?.id))
+        compose.setContent { MaterialTheme { BrowserPane(state.value, BrowserPaneActions(navigate = { navigated += it; true }, input = {
+            sent.add(it)
+            state.value = if (acknowledge()) state.value.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted")) else state.value.copy(inputPending = true)
+            true
+        }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        return state
+    }
+    /** CSS pixels per view pixel of the 400x200 test image as the viewport letterboxes it. */
+    private fun cssPerPixel(): Double {
+        val size = compose.onNodeWithTag("browserViewport").fetchSemanticsNode().size
+        val fit = requireNotNull(browserImageFit(size.width.toFloat(), size.height.toFloat(), 400, 200))
+        assertTrue("the test image is letterboxed", fit.left > 0f || fit.top > 0f)
+        return 200.0 / fit.height
+    }
+    private fun settle() { compose.mainClock.advanceTimeBy(500); compose.waitForIdle() }
+
+    @Test fun fingerTapClicksAtTheTouchedPoint() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        compose.onNodeWithTag("browserViewport").performTouchInput { click(center) }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
+        compose.runOnIdle {
+            val (down, up) = sent.map { it as BrowserInput.Pointer }
+            assertEquals(listOf("down", "up"), listOf(down.action, up.action))
+            assertEquals(listOf("left", "left"), listOf(down.button, up.button))
+            assertEquals(down.x, up.x, 0.0); assertEquals(down.y, up.y, 0.0)
+            assertEquals(200.0, down.x, 1.0); assertEquals(100.0, down.y, 1.0)
+        }
+    }
+
+    @Test fun fingerDragScrollsWithWheelInCssPixelsAndNaturalDirection() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        val scale = cssPerPixel()
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); moveBy(Offset(0f, -60f)); moveBy(Offset(-30f, -60f)); up() }
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.filterIsInstance<BrowserInput.Wheel>().sumOf { it.deltaY } >= 119 * scale } }
+        compose.runOnIdle {
+            assertTrue("a scroll presses no button", sent.none { it is BrowserInput.Pointer })
+            val wheels = sent.filterIsInstance<BrowserInput.Wheel>()
+            // The finger moved up and left: the page scrolls down and right, by the finger's distance.
+            assertEquals(120 * scale, wheels.sumOf { it.deltaY }, 0.01)
+            assertEquals(30 * scale, wheels.sumOf { it.deltaX }, 0.01)
+            assertTrue(wheels.all { abs(it.x - 200.0) < 1.0 && abs(it.y - 100.0) < 1.0 })
+        }
+    }
+
+    @Test fun wheelDeltasAddUpWhileAnInputIsInFlight() {
+        val sent = mutableListOf<BrowserInput>()
+        var acknowledge = false
+        val state = showControlled(sent) { acknowledge }
+        val scale = cssPerPixel()
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); moveBy(Offset(0f, -40f)) }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 1 } }
+        compose.onNodeWithTag("browserViewport").performTouchInput { repeat(10) { moveBy(Offset(0f, -10f)) }; up() }
+        settle()
+        compose.runOnIdle { assertEquals("one input in flight at a time", 1, sent.size) }
+        compose.runOnIdle { acknowledge = true; state.value = state.value.copy(inputPending = false, receipt = BrowserInputReceipt(1, "accepted")) }
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
+        compose.runOnIdle {
+            val (first, second) = sent.map { it as BrowserInput.Wheel }
+            assertEquals(40 * scale, first.deltaY, 0.01)
+            assertEquals("the queued wheel carries the sum", 100 * scale, second.deltaY, 0.01)
+        }
+    }
+
+    @Test fun longPressThenDragIsALeftButtonMouseDrag() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); advanceEventTime(1_000); moveBy(Offset(40f, 0f)); moveBy(Offset(40f, 0f)); up() }
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.lastOrNull().let { it is BrowserInput.Pointer && it.action == "up" } } }
+        compose.runOnIdle {
+            assertTrue(sent.none { it is BrowserInput.Wheel })
+            val pointers = sent.map { it as BrowserInput.Pointer }
+            assertEquals("down", pointers.first().action); assertEquals("up", pointers.last().action)
+            assertTrue(pointers.any { it.action == "move" })
+            assertTrue(pointers.all { it.button == "left" })
+            assertTrue("the drag moved right", pointers.last().x > pointers.first().x)
+        }
+        compose.onNodeWithText("New tab").assertIsEnabled()
+    }
+
+    @Test fun longPressWithoutMovementIsARightClick() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); advanceEventTime(1_000); up() }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
+        compose.runOnIdle {
+            assertEquals(listOf("down" to "right", "up" to "right"), sent.map { (it as BrowserInput.Pointer).action to it.button })
+        }
+    }
+
+    @Test fun cancelledGesturesNeverLeaveAButtonHeld() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        // A cancelled scroll or tap sends nothing.
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); moveBy(Offset(0f, -60f)); cancel() }
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); cancel() }
+        settle()
+        compose.runOnIdle { assertTrue(sent.none { it is BrowserInput.Pointer }) }
+        // A cancelled drag releases its button.
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); advanceEventTime(1_000); moveBy(Offset(40f, 0f)); cancel() }
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.lastOrNull().let { it is BrowserInput.Pointer && it.action == "up" } } }
+        compose.onNodeWithText("New tab").assertIsEnabled()
+        // Focus moving away mid-drag releases it as well.
+        compose.onNodeWithTag("browserViewport").performTouchInput { down(center); advanceEventTime(1_000); moveBy(Offset(40f, 0f)) }
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.lastOrNull().let { it is BrowserInput.Pointer && it.action == "move" } } }
+        compose.onNodeWithText("New tab").assertIsNotEnabled()
+        compose.onNodeWithTag("browserText").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.lastOrNull().let { it is BrowserInput.Pointer && it.action == "up" } } }
+        compose.onNodeWithText("New tab").assertIsEnabled()
+        // The finger lifting later sends nothing more: the gesture ended with the focus.
+        compose.onNodeWithTag("browserViewport").performTouchInput { up() }
+        settle()
+        compose.runOnIdle {
+            val pointers = sent.filterIsInstance<BrowserInput.Pointer>()
+            assertEquals(pointers.count { it.action == "down" }, pointers.count { it.action == "up" })
+        }
+    }
+
+    @Test fun mouseKeepsPlainMouseSemantics() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        compose.onNodeWithTag("browserViewport").performMouseInput { moveTo(center); press(); moveBy(Offset(30f, 0f)); release() }
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.lastOrNull().let { it is BrowserInput.Pointer && it.action == "up" } } }
+        compose.runOnIdle {
+            assertTrue(sent.none { it is BrowserInput.Wheel })
+            val pointers = sent.map { it as BrowserInput.Pointer }
+            assertEquals("down", pointers.first().action)
+            assertTrue(pointers.any { it.action == "move" })
+            assertTrue(pointers.all { it.button == "left" })
+        }
+    }
+
+    @Test fun keyChipIsOnePressThatCannotStayDown() {
+        val sent = mutableListOf<BrowserInput>()
+        showControlled(sent)
+        compose.onNodeWithTag("browserKey_PageDown").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
+        compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "PageDown", "PageDown"), BrowserInput.Key("up", "PageDown", "PageDown")), sent) }
+        compose.onNodeWithText("New tab").assertIsEnabled()
+        compose.onNodeWithTag("browserKey_Escape").assertContentDescriptionEquals("Escape")
+    }
+
+    @Test fun reloadOpensTheCurrentAddressAgainOnlyWhenThatReloads() {
+        val sent = mutableListOf<BrowserInput>(); val navigated = mutableListOf<String>()
+        val state = showControlled(sent, listOf(BrowserTab("tab", "T", "https://example.com/a")), navigated)
+        compose.onNodeWithTag("browserReload").performClick()
+        compose.runOnIdle { assertEquals(listOf("https://example.com/a"), navigated) }
+        compose.runOnIdle { state.value = state.value.copy(tabs = listOf(BrowserTab("tab", "T", "https://example.com/a#part"))) }
+        compose.onAllNodesWithTag("browserReload").assertCountEquals(0)
+        compose.runOnIdle { state.value = state.value.copy(tabs = listOf(BrowserTab("tab", "T", "https://example.com/a")), ownsControl = false) }
+        compose.onAllNodesWithTag("browserReload").assertCountEquals(0)
+        compose.onNodeWithTag("browserSync").assertExists()
+    }
+
+    @Test fun controlBarNamesTheHolderAndHandsOverToALocalizedParticipant() {
+        val handed = mutableListOf<String>()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, owner = BrowserOwner("agent", "agent-123456")))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(handoff = { handed += it; true }), {}) } }
+        compose.onNodeWithTag("browserControlState").assertTextEquals("Control held by Pi agent 123456")
+        compose.runOnIdle { view = view.copy(ownsControl = true, owner = BrowserOwner("device", "me"), participants = listOf(BrowserOwner("device", "me"), BrowserOwner("agent", "agent-123456"))) }
+        compose.onNodeWithTag("browserControlState").assertTextEquals("You have control")
+        compose.onNodeWithTag("browserHandoff").performClick()
+        compose.onNodeWithTag("browserHandoff_agent-123456").assertTextEquals("Pi agent 123456").performClick()
+        compose.runOnIdle { assertEquals(listOf("agent-123456"), handed) }
+    }
+
+    @Test fun frameFailureOffersRetryAndOpeningShowsAPlaceholder() {
+        var refreshed = 0
+        var view by mutableStateOf<BrowserView?>(BrowserView("s"))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(refresh = { refreshed++; true }), {}) } }
+        compose.onNodeWithTag("browserViewportPlaceholder").assertExists()
+        compose.onNodeWithText("Opening…").assertExists()
+        compose.onAllNodesWithTag("browserControlBar").assertCountEquals(0)
+        compose.runOnIdle { view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, notice = BrowserNotice.FRAME_FAILED) }
+        compose.onNodeWithText("Try again").performClick()
+        compose.runOnIdle { assertEquals(1, refreshed) }
+    }
+
+    @Test fun typingADraftReportsUnsentInput() {
+        var unsent = false
+        compose.setContent { MaterialTheme { BrowserPane(BrowserView("s", opening = false, ownsControl = true), BrowserPaneActions(), {}, { unsent = it }) } }
+        compose.runOnIdle { assertFalse(unsent) }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.runOnIdle { assertTrue(unsent) }
+        compose.onNodeWithTag("browserText").performTextReplacement("")
+        compose.runOnIdle { assertFalse(unsent) }
+        compose.onNodeWithTag("browserAddress").performTextReplacement("https://example.com")
+        compose.runOnIdle { assertTrue(unsent) }
+    }
 }
