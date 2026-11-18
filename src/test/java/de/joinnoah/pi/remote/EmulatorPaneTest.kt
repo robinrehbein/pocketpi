@@ -137,6 +137,13 @@ class EmulatorPaneTest {
         compose.onNodeWithText("The picture could not be shown.").assertIsDisplayed()
         compose.onNodeWithText("Waiting for the first frame…").assertDoesNotExist()
     }
+    @Test fun aRefusedRequestBeforeTheFirstFrameKeepsWaitingForIt() {
+        // A refused acquire or refresh leaves the watch alive: a frame follows.
+        compose.setContent { MaterialTheme { EmulatorPane(EmulatorView("s", opening = false, emulatorId = "e", notice = EmulatorNotice.FAILED), actions(), {}) } }
+        compose.onNodeWithText("The request failed.").assertIsDisplayed()
+        compose.onNodeWithText("Waiting for the first frame…").assertIsDisplayed()
+        compose.onNodeWithText("The picture could not be shown.").assertDoesNotExist()
+    }
     @Test fun theControlBarSitsDirectlyUnderTheNoticesAboveTheScreen() {
         compose.setContent { MaterialTheme { EmulatorPane(controlled(EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)).copy(notice = EmulatorNotice.FAILED), actions(), {}, decodeContext = EmptyCoroutineContext) } }
         val notice = compose.onNodeWithTag("emulatorNotice").getUnclippedBoundsInRoot()

@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
@@ -48,8 +49,20 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** One prompt or choice in a [PaneAction]'s menu. */
-internal class PaneMenuItem(val label: String, val tag: String, val onClick: () -> Unit)
+/**
+ * One prompt or choice in a [PaneAction]'s menu. A non-null [selected] makes it one of several
+ * choices (such as a browser tab), checked while selected; [close] adds a close button at its end.
+ */
+internal class PaneMenuItem(
+    val label: String,
+    val tag: String,
+    val selected: Boolean? = null,
+    val close: PaneMenuClose? = null,
+    val onClick: () -> Unit,
+)
+
+/** The close button of a [PaneMenuItem]: [label] is its spoken name, [tag] its test tag. */
+internal class PaneMenuClose(val label: String, val tag: String, val onClick: () -> Unit)
 
 /**
  * A button in a [PaneHeader] beside its refresh button. With [checked] it is a toggle; with
@@ -96,6 +109,8 @@ internal fun PaneHeader(
     leaveEnabled: Boolean = true,
     /** A short pane: no padding above and below the pills, which keep their 48dp. */
     compact: Boolean = false,
+    /** False where Esc does not leave the pane: the back or close button's tooltip then names no key. */
+    escapeLeaves: Boolean = true,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compact) 0.dp else 8.dp)) {
         val hasTrailingPill = onReload != null || actions.isNotEmpty()
@@ -110,8 +125,8 @@ internal fun PaneHeader(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             FloatingSurface(Modifier.weight(1f, fill = false).testTag("${tag}HeaderPill"), shape = CircleShape) {
                 Row(Modifier.padding(start = 8.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // Esc runs the same step as this button (see PaneBackHandler).
-                    ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE) {
+                    // Esc runs the same step as this button (see PaneBackHandler), where it leaves the pane.
+                    ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE.takeIf { escapeLeaves }) {
                         IconButton(onClick = if (nested) onBack else onClose, enabled = leaveEnabled, modifier = Modifier.size(48.dp).testTag(if (nested) "${tag}Back" else "${tag}Close")) {
                             Icon(if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close, if (nested) backLabel else closeLabel)
                         }
@@ -183,13 +198,29 @@ private fun InlineAction(action: PaneAction) {
 
 @Composable
 private fun MenuEntry(item: PaneMenuItem, dismiss: () -> Unit) {
+    val selected = item.selected
+    val close = item.close
     DropdownMenuItem(
-        text = { Text(item.label) },
+        text = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         onClick = {
             dismiss()
             item.onClick()
         },
-        modifier = Modifier.testTag(item.tag),
+        modifier = Modifier.testTag(item.tag).then(if (selected != null) Modifier.semantics { this.selected = selected } else Modifier),
+        leadingIcon = if (selected != null) { { if (selected) Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) } } else null,
+        trailingIcon = if (close != null) {
+            {
+                IconButton(
+                    onClick = {
+                        dismiss()
+                        close.onClick()
+                    },
+                    modifier = Modifier.size(48.dp).testTag(close.tag),
+                ) {
+                    Icon(Icons.Default.Close, close.label, Modifier.size(18.dp))
+                }
+            }
+        } else null,
     )
 }
 

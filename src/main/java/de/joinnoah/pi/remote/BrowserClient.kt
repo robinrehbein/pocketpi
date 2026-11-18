@@ -152,7 +152,15 @@ internal class BrowserClient(
                 }
             } catch (_: Exception) {
                 if (connectionAlive(c)) closeConnection(c)
-            } finally { releaseInFlight--; if (refreshAfter && valid(t, v.sessionId, c)) refresh() }
+            } finally {
+                releaseInFlight--
+                if (refreshAfter && valid(t, v.sessionId, c)) refresh()
+                // Hidden and shown again meanwhile (a stale token): the refresh of that showing may
+                // have come back while this release was in flight, leaving [reacquire] armed. The
+                // refresh after the release is the one that takes control back (or ends the chance);
+                // a hidden pane leaves it to its next showing.
+                else if (reacquire && releaseInFlight == 0 && visible) refresh()
+            }
         }
     }
     private fun detach(refreshAfter: Boolean = true) {

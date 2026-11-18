@@ -11,4 +11,6 @@
     <string name="browser_discard_title">Discard browser input?</string>
     <string name="browser_discard_body">The address or text you have not sent will be discarded.</string>
     <string name="browser_close_tab">Close tab %1$s</string>
+    <string name="browser_tabs">Tabs</string>
+    <string name="browser_control_dropped">Control was given up so that no key or button stays pressed on the page. Take control again to continue.</string>
 </resources>

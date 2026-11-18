@@ -895,6 +895,34 @@ class BrowserClientTest {
         assertTrue(calls.any { it.first == "browser.acquire" })
     }
 
+    @Test fun hidingAndShowingTwiceDuringOneReleaseTakesControlBackAfterItAndNotOnALaterSync() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = acquiredClient(calls, backgroundScope); runCurrent()
+        calls.answer("browser.open", opened()); runCurrent()
+        assertTrue(client.acquire()); runCurrent(); calls.answer("browser.acquire", lease()); runCurrent()
+        client.setVisible(false); runCurrent()
+        client.setVisible(true); runCurrent()
+        client.setVisible(false); runCurrent()
+        client.setVisible(true); runCurrent()
+        // The first showing's refresh is stale; the second's comes back before the release.
+        calls.answer("browser.open", openedAt(1)); runCurrent(); calls.answer("browser.participants", participantsAt(1)); runCurrent()
+        calls.answer("browser.open", openedAt(1)); runCurrent(); calls.answer("browser.participants", participantsAt(1)); runCurrent()
+        assertTrue(calls.none { it.first == "browser.acquire" })
+        // The release lands under a newer token: its refresh still runs and takes control back once.
+        calls.answer("browser.detach", Wire.objectOf("kind" to "browser.released", "browserId" to "b", "generation" to 2)); runCurrent()
+        calls.answer("browser.open", openedAt(2)); runCurrent()
+        calls.answer("browser.participants", participantsAt(2)); runCurrent()
+        calls.answer("browser.acquire", JsonObject(lease() + ("generation" to JsonPrimitive(2)))); runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        // Given away later, control is not taken again by a manual "Update status".
+        assertTrue(client.handoff("agent")); runCurrent()
+        calls.answer("browser.handoff", Wire.objectOf("kind" to "browser.released", "browserId" to "b", "generation" to 3)); runCurrent()
+        calls.answer("browser.open", openedAt(3)); runCurrent(); calls.answer("browser.participants", participantsAt(3)); runCurrent()
+        assertTrue(client.refresh()); runCurrent()
+        calls.answer("browser.open", openedAt(3)); runCurrent(); calls.answer("browser.participants", participantsAt(3)); runCurrent()
+        assertTrue(calls.none { it.first == "browser.acquire" })
+    }
+
     @Test fun whileAStallIsRecoveredOnlyReleasesGoOutNotWheels() = runTest {
         val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
         val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, { "device" })

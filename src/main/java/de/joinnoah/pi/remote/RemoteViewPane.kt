@@ -5,10 +5,9 @@ import androidx.compose.ui.layout.VerticalAlignmentLine
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Measured
 import androidx.compose.ui.layout.layoutId
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.findRootCoordinates
-import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.WindowInsetsRulers
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,19 +21,18 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fitInside
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
@@ -89,6 +87,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /*
  * What the remote view panes (terminal, browser and preview, emulator) share: the pane with its
@@ -109,8 +108,9 @@ private fun remoteViewBarPadding(): PaddingValues =
     if (LocalRemoteViewCompact.current) REMOTE_VIEW_COMPACT_BAR_PADDING else REMOTE_VIEW_BAR_PADDING
 
 /**
- * The height a compact pane keeps for its viewport (about four terminal rows) before anything
- * else: the bars around it yield first (see docs/testing/android-terminal-compact.md).
+ * The height a compact pane keeps for its viewport (about four terminal rows, see
+ * docs/testing/android-terminal-compact.md) out of the room the bars leave above their minimum
+ * heights: [RemoteViewColumn] never squeezes a bar below its minimum for it.
  */
 internal val REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT = 96.dp
 
@@ -124,10 +124,10 @@ internal fun remoteViewCompact(height: Dp): Boolean = height < REMOTE_VIEW_COMPA
  * True inside a compact [RemoteViewPane], one less than [REMOTE_VIEW_COMPACT_HEIGHT] high. There
  * every pane keeps the viewport as large as it can: the header and the bars lose their padding
  * above and below (their 48dp controls stay), input bars are single lines (the default of
- * [RemoteInputBar]), the viewport keeps at least [REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT] while the
- * bars yield, and a pane leaves out what it can do without (the browser its tab row and an empty
- * text to send; the address bar and key strip stay). An input on its way shows as the viewport's
- * busy bar, never as a notice row.
+ * [RemoteInputBar]), and a pane moves what it can into the header (the browser its tab row, into
+ * [RemoteViewPane]'s `compactActions`). No focusable input leaves composition for the height: the
+ * soft keyboard opening would shrink the pane and take the focus away with it. An input on its
+ * way shows as the viewport's busy bar, never as a notice row.
  */
 internal val LocalRemoteViewCompact = compositionLocalOf { false }
 
@@ -179,11 +179,15 @@ internal fun RemoteViewNoticeLine(notice: RemoteViewNotice, modifier: Modifier =
  * [tag] prefixes the test tags: `<tag>Pane`, and the header's `<tag>Close`, `<tag>Reload`,
  * `<tag>Back` and `<tag>Title`. With [onBack] the header shows a back arrow beside its close
  * button, and Back and Esc run it instead of [onClose]. A pane that stays composed while another
- * inspector tab shows does not take Back or Esc. With [escapeCloses] false a hardware Esc does
- * nothing to the pane (nor reaches the chat behind it), while Back still closes it: Esc is a key
- * of the terminal and of the page, which a habit press must not close.
+ * inspector tab shows does not take Back or Esc. With [escapeCloses] false a hardware Esc never
+ * closes the pane, while Back still does: Esc is a key of the terminal and of the page, which a
+ * habit press must not close. Over the chat, or with keyboard focus in the pane, such an Esc does
+ * nothing (it does not reach the chat behind); beside the chat with focus elsewhere it runs the
+ * chat's own steps (see [PaneBackHandler]). The header's close button then names no shortcut.
  *
- * The pane provides [LocalRemoteViewCompact] to [content].
+ * [compactActions] join [actions] in a compact pane only. The pane provides
+ * [LocalRemoteViewCompact] to [content]; its notices give way first where the bars do not fit
+ * ([RemoteViewShed]).
  */
 @Composable
 internal fun RemoteViewPane(
@@ -198,6 +202,7 @@ internal fun RemoteViewPane(
     onReload: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     actions: List<PaneAction> = emptyList(),
+    compactActions: List<PaneAction> = emptyList(),
     notices: List<RemoteViewNotice> = emptyList(),
     /** False leaves Back and Esc to whatever is under the pane. */
     backEnabled: Boolean = true,
@@ -207,15 +212,29 @@ internal fun RemoteViewPane(
     backLabel: String = stringResource(R.string.remote_view_back),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    // Whether keyboard focus is in the pane; read only when Esc comes, so a plain holder.
+    val focusInside = remember { booleanArrayOf(false) }
     // A terminal or browser tab stays composed while another tab shows; Back is not its to take.
-    PaneBackHandler(enabled = backEnabled && LocalTerminalKeyboardActive.current, escapeCloses = escapeCloses, onBack = onBack ?: onClose)
+    PaneBackHandler(
+        enabled = backEnabled && LocalTerminalKeyboardActive.current,
+        escapeCloses = escapeCloses,
+        focusInside = { focusInside[0] },
+        onBack = onBack ?: onClose,
+    )
     // The page background, as the other panes have. A Surface also keeps taps off the chat under it.
-    Surface(modifier.fillMaxSize().testTag("${tag}Pane"), color = MaterialTheme.colorScheme.background) {
+    Surface(
+        modifier.fillMaxSize().testTag("${tag}Pane").onFocusChanged { focusInside[0] = it.hasFocus },
+        color = MaterialTheme.colorScheme.background,
+    ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = remoteViewCompact(maxHeight)
             CompositionLocalProvider(LocalRemoteViewCompact provides compact) {
+                // Pads, in the layout phase, by the part of the safe drawing insets (system bars,
+                // cutout, keyboard) that overlaps the pane in its window: a pane over the whole
+                // screen keeps clear of all of them, one that ends above the navigation bar or the
+                // keyboard loses no height to them. No recomposition while the keyboard animates.
                 RemoteViewColumn(
-                    Modifier.fillMaxSize().remoteViewInsetsPadding(),
+                    Modifier.fillMaxSize().fitInside(WindowInsetsRulers.SafeDrawing.current),
                     viewportMinHeight = if (compact) REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT else 0.dp,
                 ) {
                     PaneHeader(
@@ -230,10 +249,11 @@ internal fun RemoteViewPane(
                         onBack = onBack ?: onClose,
                         onClose = onClose,
                         onReload = onReload,
-                        actions = actions,
+                        actions = if (compact) actions + compactActions else actions,
                         compact = compact,
+                        escapeLeaves = escapeCloses,
                     )
-                    notices.forEach { RemoteViewNoticeLine(it) }
+                    notices.forEach { RemoteViewNoticeLine(it, Modifier.remoteViewShed(RemoteViewShed.NOTICES)) }
                     content()
                 }
             }
@@ -241,38 +261,28 @@ internal fun RemoteViewPane(
     }
 }
 
-/**
- * Pads by the part of the safe drawing insets (system bars, cutout, keyboard) that overlaps this
- * layout in its window. A pane over the whole screen keeps clear of all of them; one that ends
- * above the navigation bar or the keyboard (a parent made room already, or a test host draws it
- * in a smaller box) loses no height to them.
- */
-@Composable
-private fun Modifier.remoteViewInsetsPadding(): Modifier {
-    val insets = WindowInsets.safeDrawing
-    val density = LocalDensity.current
-    val direction = LocalLayoutDirection.current
-    // The layout's bounds and the size of the root it lies in, which fills the window.
-    var bounds by remember { mutableStateOf<Pair<androidx.compose.ui.geometry.Rect, androidx.compose.ui.unit.IntSize>?>(null) }
-    val known = bounds?.first
-    val window = bounds?.second ?: androidx.compose.ui.unit.IntSize.Zero
-    val (left, right) = insets.getLeft(density, direction) to insets.getRight(density, direction)
-    val top = insets.getTop(density); val bottom = insets.getBottom(density)
-    val padding = with(density) {
-        if (known == null || window.width <= 0 || window.height <= 0)
-            PaddingValues.Absolute(left.toDp(), top.toDp(), right.toDp(), bottom.toDp())
-        else PaddingValues.Absolute(
-            left = (left - known.left).coerceAtLeast(0f).toDp(),
-            top = (top - known.top).coerceAtLeast(0f).toDp(),
-            right = (right - (window.width - known.right)).coerceAtLeast(0f).toDp(),
-            bottom = (bottom - (window.height - known.bottom)).coerceAtLeast(0f).toDp(),
-        )
-    }
-    // The bounds are the layout's own, outside its padding, so the padding cannot move them.
-    return onGloballyPositioned { bounds = it.boundsInRoot() to it.findRootCoordinates().size }.padding(padding)
-}
-
 private object RemoteViewportSlot
+
+/**
+ * The bars of a [RemoteViewPane] that give way where the bars together, at their minimum heights,
+ * are taller than the pane, in this order: the key strip first, then the notices, then the control
+ * bar. The lowest bar of a kind goes first. A bar without a mark, such as the header, an input bar
+ * or the address bar, always stays.
+ */
+internal enum class RemoteViewShed { KEYS, NOTICES, CONTROL }
+
+private data class RemoteViewShedSlot(val shed: RemoteViewShed)
+
+/** Marks a bar of a [RemoteViewPane]'s content as one that gives way ([RemoteViewShed]). */
+internal fun Modifier.remoteViewShed(shed: RemoteViewShed): Modifier = layoutId(RemoteViewShedSlot(shed))
+
+private data class RemoteViewFlexSlot(val minHeight: Dp)
+
+/**
+ * Marks a bar that may be shorter than its content, down to [minHeight], such as an input bar
+ * whose draft has more lines than show at once. Other bars keep their own height.
+ */
+private fun Modifier.remoteViewFlex(minHeight: Dp): Modifier = layoutId(RemoteViewFlexSlot(minHeight))
 
 /** [ColumnScope] of [RemoteViewColumn]: a weight marks the viewport; alignment is the start. */
 private object RemoteViewColumnScope : ColumnScope {
@@ -283,26 +293,57 @@ private object RemoteViewColumnScope : ColumnScope {
 }
 
 /**
- * A column like [Column] whose weighted children (the viewport) share what the others leave,
- * but keep at least [viewportMinHeight]: the other children, measured top to bottom, get only
- * the height above that floor, so they yield before the viewport does.
+ * A column like [Column] whose weighted children (the viewport) share what the others, the bars,
+ * leave. No bar is squeezed below its minimum height: that is its own height, or for an input bar
+ * ([RemoteInputBar]) the height of one line. The viewport keeps [viewportMinHeight] only out of
+ * the room above those minimums, `min(viewportMinHeight, total - sum of the minimums)`, so a
+ * focused input bar never shrinks out of sight for it. Where the minimums alone do not fit, the
+ * bars marked with [remoteViewShed] are left out in [RemoteViewShed]'s order until the rest fit.
+ *
+ * A bar's minimum is not asked as an intrinsic height: [PaneHeader] and [RemoteControlBar] are
+ * subcomposed (BoxWithConstraints), which answers no intrinsic measurement, and a text field's
+ * intrinsic height is that of all its lines. Bars without a [remoteViewFlex] mark are measured
+ * once at their own height; input bars declare their one-line height.
  */
 @Composable
-private fun RemoteViewColumn(modifier: Modifier, viewportMinHeight: Dp, content: @Composable ColumnScope.() -> Unit) {
+internal fun RemoteViewColumn(modifier: Modifier, viewportMinHeight: Dp = 0.dp, content: @Composable ColumnScope.() -> Unit) {
     Layout(content = { RemoteViewColumnScope.content() }, modifier = modifier) { measurables, constraints ->
-        val total = if (constraints.hasBoundedHeight) constraints.maxHeight else Constraints.Infinity
-        val weighted = measurables.count { it.layoutId === RemoteViewportSlot }
-        val floor = if (weighted > 0) viewportMinHeight.roundToPx() else 0
+        val bounded = constraints.hasBoundedHeight
+        val total = if (bounded) constraints.maxHeight else Constraints.Infinity
+        val placeables = arrayOfNulls<Placeable>(measurables.size)
+        val flexMin = IntArray(measurables.size) { (measurables[it].layoutId as? RemoteViewFlexSlot)?.minHeight?.roundToPx() ?: -1 }
+        // The bars that keep their own height first.
         var used = 0
-        val placeables = arrayOfNulls<androidx.compose.ui.layout.Placeable>(measurables.size)
         measurables.forEachIndexed { index, child ->
-            if (child.layoutId === RemoteViewportSlot) return@forEachIndexed
-            val room = if (total == Constraints.Infinity) Constraints.Infinity else (total - used - floor).coerceAtLeast(0)
+            if (child.layoutId === RemoteViewportSlot || flexMin[index] >= 0) return@forEachIndexed
+            val placeable = child.measure(Constraints(maxWidth = constraints.maxWidth, maxHeight = total))
+            placeables[index] = placeable
+            used += placeable.height
+        }
+        var laterMins = flexMin.sumOf { it.coerceAtLeast(0) }
+        if (bounded)
+            for (shed in RemoteViewShed.entries) {
+                for (index in measurables.indices.reversed()) {
+                    if (used + laterMins <= total) break
+                    if ((measurables[index].layoutId as? RemoteViewShedSlot)?.shed != shed) continue
+                    used -= placeables[index]?.height ?: 0
+                    placeables[index] = null
+                }
+            }
+        val weighted = measurables.count { it.layoutId === RemoteViewportSlot }
+        val floor = if (bounded && weighted > 0) minOf(viewportMinHeight.roundToPx(), total - used - laterMins).coerceAtLeast(0) else 0
+        // Then the input bars, top to bottom: each gets what is left above the floor and the
+        // minimums of those below it, and never less than its own minimum.
+        measurables.forEachIndexed { index, child ->
+            val min = flexMin[index]
+            if (min < 0) return@forEachIndexed
+            laterMins -= min
+            val room = if (bounded) maxOf(min, total - used - floor - laterMins) else Constraints.Infinity
             val placeable = child.measure(Constraints(maxWidth = constraints.maxWidth, maxHeight = room))
             placeables[index] = placeable
             used += placeable.height
         }
-        val left = if (total == Constraints.Infinity) floor else (total - used).coerceAtLeast(0)
+        val left = if (bounded) (total - used).coerceAtLeast(0) else 0
         var shared = 0
         var seen = 0
         measurables.forEachIndexed { index, child ->
@@ -312,7 +353,7 @@ private fun RemoteViewColumn(modifier: Modifier, viewportMinHeight: Dp, content:
             shared += height
             placeables[index] = child.measure(Constraints(minWidth = 0, maxWidth = constraints.maxWidth, minHeight = height, maxHeight = height))
         }
-        val height = if (total == Constraints.Infinity) used + left else total
+        val height = if (bounded) total else used
         layout(constraints.maxWidth, height) {
             var y = 0
             placeables.forEach { placeable -> placeable?.let { it.placeRelative(0, y); y += it.height } }
@@ -641,7 +682,7 @@ internal fun RemoteTabStrip(
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
-        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(remoteViewBarPadding()).testTag("${tag}Tabs"),
+        modifier.fillMaxWidth().selectableGroup().horizontalScroll(rememberScrollState()).padding(remoteViewBarPadding()).testTag("${tag}Tabs"),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -692,8 +733,13 @@ internal fun RemoteInputBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val send = { if (sendEnabled) onSend() }
+    val barPadding = remoteViewBarPadding()
+    // One line of the field (its 56dp, more with a larger font) and the bar's padding: in a
+    // remote view pane the bar never gets less, whatever the viewport would like.
+    val lineHeight = with(LocalDensity.current) { MaterialTheme.typography.bodyLarge.lineHeight.takeIf { it.isSp }?.toDp() ?: 24.sp.toDp() }
+    val minHeight = maxOf(TextFieldDefaults.MinHeight, lineHeight + 32.dp) + barPadding.calculateTopPadding() + barPadding.calculateBottomPadding()
     Row(
-        modifier.fillMaxWidth().padding(remoteViewBarPadding()),
+        modifier.remoteViewFlex(minHeight).fillMaxWidth().padding(barPadding),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {

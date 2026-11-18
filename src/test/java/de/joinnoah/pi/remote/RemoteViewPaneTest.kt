@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
@@ -47,13 +48,24 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import android.view.KeyEvent as NativeKeyEvent
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.navigation3.runtime.NavKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], qualifiers = "w600dp-h800dp")
@@ -316,23 +328,89 @@ class RemoteViewPaneTest {
 
     @Test fun hardwareEscDoesNotCloseAPaneThatKeepsItButBackDoes() {
         var closed = 0
-        val target = ChatKeyTarget()
+        var stopped = 0
+        val target = ChatKeyTarget().apply { running = true; stop = { stopped++ } }
         lateinit var dispatcher: OnBackPressedDispatcher
         compose.setContent {
             dispatcher = requireNotNull(LocalOnBackPressedDispatcherOwner.current).onBackPressedDispatcher
             CompositionLocalProvider(LocalChatKeyTarget provides target) {
-                MaterialTheme { RemoteViewPane("Terminal", "terminal", onClose = { closed++ }, escapeCloses = false) {} }
+                MaterialTheme {
+                    Column {
+                        // Something of the chat beside the pane that can hold focus.
+                        androidx.compose.material3.TextField("", {}, Modifier.testTag("chatField"))
+                        Box(Modifier.weight(1f)) {
+                            RemoteViewPane("Terminal", "terminal", onClose = { closed++ }, escapeCloses = false) {
+                                RemoteInputBar("", {}, onSend = {}, tag = "terminalInput")
+                            }
+                        }
+                    }
+                }
             }
         }
+        // Over the chat (a phone): Esc takes the pane's turn, so it neither closes the pane nor
+        // reaches the chat behind it, where Esc, Esc would stop pi.
         compose.runOnIdle {
-            // Esc takes the pane's turn, so it neither closes it nor reaches the chat behind it.
-            target.running = true
+            target.composerCovered = true
             target.escape(1_000L); target.escape(1_100L)
             assertTrue(target.paneOpen)
             assertEquals(0, closed)
+            assertEquals(0, stopped)
+            target.composerCovered = false
+        }
+        // Beside the chat with keyboard focus in the pane: the same.
+        compose.onNodeWithTag("terminalInput").performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle {
+            target.escape(2_000L); target.escape(2_100L)
+            assertTrue(target.paneOpen)
+            assertEquals(0, closed)
+            assertEquals(0, stopped)
+        }
+        compose.onNodeWithTag("chatField").performSemanticsAction(SemanticsActions.RequestFocus)
+        // Beside the chat with focus elsewhere: Esc runs the chat's steps and still never closes the pane.
+        compose.runOnIdle {
+            assertFalse(target.paneOpen)
+            target.escape(3_000L); target.escape(3_100L)
+            assertEquals(0, closed)
+            assertEquals(1, stopped)
+            // Back closes it wherever it is.
             dispatcher.onBackPressed()
             assertEquals(1, closed)
         }
+    }
+
+    @Test fun escEscReachesTheChatWhileATerminalTabShowsBesideIt() {
+        val chat = RemoteNavKey.Chat("host", "project", "session")
+        val scope = CoroutineScope(Job())
+        val navigator = RemoteNavigator(NavigationFakeRepository(), chat.selection().keys().toMutableList<NavKey>(), scope)
+        var closed = 0
+        var stopped = 0
+        val target = ChatKeyTarget().apply { running = true; stop = { stopped++ } }
+        val targets = ShortcutTargets().apply { register(chat, target) }
+        compose.setContent {
+            CompositionLocalProvider(LocalChatKeyTarget provides target) {
+                MaterialTheme {
+                    // The inspector beside the chat with the terminal as its active tab.
+                    InspectorHost(
+                        InspectorTabs().open(InspectorTab.TERMINAL),
+                        content = { tab ->
+                            if (tab == InspectorTab.TERMINAL) ({ RemoteViewPane("Terminal", "terminal", onClose = { closed++ }, escapeCloses = false) {} })
+                            else null
+                        },
+                        onSelect = {}, onClose = {}, expanded = false, onExpand = {},
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("terminalPane").assertIsDisplayed()
+        compose.runOnIdle {
+            // Nothing has focus, so the window reports the keys as unhandled.
+            for (time in listOf(1_000L, 1_200L))
+                for (action in listOf(NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.ACTION_UP))
+                    assertTrue(navigator.key(KeyEvent(NativeKeyEvent(time, time, action, NativeKeyEvent.KEYCODE_ESCAPE, 0)), null, targets, unhandled = true))
+            assertEquals("Esc, Esc stops pi", 1, stopped)
+            assertEquals("the terminal tab stays open", 0, closed)
+        }
+        scope.cancel()
     }
 
     @Test fun hardwareEscClosesAPaneByDefault() {
@@ -434,6 +512,9 @@ class RemoteViewPaneTest {
         compose.onNodeWithTag("browserTab_b").assertIsNotEnabled()
     }
 
+    // Native graphics: the legacy text metrics ignore maxLines, so the one-line draft field would
+    // measure four lines tall.
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
     @Test fun aCompactPaneLeavesTheTerminalItsBudgetWithDraftModifiersAndPendingInput() {
         // The terminal's chrome in its fullest compact state: header with the modifier subtitle and
         // an action, the key strip, a four-line draft with the insert action, input on its way.
@@ -443,7 +524,7 @@ class RemoteViewPaneTest {
                     RemoteViewPane("Terminal", "terminal", onClose = {}, subtitle = "Ctrl+Alt+Shift",
                         actions = listOf(PaneAction("Shortcuts", Icons.Default.Keyboard, "terminalShortcuts"))) {
                         RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth(), busy = true)
-                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab"), RemoteKey("enter", "Enter")) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL), onKey = {}, tag = "terminal")
+                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab"), RemoteKey("enter", "Enter")) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL), onKey = {}, tag = "terminal", modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS))
                         RemoteInputBar("first line\nsecond line\nthird line\nfourth line", {}, onSend = {}, tag = "terminalInput") {
                             androidx.compose.material3.IconButton(onClick = {}, Modifier.width(48.dp).height(48.dp)) {}
                         }
@@ -453,30 +534,83 @@ class RemoteViewPaneTest {
         }
         // On a device the header is 48dp (its pills, no padding), the key strip 48 and the input bar
         // 56: 152dp, plus 24dp of status bar over a pane at the top of the window, leaves 104dp of
-        // 280. Robolectric's legacy text metrics make text rows taller, so this checks the rules
-        // that budget rests on: no padding around the header, the viewport floor kept while the
-        // bars yield, and the controls the terminal needs still shown.
-        fun height(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.bottom - it.top }
-        val pane = compose.onNodeWithTag("terminalPane").getUnclippedBoundsInRoot()
-        assertEquals(pane.top, compose.onNodeWithTag("terminalHeaderPill").getUnclippedBoundsInRoot().top)
-        assertTrue("viewport=${height("terminalViewport")}", height("terminalViewport") >= REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT)
+        // 280 (the androidTest TerminalPaneCompactUiTest asserts that on a Pixel 2). Robolectric's
+        // fonts and window differ from the device's, so this checks the rules that budget rests
+        // on: no padding around the header, no bar below its minimum (the input bar's is one line),
+        // and the viewport floor out of the room above those minimums.
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        fun height(tag: String) = bounds(tag).let { it.bottom - it.top }
+        val pane = bounds("terminalPane")
+        val header = bounds("terminalHeaderPill")
+        assertEquals(pane.top, header.top)
+        val column = bounds("terminalInput").bottom - header.top
+        val minimums = height("terminalHeaderPill") + height("terminalKeys") + 56.dp
+        val viewport = height("terminalViewport")
+        val budget = "pane=$pane column=$column header=${height("terminalHeaderPill")} keys=${height("terminalKeys")} input=${height("terminalInput")} viewport=$viewport"
+        println("Compact terminal budget at 280dp: $budget")
+        assertTrue(budget, viewport >= minOf(REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT, column - minimums) - 0.5.dp)
         compose.onNodeWithTag("terminalSubtitle").assertTextEquals("Ctrl+Alt+Shift")
         compose.onNodeWithTag("terminalInputSend").assertIsDisplayed()
+        compose.onNodeWithTag("terminalInput").assertHeightIsAtLeast(48.dp)
         compose.onNodeWithTag("terminalKey_escape").assertIsDisplayed()
     }
 
-    @Test fun aCompactPaneKeepsTheViewportFloorAndTheBarsYieldFirst() {
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun aShortPaneKeepsTheInputBarWholeWhileTheViewportShrinks() {
+        // Phone landscape with the soft keyboard leaves a pane about 180dp high.
         compose.setContent {
             MaterialTheme {
-                Box(Modifier.fillMaxWidth().height(260.dp)) {
-                    RemoteViewPane("Browser", "browser", onClose = {}) {
-                        RemoteViewport("browserViewport", Modifier.weight(1f).fillMaxWidth())
-                        Box(Modifier.fillMaxWidth().height(300.dp).testTag("tallBar"))
+                Box(Modifier.fillMaxWidth().height(180.dp)) {
+                    RemoteViewPane("Terminal", "terminal", onClose = {}) {
+                        RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth())
+                        RemoteKeyStrip(listOf(RemoteKey("escape", "Esc"), RemoteKey("tab", "Tab")), onKey = {}, tag = "terminal", modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS))
+                        RemoteInputBar("", {}, onSend = {}, tag = "terminalInput")
                     }
                 }
             }
         }
-        val viewport = compose.onNodeWithTag("browserViewport").getUnclippedBoundsInRoot()
-        assertEquals(REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT, viewport.bottom - viewport.top)
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        compose.onNodeWithTag("terminalInput").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("terminalInputSend").assertIsDisplayed()
+        assertTrue("input bar inside the pane", bounds("terminalInput").bottom <= bounds("terminalPane").bottom + 0.5.dp)
+        val viewport = bounds("terminalViewport")
+        assertTrue("viewport=$viewport", viewport.bottom - viewport.top < REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT)
+    }
+
+    @Test fun barsThatDoNotFitGiveWayKeysFirstThenNoticesAndTheOthersKeepTheirHeight() {
+        var height by mutableStateOf(300.dp)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(height)) {
+                    RemoteViewColumn(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxWidth().height(48.dp).testTag("header"))
+                        Box(Modifier.fillMaxWidth().height(40.dp).remoteViewShed(RemoteViewShed.NOTICES).testTag("notice"))
+                        Box(Modifier.weight(1f).fillMaxWidth().testTag("viewport"))
+                        Box(Modifier.fillMaxWidth().height(48.dp).remoteViewShed(RemoteViewShed.KEYS).testTag("keys"))
+                        Box(Modifier.fillMaxWidth().height(56.dp).testTag("input"))
+                    }
+                }
+            }
+        }
+        fun height(tag: String) = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        // Everything fits: the viewport gets the rest (300 - 192).
+        assertEquals(108.dp, height("viewport"))
+        compose.onNodeWithTag("keys").assertIsDisplayed()
+        // 192dp of bars in 180: the key strip goes, the rest keep their heights.
+        compose.runOnIdle { height = 180.dp }
+        compose.onNodeWithTag("keys").assertIsNotDisplayed()
+        compose.onNodeWithTag("notice").assertIsDisplayed()
+        assertEquals(36.dp, height("viewport"))
+        assertEquals(56.dp, height("input"))
+        assertEquals(180.dp, compose.onNodeWithTag("input").getUnclippedBoundsInRoot().bottom)
+        // 144dp in 130: the notice goes too.
+        compose.runOnIdle { height = 130.dp }
+        compose.onNodeWithTag("notice").assertIsNotDisplayed()
+        assertEquals(26.dp, height("viewport"))
+        // Nothing else gives way: the header and the input bar are never squeezed.
+        compose.runOnIdle { height = 90.dp }
+        assertEquals(48.dp, height("header"))
+        assertEquals(56.dp, height("input"))
+        assertEquals(0.dp, height("viewport"))
     }
 }

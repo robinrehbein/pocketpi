@@ -11,7 +11,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -23,7 +25,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.input.pointer.RequestDisallowInterceptTouchEvent
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
@@ -145,7 +153,14 @@ private fun browserStripKeys(): List<RemoteKey> {
  * Touch input follows phone conventions: a tap clicks, a one-finger drag scrolls the page (wheel
  * input, the content follows the finger), and a long press clicks the right button or, followed
  * by a drag, drags with the left button (text selection, drag and drop). A mouse or touchpad keeps
- * plain mouse semantics. Hardware Esc is the page's key: it never closes the pane (Back does).
+ * plain mouse semantics.
+ *
+ * Hardware Esc never closes the pane; Back and the close button do. With the viewport focused and
+ * in control it goes to the page; otherwise it does nothing, or, beside the chat with focus
+ * outside the pane, runs the chat's own Esc steps (see [RemoteViewPane]). The preview's own window
+ * swallows it too ([PreviewDialog]).
+ *
+ * A compact pane keeps its text bar (one line) and moves the tab row into a header menu.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -177,6 +192,9 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var urlDirty by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf(false) }
     var draft by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf("") }
     var textSendRefused by remember(view?.sessionId) { mutableStateOf(false) }
+    // The fail-safe gave up control under a held key or button; taking control again clears it.
+    var controlDropped by remember(view?.sessionId) { mutableStateOf(false) }
+    LaunchedEffect(view?.ownsControl) { if (view?.ownsControl == true) controlDropped = false }
     val queue = remember(view?.sessionId) { mutableStateListOf<PendingBrowserInput>() }
     var flight by remember(view?.sessionId) { mutableStateOf<BrowserFlight?>(null) }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -218,7 +236,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             if (!latestActions.input(next.input)) {
                 queue.clear(); flight = null
                 if (next.submittedText != null) textSendRefused = true
-                if (held.isNotEmpty()) latestActions.dropControl()
+                if (held.isNotEmpty()) { latestActions.dropControl(); controlDropped = true }
             }
         }
     }
@@ -242,7 +260,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     }
     LaunchedEffect(view?.viewportRevision) {
         if (resizeRevision != null && resizeRevision != view?.viewportRevision) resizeRevision = null
-        if (held.isNotEmpty() && heldRevision != null && heldRevision != view?.viewportRevision) latestActions.dropControl()
+        if (held.isNotEmpty() && heldRevision != null && heldRevision != view?.viewportRevision) { latestActions.dropControl(); controlDropped = true }
     }
     val image = view?.image?.takeIf { it.viewportRevision == view.viewportRevision }
     var decoded by remember(view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision, view?.documentEpoch, view?.previewPort) { mutableStateOf<Pair<BrowserImage, android.graphics.Bitmap>?>(null) }
@@ -469,7 +487,19 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
         if (textSendRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_send_refused), "browserSendRefused"))
         if (goRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_go_refused), "browserGoRefused"))
+        if (controlDropped) add(RemoteViewNotice.Info(stringResource(R.string.browser_control_dropped), "browserControlDropped"))
     }
+    // A compact pane has no room for the tab row: its tabs are a header menu instead.
+    val tabsMenu = if (view == null || view.opening) emptyList<PaneMenuItem>() else buildList<PaneMenuItem> {
+        view.tabs.forEach { tab ->
+            val tabLabel = tab.title.ifBlank { tab.url }
+            val close = if (view.ownsControl) PaneMenuClose(stringResource(R.string.browser_close_tab, tabLabel), "browserTabsMenuClose_${tab.id}") { latestActions.closeTab(tab.id) } else null
+            add(PaneMenuItem(tabLabel, "browserTabsMenu_${tab.id}", selected = tab.id == view.selectedTabId, close = close) { latestActions.selectTab(tab.id) })
+        }
+        if (view.ownsControl) add(PaneMenuItem(stringResource(R.string.browser_new_tab), "browserTabsMenuNew") { latestActions.newTab("about:blank") })
+    }
+    val compactActions = if (tabsMenu.isEmpty()) emptyList<PaneAction>() else
+        listOf(PaneAction(stringResource(R.string.browser_tabs), Icons.Default.Tab, "browserTabsMenu", items = tabsMenu, enabled = held.isEmpty()))
     RemoteViewPane(
         title = title,
         tag = "browser",
@@ -478,6 +508,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         busy = held.isNotEmpty(),
         onReload = if (reloadUrl != null) ({ latestActions.navigate(reloadUrl) }) else null,
         actions = headerActions,
+        compactActions = compactActions,
         notices = notices,
         escapeCloses = false,
     ) {
@@ -492,12 +523,13 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                     else -> RemoteControlState.VIEWING
                 },
                 tag = "browser",
+                modifier = Modifier.remoteViewShed(RemoteViewShed.CONTROL),
                 holder = view.owner?.let { browserParticipantLabel(it) },
                 onTake = { latestActions.acquire() },
                 handoffTargets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, browserParticipantLabel(it)) },
                 onHandOff = { latestActions.handoff(it) },
             )
-            // A compact pane leaves the tab row out; the address bar still opens a page.
+            // A compact pane shows its tabs as a header menu (compactActions); the address bar stays.
             if (!compact)
                 RemoteTabStrip(
                     tabs = view.tabs.map { tab ->
@@ -599,10 +631,12 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 keys = browserStripKeys(),
                 onKey = { key -> latestPress(BrowserInput.Key("down", key.id, key.id), BrowserInput.Key("up", key.id, key.id)) },
                 tag = "browser",
+                modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS),
                 enabled = canTextKeys,
             )
-            // A compact pane leaves the text bar out unless it holds a draft, which never hides.
-            if (!compact || draft.isNotEmpty()) RemoteInputBar(
+            // Always composed, also in a compact pane (one line there): the soft keyboard opening
+            // shrinks the pane, and a bar that left composition then would take the focus with it.
+            RemoteInputBar(
                 value = draft,
                 onValueChange = { draft = it },
                 onSend = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) },
@@ -612,5 +646,24 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 sendTag = "browserSendText",
             )
         }
+    }
+}
+
+/**
+ * The window of the dev-server preview: [content] (its [BrowserPane]) over everything. Android
+ * turns an Esc nothing in a dialog took into Back, which would close the preview or ask to discard
+ * its input; here an Esc the pane leaves (focus in the address or text field, or nowhere) is used
+ * up at the window's root, which holds the focus while nothing else does. Back and the pane's
+ * close button still close the preview through the pane's handler and [onDismissRequest]; with
+ * the viewport focused and in control, Esc goes to the page before it gets here.
+ */
+@Composable
+internal fun PreviewDialog(onDismissRequest: () -> Unit, content: @Composable () -> Unit) {
+    Dialog(onDismissRequest = onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        val rootFocus = remember { FocusRequester() }
+        Surface(Modifier.fillMaxSize().onKeyEvent { it.key == Key.Escape }.focusRequester(rootFocus).focusTarget().testTag("previewDialog")) {
+            content()
+        }
+        LaunchedEffect(rootFocus) { runCatching { rootFocus.requestFocus() } }
     }
 }

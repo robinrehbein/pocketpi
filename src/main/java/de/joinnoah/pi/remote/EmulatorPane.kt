@@ -240,6 +240,7 @@ internal fun EmulatorPane(
             RemoteControlBar(
                 state = controlState,
                 tag = "emulator",
+                modifier = Modifier.remoteViewShed(RemoteViewShed.CONTROL),
                 holder = view.owner?.let { emulatorParticipantLabel(it) },
                 enabled = !view.opening,
                 onTake = { latestActions.acquire() },
@@ -248,7 +249,8 @@ internal fun EmulatorPane(
                 onHandOff = { latestActions.handoff(it) },
             )
             // Nothing more comes on its own after these: the notice says what to do.
-            val stopped = view.notice == EmulatorNotice.STREAM_FAILED || view.notice == EmulatorNotice.FAILED || view.notice == EmulatorNotice.UNCERTAIN
+            // A refused request (FAILED) stops nothing: the watch lives on and a frame follows.
+            val stopped = view.notice == EmulatorNotice.STREAM_FAILED || view.notice == EmulatorNotice.UNCERTAIN
             val placeholder = when {
                 view.opening -> RemoteViewPlaceholder(stringResource(R.string.remote_view_opening))
                 image != null && failedImage === image -> RemoteViewPlaceholder(stringResource(R.string.remote_view_frame_failed), busy = false)
@@ -308,6 +310,7 @@ internal fun EmulatorPane(
                 emulatorKeys(),
                 onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
                 tag = "emulator",
+                modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS),
                 enabled = view.ownsControl && displayed && !view.opening,
             )
         }

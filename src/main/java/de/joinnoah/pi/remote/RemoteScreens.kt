@@ -4464,22 +4464,20 @@ internal fun RemoteScreen(
         }, Modifier.testTag("previewOpen"), enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
         dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_cancel)) } },
     )
-    if (previewShown && state.previewBrowser != null && chatModel != null) androidx.compose.ui.window.Dialog(onDismissRequest = {
+    if (previewShown && state.previewBrowser != null && chatModel != null) PreviewDialog(onDismissRequest = {
         if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
-    }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-            val previewPort by rememberUpdatedState(state.previewBrowser?.previewPort)
-            val actions = remember(chatModel) { BrowserPaneActions(
-                // Retry after a failed open opens the same port again.
-                open = { previewPort?.let(chatModel::openPreview) ?: false },
-                acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
-                newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
-                closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
-                input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible, dropControl = chatModel::dropPreviewControl,
-            ) }
-            previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
-                BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
-            }
+    }) {
+        val previewPort by rememberUpdatedState(state.previewBrowser?.previewPort)
+        val actions = remember(chatModel) { BrowserPaneActions(
+            // Retry after a failed open opens the same port again.
+            open = { previewPort?.let(chatModel::openPreview) ?: false },
+            acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
+            newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
+            closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
+            input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible, dropControl = chatModel::dropPreviewControl,
+        ) }
+        previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
+            BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
         }
     }
     if (previewCloseConfirm) AlertDialog(

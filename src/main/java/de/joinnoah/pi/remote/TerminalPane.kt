@@ -222,6 +222,7 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
         if (view?.holder != null)
             RemoteControlBar(
                 RemoteControlState.HELD, "terminal",
+                Modifier.remoteViewShed(RemoteViewShed.CONTROL),
                 holder = stringResource(if (view.holder == "mac") R.string.remote_view_holder_mac else R.string.remote_view_holder_phone),
                 // Taking over interrupts whoever types there: it asks first.
                 onTake = { confirmTakeover = true },
@@ -238,7 +239,7 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
             // Always composed: removing the view would end the renderer.
             AndroidView(factory = { renderer.view }, modifier = Modifier.fillMaxSize().semantics { contentDescription = screenLabel })
         }
-        RemoteKeyStrip(keys, onKey = { sendTouchKey(it.id) }, tag = "terminal", enabled = live)
+        RemoteKeyStrip(keys, onKey = { sendTouchKey(it.id) }, tag = "terminal", modifier = Modifier.remoteViewShed(RemoteViewShed.KEYS), enabled = live)
         RemoteInputBar(
             value = draft,
             onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) },

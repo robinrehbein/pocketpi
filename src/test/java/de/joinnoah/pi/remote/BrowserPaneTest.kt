@@ -698,6 +698,13 @@ class BrowserPaneTest {
         compose.waitUntil(5_000) { compose.runOnIdle { drops == 1 } }
         // The drop is not a hide and show, which would take control back on its own.
         compose.runOnIdle { assertEquals(listOf(true), visible) }
+        // The pane says why it is view only now, until control is taken again.
+        compose.onNodeWithTag("browserControlDropped").assertIsDisplayed()
+            .assertTextEquals("Control was given up so that no key or button stays pressed on the page. Take control again to continue.")
+        compose.runOnIdle { state.value = state.value.copy(ownsControl = false) }
+        compose.onNodeWithTag("browserControlDropped").assertIsDisplayed()
+        compose.runOnIdle { state.value = state.value.copy(ownsControl = true) }
+        compose.onNodeWithTag("browserControlDropped").assertDoesNotExist()
     }
 
     @Test fun tabsAreSelectableGlassChipsWithAFortyEightDpClose() {
@@ -715,19 +722,86 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserTab_t1").assertExists()
     }
 
-    @Test fun aCompactPaneLeavesOutTheTabRowAndAnEmptyTextBar() {
+    @Test fun aCompactPaneKeepsTheTextBarAndMovesTheTabsIntoAHeaderMenu() {
         var height by mutableStateOf(360.dp)
         compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(height)) {
             BrowserPane(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1,
                 tabs = listOf(BrowserTab("t1", "First", "https://a.example")), selectedTabId = "t1"), BrowserPaneActions(), {})
         } } }
         compose.onNodeWithTag("browserTabs").assertDoesNotExist()
-        compose.onNodeWithTag("browserText").assertDoesNotExist()
+        compose.onNodeWithTag("browserTabsMenu").assertIsDisplayed().assertContentDescriptionEquals("Tabs")
+        compose.onNodeWithTag("browserText").assertIsDisplayed()
         compose.onNodeWithTag("browserAddress").assertExists()
         compose.onNodeWithTag("browserKeys").assertExists()
         compose.runOnIdle { height = 700.dp }
         compose.onNodeWithTag("browserTabs").assertExists()
+        compose.onNodeWithTag("browserTabsMenu").assertDoesNotExist()
         compose.onNodeWithTag("browserText").assertExists()
+    }
+
+    @Test fun theFocusedTextBarStaysWhenTheKeyboardMakesThePaneCompact() {
+        var height by mutableStateOf(500.dp)
+        compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(height)) {
+            BrowserPane(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1), BrowserPaneActions(), {})
+        } } }
+        compose.onNodeWithTag("browserText").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        compose.onNodeWithTag("browserText").assertIsFocused()
+        // The soft keyboard opens and the pane shrinks below the compact threshold.
+        compose.runOnIdle { height = 300.dp }
+        compose.onNodeWithTag("browserText").assertIsDisplayed().assertIsFocused()
+        compose.onNodeWithTag("browserText").performTextInput("a")
+        compose.onNodeWithTag("browserText").assertTextContains("a")
+    }
+
+    @Test fun theCompactTabsMenuSelectsClosesAndOpensTabs() {
+        val selected = mutableListOf<String>(); val closed = mutableListOf<String>(); val opened = mutableListOf<String>()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1,
+            tabs = listOf(BrowserTab("t1", "First", "https://a.example"), BrowserTab("t2", "", "https://b.example")), selectedTabId = "t1"))
+        compose.setContent { MaterialTheme { Box(Modifier.fillMaxWidth().height(360.dp)) {
+            BrowserPane(view, BrowserPaneActions(selectTab = { selected += it }, closeTab = { closed += it; true }, newTab = { opened += it; true }), {})
+        } } }
+        compose.onNodeWithTag("browserTabsMenu").performClick()
+        compose.onNodeWithTag("browserTabsMenu_t1").assertIsSelected().assertTextContains("First")
+        compose.onNodeWithTag("browserTabsMenu_t2").assertIsNotSelected().assertTextContains("https://b.example").performClick()
+        compose.onNodeWithTag("browserTabsMenu_t2").assertDoesNotExist()
+        compose.onNodeWithTag("browserTabsMenu").performClick()
+        compose.onNodeWithTag("browserTabsMenuClose_t1").assertContentDescriptionEquals("Close tab First").assertWidthIsAtLeast(48.dp).performClick()
+        compose.onNodeWithTag("browserTabsMenu").performClick()
+        compose.onNodeWithTag("browserTabsMenuNew").assertTextContains("New tab").performClick()
+        compose.runOnIdle { assertEquals(listOf("t2"), selected); assertEquals(listOf("t1"), closed); assertEquals(listOf("about:blank"), opened) }
+        // Without control the tabs can still be watched, but not closed or added.
+        compose.runOnIdle { view = view.copy(ownsControl = false) }
+        compose.onNodeWithTag("browserTabsMenu").performClick()
+        compose.onNodeWithTag("browserTabsMenu_t1").assertExists()
+        compose.onNodeWithTag("browserTabsMenuClose_t1").assertDoesNotExist()
+        compose.onNodeWithTag("browserTabsMenuNew").assertDoesNotExist()
+    }
+
+    @Test fun hardwareEscNeverClosesThePreviewWindowButBackStillDoes() {
+        var dismissed = 0; var closed = 0
+        lateinit var window: android.view.Window
+        lateinit var back: androidx.activity.OnBackPressedDispatcher
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, previewPort = 3000)
+        compose.setContent { MaterialTheme { PreviewDialog({ dismissed++ }) {
+            window = (LocalView.current.parent as androidx.compose.ui.window.DialogWindowProvider).window
+            back = requireNotNull(androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current).onBackPressedDispatcher
+            BrowserPane(view, BrowserPaneActions(), { closed++ })
+        } } }
+        fun escape() = compose.runOnIdle {
+            for (action in listOf(NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.ACTION_UP))
+                window.callback.dispatchKeyEvent(NativeKeyEvent(action, NativeKeyEvent.KEYCODE_ESCAPE))
+        }
+        // Focus on the window's root, then in the address field: neither lets Esc become Back.
+        escape()
+        compose.runOnIdle { assertEquals(0, dismissed); assertEquals(0, closed) }
+        compose.onNodeWithTag("browserAddress").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        compose.onNodeWithTag("browserAddress").assertIsFocused()
+        escape()
+        compose.onNodeWithTag("browserTitle").assertExists()
+        compose.runOnIdle { assertEquals(0, dismissed); assertEquals(0, closed) }
+        // Back still goes through the pane's close path.
+        compose.runOnIdle { back.onBackPressed() }
+        compose.runOnIdle { assertEquals(1, closed); assertEquals(0, dismissed) }
     }
 
     /** A controlling pane in a box [height] high, whose resize the Host applies at once. */

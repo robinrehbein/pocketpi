@@ -460,23 +460,35 @@ internal class ChatKeyTarget {
         return true
     }
 
-    /** The open panes' Back actions, oldest first, as [PaneBackHandler] registered them. */
-    private val panes = mutableListOf<() -> Unit>()
+    /** An open pane's Esc action, and whether Esc is the pane's now ([takesEscape]). */
+    private class Pane(val close: () -> Unit, val takesEscape: () -> Boolean)
 
-    fun addPane(close: () -> Unit) {
-        panes += close
+    /** The open panes, oldest first, as [PaneBackHandler] registered them. */
+    private val panes = mutableListOf<Pane>()
+
+    /**
+     * Registers an open pane: Esc runs [close] while [takesEscape] says so; otherwise Esc passes
+     * the pane by, as if it were not open.
+     */
+    fun addPane(close: () -> Unit, takesEscape: () -> Boolean) {
+        panes += Pane(close, takesEscape)
     }
+
+    /** Registers an open pane that always takes Esc. */
+    fun addPane(close: () -> Unit) = addPane(close) { true }
 
     fun removePane(close: () -> Unit) {
-        panes.remove(close)
+        val index = panes.indexOfLast { it.close === close }
+        if (index >= 0) panes.removeAt(index)
     }
 
-    val paneOpen: Boolean get() = panes.isNotEmpty()
+    /** A pane takes Esc now. */
+    val paneOpen: Boolean get() = panes.any { it.takesEscape() }
 
-    /** Runs the newest pane's Back action, as Back would; false without an open pane. */
+    /** Runs the Esc action of the newest pane that takes Esc now; false without one. */
     fun closeTopPane(): Boolean {
-        val close = panes.lastOrNull() ?: return false
-        close()
+        val pane = panes.lastOrNull { it.takesEscape() } ?: return false
+        pane.close()
         return true
     }
 
@@ -544,19 +556,29 @@ internal val LocalChatKeyTarget = staticCompositionLocalOf<ChatKeyTarget?> { nul
 
 /**
  * Back for a pane over or beside the chat (a tool detail, Files, Changes, jobs, history). Esc
- * runs the same action through [LocalChatKeyTarget], newest pane first like Back. With
- * [escapeCloses] false the pane still takes Esc's turn, so Esc neither closes it nor reaches the
- * chat behind it (where Esc, Esc would stop pi), but does nothing: for a remote terminal or
- * browser, where Esc is the remote's key.
+ * runs the same action through [LocalChatKeyTarget], newest pane first like Back.
+ *
+ * With [escapeCloses] false (a remote terminal or browser, where Esc is the remote's key) Esc
+ * never closes the pane. While the pane covers the chat ([ChatKeyTarget.composerCovered]) or
+ * [focusInside] says keyboard focus is in it, the pane takes Esc's turn and does nothing, so a
+ * habit press neither closes it nor reaches the chat behind it (where Esc, Esc would stop pi).
+ * Beside the chat with focus elsewhere, Esc passes the pane by and runs the chat's own steps.
  */
 @Composable
-internal fun PaneBackHandler(enabled: Boolean = true, escapeCloses: Boolean = true, onBack: () -> Unit) {
+internal fun PaneBackHandler(
+    enabled: Boolean = true,
+    escapeCloses: Boolean = true,
+    focusInside: () -> Boolean = { false },
+    onBack: () -> Unit,
+) {
     BackHandler(enabled = enabled, onBack = onBack)
     val target = LocalChatKeyTarget.current ?: return
     val latest by rememberUpdatedState(onBack)
+    val latestFocusInside by rememberUpdatedState(focusInside)
     DisposableEffect(target, enabled, escapeCloses) {
         val close: () -> Unit = if (escapeCloses) ({ latest() }) else ({})
-        if (enabled) target.addPane(close)
+        val takesEscape: () -> Boolean = if (escapeCloses) ({ true }) else ({ target.composerCovered || latestFocusInside() })
+        if (enabled) target.addPane(close, takesEscape)
         onDispose { target.removePane(close) }
     }
 }
