@@ -54,4 +54,31 @@ class NewSessionNavigationTest {
         assertEquals("Hello", repository.state.value.draft)
         assertEquals(listOf(R.string.remote_new_session_model_failed_kept), repository.errors)
     }
+
+    @Test
+    fun claudeCodeCreatesWithItsHarnessAndSetsNoModel() = runTest {
+        val repository = repository()
+        val stack = RemoteSelection("route", "project").keys().toMutableList<androidx.navigation3.runtime.NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+
+        navigation.startSession("route", "project", NewSessionChoice(chosen, "Hello", SessionHarness.CLAUDE))
+        runCurrent()
+
+        assertEquals(listOf("create:claude", "prompt"), repository.sessionSteps)
+        assertEquals("Hello", repository.state.value.draft)
+        assertEquals(emptyList<Int>(), repository.errors)
+    }
+
+    @Test
+    fun claudeCodeWithoutAPromptStillCreatesWithItsHarness() = runTest {
+        val repository = repository()
+        val stack = RemoteSelection("route", "project").keys().toMutableList<androidx.navigation3.runtime.NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+
+        navigation.startSession("route", "project", NewSessionChoice(null, "", SessionHarness.CLAUDE))
+        runCurrent()
+
+        assertEquals(listOf("create:claude"), repository.sessionSteps)
+        assertEquals(RemoteNavKey.Chat("route", "project", "created"), stack.last())
+    }
 }

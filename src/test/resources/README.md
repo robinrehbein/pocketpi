@@ -45,3 +45,10 @@ requests with `includeContext` alone and together with `includeCompaction`, list
 after a compaction (unknown tokens and percent), over their window and without a fill, and refused
 shapes (unknown or missing keys, bad counts and percents, a `null` context, a `false` or misplaced
 flag, a fill outside a list).
+
+`session-harness-v1.json` holds the wire shapes of `session.harness.v1`: a `sessions.create` that
+asks for Claude Code (`harness: "claude"`) or pi, the Claude Code session it returns, a
+`sessions.list` result with a Claude Code row beside a pi row (no `harness`), the `unsupported`
+refusal "Claude Code CLI not found on the Mac", and refused shapes (an unknown harness, a session
+row that names `pi`). The app never sends `harness: "pi"`. It is copied from the noah-monorepo
+branch `ccr-2fe51638-s6dc9x`, not yet on `dev`.

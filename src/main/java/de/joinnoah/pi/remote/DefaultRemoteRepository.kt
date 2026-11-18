@@ -418,6 +418,8 @@ class DefaultRemoteRepository(
             STREAM_CAPABILITY,
             // Capability routes v2 and later give extension sessions their controls.
             HOST_WORKER_V2_CAPABILITY,
+            // `sessions.create` takes `harness` (Claude Code); pi stays the default.
+            SESSION_HARNESS_CAPABILITY,
         )
     /** The projects.list route falls back through v2 to v1 only when a list is absent. */
     private var terminalRouteOffered = false
@@ -5316,14 +5318,24 @@ class DefaultRemoteRepository(
         }
     }
 
-    override suspend fun createSession(routeId: String, projectId: String): RemoteSelection {
+    override suspend fun createSession(
+        routeId: String,
+        projectId: String,
+        harness: SessionHarness,
+    ): RemoteSelection {
         val parent = RemoteSelection(routeId, projectId)
         if (activate(parent) != parent) return state.value.selection
+        // Never send `harness` to a host that does not list it: it would reject the request.
+        val fields = sessionCreateFields(projectId, harness, state.value.capabilities)
+        if (fields == null) {
+            reportError(R.string.remote_new_session_claude_unavailable)
+            return state.value.selection
+        }
         cancelSelection()
         val epoch = selectionEpoch
         update { it.copy(loading = true) }
         try {
-            val session = withHostWorker(request("sessions.create", epoch, "projectId" to projectId).obj("session"))
+            val session = withHostWorker(request("sessions.create", epoch, *fields.toTypedArray()).obj("session"))
             // Only the project's list misses the new chat; other lists and chats stay cached.
             invalidateProjectList(routeId, projectId)
             invalidateProjectList(routeId, session.text("projectId"))
@@ -5350,7 +5362,11 @@ class DefaultRemoteRepository(
             throw e
         } catch (swallowed: Exception) {
             Diagnostics.caught("repo.createSession", swallowed)
-            reportError(R.string.remote_request_error)
+            reportError(
+                // The host refuses Claude Code as unsupported, e.g. when the Mac has no Claude Code CLI.
+                if (harness == SessionHarness.CLAUDE && swallowed.isUnsupported) R.string.remote_new_session_claude_unavailable
+                else R.string.remote_request_error,
+            )
             return state.value.selection
         } finally {
             if (epoch == selectionEpoch) update { it.copy(loading = false) }

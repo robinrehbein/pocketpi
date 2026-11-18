@@ -4288,6 +4288,7 @@ internal fun RemoteScreen(
                             },
                             onDismiss = { newSessionOpen = false },
                             busy = navigator.mutating,
+                            harnessSelectable = harnessSelectable(state.capabilities),
                         )
                     ChatPreviewHint(state)
                     val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }

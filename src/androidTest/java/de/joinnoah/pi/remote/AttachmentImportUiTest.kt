@@ -291,7 +291,7 @@ class AttachmentImportUiTest {
         }
 
         override suspend fun activate(selection: RemoteSelection, mode: ActivationMode) = selection
-        override suspend fun createSession(routeId: String, projectId: String) = RemoteSelection(routeId, projectId)
+        override suspend fun createSession(routeId: String, projectId: String, harness: SessionHarness) = RemoteSelection(routeId, projectId)
         override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? = null
         override fun cancelSelection() {}
         override suspend fun pair(text: String): RemoteSelection? = null

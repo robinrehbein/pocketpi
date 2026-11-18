@@ -126,7 +126,7 @@ internal class FullChatFixtureRepository : RemoteRepository {
     }
 
     override suspend fun activate(selection: RemoteSelection, mode: ActivationMode) = fullChatKey.selection()
-    override suspend fun createSession(routeId: String, projectId: String) = fullChatKey.selection()
+    override suspend fun createSession(routeId: String, projectId: String, harness: SessionHarness) = fullChatKey.selection()
     override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? = null
     override suspend fun pair(text: String): RemoteSelection? = null
     override fun cancelSelection() {}
