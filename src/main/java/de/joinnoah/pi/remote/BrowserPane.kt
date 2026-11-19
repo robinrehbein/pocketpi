@@ -75,6 +75,9 @@ private class BrowserFrameKey(private val image: BrowserImage?) {
  */
 private const val BROWSER_WHEEL_INTERVAL_MS = 50L
 
+/** The smallest viewport side, in dp (CSS pixels), the pane asks the host to resize the page to. */
+private const val BROWSER_VIEWPORT_MIN_DP = 80
+
 private enum class BrowserTouchMode {
     /** No finger gesture, or one that was given up (a second finger, a refused press). */
     NONE,
@@ -248,9 +251,13 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     // resize the page under the tap it is about to send.
     val touching = touch.mode != BrowserTouchMode.NONE
     LaunchedEffect(size, density, view?.ownsControl, view?.generation, view?.selectedTabId, active, held.size, touching) {
-        if (active && view?.ownsControl == true && held.isEmpty() && !touching && size.width > 0 && size.height > 0) {
-            val width = (size.width / density).toInt().coerceIn(80, 2048)
-            val height = (size.height / density).toInt().coerceIn(80, 2048)
+        // A viewport below the clamp's floor (a pane squeezed to a few dp) asks for nothing: the page
+        // would reflow to a size nobody sees. The last requested size stays until it grows again.
+        val measuredWidth = (size.width / density).toInt()
+        val measuredHeight = (size.height / density).toInt()
+        if (active && view?.ownsControl == true && held.isEmpty() && !touching && measuredWidth >= BROWSER_VIEWPORT_MIN_DP && measuredHeight >= BROWSER_VIEWPORT_MIN_DP) {
+            val width = measuredWidth.coerceIn(BROWSER_VIEWPORT_MIN_DP, 2048)
+            val height = measuredHeight.coerceIn(BROWSER_VIEWPORT_MIN_DP, 2048)
             val scale = density.toDouble().coerceIn(0.5, 3.0)
             val wanted = Triple(width, height, scale)
             if (wanted != requestedSize && latestActions.resize(width, height, scale, if (width >= height) "landscape" else "portrait")) {
@@ -653,7 +660,8 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
  * The window of the dev-server preview: [content] (its [BrowserPane]) over everything. Android
  * turns an Esc nothing in a dialog took into Back, which would close the preview or ask to discard
  * its input; here an Esc the pane leaves (focus in the address or text field, or nowhere) is used
- * up at the window's root, which holds the focus while nothing else does. Back and the pane's
+ * up at the window's root, which holds the focus while nothing else does (it takes it back when
+ * the focused field or viewport turns disabled and the focus would go nowhere). Back and the pane's
  * close button still close the preview through the pane's handler and [onDismissRequest]; with
  * the viewport focused and in control, Esc goes to the page before it gets here.
  */
@@ -661,7 +669,20 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
 internal fun PreviewDialog(onDismissRequest: () -> Unit, content: @Composable () -> Unit) {
     Dialog(onDismissRequest = onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         val rootFocus = remember { FocusRequester() }
-        Surface(Modifier.fillMaxSize().onKeyEvent { it.key == Key.Escape }.focusRequester(rootFocus).focusTarget().testTag("previewDialog")) {
+        val scope = rememberCoroutineScope()
+        // Whether the root or anything in it has focus; read when the posted request runs.
+        val focusInside = remember { booleanArrayOf(false) }
+        Surface(Modifier.fillMaxSize().onKeyEvent { it.key == Key.Escape }
+            .onFocusChanged { state ->
+                focusInside[0] = state.hasFocus
+                // A focused field or viewport that turns disabled (control taken, the fail-safe
+                // release) loses focus to nowhere, and the next Esc would close the window. The
+                // root takes it back, posted (never inside a focus change), and only while still
+                // nothing in the window has it, so a field focused meanwhile keeps its focus. The
+                // root is no text field: the soft keyboard does not open for it.
+                if (!state.hasFocus) scope.launch { if (!focusInside[0]) runCatching { rootFocus.requestFocus() } }
+            }
+            .focusRequester(rootFocus).focusTarget().testTag("previewDialog")) {
             content()
         }
         LaunchedEffect(rootFocus) { runCatching { rootFocus.requestFocus() } }

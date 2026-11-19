@@ -2862,4 +2862,23 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
         assertChatShown()
     }
+
+    @Test fun removingOneEscKeepingPaneLeavesTheOtherRegistered() {
+        // Both register the same no-op closer (a non-capturing lambda is one object): removing the
+        // first must remove its own entry, not the newest one with that closer.
+        val target = ChatKeyTarget()
+        var firstShown by mutableStateOf(true)
+        compose.setContent {
+            CompositionLocalProvider(LocalChatKeyTarget provides target) {
+                if (firstShown) PaneBackHandler(escapeCloses = false, focusInside = { false }, onBack = {})
+                PaneBackHandler(escapeCloses = false, focusInside = { true }, onBack = {})
+            }
+        }
+        compose.runOnIdle { assertTrue(target.paneOpen) }
+        compose.runOnIdle { firstShown = false }
+        compose.runOnIdle {
+            assertTrue("the second pane, with focus inside, still takes Esc", target.paneOpen)
+            assertTrue(target.closeTopPane())
+        }
+    }
 }

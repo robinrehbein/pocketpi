@@ -11,10 +11,12 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
@@ -792,6 +794,28 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserTabsMenuNew").assertDoesNotExist()
     }
 
+    @Test fun theTabsSubmenuInTheMoreMenuFollowsTabsOpenedAndClosedMeanwhile() {
+        val selected = mutableListOf<String>()
+        // 360dp wide and compact, with Reload: Sync and Tabs do not fit beside the title and move
+        // into the "more" menu (328 - 148 - 96 < 120).
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1,
+            tabs = listOf(BrowserTab("t1", "First", "https://a.example"), BrowserTab("t2", "Second", "https://b.example")), selectedTabId = "t1"))
+        compose.setContent { MaterialTheme { Box(Modifier.width(360.dp).height(360.dp)) {
+            BrowserPane(view, BrowserPaneActions(selectTab = { selected += it }), {})
+        } } }
+        compose.onNodeWithTag("browserReload").assertExists()
+        compose.onNodeWithTag("browserMoreActions").performClick()
+        compose.onNodeWithTag("browserTabsMenu").performClick()
+        compose.onNodeWithTag("browserTabsMenu_t2").assertIsNotSelected()
+        // The agent closes t2, opens t3 and selects it while the submenu is open.
+        compose.runOnIdle { view = view.copy(tabs = listOf(BrowserTab("t1", "First", "https://a.example"), BrowserTab("t3", "Third", "https://c.example")), selectedTabId = "t3") }
+        compose.onNodeWithTag("browserTabsMenu_t2").assertDoesNotExist()
+        compose.onNodeWithTag("browserTabsMenu_t1").assertIsNotSelected()
+        compose.onNodeWithTag("browserTabsMenu_t3").assertIsSelected().assertTextContains("Third")
+        compose.onNodeWithTag("browserTabsMenu_t1").performClick()
+        compose.runOnIdle { assertEquals(listOf("t1"), selected) }
+    }
+
     @Test fun hardwareEscNeverClosesThePreviewWindowButBackStillDoes() {
         var dismissed = 0; var closed = 0
         lateinit var window: android.view.Window
@@ -817,6 +841,55 @@ class BrowserPaneTest {
         // Back still goes through the pane's close path.
         compose.runOnIdle { back.onBackPressed() }
         compose.runOnIdle { assertEquals(1, closed); assertEquals(0, dismissed) }
+    }
+
+    @Test fun hardwareEscAfterLosingControlInAFocusedFieldStillDoesNotCloseThePreview() {
+        var dismissed = 0; var closed = 0
+        lateinit var window: android.view.Window
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, previewPort = 3000))
+        // Whether focus is anywhere in the pane (a disabled field reports no focus state of its own).
+        var paneFocused = false
+        compose.setContent { MaterialTheme { PreviewDialog({ dismissed++ }) {
+            window = (LocalView.current.parent as androidx.compose.ui.window.DialogWindowProvider).window
+            Box(Modifier.onFocusChanged { paneFocused = it.hasFocus }) { BrowserPane(view, BrowserPaneActions(), { closed++ }) }
+        } } }
+        fun escape() = compose.runOnIdle {
+            for (action in listOf(NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.ACTION_UP))
+                window.callback.dispatchKeyEvent(NativeKeyEvent(action, NativeKeyEvent.KEYCODE_ESCAPE))
+        }
+        for (field in listOf("browserAddress", "browserText")) {
+            compose.onNodeWithTag(field).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+            compose.onNodeWithTag(field).assertIsFocused()
+            compose.runOnIdle { assertTrue(paneFocused) }
+            // The agent takes control: the field turns disabled and Compose clears the window's focus.
+            compose.runOnIdle { view = view.copy(ownsControl = false, owner = BrowserOwner("agent", "a")) }
+            compose.onNodeWithTag(field).assertIsNotEnabled()
+            compose.runOnIdle { assertFalse("$field: the disabled field let go of the focus", paneFocused) }
+            escape()
+            compose.onNodeWithTag("browserTitle").assertExists()
+            compose.runOnIdle { assertEquals("$field: Esc after losing control must not dismiss", 0, dismissed); assertEquals(0, closed) }
+            compose.runOnIdle { view = view.copy(ownsControl = true, owner = null) }
+        }
+        // The root takes the focus back only while nothing has it: a field focused now keeps it.
+        compose.onNodeWithTag("browserAddress").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        compose.waitForIdle()
+        compose.onNodeWithTag("browserAddress").assertIsFocused()
+    }
+
+    @Test fun aViewportSqueezedBelowTheFloorAsksForNoResize() {
+        val sent = mutableListOf<BrowserInput>(); val resizes = mutableListOf<Int>(); val height = mutableStateOf(700)
+        showResizable(sent, resizes, height)
+        // Header 48 + address 56 + text 56 leave the viewport about 30dp of a 190dp pane.
+        compose.runOnIdle { height.value = 190 }
+        settle()
+        val viewport = compose.onNodeWithTag("browserViewport").getUnclippedBoundsInRoot()
+        assertTrue("the viewport is below the 80dp floor: $viewport", viewport.bottom - viewport.top < 80.dp)
+        compose.runOnIdle { assertEquals("no Wx80 reflow for a viewport nobody sees", 1, resizes.size) }
+        // It grows again: the next size is requested as before.
+        compose.runOnIdle { height.value = 600 }
+        settle()
+        compose.waitUntil(5_000) { compose.runOnIdle { resizes.size == 2 } }
+        compose.runOnIdle { assertTrue("a real size, not the floor: ${resizes.last()}", resizes.last() > 80) }
     }
 
     /** A controlling pane in a box [height] high, whose resize the Host applies at once. */

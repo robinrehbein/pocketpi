@@ -271,4 +271,17 @@ class KeymapTest {
         assertEquals(Shortcut.ACTIVITY, ctrl(Key.A, shift = true, context = KeyContext.CHAT))
         assertEquals(Shortcut.SELECT_ALL_LINES, ctrl(Key.A, context = KeyContext.CODE))
     }
+
+    @Test
+    fun eachPaneRegistrationIsRemovedOnItsOwnEvenWithASharedCloser() {
+        val target = ChatKeyTarget()
+        val shared: () -> Unit = {}
+        val first = target.addPane(shared) { false }
+        target.addPane(shared) { true }
+        target.removePane(first)
+        assertTrue("the second registration stays", target.paneOpen)
+        // Removing a registration twice is a no-op, never another pane's entry.
+        target.removePane(first)
+        assertTrue(target.paneOpen)
+    }
 }
