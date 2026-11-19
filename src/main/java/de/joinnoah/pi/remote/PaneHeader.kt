@@ -119,15 +119,25 @@ internal fun PaneHeader(
     compact: Boolean = false,
     /** False where Esc does not leave the pane: the back or close button's tooltip then names no key. */
     escapeLeaves: Boolean = true,
+    /**
+     * Every action and the refresh button behind the one "more" button, whatever the width, for
+     * a narrow pane where something under the header matters more than its buttons.
+     */
+    collapseActions: Boolean = false,
 ) {
+    // Collapsed, the refresh button is the last entry of the "more" menu, with the same tag.
+    val reload = onReload.takeUnless { collapseActions }
+    val actions = if (collapseActions && onReload != null)
+        actions + PaneAction(reloadLabel, Icons.Default.Refresh, "${tag}Reload", enabled = !busy, onClick = onReload)
+    else actions
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compact) 0.dp else 8.dp)) {
-        val hasTrailingPill = onReload != null || actions.isNotEmpty()
-        val reloadWidth = if (onReload == null) 0.dp else 48.dp
+        val hasTrailingPill = reload != null || actions.isNotEmpty()
+        val reloadWidth = if (reload == null) 0.dp else 48.dp
         // Leading padding, back/close button, title gap and trailing padding: 8 + 48 + 12 + 20.
         val reserved = 88.dp + reloadWidth + (if (nested) 48.dp else 0.dp) +
             (if (hasTrailingPill) PANE_PILL_GAP else 0.dp)
         // Every action as a button of its own, or all of them behind one "more" button.
-        val inline = actions.isNotEmpty() && maxWidth - reserved - 48.dp * actions.size >= PANE_TITLE_MIN_ROOM
+        val inline = !collapseActions && actions.isNotEmpty() && maxWidth - reserved - 48.dp * actions.size >= PANE_TITLE_MIN_ROOM
         val actionsWidth = if (actions.isEmpty()) 0.dp else 48.dp * (if (inline) actions.size else 1)
         val textWidth = (maxWidth - reserved - actionsWidth).coerceAtLeast(0.dp)
         Row(
@@ -181,9 +191,9 @@ internal fun PaneHeader(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (inline) actions.forEach { InlineAction(it) }
                     else if (actions.isNotEmpty()) OverflowActions(actions, tag)
-                    if (onReload != null)
+                    if (reload != null)
                         ShortcutTooltip(reloadLabel) {
-                            IconButton(onClick = onReload, enabled = !busy, modifier = Modifier.size(48.dp).testTag("${tag}Reload")) {
+                            IconButton(onClick = reload, enabled = !busy, modifier = Modifier.size(48.dp).testTag("${tag}Reload")) {
                                 Icon(Icons.Default.Refresh, reloadLabel)
                             }
                         }

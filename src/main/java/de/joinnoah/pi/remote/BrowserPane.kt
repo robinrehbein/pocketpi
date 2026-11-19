@@ -44,6 +44,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,13 @@ internal data class BrowserPaneActions(
     /** The fail-safe release while a key or button is held: gives up control, never taking it back. */
     val dropControl: () -> Unit = {},
 )
+
+/**
+ * Below this width a browser pane with a failure notice moves its header buttons into the "more"
+ * menu (see [remoteViewNoticeFirst]). It covers the narrow panes of about 312 to 336dp, a side
+ * inspector or a small window; wider panes keep their header as it is.
+ */
+internal val BROWSER_NOTICE_FIRST_WIDTH = 344.dp
 
 private data class PendingBrowserInput(val input: BrowserInput, val submittedText: String? = null, val repeatRelease: Boolean = false)
 private data class BrowserFlight(val item: PendingBrowserInput, val baseline: BrowserInputReceipt?)
@@ -518,6 +526,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         compactActions = compactActions,
         notices = notices,
         escapeCloses = false,
+        noticeFirstBelow = BROWSER_NOTICE_FIRST_WIDTH,
     ) {
         val compact = LocalRemoteViewCompact.current
         if (view == null || view.opening) {

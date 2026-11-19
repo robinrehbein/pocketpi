@@ -144,6 +144,15 @@ internal fun remoteViewCompact(height: Dp): Boolean = height < REMOTE_VIEW_COMPA
  */
 internal val LocalRemoteViewCompact = compositionLocalOf { false }
 
+/**
+ * Whether a remote view pane [width] wide moves its header's actions and refresh button into the
+ * "more" menu ([PaneHeader]'s `collapseActions`): below [noticeFirstBelow], while one of [notices]
+ * is a failure. The failure is what matters then, and the header keeps only close, the title and
+ * one button.
+ */
+internal fun remoteViewNoticeFirst(width: Dp, noticeFirstBelow: Dp, notices: List<RemoteViewNotice>): Boolean =
+    width < noticeFirstBelow && notices.any { it is RemoteViewNotice.Failure }
+
 /** A line of status under a remote view's header. [tag] is its test tag. */
 internal sealed interface RemoteViewNotice {
     val text: String
@@ -223,6 +232,8 @@ internal fun RemoteViewPane(
     closeLabel: String = stringResource(R.string.remote_view_close),
     reloadLabel: String = stringResource(R.string.remote_view_reload),
     backLabel: String = stringResource(R.string.remote_view_back),
+    /** Below this width a failure notice comes first: see [remoteViewNoticeFirst]. */
+    noticeFirstBelow: Dp = 0.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // Whether keyboard focus is in the pane; read only when Esc comes, so a plain holder.
@@ -241,6 +252,7 @@ internal fun RemoteViewPane(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = remoteViewCompact(maxHeight)
+            val noticeFirst = remoteViewNoticeFirst(maxWidth, noticeFirstBelow, notices)
             CompositionLocalProvider(LocalRemoteViewCompact provides compact) {
                 // Pads by the part of the safe drawing insets (system bars, cutout, keyboard) that
                 // overlaps the pane in its window: a pane over the whole screen keeps clear of all
@@ -265,6 +277,7 @@ internal fun RemoteViewPane(
                         actions = if (compact) actions + compactActions else actions,
                         compact = compact,
                         escapeLeaves = escapeCloses,
+                        collapseActions = noticeFirst,
                     )
                     notices.forEach {
                         val shed = if (it is RemoteViewNotice.Info) RemoteViewShed.INFO else RemoteViewShed.FAILURE
