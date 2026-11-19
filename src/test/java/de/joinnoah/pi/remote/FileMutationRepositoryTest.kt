@@ -93,7 +93,7 @@ class FileMutationRepositoryTest {
 
         private fun response(request: JsonObject): JsonObject? =
             when (request.text("type")) {
-                "projects.list" -> if (withoutV3 && request.text("requestId").startsWith("capabilities.v3:"))
+                "projects.list" -> if (withoutV3 && request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") })
                     Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))))
                 else Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))),
                     "capabilities" to JsonArray(advertised.map(::JsonPrimitive)))

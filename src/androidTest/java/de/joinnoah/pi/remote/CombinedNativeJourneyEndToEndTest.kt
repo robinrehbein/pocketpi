@@ -723,7 +723,7 @@ class CombinedNativeJourneyEndToEndTest {
         val production = final.getJSONObject("nativeProduction")
         assertEquals(1, production.getInt("ledgerAppliedCount")); assertEquals(0, production.getInt("ledgerAfterReleaseCount"))
         val capabilityId = production.getJSONObject("capabilityRequest").getString("requestId")
-        assertTrue(capabilityId.startsWith("capabilities.v3:"))
+        assertTrue(capabilityId.startsWith("capabilities.v4:") || capabilityId.startsWith("capabilities.v3:"))
         assertEquals(1, writes.count { it.optionalText("type") == "projects.list" && it.optionalText("requestId") == capabilityId })
         assertTrue(inbound.any { it.optionalText("type") == "result" && it.optionalText("requestId") == capabilityId && it.flag("ok") })
         for (optIn in listOf("question_editor.v1", "question_editor_native.v1", QUESTION_PAGED_EDITOR_OPT_IN, QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN)) assertTrue(capabilityId.contains(optIn))

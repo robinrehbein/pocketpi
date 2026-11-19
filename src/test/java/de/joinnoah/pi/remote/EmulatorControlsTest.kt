@@ -1,0 +1,223 @@
+package de.joinnoah.pi.remote
+
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import java.util.Base64
+import javax.imageio.ImageIO
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.serialization.json.*
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class EmulatorControlsTest {
+    private val fixture: JsonObject by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/emulator-controls-v1.json")!!.readText()).jsonObject
+    }
+
+    @Test fun fixtureCommandsRoundTripAndInvalidOnesAreRefused() {
+        val commands = fixture.obj("commands")
+        for (entry in commands.getValue("valid").jsonArray) {
+            val o = entry.jsonObject
+            assertEquals(o, encodeEmulatorCommand(parseEmulatorLeaseCommand(o)))
+        }
+        for (entry in commands.getValue("invalid").jsonArray)
+            assertThrows(entry.toString(), Exception::class.java) { parseEmulatorLeaseCommand(entry.jsonObject) }
+        val results = fixture.obj("results")
+        for (entry in results.getValue("valid").jsonArray) assertTrue(parseEmulatorResult(entry.jsonObject) is EmulatorResult.Rotated)
+        for (entry in results.getValue("invalid").jsonArray)
+            assertThrows(entry.toString(), Exception::class.java) { parseEmulatorResult(entry.jsonObject) }
+    }
+
+    @Test fun textIsPrintableAsciiOnly() {
+        assertTrue(emulatorTextValid("Hello, world! ~"))
+        assertFalse(emulatorTextValid("Grüße"))
+        assertFalse(emulatorTextValid("line\nbreak"))
+        assertFalse(emulatorTextValid(""))
+        assertFalse(emulatorTextValid("x".repeat(257)))
+        assertFalse(emulatorTextValid("%s".repeat(8)))
+    }
+
+    private data class Call(val type: String, val fields: Map<String, Any?>, val reply: CompletableDeferred<JsonObject>)
+    private val geometry = Wire.objectOf("width" to 2, "height" to 3, "rotation" to 0, "revision" to 1)
+    private fun png(): ByteArray = ByteArrayOutputStream().also { ImageIO.write(BufferedImage(2, 3, BufferedImage.TYPE_INT_ARGB), "png", it) }.toByteArray()
+    private fun frame(stream: String, generation: Int): JsonObject {
+        val bytes = png()
+        return Wire.objectOf("type" to "host.event", "kind" to "emulator.frame", "emulatorId" to "e", "incarnation" to "i", "streamId" to stream,
+            "generation" to generation, "geometryRevision" to 1, "frameId" to 1, "chunkIndex" to 0, "chunkCount" to 1, "totalBytes" to bytes.size,
+            "width" to 2, "height" to 3, "displayWidth" to 2, "displayHeight" to 3, "rotation" to 0, "data" to Base64.getUrlEncoder().withoutPadding().encodeToString(bytes))
+    }
+
+    /** A client in control with a frame shown; inputs and rotations wait in [held] for their replies. */
+    private fun controlling(scope: TestScope, controls: Boolean, held: MutableList<Call>, closed: MutableList<Long>, limits: EmulatorLimits? = null): EmulatorClient {
+        var generation = 1
+        val self = Wire.objectOf("kind" to "device", "id" to "me")
+        val client = EmulatorClient(scope.backgroundScope, { _, _ -> true }, { _, type, fields ->
+            val map = fields.toMap()
+            when (type) {
+                "emulator.list" -> Wire.objectOf("kind" to "emulator.profiles", "profiles" to JsonArray(listOf(Wire.objectOf("id" to "p", "label" to "Phone"))))
+                "emulator.open" -> Wire.objectOf("kind" to "emulator.opened", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to generation, "geometry" to geometry)
+                "emulator.status" -> Wire.objectOf("kind" to "emulator.status", "emulatorId" to "e", "profileId" to "p", "label" to "Phone", "incarnation" to "i", "generation" to generation, "geometry" to geometry, "owner" to self)
+                "emulator.participants" -> Wire.objectOf("kind" to "emulator.participants", "emulatorId" to "e", "generation" to generation, "participants" to JsonArray(emptyList()))
+                "emulator.watch" -> Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream$generation")
+                "emulator.unwatch" -> Wire.objectOf("kind" to "emulator.unwatched", "emulatorId" to "e", "streamId" to map["streamId"])
+                "emulator.frame.ack" -> Wire.objectOf("kind" to "accepted")
+                "emulator.acquire" -> { generation = 2
+                    Wire.objectOf("kind" to "emulator.lease", "emulatorId" to "e", "generation" to generation, "geometry" to geometry, "owner" to self, "leaseId" to "lease", "nextSequence" to 5) }
+                else -> CompletableDeferred<JsonObject>().also { held.add(Call(type, map, it)) }.await()
+            }
+        }, {}, { "d" }, { true }, { closed.add(it) }, { false }, { controls }, { limits }, { scope.testScheduler.currentTime })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertTrue(client.acquire()); scope.runCurrent()
+        client.frame(frame("stream2", 2)); scope.runCurrent()
+        assertNotNull(client.view?.image)
+        assertEquals(controls, client.view?.controls)
+        return client
+    }
+
+    private fun ack(call: Call, status: String = "accepted") = call.reply.complete(Wire.objectOf("kind" to "emulator.input.ack", "emulatorId" to "e", "generation" to 2, "sequence" to call.fields["sequence"].toString().toLong(), "status" to status))
+    private fun touch(vararg points: EmulatorTouchPoint) = EmulatorInput.Touch(points.toList())
+
+    @Test fun withoutTheCapabilityNoControlGoesOut() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = false, held, closed)
+        assertFalse(client.input(EmulatorInput.Key("Power")))
+        assertFalse(client.input(EmulatorInput.Text("hi")))
+        assertFalse(client.touch(touch(EmulatorTouchPoint(0, 1, 1, 512))))
+        assertFalse(client.rotate(1))
+        assertTrue(client.input(EmulatorInput.Key("Home")))
+        scope.runCurrent()
+        assertEquals(listOf("emulator.input"), held.map { it.type })
+    }
+
+    @Test fun textAndKeysGoOutAndNonAsciiTextNever() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed)
+        assertFalse(client.input(EmulatorInput.Text("Grüße")))
+        assertTrue(held.isEmpty())
+        assertTrue(client.input(EmulatorInput.Text("hello"))); scope.runCurrent()
+        // Text is never replaced by a later input.
+        assertFalse(client.input(EmulatorInput.Text("again")))
+        val sent = held.single()
+        assertEquals("""{"kind":"text","text":"hello"}""", sent.fields["input"].toString())
+        ack(sent); scope.runCurrent()
+        assertTrue(client.input(EmulatorInput.Key("VolumeUp"))); scope.runCurrent()
+        assertEquals("""{"kind":"key","key":"VolumeUp"}""", held.last().fields["input"].toString())
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun rotationTakesTheNextSequenceAndTheNewGeometry() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed)
+        assertTrue(client.rotate(1)); scope.runCurrent()
+        val call = held.single()
+        assertEquals("emulator.rotate", call.type)
+        assertEquals("5", call.fields["sequence"].toString())
+        assertEquals("1", call.fields["rotation"].toString())
+        assertTrue(client.view!!.inputPending)
+        call.reply.complete(Wire.objectOf("kind" to "emulator.rotated", "emulatorId" to "e", "generation" to 2, "sequence" to 5, "status" to "accepted",
+            "geometry" to Wire.objectOf("width" to 3, "height" to 2, "rotation" to 1, "revision" to 2)))
+        scope.runCurrent()
+        assertEquals(EmulatorGeometry(3, 2, 1, 2), client.view!!.geometry)
+        assertFalse(client.view!!.inputPending)
+        assertNull(client.view!!.image)
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun anUncertainRotationClosesTheConnection() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed)
+        assertTrue(client.rotate(3)); scope.runCurrent()
+        held.single().reply.complete(Wire.objectOf("kind" to "emulator.rotated", "emulatorId" to "e", "generation" to 2, "sequence" to 5, "status" to "uncertain"))
+        scope.runCurrent()
+        assertEquals(EmulatorNotice.UNCERTAIN, client.view!!.notice)
+        assertEquals(listOf(1L), closed)
+    }
+
+    @Test fun touchIsPipelinedThrottledAndCoalescedButNeverDropsALift() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed)
+        assertTrue(client.touch(touch(EmulatorTouchPoint(0, 1, 1, 512)))); scope.runCurrent()
+        assertEquals(1, held.size)
+        // Within the interval: moves wait and replace each other.
+        assertTrue(client.touch(touch(EmulatorTouchPoint(0, 1, 2, 512))))
+        assertTrue(client.touch(touch(EmulatorTouchPoint(0, 1, 3, 512))))
+        assertTrue(client.touch(touch(EmulatorTouchPoint(0, 1, 3, 0))))
+        // Another input waits for the gesture.
+        assertFalse(client.input(EmulatorInput.Key("Home")))
+        scope.testScheduler.advanceTimeBy(EMULATOR_TOUCH_INTERVAL_MS + 1); scope.runCurrent()
+        scope.testScheduler.advanceTimeBy(EMULATOR_TOUCH_INTERVAL_MS + 1); scope.runCurrent()
+        assertEquals(listOf(5L, 6L, 7L), held.map { it.fields["sequence"].toString().toLong() })
+        assertEquals("""{"kind":"touch","touches":[{"id":0,"x":1,"y":3,"pressure":512}]}""", held[1].fields["input"].toString())
+        assertEquals("""{"kind":"touch","touches":[{"id":0,"x":1,"y":3,"pressure":0}]}""", held[2].fields["input"].toString())
+        assertTrue(client.view!!.inputPending)
+        held.forEach { ack(it) }; scope.runCurrent()
+        assertFalse(client.view!!.inputPending)
+        assertTrue(client.input(EmulatorInput.Key("Home")))
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun touchesInFlightStayBelowTheHostLimit() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val limits = EmulatorLimits(StreamLimits(4, 250, 1048576, 49152), 2)
+        val client = controlling(scope, controls = true, held, closed, limits)
+        // Pointer changes never coalesce: down, second down, lift, lift.
+        val events = listOf(
+            touch(EmulatorTouchPoint(0, 1, 1, 512)),
+            touch(EmulatorTouchPoint(0, 1, 1, 512), EmulatorTouchPoint(1, 0, 0, 512)),
+            touch(EmulatorTouchPoint(0, 1, 1, 0), EmulatorTouchPoint(1, 0, 0, 512)),
+            touch(EmulatorTouchPoint(1, 0, 0, 0)),
+        )
+        events.forEach { assertTrue(client.touch(it)) }
+        repeat(4) { scope.testScheduler.advanceTimeBy(100); scope.runCurrent() }
+        assertEquals(2, held.size)
+        ack(held[0]); scope.runCurrent(); scope.testScheduler.advanceTimeBy(100); scope.runCurrent()
+        assertEquals(3, held.size)
+        ack(held[1]); ack(held[2]); scope.runCurrent(); scope.testScheduler.advanceTimeBy(100); scope.runCurrent()
+        assertEquals(4, held.size)
+        assertEquals(listOf(5L, 6L, 7L, 8L), held.map { it.fields["sequence"].toString().toLong() })
+    }
+
+    @Test fun aFailedTouchLeavesTheGestureInDoubt() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed)
+        assertTrue(client.touch(touch(EmulatorTouchPoint(0, 1, 1, 512)))); scope.runCurrent()
+        ack(held.single(), status = "uncertain"); scope.runCurrent()
+        assertEquals(EmulatorNotice.UNCERTAIN, client.view!!.notice)
+        assertEquals(listOf(1L), closed)
+        assertFalse(client.touch(touch(EmulatorTouchPoint(0, 1, 1, 0))))
+    }
+
+    @Test fun theTrackerKeepsSmallIdsAndLiftsPointers() {
+        val tracker = EmulatorTouchTracker()
+        val sent = mutableListOf<EmulatorInput.Touch>()
+        fun p(key: Long, down: Boolean, was: Boolean, x: Long, inside: Boolean = true) =
+            EmulatorTouchTracker.Pointer(key, down, was, if (inside) x to 0L else null, x to 0L, 0.5f)
+        tracker.event(listOf(p(900, true, false, 1))) { sent += it; true }
+        tracker.event(listOf(p(900, true, true, 2), p(901, true, false, 5))) { sent += it; true }
+        // Down outside the image: ignored until it lifts.
+        tracker.event(listOf(p(900, true, true, 2), p(901, true, true, 5), p(902, true, false, 9, inside = false))) { sent += it; true }
+        tracker.event(listOf(p(900, false, true, 3), p(901, true, true, 5))) { sent += it; true }
+        tracker.event(listOf(p(901, false, true, 6))) { sent += it; true }
+        assertEquals(listOf(
+            listOf(EmulatorTouchPoint(0, 1, 0, 512)),
+            listOf(EmulatorTouchPoint(0, 2, 0, 512), EmulatorTouchPoint(1, 5, 0, 512)),
+            listOf(EmulatorTouchPoint(0, 2, 0, 512), EmulatorTouchPoint(1, 5, 0, 512)),
+            listOf(EmulatorTouchPoint(0, 3, 0, 0), EmulatorTouchPoint(1, 5, 0, 512)),
+            listOf(EmulatorTouchPoint(1, 6, 0, 0)),
+        ), sent.map { it.touches })
+        // A refused down forgets its pointer.
+        sent.clear()
+        tracker.event(listOf(p(903, true, false, 1))) { false }
+        tracker.event(listOf(p(903, true, true, 2))) { sent += it; true }
+        assertTrue(sent.isEmpty())
+    }
+}

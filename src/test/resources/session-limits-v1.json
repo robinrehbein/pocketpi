@@ -1,0 +1,1019 @@
+{
+  "version": 1,
+  "capability": "session.limits.v1",
+  "route": {
+    "allowed": [
+      "capabilities.v4:n0nce",
+      "capabilities.v4:optin=x:y"
+    ],
+    "refused": [
+      "capabilities.v3:n0nce",
+      "capabilities.v3:optin=session.limits.v1:n0nce",
+      "capabilities.v2:n0nce",
+      "capabilities.v1:n0nce",
+      "list:1",
+      "Capabilities.v4:n",
+      42
+    ]
+  },
+  "wireValid": [
+    {
+      "name": "request",
+      "payload": {
+        "type": "projects.list",
+        "requestId": "capabilities.v4:n0nce"
+      }
+    },
+    {
+      "name": "result-with-limits",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "result-without-capabilities",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:abc",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "result-without-limits",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "result-fractional-device-scale",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.75,
+                "maxDeviceScale": 2.5
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "limits-on-v3",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v3:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "limits-on-v2",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v2:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "limits-on-v1",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v1:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "limits-on-plain-list",
+      "payload": {
+        "type": "result",
+        "requestId": "list:1",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "limits-on-v3-opt-in",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v3:optin=session.limits.v1:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "limits-null",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": null
+        }
+      }
+    },
+    {
+      "name": "unknown-top-level-key",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "terminal": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "missing-emulator",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown-viewport-key",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3,
+                "maxPixels": 1
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "min-width-above-max",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 4096,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "min-height-zero",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 0,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "fractional-width",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048.5,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "device-scale-inverted",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 3,
+                "maxDeviceScale": 0.5
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "device-scale-string",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": "3"
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "frame-rate-zero",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 0,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "chunk-above-frame",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 2097152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "frame-bytes-over-cap",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 16777217,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "in-flight-zero",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "in-flight-negative",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": -1
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "stream-missing-key",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v4:n0nce",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.steer.v1",
+            "session.browser.v1"
+          ],
+          "limits": {
+            "browser": {
+              "viewport": {
+                "minWidth": 80,
+                "maxWidth": 2048,
+                "minHeight": 80,
+                "maxHeight": 2048,
+                "minDeviceScale": 0.5,
+                "maxDeviceScale": 3
+              },
+              "stream": {
+                "maxFrameRate": 4,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            },
+            "emulator": {
+              "stream": {
+                "maxFrameRate": 4,
+                "minFrameIntervalMs": 250,
+                "frameMaxBytes": 1048576,
+                "frameChunkBytes": 49152
+              },
+              "maxInFlightInputs": 32
+            }
+          }
+        }
+      }
+    }
+  ]
+}

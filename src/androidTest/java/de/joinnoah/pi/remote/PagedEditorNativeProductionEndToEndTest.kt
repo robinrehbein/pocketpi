@@ -192,7 +192,7 @@ class PagedEditorNativeProductionEndToEndTest {
         val capabilityResponse = production.getJSONObject("capabilityResponse")
         val capabilityId = capabilityRequest.getString("requestId")
         assertEquals("projects.list", capabilityRequest.getString("type"))
-        assertTrue(capabilityId.startsWith("capabilities.v3:"))
+        assertTrue(capabilityId.startsWith("capabilities.v4:") || capabilityId.startsWith("capabilities.v3:"))
         for (optIn in listOf("question_editor.v1", "question_editor_native.v1", QUESTION_PAGED_EDITOR_OPT_IN, QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN)) assertTrue(capabilityId.contains(optIn))
         assertEquals(capabilityId, capabilityResponse.getString("requestId")); assertTrue(capabilityResponse.getBoolean("ok"))
         assertTrue(final.getBoolean("nativeEditorValueVerified"))

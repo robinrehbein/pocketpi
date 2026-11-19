@@ -85,7 +85,7 @@ class ExecutionActivityRepositoryTest {
             val data = when (payload.text("type")) {
                 "projects.list" -> {
                     val base = Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(project)))
-                    if (v2Only && payload.text("requestId").startsWith("capabilities.v3:")) base
+                    if (v2Only && payload.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") }) base
                     else JsonObject(base + ("capabilities" to JsonArray(routeCapabilities.map(::JsonPrimitive))))
                 }
                 "sessions.list" -> if (holdLists) null else {
@@ -164,7 +164,7 @@ class ExecutionActivityRepositoryTest {
         val repo = repository(transport)
         repo.activate(selection); runCurrent()
         val discovery = transport.sent.first { it.text("type") == "projects.list" }.text("requestId")
-        assertTrue(discovery.startsWith("capabilities.v3:optin="))
+        assertTrue(discovery.startsWith("capabilities.v4:optin="))
         assertTrue(SESSION_ACTIVITY_CAPABILITY in discovery.substringAfter("optin=").substringBefore(':').split('+'))
         assertTrue(repo.activity().negotiated)
         val view = repo.activity().sessions.getValue("session")

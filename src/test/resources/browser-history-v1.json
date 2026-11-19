@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "capability": "session.browser.history.v1",
+  "valid": [
+    {
+      "name": "back command",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "back"
+      }
+    },
+    {
+      "name": "forward command",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "forward"
+      }
+    },
+    {
+      "name": "reload command",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "reload"
+      }
+    },
+    {
+      "name": "stop command",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "stop"
+      }
+    },
+    {
+      "name": "history result",
+      "payload": {
+        "type": "result",
+        "requestId": "request-fixture",
+        "ok": true,
+        "data": {
+          "kind": "browser.tabs",
+          "browserId": "browser-fixture",
+          "generation": 3,
+          "tabs": [
+            {
+              "id": "tab-fixture",
+              "title": "Fixture",
+              "url": "https://example.com/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "no history entry error",
+      "payload": {
+        "type": "result",
+        "requestId": "request-fixture",
+        "ok": false,
+        "error": {
+          "code": "not_found",
+          "message": "No browser history entry"
+        }
+      }
+    },
+    {
+      "name": "not negotiated error",
+      "payload": {
+        "type": "result",
+        "requestId": "request-fixture",
+        "ok": false,
+        "error": {
+          "code": "forbidden",
+          "message": "Browser history not negotiated"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unknown action",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "home"
+      }
+    },
+    {
+      "name": "uppercase action",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "Back"
+      }
+    },
+    {
+      "name": "missing action",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture"
+      }
+    },
+    {
+      "name": "missing tab",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "action": "back"
+      }
+    },
+    {
+      "name": "missing lease",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "back"
+      }
+    },
+    {
+      "name": "missing generation",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "tabId": "tab-fixture",
+        "action": "back"
+      }
+    },
+    {
+      "name": "blank tab",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "",
+        "action": "back"
+      }
+    },
+    {
+      "name": "negative generation",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": -1,
+        "tabId": "tab-fixture",
+        "action": "back"
+      }
+    },
+    {
+      "name": "url field",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "back",
+        "url": "https://example.com/"
+      }
+    },
+    {
+      "name": "history steps field",
+      "payload": {
+        "type": "browser.history",
+        "requestId": "request-fixture",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "leaseId": "lease-placeholder",
+        "generation": 3,
+        "tabId": "tab-fixture",
+        "action": "back",
+        "steps": 2
+      }
+    }
+  ]
+}

@@ -46,6 +46,33 @@ class BrowserPaneTest {
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out); bitmap.recycle()
         return BrowserImage(out.toByteArray(), 400, 200, 400, 200, 1.0, 0.0, 0.0, 1, 1)
     }
+    @Test fun historyControlsSendTheirActionAndANoEntryHintDisablesTheButton() {
+        val sent = mutableListOf<String>()
+        val tabs = listOf(BrowserTab("tab", "T", "https://example.com"))
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, tabs = tabs, selectedTabId = "tab", history = true))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(history = { sent += it; true }), {}) } }
+        // The narrow phone pane keeps them in the "more" menu.
+        compose.onNodeWithTag("browserMoreActions").performClick()
+        compose.onNodeWithTag("browserBack").performClick()
+        compose.onNodeWithTag("browserMoreActions").performClick()
+        compose.onNodeWithTag("browserStop").performClick()
+        compose.onNodeWithTag("browserReload").performClick()
+        assertEquals(listOf("back", "stop", "reload"), sent)
+        view = view.copy(historyMissing = "forward", historyMissingCount = 1)
+        compose.waitForIdle()
+        compose.onNodeWithTag("browserHistoryHint", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("browserMoreActions").performClick()
+        compose.onNodeWithTag("browserForward").assertIsNotEnabled()
+        compose.mainClock.advanceTimeBy(BROWSER_HISTORY_HINT_MS + 100)
+        compose.onAllNodesWithTag("browserHistoryHint", useUnmergedTree = true).assertCountEquals(0)
+    }
+    @Test fun withoutHistoryThereAreNoHistoryControls() {
+        val tabs = listOf(BrowserTab("tab", "T", "https://example.com"))
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, tabs = tabs, selectedTabId = "tab")
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}) } }
+        compose.onAllNodesWithTag("browserBack").assertCountEquals(0)
+        compose.onAllNodesWithTag("browserStop").assertCountEquals(0)
+    }
     @Test fun goWithNoTabOpensTheAddressInANewTab() {
         val opened = mutableListOf<String>(); var navigated = 0
         val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1)
@@ -234,6 +261,20 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserKey_Enter").assertIsEnabled().performClick()
         compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
         compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "Enter", "Enter"), BrowserInput.Key("up", "Enter", "Enter")), sent) }
+    }
+
+    @Test fun hostLimitsNarrowTheRequestedViewport() {
+        val requests = mutableListOf<Triple<Int, Int, Double>>()
+        val stream = StreamLimits(4, 250, 1048576, 49152)
+        val limits = BrowserLimits(ViewportLimits(100, 300, 100, 250, 1.0, 1.5), stream, 32)
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, limits = limits)
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(resize = { w, h, scale, _ -> requests += Triple(w, h, scale); true }), {}) } }
+        compose.waitUntil(10_000) { compose.runOnIdle { requests.isNotEmpty() } }
+        compose.runOnIdle {
+            val (w, h, scale) = requests.last()
+            assertTrue("$w", w in 100..300); assertTrue("$h", h in 100..250); assertTrue("$scale", scale in 1.0..1.5)
+            assertEquals(300, w); assertEquals(250, h)
+        }
     }
 
     @Test fun resizePendingBlocksTextAndKeysEvenWithDecodedImage() {

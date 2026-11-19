@@ -256,7 +256,7 @@ class GitChangesTest {
         val response = transport.response
         transport.response = { request ->
             val result = response(request)
-            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(checkNotNull(result) - "capabilities") else result
+            if (request.text("type") == "projects.list" && request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") }) JsonObject(checkNotNull(result) - "capabilities") else result
         }
         val repo = repository(transport); repo.activate(RemoteSelection("host", "project", sessionId))
         assertTrue(caps.intersect(repo.state.value.capabilities).isEmpty())
@@ -364,7 +364,7 @@ class GitChangesTest {
         val response = transport.response
         transport.response = { request ->
             val result = response(request)
-            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(checkNotNull(result) - "capabilities") else result
+            if (request.text("type") == "projects.list" && request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") }) JsonObject(checkNotNull(result) - "capabilities") else result
         }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", sessionId))
@@ -379,7 +379,7 @@ class GitChangesTest {
         v1.response = { request ->
             val result = original(request)
             if (request.text("type") == "projects.list" &&
-                (request.text("requestId").startsWith("capabilities.v3:") || request.text("requestId").startsWith("capabilities.v2:")))
+                (request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") } || request.text("requestId").startsWith("capabilities.v2:")))
                 JsonObject(checkNotNull(result) - "capabilities") else result
         }
         val legacy = repository(v1)

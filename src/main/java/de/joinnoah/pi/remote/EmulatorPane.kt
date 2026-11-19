@@ -15,7 +15,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
@@ -64,6 +70,9 @@ internal data class EmulatorPaneActions(
     /** The notices' retry: see [EmulatorClient.retry]. */
     val retry: () -> Boolean = { false },
     val release: () -> Boolean = { false },
+    /** One raw touch event; used instead of taps and swipes where [EmulatorView.controls] holds. */
+    val touch: (EmulatorInput.Touch) -> Boolean = { false },
+    val rotate: (Long) -> Boolean = { false },
 )
 
 /** How long a held finger presses: the host's swipe takes 50 to 1000 ms. */
@@ -86,6 +95,55 @@ internal fun emulatorImagePoint(containerWidth: Float, containerHeight: Float, i
     if (x < left || y < top || x >= left + width || y >= top + height) return null
     return ((x - left) / width * image.displayWidth).toLong().coerceIn(0, image.displayWidth - 1) to
         ((y - top) / height * image.displayHeight).toLong().coerceIn(0, image.displayHeight - 1)
+}
+
+/**
+ * [emulatorImagePoint] for a pointer that already went down on the image: a point outside it is
+ * taken to the nearest edge, so a drag off the screen keeps its pointer.
+ */
+internal fun emulatorImagePointClamped(containerWidth: Float, containerHeight: Float, image: EmulatorImage, x: Float, y: Float): Pair<Long, Long>? {
+    if (containerWidth <= 0f || containerHeight <= 0f || image.width <= 0 || image.height <= 0 || !x.isFinite() || !y.isFinite()) return null
+    val scale = min(containerWidth / image.width, containerHeight / image.height)
+    val width = image.width * scale; val height = image.height * scale
+    val left = (containerWidth - width) / 2f; val top = (containerHeight - height) / 2f
+    return emulatorImagePoint(containerWidth, containerHeight, image, x.coerceIn(left, left + width - 0.01f), y.coerceIn(top, top + height - 0.01f))
+}
+
+/** A finger's pressure (0 to 1, sometimes above) as the host's 1 to 1024; 0 is reserved for a lift. */
+internal fun emulatorTouchPressure(pressure: Float): Int =
+    if (!pressure.isFinite() || pressure <= 0f) EMULATOR_TOUCH_MAX_PRESSURE / 2 else (pressure * EMULATOR_TOUCH_MAX_PRESSURE).roundToInt().coerceIn(1, EMULATOR_TOUCH_MAX_PRESSURE)
+
+/**
+ * Follows the fingers on the screen and reports each change as one raw touch event: every pointer
+ * down or lifting, with an id 0 to 31 kept for as long as it is down. A pointer that goes down
+ * outside the image, beyond the tenth, or whose down was refused, is ignored until it lifts.
+ */
+internal class EmulatorTouchTracker {
+    private val ids = mutableMapOf<Long, Int>()
+    private val last = mutableMapOf<Int, Pair<Long, Long>>()
+    /** One pointer of an event: [key] is the platform's pointer id, [down] whether it is pressed. */
+    data class Pointer(val key: Long, val down: Boolean, val wasDown: Boolean, val point: Pair<Long, Long>?, val clamped: Pair<Long, Long>?, val pressure: Float)
+
+    fun event(pointers: List<Pointer>, send: (EmulatorInput.Touch) -> Boolean) {
+        val touches = mutableListOf<EmulatorTouchPoint>()
+        val started = mutableListOf<Long>()
+        for (p in pointers) {
+            var id = ids[p.key]
+            if (id == null) {
+                if (!p.down || p.wasDown || p.point == null || ids.size >= EMULATOR_TOUCH_MAX_POINTERS) continue
+                id = (0..EMULATOR_TOUCH_MAX_ID).first { it !in ids.values }
+                ids[p.key] = id; started += p.key
+            }
+            val at = p.clamped ?: last[id] ?: continue
+            last[id] = at
+            touches += EmulatorTouchPoint(id, at.first, at.second, if (p.down) emulatorTouchPressure(p.pressure) else 0)
+        }
+        val lifted = pointers.filter { !it.down }.mapNotNull { ids[it.key] }
+        if (touches.isNotEmpty() && !send(EmulatorInput.Touch(touches))) started.forEach { key -> ids.remove(key)?.let { last.remove(it) } }
+        lifted.forEach { id -> ids.entries.removeAll { it.value == id }; last.remove(id) }
+    }
+
+    fun clear() { ids.clear(); last.clear() }
 }
 
 /**
@@ -143,13 +201,18 @@ private fun emulatorNotice(view: EmulatorView, retry: () -> Unit): RemoteViewNot
 }
 
 @Composable
-private fun emulatorKeys(): List<RemoteKey> = listOf(
+private fun emulatorKeys(controls: Boolean): List<RemoteKey> = listOf(
     RemoteKey("Back", stringResource(R.string.remote_view_key_android_back)),
     RemoteKey("Home", stringResource(R.string.remote_view_key_android_home), stringResource(R.string.remote_view_key_android_home_description)),
     RemoteKey("Escape", stringResource(R.string.remote_view_key_escape), stringResource(R.string.remote_view_key_escape_description)),
     RemoteKey("Tab", stringResource(R.string.remote_view_key_tab)),
     RemoteKey("Enter", stringResource(R.string.remote_view_key_enter)),
-) + remoteNavigationKeys()
+) + remoteNavigationKeys() + (if (controls) listOf(
+    RemoteKey("AppSwitch", stringResource(R.string.remote_view_key_android_recents)),
+    RemoteKey("Power", stringResource(R.string.remote_view_key_android_power)),
+    RemoteKey("VolumeDown", stringResource(R.string.remote_view_key_android_volume_down), stringResource(R.string.remote_view_key_android_volume_down_description)),
+    RemoteKey("VolumeUp", stringResource(R.string.remote_view_key_android_volume_up), stringResource(R.string.remote_view_key_android_volume_up_description)),
+) else emptyList())
 
 /**
  * The shared Android emulator: the profile choice, then the control bar, the screen and the
@@ -183,6 +246,8 @@ internal fun EmulatorPane(
         onDispose { if (shown) latestActions.visible(false) }
     }
     var confirmStop by remember { mutableStateOf(false) }
+    var text by rememberSaveable(view.sessionId) { mutableStateOf("") }
+    var textRefused by remember(view.sessionId) { mutableStateOf(false) }
     val currentView by rememberUpdatedState(view)
 
     // The frame shown and the frames it replaced, recycled once they are drawn no more.
@@ -229,7 +294,12 @@ internal fun EmulatorPane(
             listOf(
                 PaneAction(stringResource(R.string.remote_view_update_status), Icons.Default.Sync, "emulatorSync", enabled = !view.opening) { latestActions.refresh() },
                 PaneAction(stopLabel, Icons.Default.Stop, "emulatorStop", enabled = view.ownsControl && !view.opening) { confirmStop = true },
-            )
+            ) + (if (view.controls) listOf(
+                // A quarter turn further each time.
+                PaneAction(stringResource(R.string.emulator_rotate), Icons.Default.ScreenRotation, "emulatorRotate", enabled = view.ownsControl && displayed && !view.opening && !view.inputPending) {
+                    view.geometry?.let { latestActions.rotate((it.rotation + 1) % 4) }
+                },
+            ) else emptyList())
         else emptyList()
     val notice = emulatorNotice(view) { latestActions.retry() }
     RemoteViewPane(
@@ -277,7 +347,27 @@ internal fun EmulatorPane(
                         bitmap.asImageBitmap(),
                         contentDescription = stringResource(R.string.emulator_screen),
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize().testTag("emulatorScreen").pointerInput(geometry) {
+                        modifier = Modifier.fillMaxSize().testTag("emulatorScreen").pointerInput(geometry, view.controls) {
+                            if (view.controls) {
+                                // Raw multi-touch: every finger goes to the device as it moves.
+                                val tracker = EmulatorTouchTracker()
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val shown = latestImage
+                                        val w = size.width.toFloat(); val h = size.height.toFloat()
+                                        val pointers = event.changes.map { change ->
+                                            EmulatorTouchTracker.Pointer(change.id.value, change.pressed, change.previousPressed,
+                                                shown?.let { emulatorImagePoint(w, h, it, change.position.x, change.position.y) },
+                                                shown?.let { emulatorImagePointClamped(w, h, it, change.position.x, change.position.y) },
+                                                change.pressure)
+                                        }
+                                        event.changes.forEach { it.consume() }
+                                        if (currentView.ownsControl && latestDisplayed) tracker.event(pointers) { latestActions.touch(it) }
+                                        else tracker.clear()
+                                    }
+                                }
+                            }
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = true)
                                 val start = down.position; val startTime = down.uptimeMillis
@@ -319,12 +409,29 @@ internal fun EmulatorPane(
                 }
             }
             RemoteKeyStrip(
-                emulatorKeys(),
+                emulatorKeys(view.controls),
                 onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
                 tag = "emulator",
                 enabled = view.ownsControl && displayed && !view.opening,
                 sheds = true,
             )
+            if (view.controls) {
+                // Typed on the device through its key map, so only printable ASCII goes.
+                val valid = text.isEmpty() || emulatorTextValid(text)
+                RemoteInputBar(
+                    value = text,
+                    onValueChange = { text = it; textRefused = false },
+                    onSend = { if (latestActions.input(EmulatorInput.Text(text))) text = "" else textRefused = true },
+                    tag = "emulatorText",
+                    label = stringResource(R.string.emulator_text),
+                    enabled = view.ownsControl,
+                    sendEnabled = view.ownsControl && displayed && !view.opening && text.isNotEmpty() && valid,
+                    maxLines = 1,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send, keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false),
+                )
+                if (!valid) RemoteViewNoticeLine(RemoteViewNotice.Info(stringResource(R.string.emulator_text_ascii_only), "emulatorTextHint"))
+                else if (textRefused) RemoteViewNoticeLine(RemoteViewNotice.Info(stringResource(R.string.emulator_text_refused), "emulatorTextRefused"))
+            }
         }
     }
     if (confirmStop) AlertDialog(
