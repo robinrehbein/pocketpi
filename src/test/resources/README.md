@@ -2,7 +2,7 @@
 
 The `*-v1.json` files and `paged-editor-wire.json` here are copies of the Remote protocol fixtures in the noah monorepo, under
 `packages/pi-atlas/extensions/remote/protocol/fixtures/`. Copy them byte for byte; change them there
-first. The copies match noah `dev` commit `df23e9910ff646b70a6b4305d09b233c991c626e` (session.list.context.v1, noah-monorepo PR #96).
+first. The copies match noah `dev` commit `51340fbb0d6a3ba70138e762648016efb341d413` (the `capabilities.v4:` route).
 
 `session-close-terminal-v1.json` holds the wire shapes of `session.close.terminal.v1`: closing an
 idle terminal session, its `accepted` result and the refusals (`busy` with and without unsent Mac
@@ -45,3 +45,18 @@ requests with `includeContext` alone and together with `includeCompaction`, list
 after a compaction (unknown tokens and percent), over their window and without a fill, and refused
 shapes (unknown or missing keys, bad counts and percents, a `null` context, a `false` or misplaced
 flag, a fill outside a list).
+
+`capabilities-v4.json` pins the `capabilities.v4:` route: its request IDs, the request IDs that are
+not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the four v4-only capabilities.
+
+`browser-history-v1.json` holds the wire shapes of `session.browser.history.v1`: the `back`,
+`forward`, `reload` and `stop` commands, the `browser.tabs` result, the `not_found` and `forbidden`
+refusals, and invalid commands.
+
+`emulator-controls-v1.json` holds the wire shapes of `session.emulator.controls.v1`: the new keys,
+`text`, `long_press` and raw multi-touch inputs, `emulator.rotate`, the `emulator.rotated` result,
+and invalid ones.
+
+`session-limits-v1.json` holds the wire shapes of `session.limits.v1`: the route rule, `projects`
+results with and without `limits`, and invalid ones (`limits` on another route, unknown or missing
+keys, bounds out of order or out of range).
