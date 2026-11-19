@@ -642,7 +642,11 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     fun state(payload: JsonObject) {
         val e = try { parseEmulatorState(payload) } catch (_: Exception) { return }; val v = view ?: return
         if (!current(v.sessionId,connection) || e.sessionId != v.sessionId || e.emulatorId != v.emulatorId || e.profileId != v.profileId || e.incarnation != v.incarnation || e.generation < v.generation || e.geometry.revision < (v.geometry?.revision ?: 0)) return
-        if (e.generation != v.generation || e.geometry != v.geometry) {
+        if (v.rotating && pending && lease != null && e.generation == v.generation && e.geometry != v.geometry && e.control?.leaseId == lease && e.owner?.kind == "device") {
+            // Our own rotation: the Host reports the new geometry before it answers the rotate. The
+            // lease and the request stay as they are; the answer finishes the rotation.
+            dropStream(); set(v.copy(geometry = e.geometry, owner = e.owner, image = null)); watch()
+        } else if (e.generation != v.generation || e.geometry != v.geometry) {
             val wasInputPending = v.inputPending
             if (wasInputPending) token++
             val handed = !pending && e.control != null && e.owner?.kind == "device"

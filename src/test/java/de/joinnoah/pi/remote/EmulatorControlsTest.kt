@@ -133,6 +133,29 @@ class EmulatorControlsTest {
         assertEquals(emptyList<Long>(), closed)
     }
 
+    @Test fun theHostsStateEventBeforeTheRotateAnswerKeepsControl() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed)
+        assertTrue(client.rotate(1)); scope.runCurrent()
+        val rotated = Wire.objectOf("width" to 3, "height" to 2, "rotation" to 1, "revision" to 2)
+        // The Host queues emulator.state with the new geometry ahead of the emulator.rotated result.
+        client.state(Wire.objectOf("type" to "host.event", "kind" to "emulator.state", "sessionId" to "session", "emulatorId" to "e", "profileId" to "p", "label" to "Phone",
+            "incarnation" to "i", "generation" to 2, "geometry" to rotated, "owner" to Wire.objectOf("kind" to "device", "id" to "me"),
+            "control" to Wire.objectOf("leaseId" to "lease", "nextSequence" to 6)))
+        scope.runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        assertTrue(client.view!!.rotating)
+        assertNull(client.view!!.notice)
+        held.single { it.type == "emulator.rotate" }.reply.complete(Wire.objectOf("kind" to "emulator.rotated", "emulatorId" to "e", "generation" to 2, "sequence" to 5, "status" to "accepted", "geometry" to rotated))
+        scope.runCurrent()
+        assertEquals(EmulatorGeometry(3, 2, 1, 2), client.view!!.geometry)
+        assertTrue(client.view!!.ownsControl)
+        assertFalse(client.view!!.inputPending)
+        assertFalse(client.view!!.rotating)
+        assertNull(client.view!!.notice)
+        assertEquals(emptyList<Long>(), closed)
+    }
+
     @Test fun anUncertainRotationClosesTheConnection() {
         val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
         val client = controlling(scope, controls = true, held, closed)
