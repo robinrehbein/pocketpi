@@ -148,6 +148,15 @@ internal val TWO_PANE_MIN_WIDTH = 720.dp
  * list and a chat with its composer and keyboard, so it keeps the phone layout.
  */
 internal val TWO_PANE_MIN_HEIGHT = 480.dp
+/**
+ * Whether a [width] by [height] window is a phone held sideways ([PaneLayout.Phone] and wider
+ * than high) with the soft keyboard up. Only a strip or two of the screen is left there, so the
+ * remote views keep their bars to a single short row. A tablet, a portrait phone or a closed
+ * keyboard keeps the full bars.
+ */
+internal fun phoneLandscapeWithKeyboard(width: Dp, height: Dp, imeVisible: Boolean): Boolean =
+    imeVisible && width > height && !paneLayout(width, height).twoPane
+
 /** From here the landscape buckets take a narrower session list and a wider inspector. */
 internal val INSPECTOR_MIN_WIDTH = 1180.dp
 internal val PERSISTENT_INSPECTOR_MIN_WIDTH = 1600.dp

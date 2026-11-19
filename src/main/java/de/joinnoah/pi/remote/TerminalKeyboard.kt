@@ -26,6 +26,19 @@ internal class TerminalInputFocus {
 
 internal val LocalTerminalInputFocus = staticCompositionLocalOf<TerminalInputFocus?> { null }
 
+/** The keys of the terminal's strip, by the name the pane sends, in their order. */
+private val TERMINAL_STRIP_KEYS = listOf("escape", "tab", "enter", "backspace", "left", "up", "down", "right")
+
+/**
+ * The strip of a phone in landscape with the soft keyboard up ([phoneLandscapeWithKeyboard]):
+ * one short row with what a terminal app needs most. `ctrl` is the Ctrl modifier chip, which the
+ * shortcuts sheet also toggles.
+ */
+private val TERMINAL_COMPACT_STRIP_KEYS = listOf("escape", "ctrl", "tab", "left", "up", "down", "right")
+
+/** The key names of the terminal's strip; [compact] is the one short row of [TERMINAL_COMPACT_STRIP_KEYS]. */
+internal fun terminalStripKeys(compact: Boolean): List<String> = if (compact) TERMINAL_COMPACT_STRIP_KEYS else TERMINAL_STRIP_KEYS
+
 /** Retained inspector contents must not keep hardware input while hidden. */
 internal val LocalTerminalKeyboardActive = staticCompositionLocalOf { true }
 
