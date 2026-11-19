@@ -34,7 +34,7 @@ internal class WatchFakeRepository : RemoteRepository {
         )
         return chosen
     }
-    override suspend fun createSession(routeId: String, projectId: String) = activate(RemoteSelection(routeId, projectId, "s"), ActivationMode.USER_OPEN)
+    override suspend fun createSession(routeId: String, projectId: String, harness: SessionHarness) = activate(RemoteSelection(routeId, projectId, "s"), ActivationMode.USER_OPEN)
     override suspend fun openNotification(routeId: String, sessionId: String) = activate(RemoteSelection(routeId, "p", sessionId), ActivationMode.USER_OPEN)
     override suspend fun pair(text: String) = activate(RemoteSelection("r"), ActivationMode.USER_OPEN)
     override suspend fun forkSession(source: RemoteSelection, messageId: String, mode: ForkMode): RemoteSelection {

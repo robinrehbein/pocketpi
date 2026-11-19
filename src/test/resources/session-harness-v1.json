@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "create-claude",
+      "payload": {
+        "type": "sessions.create",
+        "requestId": "host_worker.v1:create-1",
+        "projectId": "project",
+        "harness": "claude"
+      }
+    },
+    {
+      "name": "create-pi",
+      "payload": {
+        "type": "sessions.create",
+        "requestId": "host_worker.v1:create-2",
+        "projectId": "project",
+        "harness": "pi"
+      }
+    },
+    {
+      "name": "create-claude-result",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:create-1",
+        "ok": true,
+        "data": {
+          "kind": "session",
+          "session": {
+            "id": "claude-session",
+            "projectId": "project",
+            "title": "Claude Code",
+            "origin": "tui",
+            "status": "idle",
+            "harness": "claude"
+          }
+        }
+      }
+    },
+    {
+      "name": "list-with-claude",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:list-1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "claude-session",
+              "projectId": "project",
+              "title": "Fix the login test",
+              "origin": "tui",
+              "status": "running",
+              "harness": "claude"
+            },
+            {
+              "id": "pi-session",
+              "projectId": "project",
+              "title": "Fix",
+              "origin": "tui",
+              "status": "idle"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "claude-unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:create-3",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Claude Code CLI not found on the Mac"
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "create-unknown-harness",
+      "payload": {
+        "type": "sessions.create",
+        "requestId": "host_worker.v1:create-4",
+        "projectId": "project",
+        "harness": "junie"
+      }
+    },
+    {
+      "name": "session-harness-pi",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:create-5",
+        "ok": true,
+        "data": {
+          "kind": "session",
+          "session": {
+            "id": "pi-session",
+            "projectId": "project",
+            "title": "Fix",
+            "origin": "tui",
+            "status": "idle",
+            "harness": "pi"
+          }
+        }
+      }
+    }
+  ]
+}

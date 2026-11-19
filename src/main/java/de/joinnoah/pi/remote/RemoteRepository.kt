@@ -403,7 +403,15 @@ interface RemoteRepository {
         mode: ActivationMode = ActivationMode.RESTORE,
     ): RemoteSelection
 
-    suspend fun createSession(routeId: String, projectId: String): RemoteSelection
+    /**
+     * Creates a session in [projectId] that runs [harness]. A harness other than pi needs the host's
+     * [SESSION_HARNESS_CAPABILITY]; without it nothing is created and the error is reported.
+     */
+    suspend fun createSession(
+        routeId: String,
+        projectId: String,
+        harness: SessionHarness = SessionHarness.PI,
+    ): RemoteSelection
 
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
 

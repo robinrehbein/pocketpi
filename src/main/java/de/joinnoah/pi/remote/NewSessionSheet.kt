@@ -43,8 +43,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** What the new-session sheet asks for: the model (null keeps the host's) and the first prompt (blank sends none). */
-internal data class NewSessionChoice(val model: RemoteModel?, val prompt: String)
+/**
+ * What the new-session sheet asks for: the model (null keeps the host's), the first prompt (blank
+ * sends none) and the harness the Mac runs. [model] applies to pi only.
+ */
+internal data class NewSessionChoice(
+    val model: RemoteModel?,
+    val prompt: String,
+    val harness: SessionHarness = SessionHarness.PI,
+)
 
 /** The repository calls that follow a new session's creation, in order; see [finishNewSession]. */
 internal interface NewSessionSteps {
@@ -117,8 +124,9 @@ internal fun newSessionPromptIssue(prompt: String): NewSessionPromptIssue? =
     }
 
 /**
- * The new-session sheet: a model to start with (or the host's default) and an optional first
- * message. [onStart] runs with the choice; the caller creates the session.
+ * The new-session sheet: the harness (when the host offers a choice), a model to start with (or the
+ * host's default) and an optional first message. [onStart] runs with the choice; the caller creates
+ * the session.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,14 +137,20 @@ internal fun NewSessionSheet(
     onDismiss: () -> Unit,
     /** True while another session is being created or forked: Start waits for it. */
     busy: Boolean = false,
+    /** The host takes a harness other than pi ([harnessSelectable]): the sheet offers Claude Code. */
+    harnessSelectable: Boolean = false,
 ) {
     // Keep both parts of the identity across rotation; null means the host's default.
     var modelProvider by rememberSaveable { mutableStateOf<String?>(null) }
     var modelId by rememberSaveable { mutableStateOf<String?>(null) }
     var prompt by rememberSaveable { mutableStateOf("") }
     var choosingModel by rememberSaveable { mutableStateOf(false) }
+    var chosenHarness by rememberSaveable { mutableStateOf(SessionHarness.PI) }
+    val harness = if (harnessSelectable) chosenHarness else SessionHarness.PI
     val issue = newSessionPromptIssue(prompt)
+    // The pi model list does not apply to Claude Code; a model picked before switching is ignored.
     val chosen = models.firstOrNull { it.provider == modelProvider && it.id == modelId }
+        ?.takeIf { harness == SessionHarness.PI }
     GlassSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("newSessionSheet")) {
         BackHandler(enabled = choosingModel) { choosingModel = false }
         Column(
@@ -151,7 +165,25 @@ internal fun NewSessionSheet(
                 subtitle = projectName?.let { stringResource(R.string.remote_new_session_project, it) },
                 padding = PaddingValues(start = 8.dp),
             )
-            if (models.isNotEmpty()) {
+            if (harnessSelectable) {
+                Text(stringResource(R.string.remote_new_session_harness), style = MaterialTheme.typography.titleSmall)
+                Row(
+                    Modifier.fillMaxWidth().selectableGroup().testTag("newSessionHarness"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SessionHarness.entries.forEach { option ->
+                        ModelChoiceRow(
+                            label = stringResource(harnessLabel(option)),
+                            selected = harness == option,
+                            modifier = Modifier.weight(1f).testTag("newSessionHarness_${option.wire}"),
+                        ) {
+                            chosenHarness = option
+                            choosingModel = false
+                        }
+                    }
+                }
+            }
+            if (models.isNotEmpty() && harness == SessionHarness.PI) {
                 val modelLabel = stringResource(R.string.remote_new_session_model)
                 val selectedModelLabel = chosen?.let { "${it.name.ifBlank { it.id }} · ${it.provider}" }
                     ?: stringResource(R.string.remote_new_session_model_default)
@@ -209,7 +241,7 @@ internal fun NewSessionSheet(
                 shape = SHEET_OPTION_SHAPE,
             )
             SheetPrimaryButton(
-                onClick = { onStart(NewSessionChoice(chosen, prompt.trim())) },
+                onClick = { onStart(NewSessionChoice(chosen, prompt.trim(), harness)) },
                 enabled = issue == null && !busy,
                 modifier = Modifier.testTag("newSessionStart"),
             ) {
@@ -224,11 +256,23 @@ internal fun NewSessionSheet(
     }
 }
 
+/** The name of [harness] as the new-session sheet and the session list show it. */
+internal fun harnessLabel(harness: SessionHarness): Int =
+    when (harness) {
+        SessionHarness.PI -> R.string.remote_session_harness_pi
+        SessionHarness.CLAUDE -> R.string.remote_session_harness_claude
+    }
+
 @Composable
-private fun ModelChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
+private fun ModelChoiceRow(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onSelect: () -> Unit,
+) {
     // A choice is a pill; the chosen one is tinted, as in the model picker.
     Row(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
             .clip(SHEET_OPTION_SHAPE)
             .background(sheetOptionColor(selected))
             .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)

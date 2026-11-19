@@ -2438,7 +2438,7 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
         return canonical
     }
 
-    override suspend fun createSession(routeId: String, projectId: String) =
+    override suspend fun createSession(routeId: String, projectId: String, harness: SessionHarness) =
         RemoteSelection(routeId, projectId, "created").also(::update)
 
     override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? {

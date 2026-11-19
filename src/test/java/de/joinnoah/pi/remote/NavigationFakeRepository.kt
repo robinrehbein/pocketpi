@@ -358,9 +358,9 @@ internal class NavigationFakeRepository : RemoteRepository {
     /** The create, model and prompt calls in the order they came, for the new-session steps. */
     val sessionSteps = mutableListOf<String>()
 
-    override suspend fun createSession(routeId: String, projectId: String): RemoteSelection {
+    override suspend fun createSession(routeId: String, projectId: String, harness: SessionHarness): RemoteSelection {
         createdSessions++
-        sessionSteps += "create"
+        sessionSteps += if (harness == SessionHarness.PI) "create" else "create:${harness.wire}"
         return create(routeId, projectId)
     }
 

@@ -201,6 +201,7 @@ internal fun SessionListRow(
     val unreadLabel = stringResource(R.string.remote_activity_unread)
     val oldLabel = stringResource(R.string.remote_session_old)
     val hiddenLabel = stringResource(R.string.remote_session_hidden_label)
+    val claudeLabel = stringResource(harnessLabel(SessionHarness.CLAUDE))
     val hideLabel = stringResource(R.string.remote_menu_hide)
     val unhideLabel = stringResource(R.string.remote_menu_unhide)
     // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
@@ -242,6 +243,7 @@ internal fun SessionListRow(
             stringResource(R.string.remote_fork_session).takeIf { item.continuesAsCopy },
             // Shown even before the worker's first report, while it is still offline.
             workerLabel.takeIf { item.hostWorker },
+            claudeLabel.takeIf { item.harness == SessionHarness.CLAUDE },
             hiddenLabel.takeIf { hidden },
         )
     val ticketLabel = item.ticketRef?.let { stringResource(R.string.remote_ticket_chip, it) }
@@ -260,6 +262,7 @@ internal fun SessionListRow(
             ticketLabel,
             macTuiLabel.takeIf { item.liveMacTui },
             workerLabel.takeIf { item.hostWorker },
+            claudeLabel.takeIf { item.harness == SessionHarness.CLAUDE },
             pinnedLabel.takeIf { item.pinned },
             hiddenLabel.takeIf { hidden },
             unreadLabel.takeIf { item.unread },

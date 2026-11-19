@@ -62,6 +62,8 @@ internal data class SessionListItem(
      * compaction of the session shows.
      */
     val context: SessionContextUsage? = null,
+    /** The agent the Mac runs for this session (see [sessionHarness]); pi unless the row says otherwise. */
+    val harness: SessionHarness = SessionHarness.PI,
 )
 
 data class ProjectChatSummary(
@@ -445,6 +447,7 @@ internal fun sessionListItem(
             availability != SessionAvailability.OFFLINE && !loading && confirmed,
         lastKnown = (!connected || !confirmed) && availability != SessionAvailability.OFFLINE,
         hostWorker = isHostWorker(session),
+        harness = sessionHarness(session),
         busyStatus = session.text("status").let { it == "running" || it == "waiting" },
         compacting = connected && confirmed && !loading &&
             availability != SessionAvailability.OFFLINE && availability != SessionAvailability.WAITING &&

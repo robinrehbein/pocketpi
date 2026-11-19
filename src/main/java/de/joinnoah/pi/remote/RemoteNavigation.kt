@@ -631,20 +631,24 @@ internal class RemoteNavigator(
     }
 
     /**
-     * Starts a session as the new-session sheet describes it (see [finishNewSession]). Without a
-     * model or a prompt it is [createSession]. Like it, the new chat opens at once and takes
+     * Starts a session as the new-session sheet describes it (see [finishNewSession]). A pi session
+     * without a model or a prompt is [createSession]. Like it, the new chat opens at once and takes
      * [freshSession]'s focus; the model and the prompt follow in the background, only while that chat
-     * stays the selected one.
+     * stays the selected one. A Claude Code session takes no pi model: only the prompt follows.
      */
     fun startSession(routeId: String, projectId: String, choice: NewSessionChoice) {
-        if (choice.model == null && choice.prompt.isBlank()) return createSession(routeId, projectId)
+        val harness = choice.harness
+        if (harness == SessionHarness.PI && choice.model == null && choice.prompt.isBlank())
+            return createSession(routeId, projectId)
+        // The pi model list does not apply to another harness.
+        val steps = if (harness == SessionHarness.PI) choice else choice.copy(model = null)
         leavingEditor(RemoteSelection(routeId, projectId)) {
             mutate(
                 fresh = true,
                 opened = { created ->
-                    scope.launch { finishNewSession(created, choice, RepositorySteps(repository)) }
+                    scope.launch { finishNewSession(created, steps, RepositorySteps(repository)) }
                 },
-            ) { repository.createSession(routeId, projectId) }
+            ) { repository.createSession(routeId, projectId, harness) }
         }
     }
 
