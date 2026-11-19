@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -61,7 +63,12 @@ internal data class BrowserPaneActions(
     val input: (BrowserInput) -> Boolean = { false }, val visible: (Boolean) -> Unit = {},
     /** The fail-safe release while a key or button is held: gives up control, never taking it back. */
     val dropControl: () -> Unit = {},
+    /** `browser.history`: back, forward, reload or stop (see [BrowserClient.history]). */
+    val history: (String) -> Boolean = { false },
 )
+
+/** How long the hint that a tab has no earlier or later page stays. */
+internal const val BROWSER_HISTORY_HINT_MS = 3000L
 
 /**
  * Below this width a browser pane with a failure notice moves its header buttons into the "more"
@@ -481,10 +488,26 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
 
     val title = if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title)
     val subtitle = selected?.let { tab -> tab.title.ifBlank { tab.url } }?.takeIf { it.isNotBlank() }
-    // The protocol has no reload command and browser shortcuts do not reach headless Chromium:
-    // a reload opens the tab's current address again, which only works for a real document URL.
-    val reloadUrl = selected?.url?.takeIf { view?.ownsControl == true && browserReloadable(it) }
+    // Without `browser.history`, browser shortcuts do not reach headless Chromium: a reload opens
+    // the tab's current address again, which only works for a real document URL.
+    val history = view?.history == true && view.ownsControl && selected != null
+    val reloadUrl = selected?.url?.takeIf { view?.ownsControl == true && !view.history && browserReloadable(it) }
+    // Back or forward without an entry: a short hint, and the button stays off until the page changes.
+    var historyHint by remember(view?.sessionId, view?.previewPort) { mutableStateOf<String?>(null) }
+    LaunchedEffect(view?.historyMissingCount) {
+        val missing = latestView?.historyMissing ?: return@LaunchedEffect
+        historyHint = missing; delay(BROWSER_HISTORY_HINT_MS); historyHint = null
+    }
     val headerActions = buildList {
+        // Narrow panes move these into the "more" menu with the rest (see PaneHeader).
+        if (history) {
+            add(PaneAction(stringResource(R.string.browser_back), Icons.AutoMirrored.Filled.ArrowBack, "browserBack",
+                enabled = held.isEmpty() && view?.historyMissing != "back", onClick = { latestActions.history("back") }))
+            add(PaneAction(stringResource(R.string.browser_forward), Icons.AutoMirrored.Filled.ArrowForward, "browserForward",
+                enabled = held.isEmpty() && view?.historyMissing != "forward", onClick = { latestActions.history("forward") }))
+            add(PaneAction(stringResource(R.string.browser_stop), Icons.Default.Close, "browserStop",
+                enabled = held.isEmpty(), onClick = { latestActions.history("stop") }))
+        }
         if (view != null && !view.opening)
             add(PaneAction(stringResource(R.string.remote_view_update_status), Icons.Default.Sync, "browserSync", onClick = { latestActions.refresh() }))
         if (onHide != null) add(PaneAction(stringResource(R.string.preview_hide), Icons.Default.VisibilityOff, "browserHide", onClick = onHide))
@@ -503,6 +526,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         if (textSendRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_send_refused), "browserSendRefused"))
         if (goRefused) add(RemoteViewNotice.Failure(stringResource(R.string.browser_go_refused), "browserGoRefused"))
         if (controlDropped) add(RemoteViewNotice.Info(stringResource(R.string.browser_control_dropped), "browserControlDropped"))
+        historyHint?.let { add(RemoteViewNotice.Info(stringResource(if (it == "back") R.string.browser_history_no_back else R.string.browser_history_no_forward), "browserHistoryHint")) }
     }
     // A compact pane has no room for the tab row: its tabs are a header menu instead.
     val tabsMenu = if (view == null || view.opening) emptyList<PaneMenuItem>() else buildList<PaneMenuItem> {
@@ -521,7 +545,11 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         onClose = onClose,
         subtitle = subtitle,
         busy = held.isNotEmpty(),
-        onReload = if (reloadUrl != null) ({ latestActions.navigate(reloadUrl) }) else null,
+        onReload = when {
+            history -> ({ latestActions.history("reload") })
+            reloadUrl != null -> ({ latestActions.navigate(reloadUrl) })
+            else -> null
+        },
         actions = headerActions,
         compactActions = compactActions,
         notices = notices,

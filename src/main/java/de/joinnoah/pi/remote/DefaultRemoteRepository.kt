@@ -661,8 +661,15 @@ class DefaultRemoteRepository(
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+            { browserHistoryNegotiated() },
+            { state.value.hostLimits?.browser },
         )
     }
+    /** `session.browser.history.v1` counts only on a connection whose latest list came from the v4 route. */
+    private fun browserHistoryNegotiated() = state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 4 &&
+        SESSION_BROWSER_HISTORY_CAPABILITY in state.value.capabilities && SESSION_BROWSER_HISTORY_CAPABILITY !in state.value.unavailableCapabilities
+    override fun browserHistory(action: String) = browserClient.history(action)
+    override fun previewHistory(action: String) = previewClient.history(action)
     override fun canOpenBrowser(): Boolean = browserOpenable(state.value, capabilityRevision(capabilityRoute))
     override fun openBrowser(): Boolean = canOpenBrowser() && browserClient.open(requireNotNull(state.value.selection.sessionId), generation)
     override fun closeBrowser() = browserClient.close()
@@ -689,6 +696,8 @@ class DefaultRemoteRepository(
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+            { browserHistoryNegotiated() },
+            { state.value.hostLimits?.browser },
         )
     }
     override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities

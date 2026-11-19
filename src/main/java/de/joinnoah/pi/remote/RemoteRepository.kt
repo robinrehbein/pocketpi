@@ -368,6 +368,8 @@ interface RemoteRepository {
     fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
     fun sendPreviewInput(input: BrowserInput): Boolean = false
     fun refreshPreview(): Boolean = false
+    /** Back, forward, reload or stop in the preview's tab (`session.browser.history.v1`). */
+    fun previewHistory(action: String): Boolean = false
     fun setPreviewVisible(visible: Boolean) {}
     /** Gives up this device's control of the preview without taking it back later (see [BrowserClient.dropControl]). */
     fun dropPreviewControl() {}
@@ -396,6 +398,8 @@ interface RemoteRepository {
     fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
     fun sendBrowserInput(input: BrowserInput): Boolean = false
     fun refreshBrowser(): Boolean = false
+    /** Back, forward, reload or stop in the browser's tab (`session.browser.history.v1`). */
+    fun browserHistory(action: String): Boolean = false
     fun setBrowserVisible(visible: Boolean) {}
     /** Gives up this device's control of the browser without taking it back later (see [BrowserClient.dropControl]). */
     fun dropBrowserControl() {}

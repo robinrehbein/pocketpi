@@ -5,6 +5,11 @@
     <string name="browser_new_tab">Neuer Tab</string>
     <string name="browser_address">Adresse</string>
     <string name="browser_go">Öffnen</string>
+    <string name="browser_back">Zurück</string>
+    <string name="browser_forward">Vor</string>
+    <string name="browser_stop">Laden stoppen</string>
+    <string name="browser_history_no_back">Keine frühere Seite in diesem Tab.</string>
+    <string name="browser_history_no_forward">Keine spätere Seite in diesem Tab.</string>
     <string name="browser_image">Entferntes Browserbild</string>
     <string name="browser_send_refused">Der Text wurde nicht gesendet. Dein Entwurf bleibt erhalten; versuche es erneut, wenn du bereit bist.</string>
     <string name="browser_go_refused">Die Adresse wurde nicht geöffnet. Prüfe, ob sie mit http:// oder https:// beginnt und die Verbindung steht, und versuche es erneut.</string>
