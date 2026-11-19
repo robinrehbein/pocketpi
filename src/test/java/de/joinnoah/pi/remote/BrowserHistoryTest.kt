@@ -93,4 +93,21 @@ class BrowserHistoryTest {
         assertEquals(BrowserNotice.UNCERTAIN, client.view!!.notice)
         assertFalse(client.view!!.ownsControl)
     }
+
+    @Test fun aSlowHostStreamGetsALongerDeadline() = runTest {
+        val calls = mutableListOf<Call>()
+        val slow = BrowserLimits(ViewportLimits(80, 2048, 80, 2048, 0.5, 3.0), StreamLimits(1, 2000, 1048576, 49152), 32)
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, fields ->
+            CompletableDeferred<JsonObject>().also { calls.add(Call(type, fields.toMap(), it)) }.await()
+        }, {}, { "device" }, limits = { slow })
+        client.open("session", 1); runCurrent()
+        calls.removeAt(0).result.complete(opened()); runCurrent()
+        calls.single { it.type == "browser.watch" }.result.complete(Wire.objectOf("kind" to "browser.watching", "browserId" to "b", "streamId" to "stream", "generation" to 1, "viewportRevision" to 1))
+        runCurrent()
+        assertEquals(slow, client.view!!.limits)
+        testScheduler.advanceTimeBy(BROWSER_FRAME_DEADLINE_MS + 100); runCurrent()
+        assertTrue(calls.none { it.type == "browser.unwatch" })
+        testScheduler.advanceTimeBy(2000); runCurrent()
+        assertTrue(calls.any { it.type == "browser.unwatch" })
+    }
 }

@@ -8,7 +8,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 public data class EmulatorImage(val png: ByteArray, val width: Long, val height: Long, val displayWidth: Long, val displayHeight: Long, val rotation: Long, val revision: Long, val frameId: Long)
-public data class EmulatorView(val sessionId: String, val opening: Boolean = true, val profiles: List<EmulatorProfileInfo> = emptyList(), val profileId: String? = null, val label: String? = null, val emulatorId: String? = null, val incarnation: String? = null, val generation: Long = 0, val geometry: EmulatorGeometry? = null, val owner: EmulatorOwner? = null, val participants: List<EmulatorOwner> = emptyList(), val ownsControl: Boolean = false, val inputPending: Boolean = false, val image: EmulatorImage? = null, val notice: EmulatorNotice? = null, val disconnected: Boolean = false)
+public data class EmulatorView(val sessionId: String, val opening: Boolean = true, val profiles: List<EmulatorProfileInfo> = emptyList(), val profileId: String? = null, val label: String? = null, val emulatorId: String? = null, val incarnation: String? = null, val generation: Long = 0, val geometry: EmulatorGeometry? = null, val owner: EmulatorOwner? = null, val participants: List<EmulatorOwner> = emptyList(), val ownsControl: Boolean = false, val inputPending: Boolean = false, val image: EmulatorImage? = null, val notice: EmulatorNotice? = null, val disconnected: Boolean = false,
+    /** `session.emulator.controls.v1` was negotiated: raw touch, text, the extra keys and rotation. */
+    val controls: Boolean = false,
+    /** The host's emulator limits (`session.limits.v1`); null keeps the built-in values. */
+    val limits: EmulatorLimits? = null)
 
 /** What the emulator pane tells the user under its header. */
 public enum class EmulatorNotice {
@@ -26,6 +30,8 @@ public enum class EmulatorNotice {
     STREAM_FAILED,
 }
 
+/** How long a watched stream may stay silent before it counts as ended, without host limits. */
+internal const val EMULATOR_FRAME_DEADLINE_MS = 5500L
 /** Consecutive automatic re-watches after the stream ended, before the pane offers a manual retry. */
 internal const val EMULATOR_STREAM_RETRIES = 3
 /** The wait before the n-th automatic re-watch is n times this. */
@@ -47,7 +53,9 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     private val request: suspend (Long, String, Array<out Pair<String, Any?>>) -> JsonObject,
     private val changed: (EmulatorView?) -> Unit, private val deviceId: () -> String? = { null },
     private val connectionAlive: (Long) -> Boolean = { true }, private val closeConnection: (Long) -> Unit = {},
-    private val recoveryEnabled: () -> Boolean = { false }) {
+    private val recoveryEnabled: () -> Boolean = { false },
+    private val controlsEnabled: () -> Boolean = { false },
+    private val limits: () -> EmulatorLimits? = { null }) {
     // Negotiated per open: a recovery watch keeps its deadline alive with emulator.frame.waiting.
     private var recovery = false
     var view: EmulatorView? = null; private set
@@ -87,7 +95,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     fun open(session: String, c: Long): Boolean {
         if (!current(session, c)) return false
         close(); connection = c; visible = true; disconnected = false; recovery = recoveryEnabled(); val t = ++token
-        set(EmulatorView(session))
+        set(EmulatorView(session, controls = controlsEnabled(), limits = limits()))
         scope.launch { try {
             val r = send(c, EmulatorCommand.List(Wire.random(), session)) as EmulatorResult.Profiles
             if (valid(t, session, c)) set(view?.copy(opening = false, profiles = r.profiles))
@@ -132,7 +140,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         disconnected = false; connection = c; recovery = recoveryEnabled(); val t = ++token; val v = view ?: return false
         val id = v.emulatorId ?: return open(session, c)
         val profile = v.profileId ?: return false
-        set(v.copy(opening = true, ownsControl = false, inputPending = false, image = null, disconnected = false))
+        // The new connection may have negotiated another route.
+        set(v.copy(opening = true, ownsControl = false, inputPending = false, image = null, disconnected = false, controls = controlsEnabled(), limits = limits()))
         scope.launch { try {
             val r = send(c, EmulatorCommand.Open(Wire.random(), session, profile)) as EmulatorResult.Opened
             if (!valid(t, session, c)) { if (connectionAlive(c)) closeConnection(c); return@launch }
@@ -403,7 +412,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     }
     private fun armDeadline(id: String, t: Long, w: Long, session: String, c: Long) {
         deadline?.cancel()
-        deadline = scope.launch { delay(5500); if (stream == id && watchToken == w && valid(t, session, c)) streamFailed("frame_deadline") }
+        deadline = scope.launch { delay(streamDeadlineMs(view?.limits?.stream, EMULATOR_FRAME_DEADLINE_MS)); if (stream == id && watchToken == w && valid(t, session, c)) streamFailed("frame_deadline") }
     }
     fun frame(payload: JsonObject) {
         val v = view ?: return

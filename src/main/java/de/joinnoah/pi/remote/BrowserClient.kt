@@ -390,7 +390,7 @@ internal class BrowserClient(
     private fun armWatchDeadline(id: String, t: Long, w: Long, session: String, c: Long) {
         watchDeadline?.cancel()
         watchDeadline = scope.launch {
-            delay(BROWSER_FRAME_DEADLINE_MS)
+            delay(streamDeadlineMs(view?.limits?.stream, BROWSER_FRAME_DEADLINE_MS))
             if (stream == id && watchToken == w && valid(t, session, c)) {
                 watchDeadline = null
                 streamStalled()
@@ -415,7 +415,7 @@ internal class BrowserClient(
             delay(BROWSER_STALL_BACKOFF_MS * attempt)
             if (!valid(t, session, c) || !visible || stalls != attempt) return@launch
             refresh()
-            delay(BROWSER_FRAME_DEADLINE_MS)
+            delay(streamDeadlineMs(view?.limits?.stream, BROWSER_FRAME_DEADLINE_MS))
             // A watch that started arms its own deadline; this covers a refresh that started none.
             if (valid(t, session, c) && visible && stalls == attempt && stream == null && !watching) streamStalled()
         }

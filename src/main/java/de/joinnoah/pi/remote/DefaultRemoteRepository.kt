@@ -635,6 +635,9 @@ class DefaultRemoteRepository(
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_RECOVERY_CAPABILITY in state.value.capabilities },
+            // Only on a connection whose latest list came from the v4 route.
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 4 && SESSION_EMULATOR_CONTROLS_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CONTROLS_CAPABILITY !in state.value.unavailableCapabilities },
+            { state.value.hostLimits?.emulator },
         )
     }
     override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale

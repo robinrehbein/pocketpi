@@ -90,8 +90,11 @@ private class BrowserFrameKey(private val image: BrowserImage?) {
  */
 private const val BROWSER_WHEEL_INTERVAL_MS = 50L
 
-/** The smallest viewport side, in dp (CSS pixels), the pane asks the host to resize the page to. */
-private const val BROWSER_VIEWPORT_MIN_DP = 80
+/**
+ * Inputs the pane keeps queued, in flight and held at once without host limits; the host's
+ * `maxInFlightInputs` (`session.limits.v1`) can only lower it (see [inFlightInputBound]).
+ */
+private const val BROWSER_MAX_PENDING_INPUTS = 32
 
 private enum class BrowserTouchMode {
     /** No finger gesture, or one that was given up (a second finger, a refused press). */
@@ -265,15 +268,19 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     // A finger on the viewport counts as held: the soft keyboard hiding at its touch must not
     // resize the page under the tap it is about to send.
     val touching = touch.mode != BrowserTouchMode.NONE
-    LaunchedEffect(size, density, view?.ownsControl, view?.generation, view?.selectedTabId, active, held.size, touching) {
+    // The viewport sides (dp, CSS pixels) and scale the pane may ask for: the host's limits where it
+    // sent them, within the built-in bounds (see [browserViewportBounds]).
+    val bounds = browserViewportBounds(view?.limits?.viewport)
+    val inputBound = inFlightInputBound(view?.limits?.maxInFlightInputs, BROWSER_MAX_PENDING_INPUTS)
+    LaunchedEffect(bounds, size, density, view?.ownsControl, view?.generation, view?.selectedTabId, active, held.size, touching) {
         // A viewport below the clamp's floor (a pane squeezed to a few dp) asks for nothing: the page
         // would reflow to a size nobody sees. The last requested size stays until it grows again.
         val measuredWidth = (size.width / density).toInt()
         val measuredHeight = (size.height / density).toInt()
-        if (active && view?.ownsControl == true && held.isEmpty() && !touching && measuredWidth >= BROWSER_VIEWPORT_MIN_DP && measuredHeight >= BROWSER_VIEWPORT_MIN_DP) {
-            val width = measuredWidth.coerceIn(BROWSER_VIEWPORT_MIN_DP, 2048)
-            val height = measuredHeight.coerceIn(BROWSER_VIEWPORT_MIN_DP, 2048)
-            val scale = density.toDouble().coerceIn(0.5, 3.0)
+        if (active && view?.ownsControl == true && held.isEmpty() && !touching && measuredWidth >= bounds.minWidth && measuredHeight >= bounds.minHeight) {
+            val width = measuredWidth.coerceIn(bounds.minWidth, bounds.maxWidth)
+            val height = measuredHeight.coerceIn(bounds.minHeight, bounds.maxHeight)
+            val scale = density.toDouble().coerceIn(bounds.minScale, bounds.maxScale)
             val wanted = Triple(width, height, scale)
             if (wanted != requestedSize && latestActions.resize(width, height, scale, if (width >= height) "landscape" else "portrait")) {
                 requestedSize = wanted; resizeRevision = view.viewportRevision
@@ -343,7 +350,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             }
         }
         val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
-        if (!up && occupied + (if (down) 2 else 1) > 32) return false
+        if (!up && occupied + (if (down) 2 else 1) > inputBound) return false
         if (down && id != null) {
             if (held.isEmpty()) heldRevision = latestView?.viewportRevision
             held.add(id)
@@ -359,7 +366,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         val allowed = if (down is BrowserInput.Pointer) latestCanInput else latestCanTextKeys
         if (!allowed || !latestCanRelease || id in held) return false
         val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
-        if (occupied + 2 > 32) return false
+        if (occupied + 2 > inputBound) return false
         if (held.isEmpty()) heldRevision = latestView?.viewportRevision
         held.add(id)
         if (down is BrowserInput.Key) heldKeys[id] = down
@@ -375,7 +382,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         // The host rejects duplicate key-down transitions. Admit the entire pair
         // atomically while retaining the reserved slot for the final release.
         val occupied = queue.size + (if (flight == null) 0 else 1) + held.size
-        if (occupied + 2 > 32) return false
+        if (occupied + 2 > inputBound) return false
         queue.add(PendingBrowserInput(original.copy(action = "up"), repeatRelease = true))
         val repeated = input.copy(key = original.key)
         queue.add(PendingBrowserInput(repeated))

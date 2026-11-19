@@ -263,6 +263,20 @@ class BrowserPaneTest {
         compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "Enter", "Enter"), BrowserInput.Key("up", "Enter", "Enter")), sent) }
     }
 
+    @Test fun hostLimitsNarrowTheRequestedViewport() {
+        val requests = mutableListOf<Triple<Int, Int, Double>>()
+        val stream = StreamLimits(4, 250, 1048576, 49152)
+        val limits = BrowserLimits(ViewportLimits(100, 300, 100, 250, 1.0, 1.5), stream, 32)
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, limits = limits)
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(resize = { w, h, scale, _ -> requests += Triple(w, h, scale); true }), {}) } }
+        compose.waitUntil(10_000) { compose.runOnIdle { requests.isNotEmpty() } }
+        compose.runOnIdle {
+            val (w, h, scale) = requests.last()
+            assertTrue("$w", w in 100..300); assertTrue("$h", h in 100..250); assertTrue("$scale", scale in 1.0..1.5)
+            assertEquals(300, w); assertEquals(250, h)
+        }
+    }
+
     @Test fun resizePendingBlocksTextAndKeysEvenWithDecodedImage() {
         var requested = false
         val first = image()
