@@ -12,7 +12,9 @@ public data class EmulatorView(val sessionId: String, val opening: Boolean = tru
     /** `session.emulator.controls.v1` was negotiated: raw touch, text, the extra keys and rotation. */
     val controls: Boolean = false,
     /** The host's emulator limits (`session.limits.v1`); null keeps the built-in values. */
-    val limits: EmulatorLimits? = null)
+    val limits: EmulatorLimits? = null,
+    /** A rotation is in flight: keys and text wait, as the geometry they were made for is changing. */
+    val rotating: Boolean = false)
 
 /** What the emulator pane tells the user under its header. */
 public enum class EmulatorNotice {
@@ -32,10 +34,14 @@ public enum class EmulatorNotice {
 
 /** How long a watched stream may stay silent before it counts as ended, without host limits. */
 internal const val EMULATOR_FRAME_DEADLINE_MS = 5500L
-/** The shortest pause between two raw touch events: at most about 60 a second. */
-internal const val EMULATOR_TOUCH_INTERVAL_MS = 16L
-/** Raw touch events unacknowledged at once without host limits; always fewer than the host's 32. */
-internal const val EMULATOR_TOUCH_MAX_IN_FLIGHT = 31
+/**
+ * The shortest pause between two raw touch events: about 14 a second. The transport sends about
+ * 24 frames in 1.1 s, the relay drops a peer above 32 messages a second, and frame
+ * acknowledgements share that budget, so moves coalesce in the client instead of piling up there.
+ */
+internal const val EMULATOR_TOUCH_INTERVAL_MS = 70L
+/** Raw touch events unacknowledged at once; the host's limit (32 operations an actor) lowers it further. */
+internal const val EMULATOR_TOUCH_MAX_IN_FLIGHT = 4
 /** Touch events waiting to be sent; moves coalesce, so only pointer changes add up. */
 internal const val EMULATOR_TOUCH_MAX_QUEUED = 64
 /** Consecutive automatic re-watches after the stream ended, before the pane offers a manual retry. */
@@ -94,7 +100,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     private var queued: QueuedEmulatorInput? = null
     private var stream: String? = null; private var assembler: EmulatorFrameAssembler? = null; private var watchToken = 0L; private var watching = false
     private val early = linkedMapOf<String, JsonObject>(); private var retiredStream: String? = null
-    private fun set(v: EmulatorView?) { view = v; changed(v) }
+    // A rotation shows as in flight only while an input is: every path that ends one clears both.
+    private fun set(v: EmulatorView?) { val w = if (v != null && v.rotating && !v.inputPending) v.copy(rotating = false) else v; view = w; changed(w) }
     private fun valid(t: Long, s: String, c: Long) = token == t && current(s, c)
     private suspend fun send(c: Long, command: EmulatorCommand): EmulatorResult {
         val p = encodeEmulatorCommand(command)
@@ -169,6 +176,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     fun setVisible(value: Boolean) {
         visible = value
         if (!value) {
+            liftAllTouches()
             queued = null; rewatch?.cancel(); rewatch = null; dropStream(); view?.let { set(it.copy(image = null)) }
             // A take-back still waiting for a free state waits for the next show instead.
             if (reacquire) { reacquire = false; takeBackOnShow = true; hiddenOwner = lostOwner }
@@ -286,8 +294,12 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             check(r.emulatorId == id && r.profileId == old.profileId && r.incarnation == old.incarnation && p.emulatorId == id)
             if (r.generation < old.generation || r.generation != p.generation) return@launch
             val changedGeneration = r.generation != old.generation || r.geometry != old.geometry
-            if (changedGeneration) { lease = null; dropStream() }
-            set(old.copy(generation = r.generation, geometry = r.geometry, owner = r.owner, participants = p.participants, ownsControl = lease != null, image = if (changedGeneration) null else old.image)); watch()
+            // The Host revoked the lease with the old generation, and with it any finger still down.
+            // A touch still in flight may or may not have landed.
+            var uncertain = false; var touchWasPending = false
+            if (changedGeneration) { uncertain = touchInFlight > 0; touchWasPending = touchPending; lease = null; resetTouch(); dropStream() }
+            set(old.copy(generation = r.generation, geometry = r.geometry, owner = r.owner, participants = p.participants, ownsControl = lease != null, image = if (changedGeneration) null else old.image,
+                inputPending = old.inputPending && !touchWasPending, notice = if (uncertain) EmulatorNotice.UNCERTAIN else old.notice)); watch()
         } catch (e: Exception) { if (valid(t, v.sessionId, c)) { if (e.answeredByHost) refreshRefused() else fail("refresh") } } }
         return true
     }
@@ -343,12 +355,13 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
      */
     fun input(input: EmulatorInput): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val l = lease ?: return false; val g = v.geometry ?: return false
-        if (v.image?.revision != g.revision || !visible || !current(v.sessionId, connection)) return false
-        if (requiresControls(input) && !v.controls) return false
+        if (v.image?.revision != g.revision || !visible || v.rotating || !current(v.sessionId, connection)) return false
+        // The capability can go away after the view opened: refused here, never sent to be forbidden.
+        if (requiresControls(input) && !(v.controls && controlsEnabled())) return false
         // A shape the host would refuse (non-ASCII text, a key out of range) never goes out.
         try { encodeEmulatorCommand(EmulatorCommand.Input("r", v.sessionId, id, l, v.generation, g.revision, 0, input)) } catch (_: Exception) { return false }
         // Raw touch has its own pipeline (see [touch]); nothing else goes out while it runs.
-        if (touchInFlight > 0 || touchQueue.isNotEmpty()) return false
+        if (touchActive()) return false
         if (pending) {
             // A control request in flight (acquire, hand over, stop) takes no input meanwhile.
             if (!v.inputPending) return false
@@ -383,8 +396,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
      */
     fun rotate(rotation: Long): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val l = lease ?: return false; val g = v.geometry ?: return false
-        if (!v.controls || rotation !in 0..3 || pending || touchInFlight > 0 || touchQueue.isNotEmpty() || !visible || !current(v.sessionId, connection)) return false
-        val c = connection; val t = token; val seq = sequence; pending = true; set(v.copy(inputPending = true))
+        if (!v.controls || !controlsEnabled() || rotation !in 0..3 || pending || touchActive() || !visible || !current(v.sessionId, connection)) return false
+        val c = connection; val t = token; val seq = sequence; pending = true; set(v.copy(inputPending = true, rotating = true))
         scope.launch {
             val r = try {
                 (send(c, EmulatorCommand.Rotate(Wire.random(), v.sessionId, id, l, v.generation, g.revision, seq, rotation)) as EmulatorResult.Rotated).also {
@@ -405,61 +418,126 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     // Touch events are pipelined: each takes the next sequence number when it goes out, up to
     // [touchBound] unacknowledged, at most one per [EMULATOR_TOUCH_INTERVAL_MS]. A move waiting
     // to go out is replaced by a newer move of the same pointers; a pointer going down or up is
-    // never dropped. Any failure leaves the whole gesture in doubt and closes the connection.
+    // never dropped. While the lease is held a lift always goes out, even hidden or against an
+    // older frame; one that cannot ends the lease, so the Host lifts the finger. Any failure
+    // leaves the whole gesture in doubt and closes the connection.
     private data class QueuedTouch(val input: EmulatorInput.Touch, val generation: Long, val revision: Long)
     private val touchQueue = ArrayDeque<QueuedTouch>()
+    // The pointers down on the device or on their way there, at their latest queued point.
+    private val touchDown = linkedMapOf<Int, EmulatorTouchPoint>()
     private var touchInFlight = 0
+    // Whether [pending] was set by the touch pipeline rather than another input or control request.
+    private var touchPending = false
+    // Bumped by [resetTouch]: acknowledgements of an abandoned pipeline change nothing.
+    private var touchEpoch = 0L
     private var touchSentAt = Long.MIN_VALUE / 2
     private var touchPump: Job? = null
     private fun touchBound() = inFlightInputBound(view?.limits?.maxInFlightInputs, EMULATOR_TOUCH_MAX_IN_FLIGHT)
-    private fun resetTouch() { touchQueue.clear(); touchInFlight = 0; touchPump?.cancel(); touchPump = null }
+    private fun touchActive() = touchInFlight > 0 || touchQueue.isNotEmpty() || touchDown.isNotEmpty()
+    private fun resetTouch() {
+        touchEpoch++; touchQueue.clear(); touchDown.clear(); touchInFlight = 0; touchPump?.cancel(); touchPump = null
+        if (touchPending) { touchPending = false; pending = false }
+    }
+    // Nothing left to send or acknowledge: the pipeline gives [pending] back.
+    private fun settleTouch() {
+        if (touchInFlight == 0 && touchQueue.isEmpty() && touchPending) { touchPending = false; pending = false; view?.let { set(it.copy(inputPending = false)) } }
+    }
     private fun EmulatorInput.Touch.isMove() = touches.all { it.pressure > 0 }
     private fun EmulatorInput.Touch.pointers() = touches.map { it.id }.toSet()
+    private fun EmulatorTouchPoint.liftedIn(g: EmulatorGeometry) = copy(x = x.coerceIn(0, (g.width - 1).coerceAtLeast(0)), y = y.coerceIn(0, (g.height - 1).coerceAtLeast(0)), pressure = 0)
 
-    /** Queues one raw touch event of the pane's gesture; false when it cannot go out (no control, a full queue). */
+    /**
+     * Queues one raw touch event of the pane's gesture; false when it cannot go out (no control, a
+     * full queue). A lift is accepted while the lease is held whatever the frame or visibility.
+     */
     fun touch(input: EmulatorInput.Touch): Boolean {
-        val v = view ?: return false; val g = v.geometry ?: return false
-        if (!v.controls || lease == null || v.image?.revision != g.revision || !visible || !current(v.sessionId, connection)) return false
+        val v = view ?: return false; val g = v.geometry ?: return false; val id = v.emulatorId ?: return false
+        if (lease == null || !current(v.sessionId, connection)) return false
+        val liftsActive = input.touches.any { it.pressure == 0 && it.id in touchDown }
+        if (!(v.controls && controlsEnabled())) { if (liftsActive) abandonGesture(); return false }
         // Another input or a control request in flight: the touch waits for nothing, it is refused.
-        if (pending && touchInFlight == 0) return false
-        try { encodeEmulatorCommand(EmulatorCommand.Input("r", v.sessionId, v.emulatorId ?: return false, "l", v.generation, g.revision, 0, input)) } catch (_: Exception) { return false }
+        if (pending && !touchPending) { if (liftsActive) abandonGesture(); return false }
+        val framed = visible && v.image?.revision == g.revision
+        if (!framed && input.touches.all { it.pressure > 0 }) return false
+        // Without the frame it was made against only the lifts go; a lift of a pointer never sent
+        // (or already lifted) has nothing to lift, and goes at the current geometry.
+        val touches = input.touches.mapNotNull { p -> if (p.pressure > 0) p.takeIf { framed } else touchDown[p.id]?.let { p.liftedIn(g) } }
+        if (touches.isEmpty()) return true
+        val event = EmulatorInput.Touch(touches)
+        try { encodeEmulatorCommand(EmulatorCommand.Input("r", v.sessionId, id, "l", v.generation, g.revision, 0, event)) } catch (_: Exception) { if (liftsActive) abandonGesture(); return false }
         val last = touchQueue.lastOrNull()
-        if (last != null && last.input.isMove() && input.isMove() && last.input.pointers() == input.pointers() && last.revision == g.revision)
-            touchQueue[touchQueue.lastIndex] = QueuedTouch(input, v.generation, g.revision)
+        if (last != null && last.input.isMove() && event.isMove() && last.input.pointers() == event.pointers() && last.revision == g.revision)
+            touchQueue[touchQueue.lastIndex] = QueuedTouch(event, v.generation, g.revision)
         else {
-            if (touchQueue.size >= EMULATOR_TOUCH_MAX_QUEUED && input.isMove()) return false
-            touchQueue.addLast(QueuedTouch(input, v.generation, g.revision))
+            if (touchQueue.size >= EMULATOR_TOUCH_MAX_QUEUED && event.isMove()) return false
+            touchQueue.addLast(QueuedTouch(event, v.generation, g.revision))
         }
+        for (p in touches) if (p.pressure > 0) touchDown[p.id] = p else touchDown.remove(p.id)
         pumpTouch()
         return true
     }
 
+    /**
+     * Hiding the pane mid-gesture: drops the events waiting to go out and lifts every pointer that
+     * is down or that one of them names, in one event. Events in flight are still acknowledged.
+     */
+    private fun liftAllTouches() {
+        val v = view; val g = v?.geometry
+        if (lease == null || v == null || g == null) { if (touchInFlight == 0) resetTouch() else touchQueue.clear(); return }
+        val pointers = linkedMapOf<Int, EmulatorTouchPoint>()
+        touchQueue.forEach { q -> q.input.touches.forEach { pointers[it.id] = it } }
+        pointers.putAll(touchDown)
+        touchQueue.clear(); touchDown.clear()
+        if (pointers.isNotEmpty()) { touchQueue.addLast(QueuedTouch(EmulatorInput.Touch(pointers.values.map { it.liftedIn(g) }), v.generation, g.revision)); pumpTouch() }
+        else settleTouch()
+    }
+
+    // A lift that cannot go out would leave a finger down on the device: give the lease back, so
+    // the Host's lease end lifts it, or, with touches in flight, close the connection.
+    private fun abandonGesture() {
+        val inFlight = touchInFlight > 0
+        resetTouch()
+        view?.let { if (it.inputPending && !pending) set(it.copy(inputPending = false)) }
+        if (inFlight || !release()) fail("touch_lift")
+    }
+
     private fun pumpTouch() {
+        val v = view ?: return
+        val id = v.emulatorId; val l = lease
+        // The lease is gone: the Host lifted every finger with it; what waits is dropped.
+        if (id == null || l == null) { touchQueue.clear(); touchDown.clear(); settleTouch(); return }
         val now = clock()
-        val v = view ?: return; val id = v.emulatorId ?: return; val l = lease ?: return
         while (touchQueue.isNotEmpty() && touchInFlight < touchBound()) {
             val wait = touchSentAt + EMULATOR_TOUCH_INTERVAL_MS - now
             if (wait > 0) {
                 if (touchPump == null) touchPump = scope.launch { delay(wait); touchPump = null; pumpTouch() }
                 return
             }
-            val next = touchQueue.removeFirst()
-            // Made against another frame: the gesture can no longer land where the finger is.
-            if (next.generation != v.generation || next.revision != v.geometry?.revision) { touchQueue.clear(); return }
-            val c = connection; val t = token; val seq = sequence++
-            touchInFlight++; touchSentAt = now; pending = true
-            if (!v.inputPending) set(v.copy(inputPending = true))
+            var next = touchQueue.removeFirst()
+            val g = v.geometry
+            if (g == null || next.generation != v.generation) { touchQueue.clear(); touchDown.clear(); break }
+            if (next.revision != g.revision) {
+                // Made against another frame: the gesture can no longer land where the finger is,
+                // but its lifts still go, at the current geometry.
+                val lifts = next.input.touches.filter { it.pressure == 0 }.map { it.liftedIn(g) }
+                if (lifts.isEmpty()) continue
+                next = QueuedTouch(EmulatorInput.Touch(lifts), v.generation, g.revision)
+            }
+            val c = connection; val t = token; val e = touchEpoch; val seq = sequence++
+            touchInFlight++; touchSentAt = now; pending = true; touchPending = true
+            view?.let { if (!it.inputPending) set(it.copy(inputPending = true)) }
+            val sent = next
             scope.launch {
                 try {
-                    val r = send(c, EmulatorCommand.Input(Wire.random(), v.sessionId, id, l, next.generation, next.revision, seq, next.input)) as EmulatorResult.InputAck
-                    if (!valid(t, v.sessionId, c)) return@launch
-                    check(r.emulatorId == id && r.generation == next.generation && r.sequence == seq && r.status == "accepted")
-                } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("touch"); return@launch }
+                    val r = send(c, EmulatorCommand.Input(Wire.random(), v.sessionId, id, l, sent.generation, sent.revision, seq, sent.input)) as EmulatorResult.InputAck
+                    if (!valid(t, v.sessionId, c) || e != touchEpoch) return@launch
+                    check(r.emulatorId == id && r.generation == sent.generation && r.sequence == seq && r.status == "accepted")
+                } catch (_: Exception) { if (valid(t, v.sessionId, c) && e == touchEpoch) fail("touch"); return@launch }
                 touchInFlight--
-                if (touchInFlight == 0 && touchQueue.isEmpty()) { pending = false; set(view?.copy(inputPending = false)) }
-                else pumpTouch()
+                if (touchQueue.isEmpty()) settleTouch() else pumpTouch()
             }
         }
+        settleTouch()
     }
 
     fun handoff(owner: String): Boolean {
@@ -472,7 +550,9 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     fun stop(): Boolean = control { v,id,l -> EmulatorCommand.Stop(Wire.random(),v.sessionId,id,l,v.generation) }
     private fun control(command: (EmulatorView,String,String)->EmulatorCommand): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val l = lease ?: return false; val c = connection; val t = token
-        if (pending || touchQueue.isNotEmpty() || !current(v.sessionId,c)) return false
+        if (pending || touchQueue.isNotEmpty() || touchInFlight > 0 || !current(v.sessionId,c)) return false
+        // Fingers still down are lifted by the Host when the lease ends.
+        resetTouch()
         pending = true; lease = null; reacquire = false; queued = null; dropStream(); set(v.copy(ownsControl = false, image = null))
         scope.launch { try {
             val r = send(c, command(v,id,l)); if (!valid(t,v.sessionId,c)) return@launch

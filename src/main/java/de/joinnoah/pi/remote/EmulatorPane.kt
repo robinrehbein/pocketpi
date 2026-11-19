@@ -116,7 +116,8 @@ internal fun emulatorTouchPressure(pressure: Float): Int =
 /**
  * Follows the fingers on the screen and reports each change as one raw touch event: every pointer
  * down or lifting, with an id 0 to 31 kept for as long as it is down. A pointer that goes down
- * outside the image, beyond the tenth, or whose down was refused, is ignored until it lifts.
+ * outside the image, beyond the tenth, or whose down was refused, is ignored until it lifts. A
+ * refused lift keeps its id and goes again with the next event or [clear].
  */
 internal class EmulatorTouchTracker {
     private val ids = mutableMapOf<Long, Int>()
@@ -138,12 +139,24 @@ internal class EmulatorTouchTracker {
             last[id] = at
             touches += EmulatorTouchPoint(id, at.first, at.second, if (p.down) emulatorTouchPressure(p.pressure) else 0)
         }
-        val lifted = pointers.filter { !it.down }.mapNotNull { ids[it.key] }
-        if (touches.isNotEmpty() && !send(EmulatorInput.Touch(touches))) started.forEach { key -> ids.remove(key)?.let { last.remove(it) } }
-        lifted.forEach { id -> ids.entries.removeAll { it.value == id }; last.remove(id) }
+        // A pointer that is no longer reported lifted with a refused event: lift it again.
+        val keys = pointers.map { it.key }.toSet()
+        val orphaned = ids.filterKeys { it !in keys }.values.mapNotNull { id -> last[id]?.let { EmulatorTouchPoint(id, it.first, it.second, 0) } }
+        touches += orphaned
+        val lifted = pointers.filter { !it.down }.mapNotNull { ids[it.key] } + orphaned.map { it.id }
+        if (touches.isEmpty()) return
+        if (send(EmulatorInput.Touch(touches))) lifted.forEach { forget(it) }
+        else started.forEach { key -> ids.remove(key)?.let { last.remove(it) } }
     }
 
-    fun clear() { ids.clear(); last.clear() }
+    private fun forget(id: Int) { ids.entries.removeAll { it.value == id }; last.remove(id) }
+
+    /** Lifts every pointer still down through [send], then forgets them all, whether it went out or not. */
+    fun clear(send: (EmulatorInput.Touch) -> Boolean = { false }) {
+        val lifts = ids.values.sorted().mapNotNull { id -> last[id]?.let { EmulatorTouchPoint(id, it.first, it.second, 0) } }
+        if (lifts.isNotEmpty()) send(EmulatorInput.Touch(lifts))
+        ids.clear(); last.clear()
+    }
 }
 
 /**
@@ -351,7 +364,8 @@ internal fun EmulatorPane(
                             if (view.controls) {
                                 // Raw multi-touch: every finger goes to the device as it moves.
                                 val tracker = EmulatorTouchTracker()
-                                awaitPointerEventScope {
+                                // A restart (new geometry) or disposal lifts the fingers still down.
+                                try { awaitPointerEventScope {
                                     while (true) {
                                         val event = awaitPointerEvent()
                                         val shown = latestImage
@@ -364,9 +378,9 @@ internal fun EmulatorPane(
                                         }
                                         event.changes.forEach { it.consume() }
                                         if (currentView.ownsControl && latestDisplayed) tracker.event(pointers) { latestActions.touch(it) }
-                                        else tracker.clear()
+                                        else tracker.clear { latestActions.touch(it) }
                                     }
-                                }
+                                } } finally { tracker.clear { latestActions.touch(it) } }
                             }
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = true)
@@ -412,7 +426,7 @@ internal fun EmulatorPane(
                 emulatorKeys(view.controls),
                 onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
                 tag = "emulator",
-                enabled = view.ownsControl && displayed && !view.opening,
+                enabled = view.ownsControl && displayed && !view.opening && !view.rotating,
                 sheds = true,
             )
             if (view.controls) {
@@ -425,7 +439,7 @@ internal fun EmulatorPane(
                     tag = "emulatorText",
                     label = stringResource(R.string.emulator_text),
                     enabled = view.ownsControl,
-                    sendEnabled = view.ownsControl && displayed && !view.opening && text.isNotEmpty() && valid,
+                    sendEnabled = view.ownsControl && displayed && !view.opening && !view.rotating && text.isNotEmpty() && valid,
                     maxLines = 1,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send, keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false),
                 )

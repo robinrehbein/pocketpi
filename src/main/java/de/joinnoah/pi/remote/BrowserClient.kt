@@ -299,7 +299,7 @@ internal class BrowserClient(
      */
     fun history(action: String): Boolean {
         val v = view ?: return false
-        if (!v.history || action !in BROWSER_HISTORY_ACTIONS || v.selectedTabId == null) return false
+        if (!v.history || !historyEnabled() || action !in BROWSER_HISTORY_ACTIONS || v.selectedTabId == null) return false
         return mutate({ a,b,l -> BrowserCommand.History(Wire.random(),a.sessionId,b,l,a.generation,requireNotNull(a.selectedTabId),action) },
             refused = { e ->
                 val missing = (action == "back" || action == "forward") && e is RemoteRequestException && e.answered && e.code == "not_found"

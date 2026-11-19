@@ -31,10 +31,10 @@ class BrowserHistoryTest {
     private fun opened() = Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1, "incarnation" to "i", "tabs" to tabs, "viewportRevision" to 1)
     private fun lease() = Wire.objectOf("kind" to "browser.lease", "browserId" to "b", "generation" to 1, "leaseId" to "l", "owner" to Wire.objectOf("kind" to "device", "id" to "device"), "viewportRevision" to 1)
 
-    private fun kotlinx.coroutines.test.TestScope.controlled(history: Boolean, calls: MutableList<Call>): BrowserClient {
+    private fun kotlinx.coroutines.test.TestScope.controlled(history: Boolean, calls: MutableList<Call>, historyNow: () -> Boolean = { history }): BrowserClient {
         val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, fields ->
             CompletableDeferred<JsonObject>().also { calls.add(Call(type, fields.toMap(), it)) }.await()
-        }, {}, { "device" }, historyEnabled = { history })
+        }, {}, { "device" }, historyEnabled = historyNow)
         client.open("session", 1); runCurrent()
         calls.removeAt(0).result.complete(opened()); runCurrent()
         calls.removeAll { it.type == "browser.watch" }
@@ -48,6 +48,16 @@ class BrowserHistoryTest {
         val calls = mutableListOf<Call>()
         val client = controlled(history = false, calls)
         assertFalse(client.view!!.history)
+        assertFalse(client.history("back"))
+        assertTrue(calls.none { it.type == "browser.history" })
+    }
+
+    @Test fun historyWithdrawnAfterOpenIsRefusedLocally() = runTest {
+        val calls = mutableListOf<Call>()
+        var history = true
+        val client = controlled(history = true, calls) { history }
+        assertTrue(client.view!!.history)
+        history = false
         assertFalse(client.history("back"))
         assertTrue(calls.none { it.type == "browser.history" })
     }
