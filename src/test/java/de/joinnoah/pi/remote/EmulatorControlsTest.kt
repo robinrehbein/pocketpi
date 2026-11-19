@@ -146,6 +146,9 @@ class EmulatorControlsTest {
         assertTrue(client.view!!.ownsControl)
         assertTrue(client.view!!.rotating)
         assertNull(client.view!!.notice)
+        // The event itself brought the geometry and dropped the old frame.
+        assertEquals(EmulatorGeometry(3, 2, 1, 2), client.view!!.geometry)
+        assertNull(client.view!!.image)
         held.single { it.type == "emulator.rotate" }.reply.complete(Wire.objectOf("kind" to "emulator.rotated", "emulatorId" to "e", "generation" to 2, "sequence" to 5, "status" to "accepted", "geometry" to rotated))
         scope.runCurrent()
         assertEquals(EmulatorGeometry(3, 2, 1, 2), client.view!!.geometry)
