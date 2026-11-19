@@ -12,5 +12,5 @@
     <string name="browser_discard_body">Die noch nicht gesendete Adresse oder Texteingabe wird verworfen.</string>
     <string name="browser_close_tab">Tab %1$s schließen</string>
     <string name="browser_tabs">Tabs</string>
-    <string name="browser_control_dropped">Die Steuerung wurde abgegeben, damit auf der Seite keine Taste gedrückt bleibt. Übernimm die Steuerung erneut, um weiterzumachen.</string>
+    <string name="browser_control_dropped">Die Steuerung wurde abgegeben, damit auf der Seite keine Taste oder Maustaste gedrückt bleibt. Übernimm die Steuerung erneut, um weiterzumachen.</string>
 </resources>

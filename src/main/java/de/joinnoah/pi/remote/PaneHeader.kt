@@ -28,6 +28,7 @@ import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -155,13 +158,10 @@ internal fun PaneHeader(
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (compact && subtitle != null)
-                        // One line: the title keeps at most 60% of it, the subtitle takes the rest.
-                        Row(Modifier.widthIn(max = textWidth), verticalAlignment = Alignment.CenterVertically) {
-                            val titleMin = minOf(48.dp, textWidth)
-                            titleText(Modifier.widthIn(min = titleMin, max = maxOf(titleMin, textWidth * 0.6f)))
-                            Spacer(Modifier.width(8.dp))
-                            subtitleText(subtitle, Modifier.weight(1f, fill = false))
-                        }
+                        // One line (see compactTitleWidths): each takes what it needs while both
+                        // fit; where they do not, the one that needs less keeps all of it, and two
+                        // long ones share the line 60:40.
+                        CompactTitleLine(Modifier.widthIn(max = textWidth), { titleText(Modifier) }, { subtitleText(subtitle, Modifier) })
                     else
                         Column(Modifier.widthIn(max = textWidth)) {
                             titleText(Modifier.widthIn(min = minOf(48.dp, textWidth)))
@@ -251,12 +251,18 @@ private fun MenuEntry(item: PaneMenuItem, dismiss: () -> Unit) {
 @Composable
 private fun OverflowActions(actions: List<PaneAction>, tag: String) {
     var open by remember { mutableStateOf(false) }
-    var submenu by remember { mutableStateOf<PaneAction?>(null) }
+    // The tag of the action whose items show, not the action: the current one is looked up in
+    // [actions] on every composition, so its items follow the pane (a browser tab opened or closed
+    // meanwhile) and no stale row acts on something that is gone.
+    var submenu by remember { mutableStateOf<String?>(null) }
     val label = stringResource(R.string.remote_review_more_actions)
     fun dismiss() {
         open = false
         submenu = null
     }
+    val shown = submenu?.let { tag -> actions.firstOrNull { it.tag == tag } }?.takeIf { it.enabled && it.items.isNotEmpty() }
+    // The action went away, or has nothing to choose now: back to the list of actions.
+    SideEffect { if (submenu != null && shown == null) submenu = null }
     Box {
         ShortcutTooltip(label) {
             IconButton(onClick = { open = true }, Modifier.size(48.dp).testTag("${tag}MoreActions")) {
@@ -264,7 +270,6 @@ private fun OverflowActions(actions: List<PaneAction>, tag: String) {
             }
         }
         GlassDropdownMenu(open, onDismissRequest = ::dismiss) {
-            val shown = submenu
             if (shown != null) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.remote_review_menu_back)) },
@@ -283,7 +288,7 @@ private fun OverflowActions(actions: List<PaneAction>, tag: String) {
                         trailingIcon = if (checked == true) { { Icon(Icons.Default.Check, null) } } else null,
                         enabled = action.enabled,
                         onClick = {
-                            if (action.items.isNotEmpty()) submenu = action
+                            if (action.items.isNotEmpty()) submenu = action.tag
                             else {
                                 dismiss()
                                 action.onClick()
@@ -301,6 +306,56 @@ private fun OverflowActions(actions: List<PaneAction>, tag: String) {
                                 ),
                     )
                 }
+        }
+    }
+}
+
+/** The gap between the title and the subtitle on a compact header's one line. */
+private val COMPACT_TITLE_GAP = 8.dp
+
+/**
+ * The widths of a compact header's title and subtitle on a line [available] wide (the gap between
+ * them already taken off), from the widths they would need on one line. While both fit, each gets
+ * what it needs. Otherwise the subtitle gets what it needs up to the larger of 40% of the line and
+ * what the title leaves, so a short subtitle leaves the title all the rest and a short title leaves
+ * the subtitle all the rest; the title gets the remainder, never less than [titleMin].
+ */
+internal fun compactTitleWidths(available: Int, titleNeed: Int, subtitleNeed: Int, titleMin: Int): Pair<Int, Int> {
+    val room = available.coerceAtLeast(0)
+    val minTitle = titleMin.coerceIn(0, room)
+    val titleFloor = maxOf(titleNeed, minTitle)
+    if (titleFloor + subtitleNeed <= room) return titleFloor to subtitleNeed
+    val subtitle = minOf(subtitleNeed, maxOf((room * 0.4f).toInt(), room - titleNeed)).coerceIn(0, room - minTitle)
+    val title = minOf(titleNeed, room - subtitle).coerceAtLeast(minTitle)
+    return title to subtitle
+}
+
+/**
+ * A compact header's title and subtitle on one line, both cut off with an ellipsis where
+ * [compactTitleWidths] gives them less than they need. The widths they need are their one-line
+ * intrinsic widths.
+ */
+@Composable
+private fun CompactTitleLine(modifier: Modifier, title: @Composable () -> Unit, subtitle: @Composable () -> Unit) {
+    Layout(contents = listOf(title, subtitle), modifier = modifier) { (titleMeasurables, subtitleMeasurables), constraints ->
+        val titleMeasurable = titleMeasurables.single()
+        val subtitleMeasurable = subtitleMeasurables.single()
+        val gap = COMPACT_TITLE_GAP.roundToPx()
+        val maxWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE / 2
+        val available = (maxWidth - gap).coerceAtLeast(0)
+        val (titleWidth, subtitleWidth) = compactTitleWidths(
+            available,
+            titleMeasurable.maxIntrinsicWidth(Constraints.Infinity),
+            subtitleMeasurable.maxIntrinsicWidth(Constraints.Infinity),
+            minOf(48.dp.roundToPx(), available),
+        )
+        val titlePlaceable = titleMeasurable.measure(Constraints(minWidth = titleWidth, maxWidth = titleWidth))
+        val subtitlePlaceable = subtitleMeasurable.measure(Constraints(minWidth = 0, maxWidth = subtitleWidth))
+        val width = (titlePlaceable.width + gap + subtitlePlaceable.width).coerceIn(constraints.minWidth, maxWidth)
+        val height = maxOf(titlePlaceable.height, subtitlePlaceable.height).coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(width, height) {
+            titlePlaceable.placeRelative(0, (height - titlePlaceable.height) / 2)
+            subtitlePlaceable.placeRelative(titlePlaceable.width + gap, (height - subtitlePlaceable.height) / 2)
         }
     }
 }

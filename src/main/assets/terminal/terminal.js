@@ -29,7 +29,15 @@ window.addEventListener('message', event => {
   if (typeof event.data !== 'string' || event.data.length > 16384) return;
   terminal.write(event.data, () => terminalBridge.postMessage('{"type":"written"}'));
 });
-new ResizeObserver(size).observe(document.getElementById('terminal'));
+// A pane shown again, or laid out once at a passing size, can resize the page for one frame. The
+// size goes out only once it held for 50 ms: each change restarts the wait, so the last size is
+// always the one sent.
+let sizeTimer = null;
+function sizeSoon() {
+  if (sizeTimer !== null) clearTimeout(sizeTimer);
+  sizeTimer = setTimeout(() => { sizeTimer = null; size(); }, 50);
+}
+new ResizeObserver(sizeSoon).observe(document.getElementById('terminal'));
 terminalBridge.postMessage('{"type":"ready"}');
 size();
 // The first call may run before xterm measured its cells; measure again once it has drawn.

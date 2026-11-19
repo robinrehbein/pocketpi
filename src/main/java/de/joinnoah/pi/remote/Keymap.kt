@@ -460,23 +460,34 @@ internal class ChatKeyTarget {
         return true
     }
 
-    /** An open pane's Esc action, and whether Esc is the pane's now ([takesEscape]). */
-    private class Pane(val close: () -> Unit, val takesEscape: () -> Boolean)
+    /**
+     * An open pane's Esc action, and whether Esc is the pane's now ([takesEscape]). Each
+     * registration is its own object, the token [removePane] takes: two panes may share one
+     * [close] instance (a non-capturing lambda is one object), and removing one must not remove
+     * the other.
+     */
+    class PaneRegistration internal constructor(internal val close: () -> Unit, internal val takesEscape: () -> Boolean)
 
     /** The open panes, oldest first, as [PaneBackHandler] registered them. */
-    private val panes = mutableListOf<Pane>()
+    private val panes = mutableListOf<PaneRegistration>()
 
     /**
      * Registers an open pane: Esc runs [close] while [takesEscape] says so; otherwise Esc passes
-     * the pane by, as if it were not open.
+     * the pane by, as if it were not open. The result removes exactly this registration.
      */
-    fun addPane(close: () -> Unit, takesEscape: () -> Boolean) {
-        panes += Pane(close, takesEscape)
-    }
+    fun addPane(close: () -> Unit, takesEscape: () -> Boolean): PaneRegistration =
+        PaneRegistration(close, takesEscape).also { panes += it }
 
     /** Registers an open pane that always takes Esc. */
-    fun addPane(close: () -> Unit) = addPane(close) { true }
+    fun addPane(close: () -> Unit): PaneRegistration = addPane(close) { true }
 
+    /** Removes the registration [addPane] returned; a no-op once it is gone. */
+    fun removePane(registration: PaneRegistration) {
+        val index = panes.indexOfLast { it === registration }
+        if (index >= 0) panes.removeAt(index)
+    }
+
+    /** Removes the newest registration with this [close] instance. */
     fun removePane(close: () -> Unit) {
         val index = panes.indexOfLast { it.close === close }
         if (index >= 0) panes.removeAt(index)
@@ -578,8 +589,9 @@ internal fun PaneBackHandler(
     DisposableEffect(target, enabled, escapeCloses) {
         val close: () -> Unit = if (escapeCloses) ({ latest() }) else ({})
         val takesEscape: () -> Boolean = if (escapeCloses) ({ true }) else ({ target.composerCovered || latestFocusInside() })
-        if (enabled) target.addPane(close, takesEscape)
-        onDispose { target.removePane(close) }
+        // The registration, not the closer, is the key: every Esc-keeping pane shares one closer.
+        val registration = if (enabled) target.addPane(close, takesEscape) else null
+        onDispose { if (registration != null) target.removePane(registration) }
     }
 }
 
