@@ -106,5 +106,7 @@ class PaneHeaderTest {
         // The title never goes below its minimum, also on a tiny line.
         assertEquals(48 to 0, compactTitleWidths(48, 1000, 1000, 48))
         assertEquals(48 to 50, compactTitleWidths(400, 10, 50, 48))
+        // The title floor counts toward the fit, so the pair never exceeds the line.
+        assertEquals(48 to 12, compactTitleWidths(60, 10, 50, 48))
     }
 }

@@ -323,7 +323,8 @@ private val COMPACT_TITLE_GAP = 8.dp
 internal fun compactTitleWidths(available: Int, titleNeed: Int, subtitleNeed: Int, titleMin: Int): Pair<Int, Int> {
     val room = available.coerceAtLeast(0)
     val minTitle = titleMin.coerceIn(0, room)
-    if (titleNeed + subtitleNeed <= room) return maxOf(titleNeed, minTitle) to subtitleNeed
+    val titleFloor = maxOf(titleNeed, minTitle)
+    if (titleFloor + subtitleNeed <= room) return titleFloor to subtitleNeed
     val subtitle = minOf(subtitleNeed, maxOf((room * 0.4f).toInt(), room - titleNeed)).coerceIn(0, room - minTitle)
     val title = minOf(titleNeed, room - subtitle).coerceAtLeast(minTitle)
     return title to subtitle
