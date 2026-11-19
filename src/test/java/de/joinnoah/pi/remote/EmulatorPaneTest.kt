@@ -6,7 +6,12 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -195,5 +200,19 @@ class EmulatorPaneTest {
         compose.runOnIdle { assertEquals(1, closed) }
         compose.onNodeWithTag("inspectorTabClose_emulator").performClick()
         compose.runOnIdle { assertEquals(1, disposed); assertEquals(false, visible.last()) }
+    }
+    @Test fun theAppInTheBackgroundHidesThePane() {
+        val owner = object : LifecycleOwner { val registry = LifecycleRegistry.createUnsafe(this); override val lifecycle: Lifecycle get() = registry }
+        owner.registry.currentState = Lifecycle.State.RESUMED
+        val visible = mutableListOf<Boolean>()
+        val actions = actions(visible = visible)
+        compose.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides owner) {
+                MaterialTheme { EmulatorPane(EmulatorView("s", opening = false, emulatorId = "e"), actions, {}) }
+            }
+        }
+        compose.runOnIdle { assertEquals(listOf(true), visible); owner.registry.currentState = Lifecycle.State.CREATED }
+        compose.runOnIdle { assertEquals(listOf(true, false), visible); owner.registry.currentState = Lifecycle.State.RESUMED }
+        compose.runOnIdle { assertEquals(listOf(true, false, true), visible) }
     }
 }

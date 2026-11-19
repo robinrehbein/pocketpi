@@ -30,6 +30,12 @@ public enum class EmulatorNotice {
 internal const val EMULATOR_STREAM_RETRIES = 3
 /** The wait before the n-th automatic re-watch is n times this. */
 internal const val EMULATOR_STREAM_BACKOFF_MS = 1000L
+/**
+ * How long the pane may stay hidden (another tab, the inspector collapsed, the app in the
+ * background) before this device gives its control lease back, so an unseen pane does not keep
+ * the emulator from others. Showing the pane again takes control back if nobody holds it then.
+ */
+internal const val EMULATOR_HIDDEN_RELEASE_MS = 120_000L
 
 /** Whether the Host answered the request with an error, so the connection itself is not in doubt. */
 private val Throwable.answeredByHost: Boolean get() = (this as? RemoteRequestException)?.answered == true
@@ -55,9 +61,16 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     private fun reacquireIfFree(owner: EmulatorOwner?) {
         // The resume's Open reply calls this again once the view is current.
         if (!reacquire || view?.opening == true) return
-        // Only a visible pane takes control back; a hidden one does not later on its own.
+        // Only a visible pane takes control back; a hidden one tries once it is shown again.
+        if (lease == null && !visible) { takeBackOnShow = true; hiddenOwner = lostOwner }
         if (lease != null || !visible) reacquire = false else if (owner == null) { if (acquire(automatic = true)) reacquire = false } else if (owner != lostOwner) reacquire = false
     }
+    // The release that runs once the pane stayed hidden for [EMULATOR_HIDDEN_RELEASE_MS].
+    private var hiddenRelease: Job? = null
+    // Set when this device lost its lease while the pane was hidden: showing it again takes control
+    // back once, silently, if nobody else holds it. [hiddenOwner] is this device's identity as the
+    // Host showed it, which a state from before the release may still name.
+    private var takeBackOnShow = false; private var hiddenOwner: EmulatorOwner? = null
     private var deadline: Job? = null
     // The stream ends of this view in a row without a frame shown in between, and the pending re-watch.
     private var streamFailures = 0; private var rewatch: Job? = null
@@ -107,7 +120,7 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         if (id != null && v?.emulatorId != null && current(v.sessionId, c)) scope.launch { try { send(c, EmulatorCommand.Unwatch(Wire.random(), v.sessionId, v.emulatorId, id)) } catch (_: Exception) {} }
     }
     fun close() {
-        val v = view; val c = connection; dropStream(); token++; lease = null; reacquire = false; pending = false; disconnected = false; resetRecovery(); set(null)
+        val v = view; val c = connection; dropStream(); token++; lease = null; reacquire = false; pending = false; cancelHiddenRelease(); takeBackOnShow = false; disconnected = false; resetRecovery(); set(null)
         if (v?.emulatorId != null && connectionAlive(c)) scope.launch { try { send(c, EmulatorCommand.Detach(Wire.random(), v.sessionId, v.emulatorId)) } catch (_: Exception) { if (connectionAlive(c)) closeConnection(c) } }
     }
     fun disconnected() { if (lease != null) { reacquire = view?.inputPending != true; lostOwner = view?.owner }; disconnected = view != null; dropStream(); token++; lease = null; pending = false; resetRecovery(); view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, disconnected = true, notice = if (it.inputPending || it.notice == EmulatorNotice.UNCERTAIN) EmulatorNotice.UNCERTAIN else EmulatorNotice.DISCONNECTED)) } }
@@ -134,15 +147,38 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         } catch (_: Exception) { if (valid(t, session, c)) fail("resume") } }
         return true
     }
-    // Hiding keeps the view and the lease and only ends the stream; showing it again watches anew.
+    // Hiding ends the stream and keeps the view; the lease stays for [EMULATOR_HIDDEN_RELEASE_MS].
+    // Showing it again watches anew and takes back a lease given up meanwhile (see [takeBack]).
     fun setVisible(value: Boolean) {
         visible = value
-        if (!value) { queued = null; rewatch?.cancel(); rewatch = null; dropStream(); view?.let { set(it.copy(image = null)) } }
-        else {
+        if (!value) {
+            queued = null; rewatch?.cancel(); rewatch = null; dropStream(); view?.let { set(it.copy(image = null)) }
+            if (hiddenRelease == null) hiddenRelease = scope.launch { delay(EMULATOR_HIDDEN_RELEASE_MS); hiddenRelease = null; releaseHidden() }
+        } else {
+            cancelHiddenRelease()
             streamFailures = 0
             view?.takeIf { it.notice == EmulatorNotice.STREAM_FAILED || it.notice == EmulatorNotice.STREAM_RECOVERING }?.let { set(it.copy(notice = null)) }
             watch()
+            if (takeBackOnShow) { takeBackOnShow = false; takeBack() }
         }
+    }
+    private fun cancelHiddenRelease() { hiddenRelease?.cancel(); hiddenRelease = null }
+    // The pane stayed hidden: give the lease back. Another control request in flight keeps it.
+    private fun releaseHidden() {
+        if (visible || lease == null) return
+        val owner = view?.owner
+        if (release()) { takeBackOnShow = true; hiddenOwner = owner }
+    }
+    /**
+     * Takes control back after the pane was shown again, with the current generation, only while
+     * nobody else holds it. A Busy reply shows the holder in the control bar and no notice, as the
+     * user did not ask. Where no request can go out now (a release or a reconnect still running),
+     * the next free state or the resume takes it back instead (see [reacquireIfFree]).
+     */
+    private fun takeBack() {
+        val owner = view?.owner
+        if (owner != null && owner != hiddenOwner) return
+        if (!acquire(automatic = true)) { reacquire = true; lostOwner = hiddenOwner }
     }
     // Closes the whole connection: the Host then releases this device's lease. [reason] is logged.
     // Only for failures after which the connection cannot be trusted: a request without a reply (a

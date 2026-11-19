@@ -32,6 +32,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
@@ -151,7 +154,8 @@ private fun emulatorKeys(): List<RemoteKey> = listOf(
 /**
  * The shared Android emulator: the profile choice, then the control bar, the screen and the
  * device keys. Kept composed while another inspector tab shows, it is hidden there
- * ([LocalTerminalKeyboardActive] false): the stream stops and the session and lease stay.
+ * ([LocalTerminalKeyboardActive] false), and so it is while the app is in the background: the
+ * stream stops, the session stays, and the lease stays for [EMULATOR_HIDDEN_RELEASE_MS].
  *
  * Each frame's PNG is decoded once by [decodeImage] in [decodeContext], off the main thread.
  */
@@ -164,11 +168,19 @@ internal fun EmulatorPane(
     decodeContext: CoroutineContext = Dispatchers.Default,
 ) {
     val active = LocalTerminalKeyboardActive.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var started by remember(lifecycle) { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, _ -> started = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    val shown = active && started
     val latestActions by rememberUpdatedState(actions)
-    DisposableEffect(active) {
-        if (active) latestActions.visible(true)
+    DisposableEffect(shown) {
+        if (shown) latestActions.visible(true)
         // A hidden pane has stopped already.
-        onDispose { if (active) latestActions.visible(false) }
+        onDispose { if (shown) latestActions.visible(false) }
     }
     var confirmStop by remember { mutableStateOf(false) }
     val currentView by rememberUpdatedState(view)

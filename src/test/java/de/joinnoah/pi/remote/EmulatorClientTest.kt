@@ -369,4 +369,77 @@ class EmulatorClientTest {
         host.watchReplies.single().completeExceptionally(RemoteRequestException.timeout()); scope.runCurrent()
         assertEquals(listOf(1L), closed)
     }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun TestScope.controllingHidden(host: FakeHost): EmulatorClient {
+        val client = hostClient(this, host, { 1L })
+        assertTrue(client.open("session", 1)); runCurrent()
+        assertTrue(client.selectProfile("p")); runCurrent()
+        assertTrue(client.acquire()); runCurrent()
+        assertTrue(requireNotNull(client.view).ownsControl)
+        client.setVisible(false); runCurrent()
+        return client
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aPaneHiddenForTheTimeoutGivesTheLeaseBackAndTakesItBackWhenShownAndFree() {
+        val scope = TestScope(); val host = FakeHost()
+        val client = scope.controllingHidden(host)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS - 1); scope.runCurrent()
+        assertEquals(0, host.count("emulator.release"))
+        assertTrue(requireNotNull(client.view).ownsControl)
+        scope.testScheduler.advanceTimeBy(1); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+        assertFalse(requireNotNull(client.view).ownsControl)
+        assertNull(client.view?.owner)
+        // Shown again while nobody holds it: one silent acquire with the current generation.
+        client.setVisible(true); scope.runCurrent()
+        val acquires = host.calls.filter { it.second == "emulator.acquire" }
+        assertEquals(2, acquires.size)
+        assertEquals("2", acquires.last().third["expectedGeneration"].toString())
+        assertTrue(requireNotNull(client.view).ownsControl)
+        assertNull(client.view?.notice)
+        // Hidden and shown again without a release in between: nothing more to take back.
+        client.setVisible(false); client.setVisible(true); scope.runCurrent()
+        assertEquals(2, host.count("emulator.acquire"))
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun showingThePaneBeforeTheTimeoutKeepsTheLease() {
+        val scope = TestScope(); val host = FakeHost()
+        val client = scope.controllingHidden(host)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS / 2); scope.runCurrent()
+        client.setVisible(true); scope.runCurrent()
+        client.setVisible(false); scope.runCurrent()
+        // The second hide counts from its own start.
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS / 2 + 1); scope.runCurrent()
+        assertEquals(0, host.count("emulator.release"))
+        assertTrue(requireNotNull(client.view).ownsControl)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS / 2); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aBusyEmulatorWhenShownAgainShowsItsHolderWithoutANotice() {
+        val scope = TestScope(); val host = FakeHost()
+        val client = scope.controllingHidden(host)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+        // Someone took control the app has not heard of yet: the acquire is answered Busy.
+        val other = Wire.objectOf("kind" to "device", "id" to "other"); host.busyOwner = other
+        client.setVisible(true); scope.runCurrent()
+        assertEquals(2, host.count("emulator.acquire"))
+        assertFalse(requireNotNull(client.view).ownsControl)
+        assertEquals("other", client.view?.owner?.id)
+        assertNull(client.view?.notice)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aKnownHolderWhenShownAgainIsNotAskedForControl() {
+        val scope = TestScope(); val host = FakeHost()
+        val client = scope.controllingHidden(host)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        val other = Wire.objectOf("kind" to "device", "id" to "other"); host.owner = other
+        client.state(stateEvent(host.generation, other)); scope.runCurrent()
+        client.setVisible(true); scope.runCurrent()
+        assertEquals(1, host.count("emulator.acquire"))
+        assertFalse(requireNotNull(client.view).ownsControl)
+        assertEquals("other", client.view?.owner?.id)
+        assertNull(client.view?.notice)
+    }
 }
