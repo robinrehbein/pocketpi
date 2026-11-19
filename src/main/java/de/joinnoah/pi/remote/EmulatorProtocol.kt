@@ -18,7 +18,27 @@ public sealed interface EmulatorInput {
     data class Key(val key: String) : EmulatorInput
     data class Tap(val x: Long, val y: Long) : EmulatorInput
     data class Swipe(val x: Long, val y: Long, val endX: Long, val endY: Long, val durationMs: Long) : EmulatorInput
+    /** Needs [SESSION_EMULATOR_CONTROLS_CAPABILITY], as do [Text], [Touch] and the keys in [EMULATOR_CONTROL_KEYS]. */
+    data class LongPress(val x: Long, val y: Long, val durationMs: Long) : EmulatorInput
+    /** Printable ASCII only (see [emulatorTextValid]). */
+    data class Text(val text: String) : EmulatorInput
+    /**
+     * Every pointer down or lifting in this event, in the coordinates of the frame with the
+     * command's geometry revision. Pressure 0 lifts a pointer; later events omit it.
+     */
+    data class Touch(val touches: kotlin.collections.List<EmulatorTouchPoint>) : EmulatorInput
 }
+public data class EmulatorTouchPoint(val id: Int, val x: Long, val y: Long, val pressure: Int)
+internal val EMULATOR_BASE_KEYS = setOf("Home","Back","Enter","Tab","Escape","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Backspace")
+/** The hardware keys of [SESSION_EMULATOR_CONTROLS_CAPABILITY]: Recents, Power and the volume. */
+internal val EMULATOR_CONTROL_KEYS = setOf("AppSwitch","Power","VolumeUp","VolumeDown")
+internal const val EMULATOR_TEXT_MAX_CHARS = 256
+internal const val EMULATOR_TOUCH_MAX_POINTERS = 10
+internal const val EMULATOR_TOUCH_MAX_ID = 31
+internal const val EMULATOR_TOUCH_MAX_PRESSURE = 1024
+/** The host types text through Android's key map: 1 to 256 printable ASCII characters, at most seven literal `%s`. */
+internal fun emulatorTextValid(text: String): Boolean =
+    text.length in 1..EMULATOR_TEXT_MAX_CHARS && text.all { it.code in 0x20..0x7E } && text.windowed(2).count { it == "%s" } <= 7
 internal sealed interface EmulatorCommand {
     val requestId: String; val sessionId: String
     data class List(override val requestId:String, override val sessionId:String):EmulatorCommand
@@ -34,6 +54,8 @@ internal sealed interface EmulatorCommand {
     data class Watch(override val requestId:String, override val sessionId:String,val emulatorId:String,val generation:Long,val recovery:Boolean=false):EmulatorCommand
     data class Unwatch(override val requestId:String, override val sessionId:String,val emulatorId:String,val streamId:String):EmulatorCommand
     data class FrameAck(override val requestId:String, override val sessionId:String,val emulatorId:String,val streamId:String,val frameId:Long,val chunkIndex:Long):EmulatorCommand
+    /** `emulator.rotate` ([SESSION_EMULATOR_CONTROLS_CAPABILITY]): [rotation] 0 to 3, in quarter turns. */
+    data class Rotate(override val requestId:String, override val sessionId:String,val emulatorId:String,val leaseId:String,val generation:Long,val geometryRevision:Long,val sequence:Long,val rotation:Long):EmulatorCommand
 }
 internal sealed interface EmulatorResult {
     data class Profiles(val profiles:List<EmulatorProfileInfo>):EmulatorResult
@@ -48,6 +70,8 @@ internal sealed interface EmulatorResult {
     data class Stopped(val emulatorId:String,val generation:Long):EmulatorResult
     data class Watching(val emulatorId:String,val streamId:String,val generation:Long):EmulatorResult
     data class Unwatched(val emulatorId:String,val streamId:String):EmulatorResult
+    /** [geometry] is the display after the rotation, present exactly when [status] is `accepted`. */
+    data class Rotated(val emulatorId:String,val generation:Long,val sequence:Long,val status:String,val geometry:EmulatorGeometry?):EmulatorResult
 }
 internal data class EmulatorStateEvent(val sessionId:String,val emulatorId:String,val profileId:String,val label:String,val incarnation:String,val generation:Long,val geometry:EmulatorGeometry,val owner:EmulatorOwner?,val control:EmulatorControl?)
 internal data class EmulatorFrameWaitingEvent(val emulatorId:String,val incarnation:String,val streamId:String,val generation:Long)
@@ -61,7 +85,14 @@ private fun eOwner(o:JsonObject):EmulatorOwner {Wire.keys(o,setOf("kind","id"));
 private fun eGeometry(o:JsonObject):EmulatorGeometry {Wire.keys(o,setOf("width","height","rotation","revision"));val w=o.eCount("width",1,16384);val h=o.eCount("height",1,16384);require(w*h<=8388608);return EmulatorGeometry(w,h,o.eCount("rotation",0,3),o.eCount("revision",1))}
 private fun eControl(o:JsonObject):EmulatorControl {Wire.keys(o,setOf("leaseId","nextSequence"));return EmulatorControl(o.eId("leaseId"),o.eCount("nextSequence"))}
 private fun eInput(input:EmulatorInput):JsonObject=when(input){
-    is EmulatorInput.Key -> {require(input.key in setOf("Home","Back","Enter","Tab","Escape","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Backspace"));Wire.objectOf("kind" to "key","key" to input.key)}
+    is EmulatorInput.Key -> {require(input.key in EMULATOR_BASE_KEYS || input.key in EMULATOR_CONTROL_KEYS);Wire.objectOf("kind" to "key","key" to input.key)}
+    is EmulatorInput.LongPress -> {require(input.x in 0..16383 && input.y in 0..16383 && input.durationMs in 400..2000);Wire.objectOf("kind" to "long_press","x" to input.x,"y" to input.y,"durationMs" to input.durationMs)}
+    is EmulatorInput.Text -> {require(emulatorTextValid(input.text));Wire.objectOf("kind" to "text","text" to input.text)}
+    is EmulatorInput.Touch -> {
+        require(input.touches.size in 1..EMULATOR_TOUCH_MAX_POINTERS && input.touches.map { it.id }.toSet().size == input.touches.size)
+        require(input.touches.all { it.id in 0..EMULATOR_TOUCH_MAX_ID && it.x in 0..16383 && it.y in 0..16383 && it.pressure in 0..EMULATOR_TOUCH_MAX_PRESSURE })
+        Wire.objectOf("kind" to "touch","touches" to JsonArray(input.touches.map { Wire.objectOf("id" to it.id,"x" to it.x,"y" to it.y,"pressure" to it.pressure) }))
+    }
     is EmulatorInput.Tap -> {require(input.x in 0..16383 && input.y in 0..16383);Wire.objectOf("kind" to "tap","x" to input.x,"y" to input.y)}
     is EmulatorInput.Swipe -> {require(listOf(input.x,input.y,input.endX,input.endY).all { it in 0..16383 } && input.durationMs in 50..1000);Wire.objectOf("kind" to "swipe","x" to input.x,"y" to input.y,"endX" to input.endX,"endY" to input.endY,"durationMs" to input.durationMs)}
 }
@@ -83,6 +114,7 @@ internal fun encodeEmulatorCommand(command:EmulatorCommand):JsonObject {
         is EmulatorCommand.Input -> {lease("emulator.input",command.emulatorId,command.leaseId,command.generation);require(command.geometryRevision in 1..EMULATOR_MAX_SAFE && command.sequence in 0..EMULATOR_MAX_SAFE);p.add("geometryRevision" to command.geometryRevision);p.add("sequence" to command.sequence);p.add("input" to eInput(command.input))}
         is EmulatorCommand.Watch -> {context("emulator.watch",command.emulatorId);require(command.generation in 0..EMULATOR_MAX_SAFE);p.add("generation" to command.generation);if(command.recovery)p.add("recovery" to true)}
         is EmulatorCommand.Unwatch -> {context("emulator.unwatch",command.emulatorId);eValidateId(command.streamId);p.add("streamId" to command.streamId)}
+        is EmulatorCommand.Rotate -> {lease("emulator.rotate",command.emulatorId,command.leaseId,command.generation);require(command.geometryRevision in 1..EMULATOR_MAX_SAFE && command.sequence in 0..EMULATOR_MAX_SAFE && command.rotation in 0..3);p.add("geometryRevision" to command.geometryRevision);p.add("sequence" to command.sequence);p.add("rotation" to command.rotation)}
         is EmulatorCommand.FrameAck -> {context("emulator.frame.ack",command.emulatorId);eValidateId(command.streamId);require(command.frameId in 1..EMULATOR_MAX_SAFE && command.chunkIndex in 0..21);p.add("streamId" to command.streamId);p.add("frameId" to command.frameId);p.add("chunkIndex" to command.chunkIndex)}
     }
     return Wire.objectOf(*p.toTypedArray())
@@ -100,6 +132,11 @@ internal fun parseEmulatorResult(o:JsonObject):EmulatorResult {
         "emulator.input.ack" -> Wire.keys(o,b+setOf("sequence","status"))
         "emulator.released","emulator.detached","emulator.stopped" -> Wire.keys(o,b)
         "emulator.watching" -> Wire.keys(o,b+"streamId")
+        "emulator.rotated" -> {
+            Wire.keys(o,b+setOf("sequence","status"),setOf("geometry"))
+            val status=o.text("status");require(status=="accepted"||status=="uncertain");require(("geometry" in o)==(status=="accepted"))
+            return EmulatorResult.Rotated(o.eId("emulatorId"),o.eCount("generation"),o.eCount("sequence"),status,if("geometry" in o)eGeometry(o.obj("geometry")) else null)
+        }
         "emulator.unwatched" -> {Wire.keys(o,setOf("kind","emulatorId","streamId"));return EmulatorResult.Unwatched(o.eId("emulatorId"),o.eId("streamId"))}
         else -> error("Unknown emulator result")
     }
@@ -119,3 +156,28 @@ internal fun parseEmulatorResult(o:JsonObject):EmulatorResult {
 internal fun parseEmulatorState(o:JsonObject):EmulatorStateEvent {Wire.keys(o,setOf("type","kind","sessionId")+eStatusKeys,setOf("owner","control"));require(o.text("type")=="host.event" && o.text("kind")=="emulator.state");val owner=if("owner" in o)eOwner(o.obj("owner")) else null;val control=if("control" in o)eControl(o.obj("control")) else null;require(control==null||owner!=null);return EmulatorStateEvent(o.eId("sessionId"),o.eId("emulatorId"),o.eId("profileId"),eString(o.text("label"),128),o.eId("incarnation"),o.eCount("generation"),eGeometry(o.obj("geometry")),owner,control)}
 internal fun parseEmulatorFrameWaiting(o:JsonObject):EmulatorFrameWaitingEvent {Wire.keys(o,setOf("type","kind","emulatorId","incarnation","streamId","generation","reason"));require(o.text("type")=="host.event" && o.text("kind")=="emulator.frame.waiting" && o.text("reason")=="capturing");return EmulatorFrameWaitingEvent(o.eId("emulatorId"),o.eId("incarnation"),o.eId("streamId"),o.eCount("generation"))}
 internal fun parseEmulatorFrame(o:JsonObject):EmulatorFrameEvent {Wire.keys(o,setOf("type","kind","emulatorId","incarnation","streamId","generation","geometryRevision","frameId","chunkIndex","chunkCount","totalBytes","width","height","displayWidth","displayHeight","rotation","data"));require(o.text("type")=="host.event" && o.text("kind")=="emulator.frame");val count=o.eCount("chunkCount",1,22);val index=o.eCount("chunkIndex",0,count-1);val total=o.eCount("totalBytes",1,EMULATOR_FRAME_MAX_BYTES.toLong());require(count==(total+EMULATOR_FRAME_CHUNK_BYTES-1)/EMULATOR_FRAME_CHUNK_BYTES);val w=o.eCount("width",1,16384);val h=o.eCount("height",1,16384);val dw=o.eCount("displayWidth",1,16384);val dh=o.eCount("displayHeight",1,16384);require(w*h<=8388608 && dw*dh<=8388608);val data=o.text("data");val bytes=if(index==count-1) total-index*EMULATOR_FRAME_CHUNK_BYTES else EMULATOR_FRAME_CHUNK_BYTES.toLong();Wire.decode(data,bytes.toInt());return EmulatorFrameEvent(o.eId("emulatorId"),o.eId("incarnation"),o.eId("streamId"),o.eCount("generation"),o.eCount("geometryRevision",1),o.eCount("frameId",1),index,count,total,w,h,dw,dh,o.eCount("rotation",0,3),data)}
+
+private fun JsonObject.eInt(key:String,min:Long,max:Long):Long=eCount(key,min,max)
+private fun parseEmulatorInput(o:JsonObject):EmulatorInput=when(o.text("kind")){
+    "key" -> {Wire.keys(o,setOf("kind","key"));EmulatorInput.Key(o.text("key").also { require(it in EMULATOR_BASE_KEYS || it in EMULATOR_CONTROL_KEYS) })}
+    "tap" -> {Wire.keys(o,setOf("kind","x","y"));EmulatorInput.Tap(o.eInt("x",0,16383),o.eInt("y",0,16383))}
+    "swipe" -> {Wire.keys(o,setOf("kind","x","y","endX","endY","durationMs"));EmulatorInput.Swipe(o.eInt("x",0,16383),o.eInt("y",0,16383),o.eInt("endX",0,16383),o.eInt("endY",0,16383),o.eInt("durationMs",50,1000))}
+    "long_press" -> {Wire.keys(o,setOf("kind","x","y","durationMs"));EmulatorInput.LongPress(o.eInt("x",0,16383),o.eInt("y",0,16383),o.eInt("durationMs",400,2000))}
+    "text" -> {Wire.keys(o,setOf("kind","text"));val p=o.getValue("text").jsonPrimitive;require(p.isString);EmulatorInput.Text(p.content.also { require(emulatorTextValid(it)) })}
+    "touch" -> {
+        Wire.keys(o,setOf("kind","touches"));val a=o.getValue("touches").jsonArray
+        require(a.size in 1..EMULATOR_TOUCH_MAX_POINTERS)
+        val touches=a.map { val t=it.jsonObject;Wire.keys(t,setOf("id","x","y","pressure"));EmulatorTouchPoint(t.eInt("id",0,EMULATOR_TOUCH_MAX_ID.toLong()).toInt(),t.eInt("x",0,16383),t.eInt("y",0,16383),t.eInt("pressure",0,EMULATOR_TOUCH_MAX_PRESSURE.toLong()).toInt()) }
+        require(touches.map { it.id }.toSet().size==touches.size);EmulatorInput.Touch(touches)
+    }
+    else -> error("Unknown emulator input")
+}
+/** Strict parse of the lease-bound `emulator.input` and `emulator.rotate` commands, as the host reads them. */
+internal fun parseEmulatorLeaseCommand(o:JsonObject):EmulatorCommand {
+    val type=o.text("type");val base=setOf("type","requestId","sessionId","emulatorId","leaseId","generation","geometryRevision","sequence")
+    return when(type){
+        "emulator.input" -> {Wire.keys(o,base+"input");EmulatorCommand.Input(o.eId("requestId"),o.eId("sessionId"),o.eId("emulatorId"),o.eId("leaseId"),o.eCount("generation"),o.eCount("geometryRevision",1),o.eCount("sequence"),parseEmulatorInput(o.obj("input")))}
+        "emulator.rotate" -> {Wire.keys(o,base+"rotation");EmulatorCommand.Rotate(o.eId("requestId"),o.eId("sessionId"),o.eId("emulatorId"),o.eId("leaseId"),o.eCount("generation"),o.eCount("geometryRevision",1),o.eCount("sequence"),o.eCount("rotation",0,3))}
+        else -> error("Unknown emulator command")
+    }
+}

@@ -859,6 +859,10 @@
     <string name="preview_title_port">Preview · %1$d</string>
     <string name="preview_hide">Hide</string>
     <string name="emulator_title">Emulator</string>
+    <string name="emulator_rotate">Rotate</string>
+    <string name="emulator_text">Type on the device</string>
+    <string name="emulator_text_ascii_only">Only plain ASCII letters, digits and symbols can be typed on the emulator, up to 256 characters.</string>
+    <string name="emulator_text_refused">The text was not sent. Try again.</string>
     <string name="emulator_select_profile">Choose a profile</string>
     <string name="emulator_stop">Stop emulator</string>
     <string name="emulator_stop_confirm">Stop this emulator?</string>

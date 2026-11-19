@@ -2287,6 +2287,7 @@ internal fun RemoteScreen(
                 select = model::selectEmulatorProfile, acquire = model::acquireEmulator, handoff = model::handoffEmulator,
                 stop = model::stopEmulator, input = model::sendEmulatorInput, refresh = model::refreshEmulator,
                 visible = model::setEmulatorVisible, retry = model::retryEmulator, release = model::releaseEmulator,
+                touch = model::sendEmulatorTouch, rotate = model::rotateEmulator,
             ) }
             EmulatorPane(emulator, actions, close)
         }

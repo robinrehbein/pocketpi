@@ -382,6 +382,10 @@ interface RemoteRepository {
     fun handoffEmulator(id: String): Boolean = false
     fun stopEmulator(): Boolean = false
     fun sendEmulatorInput(input: EmulatorInput): Boolean = false
+    /** One raw touch event (`session.emulator.controls.v1`, see [EmulatorClient.touch]). */
+    fun sendEmulatorTouch(input: EmulatorInput.Touch): Boolean = false
+    /** Turns the emulator's display to [rotation] quarter turns (`emulator.rotate`). */
+    fun rotateEmulator(rotation: Long): Boolean = false
     fun refreshEmulator(): Boolean = false
     fun setEmulatorVisible(visible: Boolean) {}
     fun retryEmulator(): Boolean = false

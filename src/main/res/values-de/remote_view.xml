@@ -30,6 +30,12 @@
     <string name="remote_view_key_page_up">Bild↑</string>
     <string name="remote_view_key_page_down">Bild↓</string>
     <string name="remote_view_key_android_home">Home</string>
+    <string name="remote_view_key_android_recents">Letzte Apps</string>
+    <string name="remote_view_key_android_power">Ein/Aus</string>
+    <string name="remote_view_key_android_volume_down">Leiser</string>
+    <string name="remote_view_key_android_volume_down_description">Lautstärke verringern</string>
+    <string name="remote_view_key_android_volume_up">Lauter</string>
+    <string name="remote_view_key_android_volume_up_description">Lautstärke erhöhen</string>
     <string name="remote_view_key_android_back">Zurück</string>
     <string name="remote_view_key_escape_description">Escape</string>
     <string name="remote_view_key_backspace_description">Rücktaste</string>

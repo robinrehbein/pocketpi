@@ -37,6 +37,12 @@
     <string name="remote_view_key_page_down">PgDn</string>
     <!-- The Android navigation buttons of an emulator. -->
     <string name="remote_view_key_android_home">Home</string>
+    <string name="remote_view_key_android_recents">Recents</string>
+    <string name="remote_view_key_android_power">Power</string>
+    <string name="remote_view_key_android_volume_down">Vol −</string>
+    <string name="remote_view_key_android_volume_down_description">Volume down</string>
+    <string name="remote_view_key_android_volume_up">Vol +</string>
+    <string name="remote_view_key_android_volume_up_description">Volume up</string>
     <string name="remote_view_key_android_back">Back</string>
     <!-- Spoken names of keys whose label is a symbol or an abbreviation. -->
     <string name="remote_view_key_escape_description">Escape</string>
