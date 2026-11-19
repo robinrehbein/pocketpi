@@ -144,6 +144,15 @@ internal fun remoteViewCompact(height: Dp): Boolean = height < REMOTE_VIEW_COMPA
  */
 internal val LocalRemoteViewCompact = compositionLocalOf { false }
 
+/**
+ * Whether a remote view pane [width] wide moves its header's actions and refresh button into the
+ * "more" menu ([PaneHeader]'s `collapseActions`): below [noticeFirstBelow], while one of [notices]
+ * is a failure. The failure is what matters then, and the header keeps only close, the title and
+ * one button.
+ */
+internal fun remoteViewNoticeFirst(width: Dp, noticeFirstBelow: Dp, notices: List<RemoteViewNotice>): Boolean =
+    width < noticeFirstBelow && notices.any { it is RemoteViewNotice.Failure }
+
 /** A line of status under a remote view's header. [tag] is its test tag. */
 internal sealed interface RemoteViewNotice {
     val text: String
@@ -223,6 +232,13 @@ internal fun RemoteViewPane(
     closeLabel: String = stringResource(R.string.remote_view_close),
     reloadLabel: String = stringResource(R.string.remote_view_reload),
     backLabel: String = stringResource(R.string.remote_view_back),
+    /** Below this width a failure notice comes first: see [remoteViewNoticeFirst]. */
+    noticeFirstBelow: Dp = 0.dp,
+    /**
+     * False leaves the header out, for the few rows a phone in landscape keeps while the soft
+     * keyboard is up; Back still closes the pane.
+     */
+    header: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // Whether keyboard focus is in the pane; read only when Esc comes, so a plain holder.
@@ -241,6 +257,7 @@ internal fun RemoteViewPane(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = remoteViewCompact(maxHeight)
+            val noticeFirst = remoteViewNoticeFirst(maxWidth, noticeFirstBelow, notices)
             CompositionLocalProvider(LocalRemoteViewCompact provides compact) {
                 // Pads by the part of the safe drawing insets (system bars, cutout, keyboard) that
                 // overlaps the pane in its window: a pane over the whole screen keeps clear of all
@@ -250,7 +267,7 @@ internal fun RemoteViewPane(
                     Modifier.fillMaxSize().remoteViewInsetsPadding(),
                     viewportMinHeight = if (compact) REMOTE_VIEWPORT_COMPACT_MIN_HEIGHT else 0.dp,
                 ) {
-                    PaneHeader(
+                    if (header) PaneHeader(
                         title = title,
                         subtitle = subtitle,
                         nested = onBack != null,
@@ -265,6 +282,7 @@ internal fun RemoteViewPane(
                         actions = if (compact) actions + compactActions else actions,
                         compact = compact,
                         escapeLeaves = escapeCloses,
+                        collapseActions = noticeFirst,
                     )
                     notices.forEach {
                         val shed = if (it is RemoteViewNotice.Info) RemoteViewShed.INFO else RemoteViewShed.FAILURE
@@ -356,9 +374,10 @@ private object RemoteViewportSlot
  * nothing, so it never pushes out the control bar that offers "Take control"), informational
  * notices, the control bar, failure notices (they offer Retry), and an enabled key strip last (a
  * terminal's Esc, Tab and arrows). The lowest bar of a kind goes first. A bar without a mark, such
- * as the header, an input bar or the address bar, always stays.
+ * as the header, an input bar or the address bar, always stays. A pinned key strip
+ * ([PINNED_KEYS]) is not pushed out by the viewport's floor, only where the bars alone do not fit.
  */
-internal enum class RemoteViewShed { IDLE_KEYS, INFO, CONTROL, FAILURE, KEYS }
+internal enum class RemoteViewShed { IDLE_KEYS, INFO, CONTROL, FAILURE, KEYS, PINNED_KEYS }
 
 /** A bar's mark; [RemoteViewColumn] sets [shed] while it leaves the bar out. */
 private class RemoteViewShedSlot(val kind: RemoteViewShed) {
@@ -429,8 +448,10 @@ internal fun RemoteViewColumn(modifier: Modifier, viewportMinHeight: Dp = 0.dp, 
         val shed = BooleanArray(measurables.size)
         if (bounded)
             for (kind in RemoteViewShed.entries) {
+                // A pinned strip gives way to the bars that always stay, never to the floor.
+                val floorFor = if (kind == RemoteViewShed.PINNED_KEYS) 0 else floorWanted
                 for (index in measurables.indices.reversed()) {
-                    if (used + laterMins + floorWanted <= total) break
+                    if (used + laterMins + floorFor <= total) break
                     if ((measurables[index].layoutId as? RemoteViewShedSlot)?.kind != kind) continue
                     used -= placeables[index]?.height ?: 0
                     placeables[index] = null
@@ -676,6 +697,7 @@ internal data class RemoteKey(
  * with its label, so no label clips at a large font scale. [enabled] false disables every key.
  * [sheds] marks the strip as a bar of a [RemoteViewPane] that gives way, as
  * [RemoteViewShed.KEYS] while [enabled] and as [RemoteViewShed.IDLE_KEYS], the first to go, while not.
+ * [pinned] makes an enabled strip [RemoteViewShed.PINNED_KEYS], which the viewport's floor does not push out.
  *
  * Test tags: `<tag>Keys`, and `<tag>Key_<id>` per chip.
  */
@@ -688,8 +710,14 @@ internal fun RemoteKeyStrip(
     enabled: Boolean = true,
     sheds: Boolean = false,
     contentPadding: PaddingValues = remoteViewBarPadding(),
+    pinned: Boolean = false,
 ) {
-    val marked = if (sheds) Modifier.remoteViewShed(if (enabled) RemoteViewShed.KEYS else RemoteViewShed.IDLE_KEYS).then(modifier) else modifier
+    val kind = when {
+        !enabled -> RemoteViewShed.IDLE_KEYS
+        pinned -> RemoteViewShed.PINNED_KEYS
+        else -> RemoteViewShed.KEYS
+    }
+    val marked = if (sheds) Modifier.remoteViewShed(kind).then(modifier) else modifier
     Row(
         marked.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(contentPadding).testTag("${tag}Keys"),
         horizontalArrangement = Arrangement.spacedBy(8.dp),

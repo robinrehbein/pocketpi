@@ -51,6 +51,12 @@ class TerminalKeyboardTest {
         assertEquals(1, closed)
     }
 
+    @Test fun compactStripIsOneShortRowOfEscCtrlTabAndTheArrows() {
+        assertEquals(listOf("escape", "ctrl", "tab", "left", "up", "down", "right"), terminalStripKeys(compact = true))
+        // Elsewhere the strip stays as it was: no Ctrl chip, with Enter and Backspace.
+        assertEquals(listOf("escape", "tab", "enter", "backspace", "left", "up", "down", "right"), terminalStripKeys(compact = false))
+    }
+
     @Test fun oldTerminalDisposalDoesNotStealNewTerminalFocus() {
         val state = TerminalInputFocus()
         val old = Any()

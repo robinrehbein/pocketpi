@@ -3,8 +3,10 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +25,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -42,6 +46,22 @@ import androidx.compose.ui.viewinterop.AndroidView
  * `terminalViewportBusy` while input is on its way, `terminalKey_<name>`, `terminalInput`,
  * `terminalInputSend`, `terminalInsert`, and `terminalEnded`, `terminalNotice` on the notices.
  */
+/**
+ * The chips of the terminal's key strip, in [terminalStripKeys]' order. The Ctrl chip shows
+ * [ctrl] and modifies the next key; it is enabled with [keysEnabled] only, since without
+ * structured keys the host takes no chords.
+ */
+@Composable
+internal fun terminalStripChips(compact: Boolean, ctrl: Boolean, keysEnabled: Boolean): List<RemoteKey> {
+    val chips = (listOf(
+        RemoteKey("escape", stringResource(R.string.remote_view_key_escape), stringResource(R.string.remote_view_key_escape_description)),
+        RemoteKey("ctrl", stringResource(R.string.remote_view_key_ctrl), enabled = keysEnabled, selected = ctrl),
+        RemoteKey("tab", stringResource(R.string.remote_view_key_tab)),
+        RemoteKey("enter", stringResource(R.string.remote_view_key_enter)),
+    ) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL)).associateBy { it.id }
+    return terminalStripKeys(compact).map { chips.getValue(it) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: () -> Unit, onUnsentChanged: (Boolean) -> Unit) {
@@ -192,11 +212,14 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
         }
         notice?.let { add(RemoteViewNotice.Failure(stringResource(it), "terminalNotice")) }
     }
-    val keys = listOf(
-        RemoteKey("escape", stringResource(R.string.remote_view_key_escape), stringResource(R.string.remote_view_key_escape_description)),
-        RemoteKey("tab", stringResource(R.string.remote_view_key_tab)),
-        RemoteKey("enter", stringResource(R.string.remote_view_key_enter)),
-    ) + remoteNavigationKeys(RemoteNavigationIds.TERMINAL)
+    // A phone in landscape with the keyboard up keeps one short row of keys (see terminalStripKeys).
+    val density = LocalDensity.current
+    val window = LocalWindowInfo.current.containerDpSize
+    val imeInsets = WindowInsets.ime
+    val compactKeys by remember(window, imeInsets, density) {
+        derivedStateOf { phoneLandscapeWithKeyboard(window.width, window.height, imeInsets.getBottom(density) > 0) }
+    }
+    val keys = terminalStripChips(compactKeys, ctrl, view?.keysEnabled == true)
     // The draft stays editable whatever happens to the terminal; its placeholder says why it
     // cannot be sent now, and Send and Insert are disabled.
     val inputLabel = when {
@@ -214,6 +237,8 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
         onReload = if (!failed && end?.canReattach == true) ::reattach else null,
         reloadLabel = reattachLabel,
         escapeCloses = false,
+        // While the keyboard is up on a phone in landscape, typing room beats the header's controls.
+        header = !compactKeys,
         actions = if (view?.keysEnabled == true) listOf(
             PaneAction(stringResource(R.string.remote_terminal_shortcuts), Icons.Default.Keyboard, "terminalShortcuts", onClick = { showShortcuts = true }),
         ) else emptyList(),
@@ -239,7 +264,7 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
             // Always composed: removing the view would end the renderer.
             AndroidView(factory = { renderer.view }, modifier = Modifier.fillMaxSize().semantics { contentDescription = screenLabel })
         }
-        RemoteKeyStrip(keys, onKey = { sendTouchKey(it.id) }, tag = "terminal", enabled = live, sheds = true)
+        RemoteKeyStrip(keys, onKey = { if (it.id == "ctrl") ctrl = !ctrl else sendTouchKey(it.id) }, tag = "terminal", enabled = live, sheds = true, pinned = compactKeys)
         RemoteInputBar(
             value = draft,
             onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) },

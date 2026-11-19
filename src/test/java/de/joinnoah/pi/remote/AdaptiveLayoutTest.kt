@@ -27,6 +27,17 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun onlyAPhoneInLandscapeWithTheKeyboardUpCountsAsPhoneLandscapeWithKeyboard() {
+        assertTrue(phoneLandscapeWithKeyboard(780.dp, 360.dp, imeVisible = true))
+        // The keyboard closed, a portrait phone, a square window, a tablet either way.
+        assertFalse(phoneLandscapeWithKeyboard(780.dp, 360.dp, imeVisible = false))
+        assertFalse(phoneLandscapeWithKeyboard(360.dp, 780.dp, imeVisible = true))
+        assertFalse(phoneLandscapeWithKeyboard(400.dp, 400.dp, imeVisible = true))
+        assertFalse(phoneLandscapeWithKeyboard(1205.dp, 753.dp, imeVisible = true))
+        assertFalse(phoneLandscapeWithKeyboard(753.dp, 1205.dp, imeVisible = true))
+    }
+
+    @Test
     fun phoneWidthsKeepTheSinglePaneLayout() {
         for (width in listOf(320.dp, 411.dp, 600.dp, 719.dp)) assertEquals(PaneLayout.Phone, paneLayout(width, TALL))
     }

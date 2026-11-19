@@ -659,6 +659,46 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserSync").assertExists()
     }
 
+    @Test fun aNarrowPaneWithAFailureMovesItsHeaderButtonsIntoTheMoreMenu() {
+        val navigated = mutableListOf<String>()
+        var width by mutableStateOf(320.dp)
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1,
+            tabs = listOf(BrowserTab("t1", "First", "https://a.example/page")), selectedTabId = "t1", notice = BrowserNotice.FAILED))
+        compose.setContent { MaterialTheme { Box(Modifier.width(width).height(700.dp)) {
+            BrowserPane(view, BrowserPaneActions(navigate = { navigated += it; true }), {})
+        } } }
+        // 320dp with a failure: close, the title and one "more" button; the notice keeps its line.
+        val notice = compose.onNodeWithTag("browserNotice").assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("notice $notice", (notice.right - notice.left).value >= 319f)
+        compose.onNodeWithText("Try again").assertIsDisplayed()
+        compose.onAllNodesWithTag("browserReload").assertCountEquals(0)
+        compose.onNodeWithTag("browserMoreActions").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("browserSync").assertIsDisplayed()
+        compose.onNodeWithTag("browserReload").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(listOf("https://a.example/page"), navigated) }
+        // Without the failure the refresh button is back in the header.
+        compose.runOnIdle { view = view.copy(notice = null) }
+        compose.onNodeWithTag("browserReload").assertIsDisplayed()
+        // A wider pane keeps its header as it was, failure or not.
+        compose.runOnIdle { view = view.copy(notice = BrowserNotice.FAILED); width = 360.dp }
+        compose.onNodeWithTag("browserReload").assertIsDisplayed()
+        compose.onNodeWithTag("browserSync").assertIsDisplayed()
+        compose.onAllNodesWithTag("browserMoreActions").assertCountEquals(0)
+    }
+
+    @Test fun aFailureNoticeComesFirstOnlyBelowTheBreakpoint() {
+        val failure = listOf(RemoteViewNotice.Failure("Failed"))
+        val info = listOf(RemoteViewNotice.Info("Reconnecting"))
+        assertTrue(remoteViewNoticeFirst(312.dp, BROWSER_NOTICE_FIRST_WIDTH, failure))
+        assertTrue(remoteViewNoticeFirst(336.dp, BROWSER_NOTICE_FIRST_WIDTH, failure))
+        assertFalse(remoteViewNoticeFirst(BROWSER_NOTICE_FIRST_WIDTH, BROWSER_NOTICE_FIRST_WIDTH, failure))
+        assertFalse(remoteViewNoticeFirst(360.dp, BROWSER_NOTICE_FIRST_WIDTH, failure))
+        assertFalse(remoteViewNoticeFirst(320.dp, BROWSER_NOTICE_FIRST_WIDTH, info))
+        assertFalse(remoteViewNoticeFirst(320.dp, BROWSER_NOTICE_FIRST_WIDTH, emptyList()))
+        // A pane that sets no breakpoint never collapses its header for a notice.
+        assertFalse(remoteViewNoticeFirst(320.dp, 0.dp, failure))
+    }
+
     @Test fun controlBarNamesTheHolderAndHandsOverToALocalizedParticipant() {
         val handed = mutableListOf<String>()
         var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, owner = BrowserOwner("agent", "agent-123456")))
