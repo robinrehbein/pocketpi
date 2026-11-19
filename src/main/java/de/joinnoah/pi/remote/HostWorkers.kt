@@ -52,6 +52,22 @@ internal fun isHostWorker(session: JsonObject): Boolean =
     (session[HOST_WORKER_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true
 
 /**
+ * What attaching the terminal to [session] opens: the real terminal of a host worker, or, with
+ * [shellNegotiated] (`session.terminal.shell.v1` on the v4 route), a new login shell in the folder
+ * of a live session started by hand in a Mac terminal. Null for anything else: an RPC session, a
+ * subagent child, an offline row.
+ */
+internal enum class TerminalTarget { WORKER, SHELL }
+
+internal fun terminalTarget(session: JsonObject?, shellNegotiated: Boolean): TerminalTarget? = when {
+    session == null -> null
+    isHostWorker(session) -> TerminalTarget.WORKER
+    shellNegotiated && session.optionalText("origin") == "tui" && session.optionalText("parentSessionId").isNullOrBlank() &&
+        session.optionalText("status") != "offline" -> TerminalTarget.SHELL
+    else -> null
+}
+
+/**
  * The selected terminal session or host worker offers [control]. The app cannot know which extension
  * a hand-started pi runs, so this is optimistic until the host refuses. A subagent child stays on
  * the child controls.

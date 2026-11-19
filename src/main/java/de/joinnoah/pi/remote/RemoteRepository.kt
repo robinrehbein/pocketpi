@@ -159,6 +159,8 @@ data class RemoteState(
     val browser: BrowserView? = null,
     val emulator: EmulatorView? = null,
     val terminal: TerminalView? = null,
+    /** The host's limits from a `capabilities.v4:` list (`session.limits.v1`); null keeps the built-in values. */
+    val hostLimits: SessionLimits? = null,
     val hosts: List<PairedHost> = emptyList(),
     /**
      * [hosts] were read from storage. Until then an empty list says nothing, so screens show a

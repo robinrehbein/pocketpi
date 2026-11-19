@@ -65,6 +65,13 @@ private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
+/**
+ * Everything v3 lists plus the v4-only names ([V4_ONLY_CAPABILITIES]), in at most 128 entries. A
+ * host without the route answers without a list, and the client falls back to v3.
+ */
+private const val CAPABILITIES_V4_ROUTE = "capabilities.v4:"
+/** Advertised only on the v4 route; a later v3 or older list drops them. */
+private val V4_ONLY_CAPABILITIES = setOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
 private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
 private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+$SESSION_ACTIVITY_CAPABILITY+$SUBAGENT_METADATA_CAPABILITY:"
 /** The host's bound on a request ID (parse.ts `opaqueId`); the opt-in route ID shortens its nonce to fit. */
@@ -79,6 +86,7 @@ private const val MAX_ACTIVITY_SNAPSHOT_REASONS = 64
 private const val MAX_ACTIVITY_SESSIONS = 256
 
 private fun capabilityRevision(route: String): Int = when {
+    route.startsWith(CAPABILITIES_V4_ROUTE) -> 4
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
     route.startsWith(CAPABILITIES_V2_ROUTE) -> 2
     route.startsWith(CAPABILITIES_V1_ROUTE) -> 1
@@ -418,10 +426,15 @@ class DefaultRemoteRepository(
             STREAM_CAPABILITY,
             // Capability routes v2 and later give extension sessions their controls.
             HOST_WORKER_V2_CAPABILITY,
+            // Only on capability route v4 (see V4_ONLY_CAPABILITIES).
+            SESSION_LIMITS_CAPABILITY,
+            SESSION_BROWSER_HISTORY_CAPABILITY,
+            SESSION_EMULATOR_CONTROLS_CAPABILITY,
+            SESSION_TERMINAL_SHELL_CAPABILITY,
         )
-    /** The projects.list route falls back through v2 to v1 only when a list is absent. */
+    /** The projects.list route falls back through v3 and v2 to v1 only when a list is absent. */
     private var terminalRouteOffered = false
-    private var capabilityRoute = CAPABILITIES_V3_ROUTE
+    private var capabilityRoute = CAPABILITIES_V4_ROUTE
     private var tasksCapabilityKnown = false
     private var continuationsCapabilityKnown = false
     private var continuationRefreshPending = false
@@ -472,7 +485,7 @@ class DefaultRemoteRepository(
         val selection = nativePresenceSelection
         val eligible = nativePresenceOwner != null && selection != null && selection == current.selection &&
             selection.sessionId != null && !inBackground && current.connected && current.capabilitiesKnown &&
-            capabilityRevision(capabilityRoute) == 3 && nativePresenceUnsupportedOn != generation &&
+            capabilityRevision(capabilityRoute) >= 3 && nativePresenceUnsupportedOn != generation &&
             QUESTION_EDITOR_CAPABILITY in current.capabilities && NATIVE_EDITOR_CAPABILITY in current.capabilities &&
             QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities && NATIVE_EDITOR_CAPABILITY !in current.unavailableCapabilities
         val desiredSession = if (eligible) selection?.sessionId else null
@@ -1385,7 +1398,7 @@ class DefaultRemoteRepository(
                     // The backoff resets only once this connection proves itself, so a host that
                     // accepts and then drops connections at once does not cause a tight loop.
                     connectionReady()
-                    capabilityRoute = CAPABILITIES_V3_ROUTE
+                    capabilityRoute = CAPABILITIES_V4_ROUTE
                     promptDeliveryGeneration = null
                     terminalRouteOffered = false
                     tasksCapabilityKnown = false
@@ -1395,7 +1408,8 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, SUBAGENT_METADATA_CAPABILITY),
+                            capabilities = capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) - V4_ONLY_CAPABILITIES,
+                            hostLimits = null,
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -1588,6 +1602,7 @@ class DefaultRemoteRepository(
             staleSince = null,
             questions = emptyList(),
             capabilities = emptySet(),
+            hostLimits = null,
             capabilitiesKnown = false,
             tasks = SessionTasks(),
             continuations = SessionContinuations(),
@@ -2631,7 +2646,8 @@ class DefaultRemoteRepository(
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val optIn = if (capabilityRevision(capabilityRoute) == 3) {
+        // v4 carries the same opt-ins as v3.
+        val optIn = if (capabilityRevision(capabilityRoute) >= 3) {
             if (pagedConfigured) QUESTION_DETAILS_OPT_IN.dropLast(1) + "+$QUESTION_PAGED_EDITOR_OPT_IN" +
                 (if (positiveConfigured) "+$QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN" else "") + ":" else QUESTION_DETAILS_OPT_IN
         } else ""
@@ -2705,12 +2721,12 @@ class DefaultRemoteRepository(
                 if (!result.containsKey("capabilities") && revision > 1) {
                     if (connection == generation) promptDeliveryGeneration = null
                     // Old hosts treat unknown route IDs as opaque and omit the list.
-                    capabilityRoute = if (revision == 3) CAPABILITIES_V2_ROUTE else CAPABILITIES_V1_ROUTE
+                    capabilityRoute = when (revision) { 4 -> CAPABILITIES_V3_ROUTE; 3 -> CAPABILITIES_V2_ROUTE; else -> CAPABILITIES_V1_ROUTE }
                     outcome = "retry.v${revision - 1}"
                     ended = Diagnostics.now()
                     return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
-                val maxCapabilities = when (revision) { 3 -> 64; 2 -> 32; else -> 16 }
+                val maxCapabilities = when (revision) { 4 -> 128; 3 -> 64; 2 -> 32; else -> 16 }
                 val rawCapabilities = result["capabilities"]
                 val advertised = if (rawCapabilities == null) {
                     // A v1 host may predate capability advertisement altogether.
@@ -2725,22 +2741,25 @@ class DefaultRemoteRepository(
                     list.map { (it as JsonPrimitive).content }
                 }
                 if (connection == generation) {
-                    promptDeliveryGeneration = if (revision == 3 && PROMPT_DELIVERY_CAPABILITY in advertised) connection else null
-                    if (revision == 3 && SESSION_ACTIVITY_CAPABILITY in advertised && activityOptedIn(id)) executionActivityGranted(connection)
+                    promptDeliveryGeneration = if (revision >= 3 && PROMPT_DELIVERY_CAPABILITY in advertised) connection else null
+                    if (revision >= 3 && SESSION_ACTIVITY_CAPABILITY in advertised && activityOptedIn(id)) executionActivityGranted(connection)
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 // Fixture capabilities keep their historical behavior; production requires the
                 // independently negotiated base and Native capabilities as well.
-                val pagedEligible = revision == 3 && pagedConfigured &&
+                val pagedEligible = revision >= 3 && pagedConfigured &&
                     (pagedEditorTestGate || QUESTION_EDITOR_CAPABILITY in advertised && NATIVE_EDITOR_CAPABILITY in advertised)
                 val positiveEligible = pagedEligible && positiveConfigured && QUESTION_PAGED_EDITOR_CAPABILITY in advertised
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, SESSION_CONTINUATIONS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) || revision == 3) && (it != SUBAGENT_METADATA_CAPABILITY || subagentMetadataOptedIn(id)) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY || positiveEligible) && (it != QUESTION_PAGED_EDITOR_CAPABILITY || pagedEligible) && (it !in setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, FILES_CREATE_CAPABILITY, FILES_RENAME_CAPABILITY, FILES_DELETE_CAPABILITY, FILES_MUTATION_RECOVERY_CAPABILITY, SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, SESSION_CONTINUATIONS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) || revision >= 3) && (it !in V4_ONLY_CAPABILITIES || revision == 4) && (it != SUBAGENT_METADATA_CAPABILITY || subagentMetadataOptedIn(id)) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
+                // Limits come only with a v4 list; any other list drops them with the v4-only names.
+                val limits = if (revision == 4 && SESSION_LIMITS_CAPABILITY in merged) parseProjectsLimitsOrNull(id, result) else null
+                update { it.copy(capabilities = it.capabilities - V4_ONLY_CAPABILITIES, hostLimits = limits) }
                 if (revision < 3)
                     update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, SUBAGENT_METADATA_CAPABILITY)) }
                 val hadContinuations = canReadContinuations()
-                if (revision == 3 && SESSION_CONTINUATIONS_CAPABILITY in merged) continuationsCapabilityKnown = true
+                if (revision >= 3 && SESSION_CONTINUATIONS_CAPABILITY in merged) continuationsCapabilityKnown = true
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2749,10 +2768,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision >= 3) it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY)) }
+                if (revision >= 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(SESSION_CLOSE_TERMINAL_CAPABILITY, HOST_STATS_CAPABILITY, SESSION_HANDOVER_CAPABILITY, SESSION_LIST_CONTEXT_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY, NATIVE_EDITOR_CAPABILITY, QUESTION_PAGED_EDITOR_CAPABILITY, QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY, PROMPT_DELIVERY_CAPABILITY, SUBAGENT_METADATA_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 // A snapshot can arrive while capability discovery is still in flight.
                 if (promptDeliveryGeneration == generation) timeline?.let { current ->
@@ -3272,10 +3291,10 @@ class DefaultRemoteRepository(
         update { it.copy(executionActivity = ExecutionActivityState(connectionId = generation.toString())) }
     }
 
-    /** Whether the capability request [id] named `session_activity.v1` in its v3 opt-in. */
+    /** Whether the capability request [id] named `session_activity.v1` in its v3 or v4 opt-in. */
     private fun activityOptedIn(id: String): Boolean =
-        capabilityRevision(id) == 3 &&
-            id.removePrefix(CAPABILITIES_V3_ROUTE).takeIf { it.startsWith("optin=") }
+        capabilityRevision(id) >= 3 &&
+            id.removePrefix(CAPABILITIES_V3_ROUTE).removePrefix(CAPABILITIES_V4_ROUTE).takeIf { it.startsWith("optin=") }
                 ?.removePrefix("optin=")?.substringBefore(':')?.split('+')?.contains(SESSION_ACTIVITY_CAPABILITY) == true
 
     /** The grant arrived on [connection]: it holds until that connection ends. */
@@ -9667,7 +9686,7 @@ class DefaultRemoteRepository(
             (pagedEditorTestGate && positiveOutcomeTestGate ||
                 QUESTION_EDITOR_CAPABILITY in current.capabilities && QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
                 NATIVE_EDITOR_CAPABILITY in current.capabilities && NATIVE_EDITOR_CAPABILITY !in current.unavailableCapabilities) &&
-            current.connected && current.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 &&
+            current.connected && current.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 &&
             QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities && QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities &&
             QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY in current.capabilities && QUESTION_EDITOR_POSITIVE_OUTCOME_CAPABILITY !in current.unavailableCapabilities
 
@@ -9762,7 +9781,7 @@ class DefaultRemoteRepository(
             current.connected && !current.loading && current.questions.any { it === question } &&
             current.questions.count { it.optionalText("id") == question.optionalText("id") } == 1 &&
             editorCapabilityAvailable(question, current) && QUESTION_PAGED_EDITOR_CAPABILITY in current.capabilities &&
-            QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities && capabilityRevision(capabilityRoute) == 3
+            QUESTION_PAGED_EDITOR_CAPABILITY !in current.unavailableCapabilities && capabilityRevision(capabilityRoute) >= 3
 
     override fun loadPagedEditor(question: JsonObject) {
         val current = state.value
@@ -10283,7 +10302,7 @@ class DefaultRemoteRepository(
     private fun requireGitPushCapability(sessionId: String, capability: String) {
         val current = state.value
         if (!current.connected) throw RemoteRequestException("offline")
-        if (!current.capabilitiesKnown || capabilityRevision(capabilityRoute) != 3 ||
+        if (!current.capabilitiesKnown || capabilityRevision(capabilityRoute) < 3 ||
             capability !in current.capabilities || capability in current.unavailableCapabilities)
             throw RemoteRequestException.unsupported()
         require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
@@ -11475,11 +11494,16 @@ class DefaultRemoteRepository(
         SESSION_TERMINAL_KEYS_CAPABILITY !in state.value.unavailableCapabilities
     private val terminalOutputLimit = 256 * 1024
 
+    /** Only a connection whose latest capabilities request was v4 and listed it gets the shell. */
+    private fun terminalShellNegotiated(current: RemoteState = state.value) =
+        capabilityRevision(capabilityRoute) == 4 && SESSION_TERMINAL_SHELL_CAPABILITY in current.capabilities &&
+            SESSION_TERMINAL_SHELL_CAPABILITY !in current.unavailableCapabilities
+
     override fun canAttachTerminal(): Boolean {
         val current = state.value
         return current.connected && !current.stale && activeHost?.routeId == current.selection.routeId &&
             terminalRouteOffered && SESSION_TERMINAL_CAPABILITY in current.capabilities && capabilityRevision(capabilityRoute) >= 2 &&
-            current.session?.let(::isHostWorker) == true && current.selection.sessionId == current.session?.optionalText("id")
+            terminalTarget(current.session, terminalShellNegotiated(current)) != null && current.selection.sessionId == current.session?.optionalText("id")
     }
 
     override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
@@ -11487,14 +11511,15 @@ class DefaultRemoteRepository(
         val session = current.selection.sessionId ?: return false
         if (!current.connected || current.stale || activeHost?.routeId != current.selection.routeId ||
             !terminalRouteOffered || SESSION_TERMINAL_CAPABILITY !in current.capabilities || capabilityRevision(capabilityRoute) < 2 ||
-            current.session?.let(::isHostWorker) != true || cols !in 20..500 || rows !in 5..300 ||
+            terminalTarget(current.session, terminalShellNegotiated(current)) == null || cols !in 20..500 || rows !in 5..300 ||
             (takeoverGeneration != null && takeoverGeneration !in 0..9_007_199_254_740_991L) ||
             pendingTerminal != null || terminalAttachment != null) return false
         terminalResumeSize = null
         terminalSize = cols to rows
         val pending = PendingTerminal(session, generation)
         pendingTerminal = pending
-        update { it.copy(terminal = TerminalView(session)) }
+        val shell = terminalTarget(current.session, terminalShellNegotiated(current)) == TerminalTarget.SHELL
+        update { it.copy(terminal = TerminalView(session, shell = shell)) }
         scope.launch {
             if (pendingTerminal !== pending || pending.abandoned || pending.connection != generation || !state.value.connected) {
                 if (pendingTerminal === pending) pendingTerminal = null
@@ -11510,11 +11535,11 @@ class DefaultRemoteRepository(
                         sendTerminalDetach(session, result.generation, pending.connection)
                     } else {
                         terminalAttachment = TerminalAttachment(pending.connection.toString(), session, result.generation)
-                        update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, keysEnabled = terminalKeysEnabled())) }
+                        update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, keysEnabled = terminalKeysEnabled(), shell = shell)) }
                         pending.early.forEach { acceptTerminalEvent(it) }
                     }
                 } else if (!pending.abandoned && pending.connection == generation && result is TerminalResult.Held) {
-                    update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, holder = result.holder)) }
+                    update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, holder = result.holder, shell = shell)) }
                 }
             } catch (e: Exception) {
                 if (pendingTerminal === pending) pendingTerminal = null

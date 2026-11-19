@@ -805,6 +805,7 @@
     <string name="remote_new_session_model_failed">Das gewählte Modell konnte nicht eingestellt werden.</string>
     <string name="remote_new_session_model_failed_kept">Das gewählte Modell konnte nicht eingestellt werden, deshalb wurde deine erste Nachricht nicht gesendet. Sie wartet im Eingabefeld.</string>
     <string name="remote_terminal_title">Terminal</string>
+    <string name="remote_terminal_shell_subtitle">Neue Shell im Projektordner</string>
     <string name="remote_terminal_unavailable">Terminal auf diesem Gerät nicht verfügbar.</string>
     <string name="remote_terminal_takeover">Übernehmen</string>
     <string name="remote_terminal_takeover_confirm">Die Steuerung dieses Terminals übernehmen?</string>

@@ -5,6 +5,8 @@ import kotlinx.serialization.json.*
 internal const val SESSION_EMULATOR_CAPABILITY = "session.emulator.v1"
 /** A recovery watch gets emulator.frame.waiting while the Host's next capture is slow. */
 internal const val SESSION_EMULATOR_RECOVERY_CAPABILITY = "session.emulator.recovery.v1"
+/** Raw touch, text, long press, the extra keys and `emulator.rotate`; only on the `capabilities.v4:` route. */
+internal const val SESSION_EMULATOR_CONTROLS_CAPABILITY = "session.emulator.controls.v1"
 internal const val EMULATOR_FRAME_CHUNK_BYTES = 49152
 internal const val EMULATOR_FRAME_MAX_BYTES = 1048576
 private const val EMULATOR_MAX_SAFE = 9007199254740991L

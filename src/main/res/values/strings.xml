@@ -806,6 +806,7 @@
     <string name="remote_new_session_model_failed">The chosen model could not be set.</string>
     <string name="remote_new_session_model_failed_kept">The chosen model could not be set, so your first message was not sent. It waits in the message field.</string>
     <string name="remote_terminal_title">Terminal</string>
+    <string name="remote_terminal_shell_subtitle">New shell in the project folder</string>
     <string name="remote_terminal_unavailable">Terminal unavailable on this device.</string>
     <string name="remote_terminal_takeover">Take over</string>
     <string name="remote_terminal_takeover_confirm">Take control of this terminal from the current holder?</string>

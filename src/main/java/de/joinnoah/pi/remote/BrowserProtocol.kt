@@ -6,6 +6,8 @@ import kotlinx.serialization.json.*
 internal const val SESSION_PREVIEW_CAPABILITY = "session.preview.v1"
 internal const val SESSION_BROWSER_CAPABILITY = "session.browser.v1"
 internal const val SESSION_BROWSER_RECOVERY_CAPABILITY = "session.browser.recovery.v1"
+/** `browser.history` (back, forward, reload, stop); only on the `capabilities.v4:` route. */
+internal const val SESSION_BROWSER_HISTORY_CAPABILITY = "session.browser.history.v1"
 private const val MAX_BROWSER_COUNT = 9_007_199_254_740_991L
 
 public sealed interface BrowserInput {
