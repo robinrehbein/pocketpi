@@ -153,7 +153,9 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
         visible = value
         if (!value) {
             queued = null; rewatch?.cancel(); rewatch = null; dropStream(); view?.let { set(it.copy(image = null)) }
-            if (hiddenRelease == null) hiddenRelease = scope.launch { delay(EMULATOR_HIDDEN_RELEASE_MS); hiddenRelease = null; releaseHidden() }
+            // A take-back still waiting for a free state waits for the next show instead.
+            if (reacquire) { reacquire = false; takeBackOnShow = true; hiddenOwner = lostOwner }
+            startHiddenRelease()
         } else {
             cancelHiddenRelease()
             streamFailures = 0
@@ -162,12 +164,16 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             if (takeBackOnShow) { takeBackOnShow = false; takeBack() }
         }
     }
+    private fun startHiddenRelease() {
+        if (hiddenRelease == null) hiddenRelease = scope.launch { delay(EMULATOR_HIDDEN_RELEASE_MS); hiddenRelease = null; releaseHidden() }
+    }
     private fun cancelHiddenRelease() { hiddenRelease?.cancel(); hiddenRelease = null }
-    // The pane stayed hidden: give the lease back. Another control request in flight keeps it.
+    // The pane stayed hidden: give the lease back. Another control request in flight keeps it for
+    // one more period, after which this tries again.
     private fun releaseHidden() {
         if (visible || lease == null) return
         val owner = view?.owner
-        if (release()) { takeBackOnShow = true; hiddenOwner = owner }
+        if (release()) { takeBackOnShow = true; hiddenOwner = owner } else startHiddenRelease()
     }
     /**
      * Takes control back after the pane was shown again, with the current generation, only while
@@ -176,8 +182,11 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
      * the next free state or the resume takes it back instead (see [reacquireIfFree]).
      */
     private fun takeBack() {
-        val owner = view?.owner
+        val v = view ?: return
+        val owner = v.owner
         if (owner != null && owner != hiddenOwner) return
+        // A resume's open is on its way: its reply takes control back if it is free then.
+        if (v.opening) { reacquire = true; lostOwner = hiddenOwner; return }
         if (!acquire(automatic = true)) { reacquire = true; lostOwner = hiddenOwner }
     }
     // Closes the whole connection: the Host then releases this device's lease. [reason] is logged.
@@ -355,7 +364,11 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
                     check(r.emulatorId == id && r.generation >= v.generation)
                     dropStream(); token++; lease = null; pending = false; disconnected = false; set(null)
                 }
-                is EmulatorResult.Released -> { check(r.emulatorId == id && r.generation >= v.generation); refresh() }
+                is EmulatorResult.Released -> {
+                    check(r.emulatorId == id && r.generation >= v.generation); pending = false; refresh()
+                    // A take-back that waited for this release (see [takeBack]) can go now.
+                    reacquireIfFree(view?.owner)
+                }
                 else -> error("unexpected")
             }
         } catch (_: Exception) { if (valid(t,v.sessionId,c)) fail("control") } finally { if (valid(t,v.sessionId,c)) pending = false } }
@@ -448,6 +461,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             lease = e.control.leaseId; sequence = e.control.nextSequence
             set(v.copy(owner = e.owner, ownsControl = true)); watch()
         } else set(v.copy(owner = e.owner))
+        // A lease handed to this device while the pane is hidden is given back after the timeout too.
+        if (lease != null && !visible) startHiddenRelease()
         reacquireIfFree(e.owner)
     }
 }

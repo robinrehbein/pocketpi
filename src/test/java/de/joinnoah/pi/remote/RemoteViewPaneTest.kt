@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
@@ -620,6 +621,36 @@ class RemoteViewPaneTest {
         assertEquals(48.dp, height("header"))
         assertEquals(56.dp, height("input"))
         assertEquals(0.dp, height("viewport"))
+    }
+
+    @Test fun aPinnedCompactTerminalStripStaysAt170dpWhereAnUnpinnedOneGoes() {
+        // A phone in landscape with the keyboard up leaves the terminal about 170dp: no header,
+        // the strip of Esc, Ctrl, Tab and the arrows (48dp) and the input bar (56dp) stay, the
+        // viewport gets the rest even though that is below its 96dp floor.
+        var pinned by mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxWidth().height(170.dp)) {
+                    RemoteViewPane("Terminal", "terminal", onClose = {}, header = false) {
+                        RemoteViewport("terminalViewport", Modifier.weight(1f).fillMaxWidth()) {}
+                        RemoteKeyStrip(terminalStripChips(compact = true, ctrl = false, keysEnabled = true), onKey = {}, tag = "terminal", sheds = true, pinned = pinned)
+                        RemoteInputBar("", {}, {}, "terminalInput")
+                    }
+                }
+            }
+        }
+        compose.onAllNodesWithTag("terminalTitle").assertCountEquals(0)
+        compose.onNodeWithTag("terminalKeys").assertIsDisplayed()
+        val chip = SemanticsMatcher("a terminal key chip") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("terminalKey_") == true }
+        compose.onAllNodes(chip).assertCountEquals(7)
+        listOf("escape", "ctrl", "tab", "left", "up", "down", "right").forEach { compose.onNodeWithTag("terminalKey_$it").assertIsDisplayed() }
+        compose.onNodeWithTag("terminalInput").assertIsDisplayed()
+        val viewport = compose.onNodeWithTag("terminalViewport").getUnclippedBoundsInRoot()
+        assertTrue("viewport=$viewport", viewport.bottom - viewport.top > 0.dp)
+        // Unpinned, the viewport's floor pushes the strip out.
+        compose.runOnIdle { pinned = false }
+        compose.onNodeWithTag("terminalKeys").assertIsNotDisplayed()
+        compose.onNodeWithTag("terminalInput").assertIsDisplayed()
     }
 
     @Test fun aCompactViewportFloorShedsIdleKeysThenInfoThenControlThenFailuresThenKeysBeforeItShrinks() {

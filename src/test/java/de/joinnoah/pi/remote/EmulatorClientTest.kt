@@ -152,6 +152,8 @@ class EmulatorClientTest {
     // A fake Host whose generation, owner and acquire reply the test controls. Calls are (connection, type, fields).
     private class FakeHost {
         var generation = 1; var owner: JsonObject? = null; var acquireReply: CompletableDeferred<JsonObject>? = null; var busyOwner: JsonObject? = null
+        // When set, a release waits for this before the Host answers it.
+        var releaseGate: CompletableDeferred<Unit>? = null
         val calls = mutableListOf<Triple<Long, String, Map<String, Any?>>>()
         // When set, each watch waits for its reply here, in order.
         var deferWatches = false; val watchReplies = mutableListOf<CompletableDeferred<Unit>>()
@@ -171,7 +173,7 @@ class EmulatorClientTest {
                     if (host.deferWatches) CompletableDeferred<Unit>().also { host.watchReplies.add(it) }.await()
                     Wire.objectOf("kind" to "emulator.watching", "emulatorId" to "e", "generation" to map["generation"], "streamId" to "stream$n") }
                 "emulator.unwatch" -> Wire.objectOf("kind" to "emulator.unwatched", "emulatorId" to "e", "streamId" to map["streamId"])
-                "emulator.release" -> { host.owner = null; Wire.objectOf("kind" to "emulator.released", "emulatorId" to "e", "generation" to host.generation) }
+                "emulator.release" -> { host.releaseGate?.await(); host.owner = null; Wire.objectOf("kind" to "emulator.released", "emulatorId" to "e", "generation" to host.generation) }
                 "emulator.acquire" -> host.acquireReply?.await() ?: host.busyOwner?.let { Wire.objectOf("kind" to "emulator.busy", "emulatorId" to "e", "generation" to host.generation, "owner" to it) } ?: run {
                     // The Host's identity of a device is per connection.
                     val me = Wire.objectOf("kind" to "device", "id" to "connection$c"); host.generation++; host.owner = me
@@ -441,5 +443,73 @@ class EmulatorClientTest {
         assertFalse(requireNotNull(client.view).ownsControl)
         assertEquals("other", client.view?.owner?.id)
         assertNull(client.view?.notice)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun showingThePaneWhileTheHiddenReleaseIsInFlightTakesControlBackOnceItIsReleased() {
+        val scope = TestScope(); val host = FakeHost()
+        val client = scope.controllingHidden(host)
+        val gate = CompletableDeferred<Unit>(); host.releaseGate = gate
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+        client.setVisible(true); scope.runCurrent()
+        assertEquals(1, host.count("emulator.acquire"))
+        // The Host's free state comes before the release reply.
+        host.owner = null
+        client.state(stateEvent(host.generation, null)); scope.runCurrent()
+        assertEquals(1, host.count("emulator.acquire"))
+        gate.complete(Unit); scope.runCurrent()
+        assertEquals(2, host.count("emulator.acquire"))
+        assertTrue(requireNotNull(client.view).ownsControl)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun showingThePaneWhileAResumeOpensLeavesTheTakeBackToTheResume() {
+        val scope = TestScope(); val host = FakeHost(); var connection = 1L
+        val client = hostClient(scope, host, { connection })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertTrue(client.acquire()); scope.runCurrent()
+        client.setVisible(false); scope.runCurrent()
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+        client.disconnected(); connection = 2
+        assertTrue(client.resumeIfDisconnected("session", 2))
+        assertTrue(requireNotNull(client.view).opening)
+        client.setVisible(true)
+        assertEquals(0, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
+        scope.runCurrent()
+        assertEquals(1, host.calls.count { it.first == 2L && it.second == "emulator.acquire" })
+        assertTrue(requireNotNull(client.view).ownsControl)
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aLeaseHandedToTheHiddenPaneIsGivenBackAfterTheTimeoutToo() {
+        val scope = TestScope(); val host = FakeHost()
+        val client = scope.controllingHidden(host)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+        // Someone hands control to this device while the pane is still hidden.
+        host.generation++; val me = Wire.objectOf("kind" to "device", "id" to "connection1"); host.owner = me
+        client.state(stateEvent(host.generation, me, "handed")); scope.runCurrent()
+        assertTrue(requireNotNull(client.view).ownsControl)
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS - 1); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
+        scope.testScheduler.advanceTimeBy(1); scope.runCurrent()
+        assertEquals(2, host.count("emulator.release"))
+        assertEquals("\"handed\"", host.calls.last { it.second == "emulator.release" }.third["leaseId"].toString())
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun aReleaseThatCannotGoOutAtTheTimeoutIsTriedAgainAfterAnotherPeriod() {
+        val scope = TestScope(); val host = FakeHost(); var connection = 1L
+        val client = hostClient(scope, host, { connection })
+        assertTrue(client.open("session", 1)); scope.runCurrent()
+        assertTrue(client.selectProfile("p")); scope.runCurrent()
+        assertTrue(client.acquire()); scope.runCurrent()
+        client.setVisible(false); scope.runCurrent()
+        // The connection is not current at the deadline: no release can be sent.
+        connection = 9
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        assertEquals(0, host.count("emulator.release"))
+        connection = 1
+        scope.testScheduler.advanceTimeBy(EMULATOR_HIDDEN_RELEASE_MS); scope.runCurrent()
+        assertEquals(1, host.count("emulator.release"))
     }
 }
