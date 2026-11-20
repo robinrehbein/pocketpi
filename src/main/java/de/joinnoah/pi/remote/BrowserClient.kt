@@ -496,8 +496,21 @@ internal class BrowserClient(
         val key = HistoryKey(event.browserId, event.incarnation, event.tabId)
         historyStates.remove(key)
         historyStates[key] = BrowserTabHistory(event.canGoBack, event.canGoForward)
-        while (historyStates.size > MAX_BROWSER_HISTORY_STATES) historyStates.remove(historyStates.keys.first())
+        while (historyStates.size > MAX_BROWSER_HISTORY_STATES) historyStates.remove(evictableHistoryState(v) ?: break)
         set(v)
+    }
+    /**
+     * The oldest entry to drop at the bound: another browser's or incarnation's first (both clients
+     * see every event), then a tab the view does not list, then a listed one. The selected tab's
+     * entry is never dropped: the host sends a state only when it changes, so a lost one would keep
+     * its button off until the next change.
+     */
+    private fun evictableHistoryState(v: BrowserView): HistoryKey? {
+        val listed = v.tabs.map { it.id }.toSet()
+        val candidates = historyStates.keys.filter { v.browserId == null || it.browserId != v.browserId || it.incarnation != v.incarnation || it.tabId != v.selectedTabId }
+        return candidates.firstOrNull { v.browserId != null && (it.browserId != v.browserId || it.incarnation != v.incarnation) }
+            ?: candidates.firstOrNull { it.tabId !in listed }
+            ?: candidates.firstOrNull()
     }
     private fun document(payload: JsonObject) {
         val event = try { parseBrowserDocument(payload) } catch (_: Exception) { return }

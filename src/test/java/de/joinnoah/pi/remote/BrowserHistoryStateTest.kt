@@ -78,6 +78,20 @@ class BrowserHistoryStateTest {
         assertNull(client.view!!.notice)
     }
 
+    @Test fun theBoundDropsUnlistedTabsFirstAndNeverTheSelectedOne() = runTest {
+        val client = open(mutableListOf())
+        client.historyState(state("tab", back = true, forward = false))
+        client.historyState(state("other", back = false, forward = true))
+        // States for tabs the view never lists, more than the bound holds.
+        repeat(40) { client.historyState(state("x$it", back = true, forward = true)) }
+        val kept = client.view!!.tabHistory
+        assertEquals(32, kept.size)
+        assertEquals(BrowserTabHistory(true, false), kept["tab"])
+        assertEquals(BrowserTabHistory(false, true), kept["other"])
+        assertNull(kept["x0"])
+        assertTrue(client.view!!.canGoBack)
+    }
+
     @Test fun aStateBeforeTheOpenedResultIsHandledCountsForThatBrowserOnly() = runTest {
         val calls = mutableListOf<Call>()
         val client = opening(calls)
