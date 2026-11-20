@@ -2,7 +2,7 @@
 
 The `*-v1.json` files and `paged-editor-wire.json` here are copies of the Remote protocol fixtures in the noah monorepo, under
 `packages/pi-atlas/extensions/remote/protocol/fixtures/`. Copy them byte for byte; change them there
-first. The copies match noah `dev` commit `4d4194aa5c059c1b5d3c3eb6c748dad2f9a0db6f` (the emulator keyboard).
+first. The copies match noah `dev` commit `94fb402e3571712cb8430f57bcddec14f78f18fe` (browser history state).
 
 `session-close-terminal-v1.json` holds the wire shapes of `session.close.terminal.v1`: closing an
 idle terminal session, its `accepted` result and the refusals (`busy` with and without unsent Mac
