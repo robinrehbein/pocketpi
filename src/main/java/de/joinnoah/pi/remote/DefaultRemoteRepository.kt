@@ -71,7 +71,7 @@ private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
  */
 private const val CAPABILITIES_V4_ROUTE = "capabilities.v4:"
 /** Advertised only on the v4 route; a later v3 or older list drops them. */
-private val V4_ONLY_CAPABILITIES = setOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
+private val V4_ONLY_CAPABILITIES = setOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
 private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
 private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+$SESSION_ACTIVITY_CAPABILITY+$SUBAGENT_METADATA_CAPABILITY:"
 /** The host's bound on a request ID (parse.ts `opaqueId`); the opt-in route ID shortens its nonce to fit. */
@@ -430,6 +430,7 @@ class DefaultRemoteRepository(
             SESSION_LIMITS_CAPABILITY,
             SESSION_BROWSER_HISTORY_CAPABILITY,
             SESSION_EMULATOR_CONTROLS_CAPABILITY,
+            SESSION_EMULATOR_KEYBOARD_CAPABILITY,
             SESSION_TERMINAL_SHELL_CAPABILITY,
         )
     /** The projects.list route falls back through v3 and v2 to v1 only when a list is absent. */
@@ -638,6 +639,8 @@ class DefaultRemoteRepository(
             // Only on a connection whose latest list came from the v4 route.
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 4 && SESSION_EMULATOR_CONTROLS_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CONTROLS_CAPABILITY !in state.value.unavailableCapabilities },
             { state.value.hostLimits?.emulator },
+            // Only next to the controls; EmulatorClient requires both.
+            keyboardEnabled = { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 4 && SESSION_EMULATOR_KEYBOARD_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_KEYBOARD_CAPABILITY !in state.value.unavailableCapabilities },
         )
     }
     override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
@@ -649,6 +652,7 @@ class DefaultRemoteRepository(
     override fun stopEmulator() = emulatorClient.stop()
     override fun sendEmulatorInput(input: EmulatorInput) = emulatorClient.input(input)
     override fun sendEmulatorTouch(input: EmulatorInput.Touch) = emulatorClient.touch(input)
+    override fun typeEmulatorInput(input: EmulatorInput) = emulatorClient.type(input)
     override fun rotateEmulator(rotation: Long) = emulatorClient.rotate(rotation)
     override fun refreshEmulator() = emulatorClient.refresh()
     override fun setEmulatorVisible(visible: Boolean) = emulatorClient.setVisible(visible)

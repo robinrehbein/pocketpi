@@ -57,7 +57,7 @@ class EmulatorControlsTest {
 
     /** A client in control with a frame shown; inputs and rotations wait in [held] for their replies. */
     private fun controlling(scope: TestScope, controls: Boolean, held: MutableList<Call>, closed: MutableList<Long>, limits: EmulatorLimits? = null,
-        controlsNow: () -> Boolean = { controls }, statusGeneration: () -> Int? = { null }): EmulatorClient {
+        controlsNow: () -> Boolean = { controls }, statusGeneration: () -> Int? = { null }, keyboard: () -> Boolean = { false }): EmulatorClient {
         var generation = 1
         val self = Wire.objectOf("kind" to "device", "id" to "me")
         val client = EmulatorClient(scope.backgroundScope, { _, _ -> true }, { _, type, fields ->
@@ -74,7 +74,7 @@ class EmulatorControlsTest {
                     Wire.objectOf("kind" to "emulator.lease", "emulatorId" to "e", "generation" to generation, "geometry" to geometry, "owner" to self, "leaseId" to "lease", "nextSequence" to 5) }
                 else -> CompletableDeferred<JsonObject>().also { held.add(Call(type, map, it)) }.await()
             }
-        }, {}, { "d" }, { true }, { closed.add(it) }, { false }, controlsNow, { limits }, { scope.testScheduler.currentTime })
+        }, {}, { "d" }, { true }, { closed.add(it) }, { false }, controlsNow, { limits }, { scope.testScheduler.currentTime }, keyboard)
         assertTrue(client.open("session", 1)); scope.runCurrent()
         assertTrue(client.selectProfile("p")); scope.runCurrent()
         assertTrue(client.acquire()); scope.runCurrent()
@@ -113,6 +113,65 @@ class EmulatorControlsTest {
         assertTrue(client.input(EmulatorInput.Key("VolumeUp"))); scope.runCurrent()
         assertEquals("""{"kind":"key","key":"VolumeUp"}""", held.last().fields["input"].toString())
         assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun withTheKeyboardUnicodeTextAndChordsGoOutAndWithoutItNever() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        var keyboard = true
+        val client = controlling(scope, controls = true, held, closed, keyboard = { keyboard })
+        assertEquals(true, client.view?.keyboard)
+        assertTrue(client.input(EmulatorInput.Text("Gr\u00fc\u00dfe"))); scope.runCurrent()
+        assertEquals("""{"kind":"text","text":"Gr${"\u00fc\u00df"}e"}""", held.last().fields["input"].toString())
+        ack(held.last()); scope.runCurrent()
+        // Not NFC: the host would refuse it, so it never goes out.
+        assertFalse(client.input(EmulatorInput.Text("Gru\u0308\u00dfe")))
+        assertFalse(client.input(EmulatorInput.Key("KeyA", listOf("Shift"))))
+        assertTrue(client.input(EmulatorInput.Key("KeyZ", listOf("Shift", "Control")))); scope.runCurrent()
+        assertEquals("""{"kind":"key","key":"KeyZ","modifiers":["Shift","Control"]}""", held.last().fields["input"].toString())
+        ack(held.last()); scope.runCurrent()
+        // The capability gone from the connection: nothing of it goes out any more.
+        keyboard = false
+        assertFalse(client.input(EmulatorInput.Key("Delete")))
+        assertFalse(client.type(EmulatorInput.Text("\u00e9")))
+        assertTrue(client.type(EmulatorInput.Text("e"))); scope.runCurrent()
+        assertEquals(3, held.size); assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun typedKeystrokesWaitInOrderAndTextJoins() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Text("H"))); scope.runCurrent()
+        // Typed while "H" is in flight: kept in order, the text joined, nothing replaced.
+        assertTrue(client.type(EmulatorInput.Text("a")))
+        assertTrue(client.type(EmulatorInput.Text("u")))
+        assertTrue(client.type(EmulatorInput.Key("Backspace")))
+        assertTrue(client.type(EmulatorInput.Text("\u0308")))
+        assertTrue(client.type(EmulatorInput.Key("Enter", listOf("Control"))))
+        scope.runCurrent()
+        assertEquals(1, held.size)
+        val expected = listOf("""{"kind":"text","text":"H"}""", """{"kind":"text","text":"au"}""", """{"kind":"key","key":"Backspace"}""",
+            """{"kind":"text","text":"${"\u0308"}"}""", """{"kind":"key","key":"Enter","modifiers":["Control"]}""")
+        for (i in 1 until expected.size) { ack(held.last()); scope.runCurrent(); assertEquals(i + 1, held.size) }
+        ack(held.last()); scope.runCurrent()
+        assertEquals(expected, held.map { it.fields["input"].toString() })
+        assertEquals(listOf(5L, 6L, 7L, 8L, 9L), held.map { it.fields["sequence"].toString().toLong() })
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun typedTextJoinsAsNfcAndStopsAtTheLimit() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Key("Tab"))); scope.runCurrent()
+        assertTrue(client.type(EmulatorInput.Text("u")))
+        // u and a combining diaeresis typed apart go as one NFC ü.
+        assertTrue(client.type(EmulatorInput.Text("\u0308")))
+        assertTrue(client.type(EmulatorInput.Text("x".repeat(255))))
+        // One more code point would pass 256: it starts a text of its own.
+        assertTrue(client.type(EmulatorInput.Text("y")))
+        ack(held.last()); scope.runCurrent()
+        assertEquals("""{"kind":"text","text":"${"\u00fc"}${"x".repeat(255)}"}""", held.last().fields["input"].toString())
+        ack(held.last()); scope.runCurrent()
+        assertEquals("""{"kind":"text","text":"y"}""", held.last().fields["input"].toString())
     }
 
     @Test fun rotationTakesTheNextSequenceAndTheNewGeometry() {

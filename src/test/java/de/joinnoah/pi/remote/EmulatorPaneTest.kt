@@ -71,6 +71,25 @@ class EmulatorPaneTest {
         compose.onAllNodesWithTag("emulatorKey_Power").assertCountEquals(1)
         compose.onAllNodesWithTag("emulatorKey_VolumeUp").assertCountEquals(1)
     }
+    @Test fun withTheKeyboardTheTextBarSendsNfcTextAndTheFocusedScreenTypes() {
+        val inputs = mutableListOf<EmulatorInput>(); val typed = mutableListOf<EmulatorInput>()
+        val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        val view = controlled(image).copy(controls = true, keyboard = true, geometry = EmulatorGeometry(20, 30, 0, 1))
+        val actions = EmulatorPaneActions({ true }, { true }, { true }, { true }, { inputs.add(it); true }, { true }, {}, touch = { true }, type = { typed.add(it); true })
+        compose.setContent { MaterialTheme { EmulatorPane(view, actions, {}, decodeContext = EmptyCoroutineContext) } }
+        settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("emulatorText").performTextInput("x".repeat(257))
+        compose.onNodeWithText("At most 256 characters can be sent to the emulator at once.").assertExists()
+        compose.onNodeWithTag("emulatorTextSend").assertIsNotEnabled()
+        compose.onNodeWithTag("emulatorText").performTextReplacement("Grüße")
+        compose.onNodeWithTag("emulatorTextSend").performClick()
+        compose.runOnIdle { assertEquals(EmulatorInput.Text("Grüße"), inputs.last()) }
+        // Touching the screen gives it focus; a hardware key then goes out as a keystroke.
+        compose.onNodeWithTag("emulatorScreen").performTouchInput { down(center); up() }
+        compose.onNodeWithTag("emulatorScreen").assertIsFocused()
+        compose.onNodeWithTag("emulatorScreen").performKeyInput { withKeyDown(androidx.compose.ui.input.key.Key.CtrlLeft) { pressKey(androidx.compose.ui.input.key.Key.A) } }
+        compose.runOnIdle { assertEquals(EmulatorInput.Key("KeyA", listOf("Control")), typed.last()) }
+    }
     @Test fun withoutControlsThereIsNoTextBarOrExtraKey() {
         val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
         compose.setContent { MaterialTheme { EmulatorPane(controlled(image), actions(), {}, decodeContext = EmptyCoroutineContext) } }

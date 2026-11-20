@@ -1,0 +1,1105 @@
+{
+  "version": 1,
+  "capability": "session.emulator.keyboard.v1",
+  "note": "commands.valid need the keyboard capability; commands.adb parse the same way but need only the controls or nothing more, and keep the ADB path; commands.invalid never parse.",
+  "commands": {
+    "valid": [
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "Gr\u00fc\u00dfe"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u00c7a va? \u4f60\u597d \ud83d\ude00"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\ud83d\udc69\u200d\ud83d\udcbb a\u00a0b"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "%s%s%s%s%s%s%s%s"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Delete"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "MoveHome"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "MoveEnd"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "PageUp"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "PageDown"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "ArrowLeft",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "MoveEnd",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Tab",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Backspace",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Delete",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyC",
+          "modifiers": [
+            "Meta"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyV",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyX",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyZ",
+          "modifiers": [
+            "Shift",
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Digit1",
+          "modifiers": [
+            "Alt"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Digit0",
+          "modifiers": [
+            "Shift",
+            "Meta"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Enter",
+          "modifiers": [
+            "Shift",
+            "Control",
+            "Alt",
+            "Meta"
+          ]
+        }
+      }
+    ],
+    "adb": [
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "Hello, world!"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "%s%s%s%s%s%s%s"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Enter"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Backspace"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Power"
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": ""
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "Gru\u0308\u00dfe"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "e\u0301"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4\u00e4"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "a\u0000b"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "line\nbreak"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "tab\there"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u007f"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "next\u0085line"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u009f"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "a\u2028b"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "a\u2029b"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u202aembed"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u202eoverride"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u2066isolate"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u2069"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\u061cmark"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "a\u200eb"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "a\u200fb"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "\ud800"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "text",
+          "text": "a\udc00"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Digit0"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Digit5",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Enter",
+          "modifiers": []
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyZ",
+          "modifiers": [
+            "Control",
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": [
+            "Control",
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": [
+            "Ctrl"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": [
+            null
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": "Control"
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Home",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Back",
+          "modifiers": [
+            "Meta"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Power",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "VolumeUp",
+          "modifiers": [
+            "Alt"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "AppSwitch",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Keya",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "F1",
+          "modifiers": [
+            "Control"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Space",
+          "modifiers": [
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "Delete",
+          "modifiers": [
+            "Shift",
+            "Shift"
+          ]
+        }
+      },
+      {
+        "type": "emulator.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "emulatorId": "e",
+        "leaseId": "l",
+        "generation": 1,
+        "geometryRevision": 1,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "key": "KeyA",
+          "modifiers": [
+            "Control"
+          ],
+          "text": "a"
+        }
+      }
+    ]
+  }
+}

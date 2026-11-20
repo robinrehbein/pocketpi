@@ -22,6 +22,7 @@
   "v4Only": [
     { "capability": "session.browser.history.v1", "when": "a browser or preview is eligible" },
     { "capability": "session.emulator.controls.v1", "when": "an emulator is eligible" },
+    { "capability": "session.emulator.keyboard.v1", "when": "an emulator is eligible" },
     {
       "capability": "session.terminal.shell.v1",
       "when": "terminalControl is on and node-pty is loaded"

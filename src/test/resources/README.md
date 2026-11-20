@@ -2,7 +2,7 @@
 
 The `*-v1.json` files and `paged-editor-wire.json` here are copies of the Remote protocol fixtures in the noah monorepo, under
 `packages/pi-atlas/extensions/remote/protocol/fixtures/`. Copy them byte for byte; change them there
-first. The copies match noah `dev` commit `51340fbb0d6a3ba70138e762648016efb341d413` (the `capabilities.v4:` route).
+first. The copies match noah `dev` commit `4d4194aa5c059c1b5d3c3eb6c748dad2f9a0db6f` (the emulator keyboard).
 
 `session-close-terminal-v1.json` holds the wire shapes of `session.close.terminal.v1`: closing an
 idle terminal session, its `accepted` result and the refusals (`busy` with and without unsent Mac
@@ -47,7 +47,7 @@ shapes (unknown or missing keys, bad counts and percents, a `null` context, a `f
 flag, a fill outside a list).
 
 `capabilities-v4.json` pins the `capabilities.v4:` route: its request IDs, the request IDs that are
-not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the four v4-only capabilities.
+not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the five v4-only capabilities.
 
 `browser-history-v1.json` holds the wire shapes of `session.browser.history.v1`: the `back`,
 `forward`, `reload` and `stop` commands, the `browser.tabs` result, the `not_found` and `forbidden`
@@ -55,7 +55,12 @@ refusals, and invalid commands.
 
 `emulator-controls-v1.json` holds the wire shapes of `session.emulator.controls.v1`: the new keys,
 `text`, `long_press` and raw multi-touch inputs, `emulator.rotate`, the `emulator.rotated` result,
-and invalid ones.
+invalid ones, and `needsKeyboard`: texts that parse but need `session.emulator.keyboard.v1`.
+
+`emulator-keyboard-v1.json` holds the wire shapes of `session.emulator.keyboard.v1` (noah
+TOOLING-1458): Unicode text, the editing keys and modifier chords that need the capability
+(`commands.valid`), ASCII text and plain keys that parse the same way but keep the ADB path
+(`commands.adb`), and shapes that never parse (`commands.invalid`).
 
 `session-limits-v1.json` holds the wire shapes of `session.limits.v1`: the route rule, `projects`
 results with and without `limits`, and invalid ones (`limits` on another route, unknown or missing

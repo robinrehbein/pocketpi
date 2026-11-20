@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import java.text.Normalizer
 import kotlinx.serialization.json.*
 
 internal const val SESSION_EMULATOR_CAPABILITY = "session.emulator.v1"
@@ -7,6 +8,12 @@ internal const val SESSION_EMULATOR_CAPABILITY = "session.emulator.v1"
 internal const val SESSION_EMULATOR_RECOVERY_CAPABILITY = "session.emulator.recovery.v1"
 /** Raw touch, text, long press, the extra keys and `emulator.rotate`; only on the `capabilities.v4:` route. */
 internal const val SESSION_EMULATOR_CONTROLS_CAPABILITY = "session.emulator.controls.v1"
+/**
+ * Unicode text, the editing keys ([EMULATOR_KEYBOARD_KEYS]) and modifier chords, typed through the
+ * emulator's gRPC keyboard. Only on the `capabilities.v4:` route, and only next to
+ * [SESSION_EMULATOR_CONTROLS_CAPABILITY]; without it the host types text over ADB as ASCII.
+ */
+internal const val SESSION_EMULATOR_KEYBOARD_CAPABILITY = "session.emulator.keyboard.v1"
 internal const val EMULATOR_FRAME_CHUNK_BYTES = 49152
 internal const val EMULATOR_FRAME_MAX_BYTES = 1048576
 private const val EMULATOR_MAX_SAFE = 9007199254740991L
@@ -15,12 +22,19 @@ public data class EmulatorGeometry(val width: Long, val height: Long, val rotati
 public data class EmulatorOwner(val kind: String, val id: String)
 public data class EmulatorControl(val leaseId: String, val nextSequence: Long)
 public sealed interface EmulatorInput {
-    data class Key(val key: String) : EmulatorInput
+    /**
+     * [modifiers] (canonical order, see [EMULATOR_MODIFIERS]) and the keys outside
+     * [EMULATOR_BASE_KEYS] and [EMULATOR_CONTROL_KEYS] need [SESSION_EMULATOR_KEYBOARD_CAPABILITY].
+     */
+    data class Key(val key: String, val modifiers: kotlin.collections.List<String> = emptyList()) : EmulatorInput
     data class Tap(val x: Long, val y: Long) : EmulatorInput
     data class Swipe(val x: Long, val y: Long, val endX: Long, val endY: Long, val durationMs: Long) : EmulatorInput
     /** Needs [SESSION_EMULATOR_CONTROLS_CAPABILITY], as do [Text], [Touch] and the keys in [EMULATOR_CONTROL_KEYS]. */
     data class LongPress(val x: Long, val y: Long, val durationMs: Long) : EmulatorInput
-    /** Printable ASCII only (see [emulatorTextValid]). */
+    /**
+     * Printable ASCII ([emulatorTextValid]); with [SESSION_EMULATOR_KEYBOARD_CAPABILITY] any NFC
+     * text that [emulatorKeyboardTextValid] accepts.
+     */
     data class Text(val text: String) : EmulatorInput
     /**
      * Every pointer down or lifting in this event, in the coordinates of the frame with the
@@ -32,6 +46,14 @@ public data class EmulatorTouchPoint(val id: Int, val x: Long, val y: Long, val 
 internal val EMULATOR_BASE_KEYS = setOf("Home","Back","Enter","Tab","Escape","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Backspace")
 /** The hardware keys of [SESSION_EMULATOR_CONTROLS_CAPABILITY]: Recents, Power and the volume. */
 internal val EMULATOR_CONTROL_KEYS = setOf("AppSwitch","Power","VolumeUp","VolumeDown")
+/** The editing keys of [SESSION_EMULATOR_KEYBOARD_CAPABILITY]. */
+internal val EMULATOR_KEYBOARD_KEYS = setOf("Delete","MoveHome","MoveEnd","PageUp","PageDown")
+/** Letter and digit keys: only in a chord with Control, Alt or Meta, as plain ones would be a second text path. */
+internal val EMULATOR_CHARACTER_KEYS = ('A'..'Z').map { "Key$it" }.toSet() + ('0'..'9').map { "Digit$it" }
+/** The keys a chord may press; the Android buttons (Home, Back, Recents, Power, volume) take no modifiers. */
+internal val EMULATOR_CHORD_KEYS = setOf("Enter","Tab","Escape","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Backspace") + EMULATOR_KEYBOARD_KEYS + EMULATOR_CHARACTER_KEYS
+/** The host accepts a chord's modifiers only in this order, each at most once. */
+internal val EMULATOR_MODIFIERS = listOf("Shift","Control","Alt","Meta")
 internal const val EMULATOR_TEXT_MAX_CHARS = 256
 internal const val EMULATOR_TOUCH_MAX_POINTERS = 10
 internal const val EMULATOR_TOUCH_MAX_ID = 31
@@ -39,6 +61,53 @@ internal const val EMULATOR_TOUCH_MAX_PRESSURE = 1024
 /** The host types text through Android's key map: 1 to 256 printable ASCII characters, at most seven literal `%s`. */
 internal fun emulatorTextValid(text: String): Boolean =
     text.length in 1..EMULATOR_TEXT_MAX_CHARS && text.all { it.code in 0x20..0x7E } && text.windowed(2).count { it == "%s" } <= 7
+/**
+ * A key the host accepts, by shape alone: a plain key, or a chord of an [EMULATOR_CHORD_KEYS] key
+ * with modifiers in canonical order, where a letter or digit needs more than Shift.
+ */
+internal fun emulatorKeyValid(key: String, modifiers: List<String>): Boolean {
+    if (modifiers.isEmpty()) return key in EMULATOR_BASE_KEYS || key in EMULATOR_CONTROL_KEYS || key in EMULATOR_KEYBOARD_KEYS
+    if (key !in EMULATOR_CHORD_KEYS) return false
+    val at = modifiers.map { EMULATOR_MODIFIERS.indexOf(it) }
+    if (at.any { it < 0 } || at.zipWithNext().any { (a, b) -> b <= a }) return false
+    return key !in EMULATOR_CHARACTER_KEYS || modifiers.any { it != "Shift" }
+}
+/** The host refuses text that is not NFC rather than change it, so the client normalises what it sends. */
+internal fun emulatorNfc(text: String): String = Normalizer.normalize(text, Normalizer.Form.NFC)
+/**
+ * C0 and C1 controls, DEL, the line and paragraph separators and the Bidi_Control characters: none
+ * is typed text, and the bidi ones can hide what a field holds. The host refuses them all.
+ */
+private fun emulatorForbiddenCodePoint(c: Int): Boolean =
+    c in 0x00..0x1F || c in 0x7F..0x9F || c == 0x061C || c == 0x200E || c == 0x200F || c == 0x2028 || c == 0x2029 || c in 0x202A..0x202E || c in 0x2066..0x2069
+/** Text for the gRPC keyboard: 1 to 256 code points, already NFC, no lone surrogate, no forbidden character. */
+internal fun emulatorKeyboardTextValid(text: String): Boolean {
+    if (text.isEmpty() || text.length > EMULATOR_TEXT_MAX_CHARS * 2) return false
+    var i = 0; var points = 0
+    while (i < text.length) {
+        val c = text[i]
+        if (c.isHighSurrogate()) { if (i + 1 >= text.length || !text[i + 1].isLowSurrogate()) return false } else if (c.isLowSurrogate()) return false
+        val point = text.codePointAt(i)
+        if (emulatorForbiddenCodePoint(point)) return false
+        points++; i += Character.charCount(point)
+    }
+    return points <= EMULATOR_TEXT_MAX_CHARS && Normalizer.isNormalized(text, Normalizer.Form.NFC)
+}
+/** Inputs only a peer with [SESSION_EMULATOR_CONTROLS_CAPABILITY] may send. */
+internal fun emulatorRequiresControls(input: EmulatorInput): Boolean = when (input) {
+    is EmulatorInput.Key -> input.key in EMULATOR_CONTROL_KEYS
+    is EmulatorInput.LongPress, is EmulatorInput.Text, is EmulatorInput.Touch -> true
+    else -> false
+}
+/** Inputs only a peer with [SESSION_EMULATOR_KEYBOARD_CAPABILITY] may send: non-ASCII text, the editing keys, chords. */
+internal fun emulatorRequiresKeyboard(input: EmulatorInput): Boolean = when (input) {
+    is EmulatorInput.Text -> !emulatorTextValid(input.text)
+    is EmulatorInput.Key -> input.modifiers.isNotEmpty() || (input.key !in EMULATOR_BASE_KEYS && input.key !in EMULATOR_CONTROL_KEYS)
+    else -> false
+}
+/** Whether [input] may go out on a connection that negotiated [controls] and [keyboard]; the keyboard needs both. */
+internal fun emulatorInputNegotiated(input: EmulatorInput, controls: Boolean, keyboard: Boolean): Boolean =
+    (!emulatorRequiresControls(input) || controls) && (!emulatorRequiresKeyboard(input) || (controls && keyboard))
 internal sealed interface EmulatorCommand {
     val requestId: String; val sessionId: String
     data class List(override val requestId:String, override val sessionId:String):EmulatorCommand
@@ -85,9 +154,10 @@ private fun eOwner(o:JsonObject):EmulatorOwner {Wire.keys(o,setOf("kind","id"));
 private fun eGeometry(o:JsonObject):EmulatorGeometry {Wire.keys(o,setOf("width","height","rotation","revision"));val w=o.eCount("width",1,16384);val h=o.eCount("height",1,16384);require(w*h<=8388608);return EmulatorGeometry(w,h,o.eCount("rotation",0,3),o.eCount("revision",1))}
 private fun eControl(o:JsonObject):EmulatorControl {Wire.keys(o,setOf("leaseId","nextSequence"));return EmulatorControl(o.eId("leaseId"),o.eCount("nextSequence"))}
 private fun eInput(input:EmulatorInput):JsonObject=when(input){
-    is EmulatorInput.Key -> {require(input.key in EMULATOR_BASE_KEYS || input.key in EMULATOR_CONTROL_KEYS);Wire.objectOf("kind" to "key","key" to input.key)}
+    is EmulatorInput.Key -> {require(emulatorKeyValid(input.key,input.modifiers));if(input.modifiers.isEmpty()) Wire.objectOf("kind" to "key","key" to input.key) else Wire.objectOf("kind" to "key","key" to input.key,"modifiers" to JsonArray(input.modifiers.map { JsonPrimitive(it) }))}
     is EmulatorInput.LongPress -> {require(input.x in 0..16383 && input.y in 0..16383 && input.durationMs in 400..2000);Wire.objectOf("kind" to "long_press","x" to input.x,"y" to input.y,"durationMs" to input.durationMs)}
-    is EmulatorInput.Text -> {require(emulatorTextValid(input.text));Wire.objectOf("kind" to "text","text" to input.text)}
+    // Every ASCII text is keyboard text too; emulatorInputNegotiated tells the two apart.
+    is EmulatorInput.Text -> {require(emulatorKeyboardTextValid(input.text));Wire.objectOf("kind" to "text","text" to input.text)}
     is EmulatorInput.Touch -> {
         require(input.touches.size in 1..EMULATOR_TOUCH_MAX_POINTERS && input.touches.map { it.id }.toSet().size == input.touches.size)
         require(input.touches.all { it.id in 0..EMULATOR_TOUCH_MAX_ID && it.x in 0..16383 && it.y in 0..16383 && it.pressure in 0..EMULATOR_TOUCH_MAX_PRESSURE })
@@ -159,11 +229,16 @@ internal fun parseEmulatorFrame(o:JsonObject):EmulatorFrameEvent {Wire.keys(o,se
 
 private fun JsonObject.eInt(key:String,min:Long,max:Long):Long=eCount(key,min,max)
 private fun parseEmulatorInput(o:JsonObject):EmulatorInput=when(o.text("kind")){
-    "key" -> {Wire.keys(o,setOf("kind","key"));EmulatorInput.Key(o.text("key").also { require(it in EMULATOR_BASE_KEYS || it in EMULATOR_CONTROL_KEYS) })}
+    "key" -> {
+        Wire.keys(o,setOf("kind","key"),setOf("modifiers"))
+        // An empty list is refused, not read as no modifiers: the host refuses it too.
+        val modifiers=if("modifiers" in o) o.getValue("modifiers").jsonArray.map { val p=it.jsonPrimitive;require(p.isString);p.content }.also { require(it.isNotEmpty()) } else emptyList()
+        EmulatorInput.Key(o.text("key").also { require(emulatorKeyValid(it,modifiers)) },modifiers)
+    }
     "tap" -> {Wire.keys(o,setOf("kind","x","y"));EmulatorInput.Tap(o.eInt("x",0,16383),o.eInt("y",0,16383))}
     "swipe" -> {Wire.keys(o,setOf("kind","x","y","endX","endY","durationMs"));EmulatorInput.Swipe(o.eInt("x",0,16383),o.eInt("y",0,16383),o.eInt("endX",0,16383),o.eInt("endY",0,16383),o.eInt("durationMs",50,1000))}
     "long_press" -> {Wire.keys(o,setOf("kind","x","y","durationMs"));EmulatorInput.LongPress(o.eInt("x",0,16383),o.eInt("y",0,16383),o.eInt("durationMs",400,2000))}
-    "text" -> {Wire.keys(o,setOf("kind","text"));val p=o.getValue("text").jsonPrimitive;require(p.isString);EmulatorInput.Text(p.content.also { require(emulatorTextValid(it)) })}
+    "text" -> {Wire.keys(o,setOf("kind","text"));val p=o.getValue("text").jsonPrimitive;require(p.isString);EmulatorInput.Text(p.content.also { require(emulatorKeyboardTextValid(it)) })}
     "touch" -> {
         Wire.keys(o,setOf("kind","touches"));val a=o.getValue("touches").jsonArray
         require(a.size in 1..EMULATOR_TOUCH_MAX_POINTERS)

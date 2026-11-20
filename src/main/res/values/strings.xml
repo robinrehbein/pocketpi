@@ -863,6 +863,8 @@
     <string name="emulator_text">Type on the device</string>
     <string name="emulator_text_ascii_only">Only plain ASCII letters, digits and symbols can be typed on the emulator, up to 256 characters.</string>
     <string name="emulator_text_refused">The text was not sent. Try again.</string>
+    <string name="emulator_text_too_long">At most %1$d characters can be sent to the emulator at once.</string>
+    <string name="emulator_text_unsupported">The text contains characters the emulator cannot type, such as line breaks or text direction marks.</string>
     <string name="emulator_select_profile">Choose a profile</string>
     <string name="emulator_stop">Stop emulator</string>
     <string name="emulator_stop_confirm">Stop this emulator?</string>
