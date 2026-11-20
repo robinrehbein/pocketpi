@@ -2271,6 +2271,7 @@ internal fun RemoteScreen(
                 newTab = model::newBrowserTab, navigate = model::navigateBrowser, selectTab = model::selectBrowserTab,
                 closeTab = model::closeBrowserTab, handoff = model::handoffBrowser, resize = model::resizeBrowser,
                 input = model::sendBrowserInput, visible = model::setBrowserVisible, dropControl = model::dropBrowserControl,
+                history = model::browserHistory,
             ) }
             BrowserPane(browser, actions, close, unsent)
         }
@@ -2286,6 +2287,7 @@ internal fun RemoteScreen(
                 select = model::selectEmulatorProfile, acquire = model::acquireEmulator, handoff = model::handoffEmulator,
                 stop = model::stopEmulator, input = model::sendEmulatorInput, refresh = model::refreshEmulator,
                 visible = model::setEmulatorVisible, retry = model::retryEmulator, release = model::releaseEmulator,
+                touch = model::sendEmulatorTouch, rotate = model::rotateEmulator,
             ) }
             EmulatorPane(emulator, actions, close)
         }
@@ -4475,6 +4477,7 @@ internal fun RemoteScreen(
             newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
             closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
             input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible, dropControl = chatModel::dropPreviewControl,
+            history = chatModel::previewHistory,
         ) }
         previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
             BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })

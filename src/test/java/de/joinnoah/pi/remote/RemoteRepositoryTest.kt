@@ -325,7 +325,7 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
             val discovery = transport.sent.first { it.text("type") == "projects.list" }
-            assertTrue(discovery.text("requestId").startsWith("capabilities.v3:"))
+            assertTrue(discovery.text("requestId").startsWith("capabilities.v4:"))
             assertEquals(supportsSteer, canSteer(repository.state.value))
             assertTrue(canFollowUp(repository.state.value))
             assertTrue(repository.state.value.connected)
@@ -342,7 +342,7 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertTrue(transport.sent.any {
-            it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:")
+            it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v4:")
         })
         assertTrue(repo.state.value.connected)
         assertEquals("session", repo.state.value.selection.sessionId)
@@ -477,7 +477,7 @@ class RemoteRepositoryTest {
 
     @Test
     fun capabilityDiscoveryFallsBackOnlyWhenListIsAbsent() = runTest {
-        for (supported in listOf(1, 2, 3)) {
+        for (supported in listOf(1, 2, 3, 4)) {
             val transport = Transport().also(::configure)
             val original = transport.response
             transport.response = { request ->
@@ -491,8 +491,8 @@ class RemoteRepositoryTest {
             val repo = repository(transport)
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-            assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
+            assertEquals((4 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
+            assertTrue(ids.first().startsWith("capabilities.v4:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -503,13 +503,13 @@ class RemoteRepositoryTest {
             JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(1))),
             JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(""))),
             JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive("é".repeat(33)))),
-            JsonArray(List(65) { JsonPrimitive(FILES_SEARCH_CAPABILITY) }))
+            JsonArray(List(129) { JsonPrimitive(FILES_SEARCH_CAPABILITY) }))
         for (bad in badLists) {
             val transport = Transport().also(::configure)
             advertising(transport, bad)
             val repo = repository(transport)
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
-            assertTrue(transport.sent.filter { it.text("type") == "projects.list" }.all { it.text("requestId").startsWith("capabilities.v3:") })
+            assertTrue(transport.sent.filter { it.text("type") == "projects.list" }.all { it.text("requestId").startsWith("capabilities.v4:") })
             assertFalse(FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
             assertFalse(repo.state.value.capabilitiesKnown)
             assertEquals(R.string.remote_request_error, repo.state.value.error)
@@ -6993,7 +6993,8 @@ class RemoteRepositoryTest {
         val original = transport.response
         transport.response = { request ->
             val result = original(request)
-            if (request.text("type") == "projects.list" && stripped.any { request.text("requestId").startsWith("$it:") })
+            // A host without the v3 route has no v4 route either.
+            if (request.text("type") == "projects.list" && (stripped.toList() + if ("capabilities.v3" in stripped) listOf("capabilities.v4") else emptyList()).any { request.text("requestId").startsWith("$it:") })
                 JsonObject(checkNotNull(result) - "capabilities")
             else result
         }
@@ -7030,7 +7031,7 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project"))
             runCurrent()
-            assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:") })
+            assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v4:") })
             assertFalse(SESSION_LIST_CONTEXT_CAPABILITY in repository.state.value.capabilities)
             val lists = transport.sent.filter { it.text("type") == "sessions.list" }
             assertTrue(lists.isNotEmpty())
@@ -11232,8 +11233,8 @@ class RemoteRepositoryTest {
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
         val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
-        assertTrue(ids[1].startsWith("capabilities.v2:"))
+        assertTrue(ids.first().startsWith("capabilities.v4:optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+session_activity.v1+subagent_metadata.v1:"))
+        assertTrue(ids[1].startsWith("capabilities.v3:"))
         assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
     }
 
@@ -15285,7 +15286,7 @@ class RemoteRepositoryTest {
         transport.response = { request ->
             when {
                 request.text("type") != "projects.list" -> prior(request)
-                request.text("requestId").startsWith("capabilities.v3:") -> data("projects", listOf(project))
+                request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") } -> data("projects", listOf(project))
                 else -> null // Hold fallback open, leaving the previous capability unrefreshed.
             }
         }
@@ -15295,7 +15296,7 @@ class RemoteRepositoryTest {
         repository.setForeground(true)
         runCurrent()
         val requests = transport.sent.filter { it.text("type") == "projects.list" }.drop(beforeDiscovery)
-        assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v3:") })
+        assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v4:") })
         assertTrue(requests.any { it.text("requestId").startsWith("capabilities.v2:") })
         transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
             "kind" to "message.upsert", "message" to Wire.objectOf(
@@ -18729,7 +18730,7 @@ class RemoteRepositoryTest {
         v1Only.response = { request ->
             val result = advertised(request)
             if (request.text("type") == "projects.list" &&
-                (request.text("requestId").startsWith("capabilities.v3:") || request.text("requestId").startsWith("capabilities.v2:")))
+                (request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") } || request.text("requestId").startsWith("capabilities.v2:")))
                 JsonObject(checkNotNull(result) - "capabilities")
             else result
         }
@@ -18750,7 +18751,7 @@ class RemoteRepositoryTest {
         val v2Advertised = v2Transport.response
         v2Transport.response = { request ->
             val result = v2Advertised(request)
-            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:"))
+            if (request.text("type") == "projects.list" && request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") })
                 JsonObject(checkNotNull(result) - "capabilities")
             else result
         }
@@ -18760,7 +18761,7 @@ class RemoteRepositoryTest {
 
         val v3Transport = Transport().also { controlling(it, terminalControlSession()) }
         val v3Route = runningRepository(v3Transport, "terminal-session")
-        assertTrue(v3Transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:") })
+        assertTrue(v3Transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v4:") })
         assertTrue(HOST_WORKER_V2_CAPABILITY in v3Route.state.value.capabilities)
         val unadvertised = runningRepository(Transport().also { controlling(it, terminalControlSession(), v2 = false) }, "terminal-session")
         assertFalse(HOST_WORKER_V2_CAPABILITY in unadvertised.state.value.capabilities)
@@ -18954,7 +18955,7 @@ class RemoteRepositoryTest {
         val answered = v2Only.response
         v2Only.response = { request ->
             val result = answered(request)
-            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:"))
+            if (request.text("type") == "projects.list" && request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") })
                 JsonObject(checkNotNull(result) - "capabilities")
             else result
         }

@@ -4,6 +4,11 @@ import kotlinx.serialization.json.JsonObject
 
 /** Only offered on the capabilities.v2 route; no terminal UI is enabled by this declaration. */
 internal const val SESSION_TERMINAL_CAPABILITY = "session.terminal.v1"
+/**
+ * Attaching to a session started by hand in a Mac terminal opens a new login shell in its folder.
+ * Only on the `capabilities.v4:` route, next to [SESSION_TERMINAL_CAPABILITY].
+ */
+internal const val SESSION_TERMINAL_SHELL_CAPABILITY = "session.terminal.shell.v1"
 internal const val SESSION_TERMINAL_KEYS_CAPABILITY = "session.terminal.keys.v1"
 private const val MAX_SAFE_COUNT = 9_007_199_254_740_991L
 private val DETACH_REASONS = setOf("detached", "revoked", "slow", "exit", "forbidden", "unsupported", "offline", "idle")
@@ -120,6 +125,8 @@ data class TerminalView(
     val keysEnabled: Boolean = false,
     /** Count of definitively rejected structured inputs for this attachment. */
     val inputRejected: Long = 0,
+    /** A new shell in the folder of a session started by hand, not a host worker's own terminal. */
+    val shell: Boolean = false,
 )
 
 sealed interface TerminalInput {

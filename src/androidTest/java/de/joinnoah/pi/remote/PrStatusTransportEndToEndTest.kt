@@ -1158,7 +1158,7 @@ internal class PresenceObservingTransport(
         }
         if (payload.optionalText("type") == "projects.list") {
             val id = payload.optionalText("requestId")
-            if (id != null && id.startsWith("capabilities.v3:") && id.contains("question_editor_paged.v1")) pagedV3Requests.add(id)
+            if (id != null && (id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:")) && id.contains("question_editor_paged.v1")) pagedV3Requests.add(id)
         }
         if (payload.optionalText("type") == "session.editor.presence" && payload.optionalText("sessionId") == sessionId) {
             val active = payload["active"] == JsonPrimitive(true)

@@ -232,7 +232,8 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
         title = stringResource(R.string.remote_terminal_title),
         tag = "terminal",
         onClose = onClose,
-        subtitle = activeModifiers.takeIf { it.isNotEmpty() }?.joinToString("+"),
+        subtitle = activeModifiers.takeIf { it.isNotEmpty() }?.joinToString("+")
+            ?: stringResource(R.string.remote_terminal_shell_subtitle).takeIf { view?.shell == true },
         // Once the terminal ended, the header's reload button attaches again.
         onReload = if (!failed && end?.canReattach == true) ::reattach else null,
         reloadLabel = reattachLabel,

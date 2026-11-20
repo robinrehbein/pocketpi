@@ -6,6 +6,8 @@ import kotlinx.serialization.json.*
 internal const val SESSION_PREVIEW_CAPABILITY = "session.preview.v1"
 internal const val SESSION_BROWSER_CAPABILITY = "session.browser.v1"
 internal const val SESSION_BROWSER_RECOVERY_CAPABILITY = "session.browser.recovery.v1"
+/** `browser.history` (back, forward, reload, stop); only on the `capabilities.v4:` route. */
+internal const val SESSION_BROWSER_HISTORY_CAPABILITY = "session.browser.history.v1"
 private const val MAX_BROWSER_COUNT = 9_007_199_254_740_991L
 
 public sealed interface BrowserInput {
@@ -28,7 +30,10 @@ internal sealed interface BrowserCommand {
     data class Viewport(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long, val tabId: String, val width: Long, val height: Long, val deviceScale: Double, val orientation: String) : BrowserCommand
     data class Input(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long, val tabId: String, val viewportRevision: Long, val sequence: Long, val input: BrowserInput) : BrowserCommand
     data class Detach(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long) : BrowserCommand
+    /** `browser.history` (`session.browser.history.v1`): [action] is one of [BROWSER_HISTORY_ACTIONS]. */
+    data class History(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long, val tabId: String, val action: String) : BrowserCommand
 }
+internal val BROWSER_HISTORY_ACTIONS = setOf("back", "forward", "reload", "stop")
 public data class BrowserOwner(val kind: String, val id: String)
 public data class BrowserTab(val id: String, val title: String, val url: String)
 internal sealed interface BrowserResult {
@@ -107,6 +112,7 @@ internal fun parseBrowserCommand(o: JsonObject): BrowserCommand {
         "browser.viewport" -> l + setOf("tabId", "width", "height", "deviceScale", "orientation")
         "browser.input" -> l + setOf("tabId", "viewportRevision", "sequence", "input")
         "browser.detach" -> l
+        "browser.history" -> l + setOf("tabId", "action")
         else -> error("Unknown browser command")
     }
     Wire.keys(o, fields, if (type == "browser.open") setOf("recovery", "previewPort") else emptySet())
@@ -123,6 +129,7 @@ internal fun parseBrowserCommand(o: JsonObject): BrowserCommand {
         "browser.new_tab" -> BrowserCommand.NewTab(r, s, browser, lease, generation, browserUrl(o.text("url"), newTab = true))
         "browser.close" -> BrowserCommand.Close(r, s, browser, lease, generation, o.id("tabId"))
         "browser.viewport" -> BrowserCommand.Viewport(r, s, browser, lease, generation, o.id("tabId"), o.count("width", 80, 2048), o.count("height", 80, 2048), o.number("deviceScale", 0.5, 3.0), o.choice("orientation", "portrait", "landscape"))
+        "browser.history" -> BrowserCommand.History(r, s, browser, lease, generation, o.id("tabId"), o.choice("action", *BROWSER_HISTORY_ACTIONS.toTypedArray()))
         "browser.input" -> BrowserCommand.Input(r, s, browser, lease, generation, o.id("tabId"), o.count("viewportRevision"), o.count("sequence"), parseBrowserInput(o.obj("input")))
         else -> BrowserCommand.Detach(r, s, browser, lease, generation)
     }
@@ -153,6 +160,7 @@ internal fun encodeBrowserCommand(command: BrowserCommand): JsonObject {
         is BrowserCommand.Viewport -> { lease("browser.viewport", command.browserId, command.leaseId, command.generation); pairs.add("tabId" to command.tabId); pairs.add("width" to command.width); pairs.add("height" to command.height); pairs.add("deviceScale" to browserNumber(command.deviceScale)); pairs.add("orientation" to command.orientation) }
         is BrowserCommand.Input -> { lease("browser.input", command.browserId, command.leaseId, command.generation); pairs.add("tabId" to command.tabId); pairs.add("viewportRevision" to command.viewportRevision); pairs.add("sequence" to command.sequence); pairs.add("input" to encodeBrowserInput(command.input)) }
         is BrowserCommand.Detach -> lease("browser.detach", command.browserId, command.leaseId, command.generation)
+        is BrowserCommand.History -> { lease("browser.history", command.browserId, command.leaseId, command.generation); pairs.add("tabId" to command.tabId); pairs.add("action" to command.action) }
     }
     pairs.add("requestId" to command.requestId); pairs.add("sessionId" to command.sessionId)
     return Wire.objectOf(*pairs.toTypedArray()).also { parseBrowserCommand(it) }

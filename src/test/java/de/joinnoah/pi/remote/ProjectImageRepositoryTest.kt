@@ -246,7 +246,7 @@ class ProjectImageRepositoryTest {
     fun discoveryUsesTheV3RouteAndMergesTheMediaCapability() = runTest {
         val transport = transport()
         val repository = connected(transport)
-        assertTrue(transport.discoveries().first().text("requestId").startsWith("capabilities.v3:"))
+        assertTrue(transport.discoveries().first().text("requestId").startsWith("capabilities.v4:"))
         assertEquals(1, transport.discoveries().size)
         assertTrue(FILES_MEDIA_CAPABILITY in repository.state.value.capabilities)
     }
@@ -256,7 +256,7 @@ class ProjectImageRepositoryTest {
         val transport = transport().apply { legacyHost = true; advertised = listOf(STEER_CAPABILITY) }
         val repository = connected(transport)
         val routes = transport.discoveries().map { it.text("requestId").substringBefore(':') }
-        assertEquals(listOf("capabilities.v3", "capabilities.v2", "capabilities.v1"), routes.take(3))
+        assertEquals(listOf("capabilities.v4", "capabilities.v3", "capabilities.v2", "capabilities.v1"), routes.take(4))
         assertTrue(STEER_CAPABILITY in repository.state.value.capabilities)
         assertTrue(repository.state.value.capabilitiesKnown)
         // Later discoveries go straight to v1: the host was found to be older.
@@ -266,8 +266,8 @@ class ProjectImageRepositoryTest {
     }
 
     @Test
-    fun theV3CapabilityListMayHoldSixtyFourEntriesButNotSixtyFive() = runTest {
-        val filler = (1..63).map { "filler.$it" }
+    fun theV4CapabilityListMayHold128EntriesButNot129() = runTest {
+        val filler = (1..127).map { "filler.$it" }
         for ((entries, expected) in listOf(filler + FILES_MEDIA_CAPABILITY to true, filler + FILES_MEDIA_CAPABILITY + "one-more" to false)) {
             val transport = transport().apply { advertised = entries }
             val repository = connected(transport)

@@ -129,7 +129,7 @@ class PagedEditorNativeProductionFactoryEndToEndTest {
             assertEquals(1, production.getInt("ledgerAppliedCount")); assertEquals(0, production.getInt("ledgerAfterReleaseCount"))
             val capabilityRequest = production.getJSONObject("capabilityRequest")
             val capabilityId = capabilityRequest.getString("requestId")
-            assertTrue(capabilityId.startsWith("capabilities.v3:"))
+            assertTrue(capabilityId.startsWith("capabilities.v4:") || capabilityId.startsWith("capabilities.v3:"))
             for (optIn in listOf("question_editor.v1", "question_editor_native.v1", QUESTION_PAGED_EDITOR_OPT_IN, QUESTION_EDITOR_POSITIVE_OUTCOME_OPT_IN)) assertTrue(capabilityId.contains(optIn))
             assertEquals(capabilityId, production.getJSONObject("capabilityResponse").getString("requestId"))
             assertTrue(production.getJSONObject("capabilityResponse").getBoolean("ok"))

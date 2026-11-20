@@ -31,7 +31,15 @@ internal fun browserOpenable(state: RemoteState, capabilityRevision: Int?): Bool
 internal fun browserActionAvailable(state: RemoteState, capabilityRevision: Int?): Boolean =
     state.browser != null && state.browser.sessionId == state.selection.sessionId || browserOpenable(state, capabilityRevision)
 
-public data class BrowserView(val sessionId: String, val opening: Boolean = true, val browserId: String? = null, val incarnation: String? = null, val generation: Long = 0, val viewportRevision: Long = 0, val owner: BrowserOwner? = null, val participants: List<BrowserOwner> = emptyList(), val tabs: List<BrowserTab> = emptyList(), val selectedTabId: String? = null, val ownsControl: Boolean = false, val inputPending: Boolean = false, val receipt: BrowserInputReceipt? = null, val notice: BrowserNotice? = null, val image: BrowserImage? = null, val moving: Boolean = false, val documentEpoch: Long = 0, val previewPort: Int? = null)
+public data class BrowserView(val sessionId: String, val opening: Boolean = true, val browserId: String? = null, val incarnation: String? = null, val generation: Long = 0, val viewportRevision: Long = 0, val owner: BrowserOwner? = null, val participants: List<BrowserOwner> = emptyList(), val tabs: List<BrowserTab> = emptyList(), val selectedTabId: String? = null, val ownsControl: Boolean = false, val inputPending: Boolean = false, val receipt: BrowserInputReceipt? = null, val notice: BrowserNotice? = null, val image: BrowserImage? = null, val moving: Boolean = false, val documentEpoch: Long = 0, val previewPort: Int? = null,
+    /** `session.browser.history.v1` was negotiated when the view opened: back, forward, reload and stop. */
+    val history: Boolean = false,
+    /** Back or forward the host just found no entry for; cleared once the page or tab changes. */
+    val historyMissing: String? = null,
+    /** Grows with each such refusal, so the pane shows its hint again for a repeated one. */
+    val historyMissingCount: Long = 0,
+    /** The host's browser limits (`session.limits.v1`) when the view opened; null keeps the built-in values. */
+    val limits: BrowserLimits? = null)
 
 /** Selection and connection identity travel with every asynchronous operation. */
 internal class BrowserClient(
@@ -43,6 +51,8 @@ internal class BrowserClient(
     private val connectionAlive: (Long) -> Boolean = { true },
     private val closeConnection: (Long) -> Unit = {},
     private val recoveryEnabled: () -> Boolean = { false },
+    private val historyEnabled: () -> Boolean = { false },
+    private val limits: () -> BrowserLimits? = { null },
 ) {
     var view: BrowserView? = null
         private set
@@ -98,7 +108,7 @@ internal class BrowserClient(
         if (!current(session, c)) return false
         if (isDisconnectedFor(session) && view?.previewPort == previewPort) return resumeIfDisconnected(session, c)
         close(); connection = c; val t = ++token; visible = true; recovery = recoveryEnabled(); stalls = 0; stalled = false
-        set(BrowserView(session, previewPort = previewPort))
+        set(BrowserView(session, previewPort = previewPort, history = historyEnabled(), limits = limits()))
         requestOpen(session, c, t)
         return true
     }
@@ -108,7 +118,7 @@ internal class BrowserClient(
                 val result = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(), session, recovery, view?.previewPort))) as BrowserResult.Opened
                 if (!valid(t, session, c)) return@launch
                 check(result.previewPort == view?.previewPort)
-                set(BrowserView(session, false, result.browserId, result.incarnation, result.generation, result.viewportRevision, result.owner, tabs = result.tabs, selectedTabId = result.tabs.firstOrNull()?.id, previewPort = result.previewPort))
+                set(BrowserView(session, false, result.browserId, result.incarnation, result.generation, result.viewportRevision, result.owner, tabs = result.tabs, selectedTabId = result.tabs.firstOrNull()?.id, previewPort = result.previewPort, history = view?.history == true, limits = view?.limits))
                 watch()
             } catch (_: Exception) { if (valid(t, session, c)) set(view?.copy(opening = false, notice = BrowserNotice.FAILED)) }
         }
@@ -117,10 +127,12 @@ internal class BrowserClient(
 
     fun resumeIfDisconnected(session: String, c: Long): Boolean {
         if (!current(session, c) || !isDisconnectedFor(session)) return false
-        val existing = view ?: return false
+        val previous = view ?: return false
         disconnectedView = false
         connection = c
         recovery = recoveryEnabled()
+        // The new connection may have negotiated another route.
+        val existing = previous.copy(history = historyEnabled(), limits = limits(), historyMissing = null)
         if (existing.browserId == null) {
             val t = ++token
             set(existing.copy(opening = true, notice = if (interruptedInput) BrowserNotice.UNCERTAIN else null))
@@ -247,7 +259,9 @@ internal class BrowserClient(
         if (v != null && l != null) release(v, l, c, t)
         else if (connectionAlive(c)) closeConnection(c)
     }
-    private fun mutate(build: (BrowserView, String, String) -> BrowserCommand, done: () -> Unit = {}, beforeDispatch: () -> Unit = {}, result: (BrowserResult) -> Unit = {}): Boolean {
+    // [refused] takes a host refusal that leaves nothing in doubt (it returns true); any other
+    // failure is uncertain.
+    private fun mutate(build: (BrowserView, String, String) -> BrowserCommand, done: () -> Unit = {}, beforeDispatch: () -> Unit = {}, refused: (Exception) -> Boolean = { false }, result: (BrowserResult) -> Unit = {}): Boolean {
         val v = view ?: return false; val b = v.browserId ?: return false; val l = lease ?: return false
         if (!current(v.sessionId, connection) || controlPending) return false
         val cmd = try { build(v, b, l).also { encodeBrowserCommand(it) } } catch (_: Exception) { return false }
@@ -257,7 +271,7 @@ internal class BrowserClient(
         scope.launch { try {
             val r = parseBrowserResult(send(c, cmd)); if (!valid(t, v.sessionId, c)) return@launch
             if (r.browserId != b || r.generation < v.generation) { uncertain(); return@launch }; result(r)
-        } catch (_: Exception) { if (valid(t, v.sessionId, c)) uncertain() }
+        } catch (e: Exception) { if (valid(t, v.sessionId, c) && !refused(e)) uncertain() }
           finally { if (operation == controlOperation) { controlPending = false; if (t == token) done() else { resizeActive = null; resizeNext = null } } } }
         return true
     }
@@ -277,9 +291,29 @@ internal class BrowserClient(
             refresh()
         }
     }
-    fun navigate(url: String) = mutate({ v,b,l -> BrowserCommand.Navigate(Wire.random(),v.sessionId,b,l,v.generation,requireNotNull(v.selectedTabId),url) }, beforeDispatch = ::stopPageStream) { refresh() }
+    /**
+     * Back, forward, reload or stop in the selected tab (`browser.history`). Back, forward and
+     * reload change the document, so the page stream is watched anew after them. Back or forward
+     * without an entry is refused with `not_found` before anything is dispatched: the view then
+     * names [BrowserView.historyMissing] and the page stays as it was.
+     */
+    fun history(action: String): Boolean {
+        val v = view ?: return false
+        if (!v.history || !historyEnabled() || action !in BROWSER_HISTORY_ACTIONS || v.selectedTabId == null) return false
+        return mutate({ a,b,l -> BrowserCommand.History(Wire.random(),a.sessionId,b,l,a.generation,requireNotNull(a.selectedTabId),action) },
+            refused = { e ->
+                val missing = (action == "back" || action == "forward") && e is RemoteRequestException && e.answered && e.code == "not_found"
+                if (missing) view?.let { set(it.copy(historyMissing = action, historyMissingCount = it.historyMissingCount + 1)) }
+                missing
+            }) { r ->
+            if (r is BrowserResult.Tabs) view?.let { set(it.copy(tabs = r.tabs, historyMissing = null)) }
+            if (action != "stop") stopPageStream()
+            refresh()
+        }
+    }
+    fun navigate(url: String) = mutate({ v,b,l -> BrowserCommand.Navigate(Wire.random(),v.sessionId,b,l,v.generation,requireNotNull(v.selectedTabId),url) }, beforeDispatch = { stopPageStream(); view?.let { set(it.copy(historyMissing = null)) } }) { refresh() }
     fun closeTab(id: String) = mutate({ v,b,l -> BrowserCommand.Close(Wire.random(),v.sessionId,b,l,v.generation,id) }, beforeDispatch = { if (view?.selectedTabId == id) stopPageStream() }) { refresh() }
-    fun selectTab(id: String) { val v = view ?: return; if (v.tabs.none { it.id == id } || id == v.selectedTabId) return; resizeApplied = null; dropStream(); set(v.copy(selectedTabId = id, image = null)); watch() }
+    fun selectTab(id: String) { val v = view ?: return; if (v.tabs.none { it.id == id } || id == v.selectedTabId) return; resizeApplied = null; dropStream(); set(v.copy(selectedTabId = id, image = null, historyMissing = null)); watch() }
     fun resize(width: Int, height: Int, scale: Double, orientation: String): Boolean {
         val size = Size(view?.selectedTabId ?: return false, width, height, scale, orientation)
         if (size == resizeActive || (resizeActive == null && size == resizeApplied)) return true
@@ -329,7 +363,8 @@ internal class BrowserClient(
             val changed = opened.generation != current.generation || opened.viewportRevision != current.viewportRevision || selected != current.selectedTabId
             if (opened.generation != current.generation) lease = null
             if (changed) { resizeApplied = null; dropStream() }
-            set(current.copy(generation = opened.generation, viewportRevision = opened.viewportRevision, owner = opened.owner, tabs = opened.tabs, participants = participants.participants, selectedTabId = selected, ownsControl = lease != null, image = if (changed) null else current.image)); watch()
+            val moved = selected != current.selectedTabId || opened.tabs.firstOrNull { it.id == selected }?.url != current.tabs.firstOrNull { it.id == selected }?.url
+            set(current.copy(generation = opened.generation, viewportRevision = opened.viewportRevision, owner = opened.owner, tabs = opened.tabs, participants = participants.participants, selectedTabId = selected, ownsControl = lease != null, image = if (changed) null else current.image, historyMissing = current.historyMissing.takeUnless { moved })); watch()
             reacquireIfFree(opened.owner)
         } catch (_: Exception) { if (valid(t,v.sessionId,c)) frameFailed() }
           finally { if (t == token) { refreshPending = false; val again = refreshAgain; refreshAgain = false; if (again) refresh() } } }; return true
@@ -355,7 +390,7 @@ internal class BrowserClient(
     private fun armWatchDeadline(id: String, t: Long, w: Long, session: String, c: Long) {
         watchDeadline?.cancel()
         watchDeadline = scope.launch {
-            delay(BROWSER_FRAME_DEADLINE_MS)
+            delay(streamDeadlineMs(view?.limits?.stream, BROWSER_FRAME_DEADLINE_MS))
             if (stream == id && watchToken == w && valid(t, session, c)) {
                 watchDeadline = null
                 streamStalled()
@@ -380,7 +415,7 @@ internal class BrowserClient(
             delay(BROWSER_STALL_BACKOFF_MS * attempt)
             if (!valid(t, session, c) || !visible || stalls != attempt) return@launch
             refresh()
-            delay(BROWSER_FRAME_DEADLINE_MS)
+            delay(streamDeadlineMs(view?.limits?.stream, BROWSER_FRAME_DEADLINE_MS))
             // A watch that started arms its own deadline; this covers a refresh that started none.
             if (valid(t, session, c) && visible && stalls == attempt && stream == null && !watching) streamStalled()
         }

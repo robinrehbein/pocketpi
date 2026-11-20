@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "prefix": "capabilities.v4:",
+  "maxEntries": 128,
+  "requestIds": {
+    "v4": ["capabilities.v4:n0nce", "capabilities.v4:optin=session_activity.v1+question_details.v1:n0nce"],
+    "notV4": [
+      "capabilities.v3:n0nce",
+      "capabilities.v3:optin=session_activity.v1:n0nce",
+      "capabilities.v2:n0nce",
+      "capabilities.v1:n0nce",
+      "Capabilities.v4:n0nce",
+      "list:1"
+    ]
+  },
+  "listBounds": {
+    "capabilities.v4:n0nce": 128,
+    "capabilities.v3:n0nce": 64,
+    "capabilities.v2:n0nce": 32,
+    "capabilities.v1:n0nce": 32
+  },
+  "v4Only": [
+    { "capability": "session.browser.history.v1", "when": "a browser or preview is eligible" },
+    { "capability": "session.emulator.controls.v1", "when": "an emulator is eligible" },
+    {
+      "capability": "session.terminal.shell.v1",
+      "when": "terminalControl is on and node-pty is loaded"
+    },
+    { "capability": "session.limits.v1", "when": "always; the result carries limits" }
+  ]
+}

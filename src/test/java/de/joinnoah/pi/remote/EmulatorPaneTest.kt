@@ -47,6 +47,37 @@ class EmulatorPaneTest {
     }
     private fun controlled(image: EmulatorImage) = EmulatorView("s", opening = false, emulatorId = "e", ownsControl = true, image = image)
 
+    @Test fun withControlsTheScreenSendsRawTouchAndTheTextBarRefusesNonAscii() {
+        val inputs = mutableListOf<EmulatorInput>(); val touches = mutableListOf<EmulatorInput.Touch>(); val rotations = mutableListOf<Long>()
+        val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        val view = controlled(image).copy(controls = true, geometry = EmulatorGeometry(20, 30, 0, 1))
+        val actions = EmulatorPaneActions({ true }, { true }, { true }, { true }, { inputs.add(it); true }, { true }, {}, touch = { touches.add(it); true }, rotate = { rotations.add(it); true })
+        compose.setContent { MaterialTheme { EmulatorPane(view, actions, {}, decodeContext = EmptyCoroutineContext) } }
+        settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("emulatorScreen").performTouchInput { down(center); moveBy(Offset(5f, 5f)); up() }
+        compose.runOnIdle {
+            assertTrue(inputs.none { it is EmulatorInput.Tap || it is EmulatorInput.Swipe })
+            assertTrue(touches.size >= 2)
+            assertTrue(touches.first().touches.single().pressure > 0)
+            assertEquals(0, touches.last().touches.single().pressure)
+        }
+        compose.onNodeWithTag("emulatorText").performTextInput("Grüße")
+        compose.onNodeWithTag("emulatorTextHint", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("emulatorTextSend").assertIsNotEnabled()
+        compose.onNodeWithTag("emulatorText").performTextReplacement("hello")
+        compose.onNodeWithTag("emulatorTextSend").performClick()
+        compose.runOnIdle { assertEquals(EmulatorInput.Text("hello"), inputs.last()) }
+        // The strip holds the hardware keys too (sending them is EmulatorControlsTest's).
+        compose.onAllNodesWithTag("emulatorKey_Power").assertCountEquals(1)
+        compose.onAllNodesWithTag("emulatorKey_VolumeUp").assertCountEquals(1)
+    }
+    @Test fun withoutControlsThereIsNoTextBarOrExtraKey() {
+        val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        compose.setContent { MaterialTheme { EmulatorPane(controlled(image), actions(), {}, decodeContext = EmptyCoroutineContext) } }
+        compose.onAllNodesWithTag("emulatorText").assertCountEquals(0)
+        compose.onAllNodesWithTag("emulatorKey_Power").assertCountEquals(0)
+        compose.onAllNodesWithTag("emulatorRotate").assertCountEquals(0)
+    }
     @Test fun profileChoiceRequiresExplicitSelection() {
         val selected = mutableListOf<String>()
         val actions = EmulatorPaneActions({ selected.add(it); true }, { true }, { true }, { true }, { true }, { true }, {})

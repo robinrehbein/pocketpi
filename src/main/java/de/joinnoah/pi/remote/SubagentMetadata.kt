@@ -23,7 +23,7 @@ private val METADATA_KEYS = setOf(
 private val MODEL_KEYS = setOf("provider", "id", "name")
 private val TOKEN_KEYS = setOf("input", "output", "cacheRead", "cacheWrite")
 
-private val OPT_IN_NAMES = Regex("^capabilities\\.v3:optin=([a-z0-9_.]+(?:\\+[a-z0-9_.]+)*):[^\\s:]\\S*$")
+private val OPT_IN_NAMES = Regex("^capabilities\\.v[34]:optin=([a-z0-9_.]+(?:\\+[a-z0-9_.]+)*):[^\\s:]\\S*$")
 
 /** Whether request [id] opts into `subagent_metadata.v1` as the host's `parseSubagentMetadataOptIn` reads it. */
 internal fun subagentMetadataOptedIn(id: String): Boolean =

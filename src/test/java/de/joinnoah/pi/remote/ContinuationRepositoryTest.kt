@@ -25,7 +25,7 @@ class ContinuationRepositoryTest {
         override fun pair(value: JsonObject) = Unit
         fun result(request: JsonObject, data: JsonObject) {
             listener.inbound()
-            val response = if (capabilityRevision == 2 && request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(data - "capabilities") else data
+            val response = if (capabilityRevision == 2 && request.text("type") == "projects.list" && request.text("requestId").let { id -> id.startsWith("capabilities.v3:") || id.startsWith("capabilities.v4:") }) JsonObject(data - "capabilities") else data
             listener.message(Wire.objectOf("type" to "result", "requestId" to request.text("requestId"), "ok" to true, "data" to response))
         }
         fun snapshot(request: JsonObject) = result(request, Wire.objectOf(

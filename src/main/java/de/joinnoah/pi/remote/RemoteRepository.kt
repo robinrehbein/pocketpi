@@ -159,6 +159,8 @@ data class RemoteState(
     val browser: BrowserView? = null,
     val emulator: EmulatorView? = null,
     val terminal: TerminalView? = null,
+    /** The host's limits from a `capabilities.v4:` list (`session.limits.v1`); null keeps the built-in values. */
+    val hostLimits: SessionLimits? = null,
     val hosts: List<PairedHost> = emptyList(),
     /**
      * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
@@ -366,6 +368,8 @@ interface RemoteRepository {
     fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
     fun sendPreviewInput(input: BrowserInput): Boolean = false
     fun refreshPreview(): Boolean = false
+    /** Back, forward, reload or stop in the preview's tab (`session.browser.history.v1`). */
+    fun previewHistory(action: String): Boolean = false
     fun setPreviewVisible(visible: Boolean) {}
     /** Gives up this device's control of the preview without taking it back later (see [BrowserClient.dropControl]). */
     fun dropPreviewControl() {}
@@ -378,6 +382,10 @@ interface RemoteRepository {
     fun handoffEmulator(id: String): Boolean = false
     fun stopEmulator(): Boolean = false
     fun sendEmulatorInput(input: EmulatorInput): Boolean = false
+    /** One raw touch event (`session.emulator.controls.v1`, see [EmulatorClient.touch]). */
+    fun sendEmulatorTouch(input: EmulatorInput.Touch): Boolean = false
+    /** Turns the emulator's display to [rotation] quarter turns (`emulator.rotate`). */
+    fun rotateEmulator(rotation: Long): Boolean = false
     fun refreshEmulator(): Boolean = false
     fun setEmulatorVisible(visible: Boolean) {}
     fun retryEmulator(): Boolean = false
@@ -394,6 +402,8 @@ interface RemoteRepository {
     fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
     fun sendBrowserInput(input: BrowserInput): Boolean = false
     fun refreshBrowser(): Boolean = false
+    /** Back, forward, reload or stop in the browser's tab (`session.browser.history.v1`). */
+    fun browserHistory(action: String): Boolean = false
     fun setBrowserVisible(visible: Boolean) {}
     /** Gives up this device's control of the browser without taking it back later (see [BrowserClient.dropControl]). */
     fun dropBrowserControl() {}
