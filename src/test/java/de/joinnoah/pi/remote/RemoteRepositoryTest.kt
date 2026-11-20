@@ -447,6 +447,40 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun browserHistoryStateReachesTheBrowserViewOnlyWhenNegotiated() = runTest {
+        for (negotiated in listOf(true, false)) {
+            val transport = Transport().also(::configure)
+            advertising(transport, JsonArray(listOfNotNull(SESSION_BROWSER_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY,
+                SESSION_BROWSER_HISTORY_STATE_CAPABILITY.takeIf { negotiated }).map(::JsonPrimitive)))
+            val original = transport.response
+            transport.response = { request ->
+                when (request.text("type")) {
+                    "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1,
+                        "incarnation" to "i", "tabs" to JsonArray(listOf(Wire.objectOf("id" to "tab", "title" to "T", "url" to "https://example.com"))), "viewportRevision" to 0)
+                    else -> original(request)
+                }
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+            repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+            assertTrue(repo.openBrowser()); runCurrent()
+            assertEquals(negotiated, repo.state.value.browser!!.historyState)
+            fun state(tab: String) = Wire.objectOf("type" to "host.event", "kind" to "browser.history.state", "sessionId" to "session",
+                "browserId" to "b", "incarnation" to "i", "tabId" to tab, "canGoBack" to true, "canGoForward" to false)
+            transport.deliver(state("tab"))
+            // A tab the view does not list yet is no protocol error.
+            transport.deliver(state("unknown"))
+            runCurrent()
+            assertTrue(repo.state.value.connected)
+            val view = repo.state.value.browser!!
+            if (negotiated) assertEquals(mapOf("tab" to BrowserTabHistory(true, false), "unknown" to BrowserTabHistory(true, false)), view.tabHistory)
+            else assertTrue(view.tabHistory.isEmpty())
+            assertTrue(view.canGoBack)
+            assertEquals(!negotiated, view.canGoForward)
+        }
+    }
+
+    @Test
     fun reconnectDoesNotReopenClosedPaneOrPaneWithoutBrowserCapability() = runTest {
         for (closePane in listOf(true, false)) {
             val transport = Transport().also(::configure)

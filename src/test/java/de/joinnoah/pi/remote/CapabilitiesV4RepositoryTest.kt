@@ -20,13 +20,19 @@ class CapabilitiesV4RepositoryTest {
             .single { it.text("name") == "result-with-limits" }.obj("payload").obj("data").obj("limits")
     }
 
+    /** The v4-only names the host's `capabilities-v4.json` lists. */
+    private val v4Only: List<String> by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/capabilities-v4.json")!!.readText()).jsonObject
+            .getValue("v4Only").jsonArray.map { it.jsonObject.text("capability") }
+    }
+
     private inner class Transport : RemoteTransport {
         override lateinit var listener: RemoteTransport.Listener
         val sent = mutableListOf<JsonObject>()
         /** The newest route the host knows; an older route ID is opaque to it and gets no list. */
         var hostRoute = 4
         var advertised = listOf(SESSION_TERMINAL_CAPABILITY, SESSION_BROWSER_CAPABILITY, SESSION_LIMITS_CAPABILITY,
-            SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
+            SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_BROWSER_HISTORY_STATE_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
         var limits: JsonElement? = null
         /** Limits on the v3 answer too, which the client must ignore. */
         var limitsOnV3 = false
@@ -80,7 +86,7 @@ class CapabilitiesV4RepositoryTest {
         assertTrue(subagentMetadataOptedIn(first))
         assertTrue(transport.discoveries().all { it.startsWith("capabilities.v4:") })
         val caps = repo.state.value.capabilities
-        for (name in listOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY))
+        for (name in v4Only)
             assertTrue(name, name in caps)
         assertEquals(parseSessionLimits(fixtureLimits), repo.state.value.hostLimits)
         assertEquals(32L, repo.state.value.hostLimits?.emulator?.maxInFlightInputs)
@@ -97,7 +103,7 @@ class CapabilitiesV4RepositoryTest {
         assertTrue(routes.drop(1).all { it == "capabilities.v3" })
         val caps = repo.state.value.capabilities
         assertTrue(SESSION_BROWSER_CAPABILITY in caps)
-        for (name in listOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY))
+        for (name in v4Only)
             assertFalse(name, name in caps)
         // Limits on a v3 answer are never read.
         assertNull(repo.state.value.hostLimits)

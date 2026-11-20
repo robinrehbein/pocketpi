@@ -31,6 +31,11 @@ internal fun browserOpenable(state: RemoteState, capabilityRevision: Int?): Bool
 internal fun browserActionAvailable(state: RemoteState, capabilityRevision: Int?): Boolean =
     state.browser != null && state.browser.sessionId == state.selection.sessionId || browserOpenable(state, capabilityRevision)
 
+/** Whether back and forward have an entry to move to in one tab (`session.browser.history.state.v1`). */
+public data class BrowserTabHistory(val canGoBack: Boolean, val canGoForward: Boolean)
+/** States kept per client; the host sends one per tab, and a browser holds at most 16 tabs. */
+private const val MAX_BROWSER_HISTORY_STATES = 32
+
 public data class BrowserView(val sessionId: String, val opening: Boolean = true, val browserId: String? = null, val incarnation: String? = null, val generation: Long = 0, val viewportRevision: Long = 0, val owner: BrowserOwner? = null, val participants: List<BrowserOwner> = emptyList(), val tabs: List<BrowserTab> = emptyList(), val selectedTabId: String? = null, val ownsControl: Boolean = false, val inputPending: Boolean = false, val receipt: BrowserInputReceipt? = null, val notice: BrowserNotice? = null, val image: BrowserImage? = null, val moving: Boolean = false, val documentEpoch: Long = 0, val previewPort: Int? = null,
     /** `session.browser.history.v1` was negotiated when the view opened: back, forward, reload and stop. */
     val history: Boolean = false,
@@ -39,7 +44,15 @@ public data class BrowserView(val sessionId: String, val opening: Boolean = true
     /** Grows with each such refusal, so the pane shows its hint again for a repeated one. */
     val historyMissingCount: Long = 0,
     /** The host's browser limits (`session.limits.v1`) when the view opened; null keeps the built-in values. */
-    val limits: BrowserLimits? = null)
+    val limits: BrowserLimits? = null,
+    /** `session.browser.history.state.v1` was negotiated when the view opened: back and forward follow [tabHistory]. */
+    val historyState: Boolean = false,
+    /** The latest `browser.history.state` per tab of this browser and incarnation; a tab without one has none yet. */
+    val tabHistory: Map<String, BrowserTabHistory> = emptyMap()) {
+    /** Back is offered: always without [historyState], else only once the tab's state allows it. */
+    val canGoBack: Boolean get() = !historyState || selectedTabId?.let { tabHistory[it]?.canGoBack } == true
+    val canGoForward: Boolean get() = !historyState || selectedTabId?.let { tabHistory[it]?.canGoForward } == true
+}
 
 /** Selection and connection identity travel with every asynchronous operation. */
 internal class BrowserClient(
@@ -53,6 +66,7 @@ internal class BrowserClient(
     private val recoveryEnabled: () -> Boolean = { false },
     private val historyEnabled: () -> Boolean = { false },
     private val limits: () -> BrowserLimits? = { null },
+    private val historyStateEnabled: () -> Boolean = { false },
 ) {
     var view: BrowserView? = null
         private set
@@ -96,7 +110,25 @@ internal class BrowserClient(
     private var resizeActive: Size? = null
     private var resizeNext: Size? = null
     private var resizeApplied: Size? = null
-    private fun set(value: BrowserView?) { view = value; changed(value) }
+    private data class HistoryKey(val browserId: String, val incarnation: String, val tabId: String)
+    // Kept apart from the view: a state can arrive before the result that names its browser is
+    // handled (the result resumes a coroutine, the event is handled at once), or before the view
+    // knows a new tab. [set] publishes the current browser's entries and drops stale ones.
+    private val historyStates = linkedMapOf<HistoryKey, BrowserTabHistory>()
+    private fun set(value: BrowserView?) {
+        val previous = view
+        if (value == null) historyStates.clear()
+        else if (value.browserId != null) {
+            historyStates.keys.removeAll { it.browserId != value.browserId || it.incarnation != value.incarnation }
+            // A tab the view knew and no longer lists was closed; a tab it never listed may still be new.
+            if (previous != null && previous.browserId == value.browserId && previous.incarnation == value.incarnation) {
+                val closed = previous.tabs.map { it.id }.toSet() - value.tabs.map { it.id }.toSet()
+                historyStates.keys.removeAll { it.tabId in closed }
+            }
+        }
+        val published = value?.copy(tabHistory = if (value.browserId == null) emptyMap() else historyStates.filterKeys { it.browserId == value.browserId && it.incarnation == value.incarnation }.mapKeys { it.key.tabId })
+        view = published; changed(published)
+    }
     private fun valid(t: Long, s: String, c: Long) = t == token && current(s, c)
     private suspend fun send(c: Long, command: BrowserCommand): JsonObject {
         val payload = encodeBrowserCommand(command)
@@ -108,7 +140,7 @@ internal class BrowserClient(
         if (!current(session, c)) return false
         if (isDisconnectedFor(session) && view?.previewPort == previewPort) return resumeIfDisconnected(session, c)
         close(); connection = c; val t = ++token; visible = true; recovery = recoveryEnabled(); stalls = 0; stalled = false
-        set(BrowserView(session, previewPort = previewPort, history = historyEnabled(), limits = limits()))
+        set(BrowserView(session, previewPort = previewPort, history = historyEnabled(), limits = limits(), historyState = historyStateEnabled()))
         requestOpen(session, c, t)
         return true
     }
@@ -118,7 +150,7 @@ internal class BrowserClient(
                 val result = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(), session, recovery, view?.previewPort))) as BrowserResult.Opened
                 if (!valid(t, session, c)) return@launch
                 check(result.previewPort == view?.previewPort)
-                set(BrowserView(session, false, result.browserId, result.incarnation, result.generation, result.viewportRevision, result.owner, tabs = result.tabs, selectedTabId = result.tabs.firstOrNull()?.id, previewPort = result.previewPort, history = view?.history == true, limits = view?.limits))
+                set(BrowserView(session, false, result.browserId, result.incarnation, result.generation, result.viewportRevision, result.owner, tabs = result.tabs, selectedTabId = result.tabs.firstOrNull()?.id, previewPort = result.previewPort, history = view?.history == true, limits = view?.limits, historyState = view?.historyState == true))
                 watch()
             } catch (_: Exception) { if (valid(t, session, c)) set(view?.copy(opening = false, notice = BrowserNotice.FAILED)) }
         }
@@ -132,7 +164,7 @@ internal class BrowserClient(
         connection = c
         recovery = recoveryEnabled()
         // The new connection may have negotiated another route.
-        val existing = previous.copy(history = historyEnabled(), limits = limits(), historyMissing = null)
+        val existing = previous.copy(history = historyEnabled(), limits = limits(), historyMissing = null, historyState = historyStateEnabled())
         if (existing.browserId == null) {
             val t = ++token
             set(existing.copy(opening = true, notice = if (interruptedInput) BrowserNotice.UNCERTAIN else null))
@@ -189,6 +221,9 @@ internal class BrowserClient(
         disconnectedView = view != null
         reacquire = false; stalls = 0; stalled = false
         dropStream(); lease = null; token++; resetPending()
+        // History may move while the connection is down; the host sends every tab's state again
+        // once the new connection negotiated the capability.
+        historyStates.clear()
         view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = BrowserNotice.DISCONNECTED)) }
     }
     private fun resetPending(preserveControl: Boolean = false) { if (!preserveControl) { controlOperation++; controlPending = false }; refreshPending = false; refreshAgain = false; resizeActive = null; resizeNext = null; resizeApplied = null }
@@ -446,6 +481,36 @@ internal class BrowserClient(
             scope.launch { try { streamRequest(c,"browser.frame.ack","sessionId" to v.sessionId,"browserId" to v.browserId,"streamId" to id,"frameId" to receipt.frameId,"chunkIndex" to receipt.chunkIndex) } catch (_: Exception) { if (stream == id && w == watchToken && valid(t, v.sessionId, c)) { frameFailed() } } }
             receipt.frame?.let { f -> val m = f.metadata; stalls = 0; stalled = false; set(view?.copy(moving = false, notice = view?.notice?.takeUnless { it == BrowserNotice.FRAME_FAILED }, image = BrowserImage(f.jpeg,m.width,m.height,m.cssWidth,m.cssHeight,m.deviceScale,m.scrollX,m.scrollY,f.frameId,v.viewportRevision))) }
         } catch (_: Exception) { frameFailed() }
+    }
+    /**
+     * A `browser.history.state` event. One for another session, browser or incarnation is stale
+     * and ignored; one for a tab the view does not list yet is kept for when it does. Malformed
+     * events are dropped like any other unreadable host event.
+     */
+    fun historyState(payload: JsonObject) {
+        val event = try { parseBrowserHistoryState(payload) } catch (_: Exception) { return }
+        val v = view ?: return
+        if (!v.historyState || !historyStateEnabled() || event.sessionId != v.sessionId || !current(v.sessionId, connection)) return
+        // While the view is still opening, the browser and incarnation are checked once it opened.
+        if (v.browserId != null && (event.browserId != v.browserId || event.incarnation != v.incarnation)) return
+        val key = HistoryKey(event.browserId, event.incarnation, event.tabId)
+        historyStates.remove(key)
+        historyStates[key] = BrowserTabHistory(event.canGoBack, event.canGoForward)
+        while (historyStates.size > MAX_BROWSER_HISTORY_STATES) historyStates.remove(evictableHistoryState(v) ?: break)
+        set(v)
+    }
+    /**
+     * The oldest entry to drop at the bound: another browser's or incarnation's first (both clients
+     * see every event), then a tab the view does not list, then a listed one. The selected tab's
+     * entry is never dropped: the host sends a state only when it changes, so a lost one would keep
+     * its button off until the next change.
+     */
+    private fun evictableHistoryState(v: BrowserView): HistoryKey? {
+        val listed = v.tabs.map { it.id }.toSet()
+        val candidates = historyStates.keys.filter { v.browserId == null || it.browserId != v.browserId || it.incarnation != v.incarnation || it.tabId != v.selectedTabId }
+        return candidates.firstOrNull { v.browserId != null && (it.browserId != v.browserId || it.incarnation != v.incarnation) }
+            ?: candidates.firstOrNull { it.tabId !in listed }
+            ?: candidates.firstOrNull()
     }
     private fun document(payload: JsonObject) {
         val event = try { parseBrowserDocument(payload) } catch (_: Exception) { return }

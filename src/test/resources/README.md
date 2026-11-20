@@ -2,7 +2,7 @@
 
 The `*-v1.json` files and `paged-editor-wire.json` here are copies of the Remote protocol fixtures in the noah monorepo, under
 `packages/pi-atlas/extensions/remote/protocol/fixtures/`. Copy them byte for byte; change them there
-first. The copies match noah `dev` commit `4d4194aa5c059c1b5d3c3eb6c748dad2f9a0db6f` (the emulator keyboard).
+first. The copies match noah `dev` commit `94fb402e3571712cb8430f57bcddec14f78f18fe` (browser history state).
 
 `session-close-terminal-v1.json` holds the wire shapes of `session.close.terminal.v1`: closing an
 idle terminal session, its `accepted` result and the refusals (`busy` with and without unsent Mac
@@ -47,11 +47,16 @@ shapes (unknown or missing keys, bad counts and percents, a `null` context, a `f
 flag, a fill outside a list).
 
 `capabilities-v4.json` pins the `capabilities.v4:` route: its request IDs, the request IDs that are
-not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the five v4-only capabilities.
+not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the six v4-only capabilities.
 
 `browser-history-v1.json` holds the wire shapes of `session.browser.history.v1`: the `back`,
 `forward`, `reload` and `stop` commands, the `browser.tabs` result, the `not_found` and `forbidden`
 refusals, and invalid commands.
+
+`browser-history-state-v1.json` holds the wire shapes of `session.browser.history.state.v1`: the
+`browser.history.state` event with each combination of `canGoBack` and `canGoForward`, and invalid
+events (a missing, non-boolean or null flag, a missing or blank tab, a missing incarnation, extra
+fields, and the flags on `browser.document`).
 
 `emulator-controls-v1.json` holds the wire shapes of `session.emulator.controls.v1`: the new keys,
 `text`, `long_press` and raw multi-touch inputs, `emulator.rotate`, the `emulator.rotated` result,
