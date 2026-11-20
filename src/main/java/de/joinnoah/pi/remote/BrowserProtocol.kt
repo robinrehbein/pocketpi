@@ -8,6 +8,8 @@ internal const val SESSION_BROWSER_CAPABILITY = "session.browser.v1"
 internal const val SESSION_BROWSER_RECOVERY_CAPABILITY = "session.browser.recovery.v1"
 /** `browser.history` (back, forward, reload, stop); only on the `capabilities.v4:` route. */
 internal const val SESSION_BROWSER_HISTORY_CAPABILITY = "session.browser.history.v1"
+/** `browser.history.state` events (back and forward availability per tab); only next to [SESSION_BROWSER_HISTORY_CAPABILITY]. */
+internal const val SESSION_BROWSER_HISTORY_STATE_CAPABILITY = "session.browser.history.state.v1"
 private const val MAX_BROWSER_COUNT = 9_007_199_254_740_991L
 
 public sealed interface BrowserInput {
@@ -186,6 +188,14 @@ internal fun parseBrowserDocument(o: JsonObject): BrowserDocumentEvent {
     require(control == null || "owner" in o)
     val from = o.count("fromViewportRevision"); val revision = o.count("viewportRevision"); require(from < revision)
     return BrowserDocumentEvent(o.id("sessionId"), o.id("browserId"), o.id("incarnation"), o.id("tabId"), o.count("generation"), from, revision, parseBrowserTabs(o), if ("owner" in o) parseBrowserOwner(o.obj("owner")) else null, control?.id("leaseId"), control?.count("nextSequence"))
+}
+/** Whether back and forward have an entry to move to in one tab (`browser.history.state`). */
+internal data class BrowserHistoryStateEvent(val sessionId: String, val browserId: String, val incarnation: String, val tabId: String, val canGoBack: Boolean, val canGoForward: Boolean)
+internal fun parseBrowserHistoryState(o: JsonObject): BrowserHistoryStateEvent {
+    // Exactly these keys, as the host's parseBrowserHistoryState: a later field is a new capability.
+    Wire.keys(o, setOf("type", "kind", "sessionId", "browserId", "incarnation", "tabId", "canGoBack", "canGoForward"))
+    require(o.text("type") == "host.event" && o.text("kind") == "browser.history.state")
+    return BrowserHistoryStateEvent(o.id("sessionId"), o.id("browserId"), o.id("incarnation"), o.id("tabId"), o.flag("canGoBack"), o.flag("canGoForward"))
 }
 internal fun parseBrowserResult(o: JsonObject): BrowserResult {
     val kind = o.text("kind")

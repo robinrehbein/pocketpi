@@ -71,7 +71,7 @@ private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
  */
 private const val CAPABILITIES_V4_ROUTE = "capabilities.v4:"
 /** Advertised only on the v4 route; a later v3 or older list drops them. */
-private val V4_ONLY_CAPABILITIES = setOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
+private val V4_ONLY_CAPABILITIES = setOf(SESSION_LIMITS_CAPABILITY, SESSION_BROWSER_HISTORY_CAPABILITY, SESSION_BROWSER_HISTORY_STATE_CAPABILITY, SESSION_EMULATOR_CONTROLS_CAPABILITY, SESSION_EMULATOR_KEYBOARD_CAPABILITY, SESSION_TERMINAL_SHELL_CAPABILITY)
 private const val PROMPT_DELIVERY_CAPABILITY = "remote_prompt_delivery.v1"
 private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1+question_editor_native.v1+message_interruption.v1+remote_prompt_delivery.v1+$SESSION_ACTIVITY_CAPABILITY+$SUBAGENT_METADATA_CAPABILITY:"
 /** The host's bound on a request ID (parse.ts `opaqueId`); the opt-in route ID shortens its nonce to fit. */
@@ -429,6 +429,7 @@ class DefaultRemoteRepository(
             // Only on capability route v4 (see V4_ONLY_CAPABILITIES).
             SESSION_LIMITS_CAPABILITY,
             SESSION_BROWSER_HISTORY_CAPABILITY,
+            SESSION_BROWSER_HISTORY_STATE_CAPABILITY,
             SESSION_EMULATOR_CONTROLS_CAPABILITY,
             SESSION_EMULATOR_KEYBOARD_CAPABILITY,
             SESSION_TERMINAL_SHELL_CAPABILITY,
@@ -672,11 +673,15 @@ class DefaultRemoteRepository(
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
             { browserHistoryNegotiated() },
             { state.value.hostLimits?.browser },
+            { browserHistoryStateNegotiated() },
         )
     }
     /** `session.browser.history.v1` counts only on a connection whose latest list came from the v4 route. */
     private fun browserHistoryNegotiated() = state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 4 &&
         SESSION_BROWSER_HISTORY_CAPABILITY in state.value.capabilities && SESSION_BROWSER_HISTORY_CAPABILITY !in state.value.unavailableCapabilities
+    /** `session.browser.history.state.v1` is listed only next to `session.browser.history.v1`, and counts only with it. */
+    private fun browserHistoryStateNegotiated() = browserHistoryNegotiated() &&
+        SESSION_BROWSER_HISTORY_STATE_CAPABILITY in state.value.capabilities && SESSION_BROWSER_HISTORY_STATE_CAPABILITY !in state.value.unavailableCapabilities
     override fun browserHistory(action: String) = browserClient.history(action)
     override fun previewHistory(action: String) = previewClient.history(action)
     override fun canOpenBrowser(): Boolean = browserOpenable(state.value, capabilityRevision(capabilityRoute))
@@ -707,6 +712,7 @@ class DefaultRemoteRepository(
             { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
             { browserHistoryNegotiated() },
             { state.value.hostLimits?.browser },
+            { browserHistoryStateNegotiated() },
         )
     }
     override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) >= 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
@@ -3098,6 +3104,11 @@ class DefaultRemoteRepository(
                             val browserId = payload.optionalText("browserId")
                             if (browserId != null && browserId == browserClient.view?.browserId) browserClient.frame(payload)
                             if (browserId != null && browserId == previewClient.view?.browserId) previewClient.frame(payload)
+                        } else if (payload.optionalText("kind") == "browser.history.state") {
+                            // Both clients see it: one still opening has no browser ID to match yet, and
+                            // each drops a state for another browser or incarnation itself.
+                            browserClient.historyState(payload)
+                            previewClient.historyState(payload)
                         } else if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
                             receiveTerminalEvent(payload)
                         } else if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {

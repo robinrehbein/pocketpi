@@ -66,6 +66,28 @@ class BrowserPaneTest {
         compose.mainClock.advanceTimeBy(BROWSER_HISTORY_HINT_MS + 100)
         compose.onAllNodesWithTag("browserHistoryHint", useUnmergedTree = true).assertCountEquals(0)
     }
+    @Test fun withHistoryStateBackAndForwardFollowTheSelectedTab() {
+        val tabs = listOf(BrowserTab("tab", "T", "https://example.com"), BrowserTab("other", "O", "https://example.com/o"))
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, tabs = tabs, selectedTabId = "tab", history = true, historyState = true))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(history = { true }), {}) } }
+        // The narrow phone pane keeps them in the "more" menu, which stays open across these updates.
+        compose.onNodeWithTag("browserMoreActions").performClick()
+        fun assertEnabled(back: Boolean, forward: Boolean) {
+            compose.waitForIdle()
+            compose.onNodeWithTag("browserBack").apply { if (back) assertIsEnabled() else assertIsNotEnabled() }
+            compose.onNodeWithTag("browserForward").apply { if (forward) assertIsEnabled() else assertIsNotEnabled() }
+            compose.onNodeWithTag("browserStop").assertIsEnabled()
+        }
+        // No state for the tab yet: neither direction.
+        assertEnabled(back = false, forward = false)
+        view = view.copy(tabHistory = mapOf("tab" to BrowserTabHistory(canGoBack = true, canGoForward = false), "other" to BrowserTabHistory(canGoBack = false, canGoForward = true)))
+        assertEnabled(back = true, forward = false)
+        view = view.copy(selectedTabId = "other")
+        assertEnabled(back = false, forward = true)
+        // Without the capability both stay on, as before it existed.
+        view = view.copy(historyState = false, tabHistory = emptyMap())
+        assertEnabled(back = true, forward = true)
+    }
     @Test fun withoutHistoryThereAreNoHistoryControls() {
         val tabs = listOf(BrowserTab("tab", "T", "https://example.com"))
         val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, tabs = tabs, selectedTabId = "tab")

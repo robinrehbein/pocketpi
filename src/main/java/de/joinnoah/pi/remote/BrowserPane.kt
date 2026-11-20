@@ -508,10 +508,13 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val headerActions = buildList {
         // Narrow panes move these into the "more" menu with the rest (see PaneHeader).
         if (history) {
+            // With `session.browser.history.state.v1` the host says per tab whether an entry exists;
+            // without it the buttons stay on until the host refuses one (historyMissing).
+            val stated = view?.historyState == true
             add(PaneAction(stringResource(R.string.browser_back), Icons.AutoMirrored.Filled.ArrowBack, "browserBack",
-                enabled = held.isEmpty() && view?.historyMissing != "back", onClick = { latestActions.history("back") }))
+                enabled = held.isEmpty() && if (stated) view?.canGoBack == true else view?.historyMissing != "back", onClick = { latestActions.history("back") }))
             add(PaneAction(stringResource(R.string.browser_forward), Icons.AutoMirrored.Filled.ArrowForward, "browserForward",
-                enabled = held.isEmpty() && view?.historyMissing != "forward", onClick = { latestActions.history("forward") }))
+                enabled = held.isEmpty() && if (stated) view?.canGoForward == true else view?.historyMissing != "forward", onClick = { latestActions.history("forward") }))
             add(PaneAction(stringResource(R.string.browser_stop), Icons.Default.Close, "browserStop",
                 enabled = held.isEmpty(), onClick = { latestActions.history("stop") }))
         }

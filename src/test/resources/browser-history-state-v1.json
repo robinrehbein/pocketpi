@@ -1,0 +1,205 @@
+{
+  "version": 1,
+  "capability": "session.browser.history.state.v1",
+  "valid": [
+    {
+      "name": "back only",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true,
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "forward only",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": false,
+        "canGoForward": true
+      }
+    },
+    {
+      "name": "both",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true,
+        "canGoForward": true
+      }
+    },
+    {
+      "name": "neither",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": false,
+        "canGoForward": false
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "missing canGoBack",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "missing canGoForward",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true
+      }
+    },
+    {
+      "name": "string flag",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": "true",
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "numeric flag",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true,
+        "canGoForward": 0
+      }
+    },
+    {
+      "name": "null flag",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": null,
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "missing tab",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "canGoBack": true,
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "blank tab",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "",
+        "canGoBack": true,
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "missing incarnation",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true,
+        "canGoForward": false
+      }
+    },
+    {
+      "name": "history entry count field",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true,
+        "canGoForward": false,
+        "entries": 2
+      }
+    },
+    {
+      "name": "url field",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.history.state",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "canGoBack": true,
+        "canGoForward": false,
+        "url": "https://example.com/"
+      }
+    },
+    {
+      "name": "flags on browser.document",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.document",
+        "sessionId": "session-fixture",
+        "browserId": "browser-fixture",
+        "incarnation": "incarnation-fixture",
+        "tabId": "tab-fixture",
+        "generation": 3,
+        "fromViewportRevision": 1,
+        "viewportRevision": 2,
+        "tabs": [],
+        "canGoBack": true,
+        "canGoForward": false
+      }
+    }
+  ]
+}

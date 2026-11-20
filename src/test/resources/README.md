@@ -47,11 +47,16 @@ shapes (unknown or missing keys, bad counts and percents, a `null` context, a `f
 flag, a fill outside a list).
 
 `capabilities-v4.json` pins the `capabilities.v4:` route: its request IDs, the request IDs that are
-not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the five v4-only capabilities.
+not v4, every route's list bound (v4 128, v3 64, v2 and v1 32) and the six v4-only capabilities.
 
 `browser-history-v1.json` holds the wire shapes of `session.browser.history.v1`: the `back`,
 `forward`, `reload` and `stop` commands, the `browser.tabs` result, the `not_found` and `forbidden`
 refusals, and invalid commands.
+
+`browser-history-state-v1.json` holds the wire shapes of `session.browser.history.state.v1`: the
+`browser.history.state` event with each combination of `canGoBack` and `canGoForward`, and invalid
+events (a missing, non-boolean or null flag, a missing or blank tab, a missing incarnation, extra
+fields, and the flags on `browser.document`).
 
 `emulator-controls-v1.json` holds the wire shapes of `session.emulator.controls.v1`: the new keys,
 `text`, `long_press` and raw multi-touch inputs, `emulator.rotate`, the `emulator.rotated` result,
