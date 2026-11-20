@@ -370,7 +370,11 @@ internal fun EmulatorPane(
             // With a hardware keyboard attached, taking control puts its keys on the screen at once.
             val configuration = LocalConfiguration.current
             val hardwareKeyboard = configuration.keyboard != Configuration.KEYBOARD_NOKEYS && configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
-            val takeRefused = (view.owner != null && !view.ownsControl) || view.notice == EmulatorNotice.BUSY || view.notice == EmulatorNotice.FAILED
+            // Any end of the take without control clears the wish, so a later handoff or adopted
+            // lease never pulls focus away from where the user is typing.
+            val takeRefused = (view.owner != null && !view.ownsControl) || view.disconnected || !active ||
+                view.notice == EmulatorNotice.BUSY || view.notice == EmulatorNotice.FAILED ||
+                view.notice == EmulatorNotice.UNCERTAIN || view.notice == EmulatorNotice.DISCONNECTED
             LaunchedEffect(focusOnControl, view.ownsControl, takeRefused) {
                 if (!focusOnControl) return@LaunchedEffect
                 if (view.ownsControl) { focusOnControl = false; if (hardwareKeyboard && active) screenFocus.requestFocus() }
