@@ -90,20 +90,21 @@ internal class EmulatorHardwareKeys {
 
     /**
      * Sends what [event] makes through [send] (with whether it is an auto-repeat) and returns
-     * whether the pane keeps the event. Both halves of a sent key stay in the pane, so Android
-     * cannot turn Escape's release into Back. A first press [send] refuses falls through, so a
-     * key this connection no longer takes reaches the app; a refused repeat stays, as dropping
-     * repeats while one is in flight is how a held key keeps pace. A named key without a wire
-     * form (Shift+Tab without the keyboard capability) stays too, sending nothing, so focus
-     * traversal cannot carry the focus off the screen. A character the connection cannot send
-     * (non-ASCII text without [keyboard]) is left alone.
+     * whether the pane keeps the event. Both halves of a named key (Enter, Tab, Escape, the
+     * arrows, the editing keys, with or without modifiers) always stay in the pane, sent or not,
+     * so Android cannot turn Escape's release into Back and focus traversal cannot carry the
+     * focus off the screen. A first press of a character or a letter chord that [send] refuses
+     * falls through, so a key this connection no longer takes reaches the app; a refused repeat
+     * stays, as dropping repeats while one is in flight is how a held key keeps pace. A character
+     * the connection cannot send (non-ASCII text without [keyboard]) is left alone.
      */
     fun key(event: KeyEvent, keyboard: Boolean, send: (EmulatorInput, Boolean) -> Boolean): Boolean {
         val down = event.action == KeyEvent.ACTION_DOWN
         if (!down && event.action != KeyEvent.ACTION_UP) return false
         val repeat = event.repeatCount > 0
-        emulatorKeyInput(event, keyboard)?.let { if (!down) return true; accent = 0; return send(it, repeat) || repeat }
-        if (emulatorBaseKey(event.keyCode) != null || emulatorEditingKey(event.keyCode) != null) { if (down) accent = 0; return true }
+        val named = emulatorBaseKey(event.keyCode) != null || emulatorEditingKey(event.keyCode) != null
+        emulatorKeyInput(event, keyboard)?.let { if (!down) return true; accent = 0; return send(it, repeat) || repeat || named }
+        if (named) { if (down) accent = 0; return true }
         // Control, left Alt or Meta with a key that makes no chord: a shortcut, never text.
         if (event.isCtrlPressed || event.isMetaPressed || (event.isAltPressed && !event.altGr())) return false
         val char = event.unicodeChar
@@ -133,22 +134,24 @@ internal fun emulatorTypedText(accent: Int, char: Int, deadChar: (Int, Int) -> I
 }
 
 /**
- * The emulator screen's hardware keys while [enabled] (this device holds control and a frame
- * shows). Its focus counts as a remote input's focus ([LocalTerminalInputFocus]), so the app's
- * shortcuts leave its keys alone, as in the terminal.
+ * The emulator screen's hardware keys. While this device [holds] control its focus counts as a
+ * remote input's focus ([LocalTerminalInputFocus]), so the app's shortcuts leave its keys alone,
+ * as in the terminal, and the named keys stay in the pane; keys go out only while [enabled] (a
+ * frame shows, nothing opening or rotating). In a gap between frames Escape, Tab and the arrows
+ * are swallowed rather than closing the pane or moving the focus.
  */
 @Composable
-internal fun rememberEmulatorInputKeys(enabled: Boolean, keyboard: Boolean, send: (EmulatorInput, Boolean) -> Boolean): Modifier {
+internal fun rememberEmulatorInputKeys(holds: Boolean, enabled: Boolean, keyboard: Boolean, send: (EmulatorInput, Boolean) -> Boolean): Modifier {
     val state = LocalTerminalInputFocus.current
     val active = LocalTerminalKeyboardActive.current
     val token = remember { Any() }
     val keys = remember { EmulatorHardwareKeys() }
     var focused by remember { mutableStateOf(false) }
     val latestSend by rememberUpdatedState(send)
-    val owns = active && enabled
+    val owns = active && holds
     SideEffect { state?.update(token, owns && focused); if (!owns) keys.reset() }
     DisposableEffect(state) { onDispose { state?.update(token, false) } }
     return Modifier.focusProperties { canFocus = active }
         .onFocusChanged { focused = it.hasFocus; if (!it.hasFocus) keys.reset(); state?.update(token, owns && it.hasFocus) }
-        .onPreviewKeyEvent { owns && keys.key(it.nativeKeyEvent, keyboard) { input, repeat -> latestSend(input, repeat) } }
+        .onPreviewKeyEvent { owns && keys.key(it.nativeKeyEvent, keyboard) { input, repeat -> enabled && latestSend(input, repeat) } }
 }

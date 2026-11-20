@@ -221,6 +221,20 @@ class EmulatorControlsTest {
         assertEquals(emptyList<Long>(), closed)
     }
 
+    @Test fun aKeptOnScreenKeyGoesBeforeKeystrokesTypedAfterIt() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.input(EmulatorInput.Key("Home"))); scope.runCurrent()
+        // Kept while Home is in flight; the keystroke typed after it waits behind it.
+        assertTrue(client.input(EmulatorInput.Key("Back")))
+        assertTrue(client.type(EmulatorInput.Text("x")))
+        ack(held.last()); scope.runCurrent()
+        assertEquals("""{"kind":"key","key":"Back"}""", inputs(held).last())
+        ack(held.last()); scope.paced()
+        assertEquals(listOf("""{"kind":"key","key":"Home"}""", """{"kind":"key","key":"Back"}""", """{"kind":"text","text":"x"}"""), inputs(held))
+        assertEquals(emptyList<Long>(), closed)
+    }
+
     @Test fun anOnScreenKeyWaitsBehindTypedKeystrokes() {
         val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
         val client = controlling(scope, controls = true, held, closed, keyboard = { true })

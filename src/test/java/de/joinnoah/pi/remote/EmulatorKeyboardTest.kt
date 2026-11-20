@@ -110,16 +110,21 @@ class EmulatorKeyboardTest {
         assertEquals("x", emulatorTypedText(0x301, 'x'.code, acute))
     }
 
-    @Test fun aRefusedFirstPressFallsThroughAndARefusedRepeatStays() {
+    @Test fun aRefusedCharacterFallsThroughButARefusedNamedKeyOrRepeatStays() {
         val keys = EmulatorHardwareKeys()
         val repeats = mutableListOf<Boolean>()
         val refuse = { _: EmulatorInput, repeat: Boolean -> repeats.add(repeat); false }
-        // A key the client no longer takes (the capability went away) reaches the app.
-        assertFalse(keys.key(event(KeyEvent.KEYCODE_DEL), true, refuse))
+        // A character or letter chord the client no longer takes (the capability went away) reaches the app.
+        assertFalse(keys.key(event(KeyEvent.KEYCODE_X), true, refuse))
+        assertFalse(keys.key(event(KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON), true, refuse))
+        // A refused named key stays, so focus traversal cannot take Tab or an arrow off the screen.
+        assertTrue(keys.key(event(KeyEvent.KEYCODE_TAB), true, refuse))
+        assertTrue(keys.key(event(KeyEvent.KEYCODE_TAB, KeyEvent.META_SHIFT_ON), true, refuse))
+        assertTrue(keys.key(event(KeyEvent.KEYCODE_DPAD_DOWN), true, refuse))
         // A held key's repeat is dropped while one is in flight, and stays in the pane.
         assertTrue(keys.key(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL, 3, 0), true, refuse))
         assertTrue(keys.key(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_X, 3, 0), true, refuse))
-        assertEquals(listOf(false, true, true), repeats)
+        assertEquals(listOf(false, false, false, false, false, true, true), repeats)
     }
 
     @Test fun unrepresentableKeysAreIgnored() {

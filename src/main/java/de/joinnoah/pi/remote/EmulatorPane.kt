@@ -340,13 +340,16 @@ internal fun EmulatorPane(
                 view.owner != null -> RemoteControlState.HELD
                 else -> RemoteControlState.VIEWING
             }
+            // Set by this user's own take; an automatic re-acquire (after a reconnect, on showing
+            // the pane again) must not pull the focus out of the chat composer mid-sentence.
+            var focusOnControl by remember { mutableStateOf(false) }
             RemoteControlBar(
                 state = controlState,
                 tag = "emulator",
                 modifier = Modifier.remoteViewShed(RemoteViewShed.CONTROL),
                 holder = view.owner?.let { emulatorParticipantLabel(it) },
                 enabled = !view.opening,
-                onTake = { latestActions.acquire() },
+                onTake = { if (latestActions.acquire()) focusOnControl = true },
                 onRelease = { latestActions.release() },
                 handoffTargets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, emulatorParticipantLabel(it)) },
                 onHandOff = { latestActions.handoff(it) },
@@ -362,11 +365,17 @@ internal fun EmulatorPane(
                 else -> null
             }
             val keysEnabled = view.ownsControl && displayed && !view.opening && !view.rotating
-            val screenKeys = rememberEmulatorInputKeys(keysEnabled, view.keyboard) { input, repeat -> latestActions.type(input, repeat) }
+            val screenKeys = rememberEmulatorInputKeys(view.ownsControl, keysEnabled, view.keyboard) { input, repeat -> latestActions.type(input, repeat) }
             val screenFocus = remember { FocusRequester() }
             // With a hardware keyboard attached, taking control puts its keys on the screen at once.
-            val hardwareKeyboard = LocalConfiguration.current.keyboard != Configuration.KEYBOARD_NOKEYS
-            LaunchedEffect(view.ownsControl) { if (view.ownsControl && hardwareKeyboard && active) screenFocus.requestFocus() }
+            val configuration = LocalConfiguration.current
+            val hardwareKeyboard = configuration.keyboard != Configuration.KEYBOARD_NOKEYS && configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+            val takeRefused = (view.owner != null && !view.ownsControl) || view.notice == EmulatorNotice.BUSY || view.notice == EmulatorNotice.FAILED
+            LaunchedEffect(focusOnControl, view.ownsControl, takeRefused) {
+                if (!focusOnControl) return@LaunchedEffect
+                if (view.ownsControl) { focusOnControl = false; if (hardwareKeyboard && active) screenFocus.requestFocus() }
+                else if (takeRefused) focusOnControl = false
+            }
             // The viewport, not the image, holds the keyboard focus: the image goes away with each
             // gap between frames (rotation, a new watch, hiding) and its focus would go with it.
             // Touching the screen gives it focus.

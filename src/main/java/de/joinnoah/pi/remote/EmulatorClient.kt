@@ -390,7 +390,9 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("input"); return@launch }
             sequence++; pending = false; set(view?.copy(inputPending = false))
             val next = queued; queued = null; val now = view
-            if (next != null && now != null && next.generation == now.generation && next.revision == now.geometry?.revision) submit(next.input, fromTyped = false)
+            if (next != null && now != null && next.generation == now.generation && next.revision == now.geometry?.revision)
+                // Kept before any keystroke now waiting, so it goes first, not behind them.
+                submit(next.input, fromTyped = true)
             drainTyped()
         }
         return true
