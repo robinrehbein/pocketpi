@@ -404,7 +404,7 @@ internal class ChatViewModel(
     fun stopEmulator() = repository.stopEmulator()
     fun sendEmulatorInput(input: EmulatorInput) = repository.sendEmulatorInput(input)
     fun sendEmulatorTouch(input: EmulatorInput.Touch) = repository.sendEmulatorTouch(input)
-    fun typeEmulatorInput(input: EmulatorInput) = repository.typeEmulatorInput(input)
+    fun typeEmulatorInput(input: EmulatorInput, repeat: Boolean) = repository.typeEmulatorInput(input, repeat)
     fun rotateEmulator(rotation: Long) = repository.rotateEmulator(rotation)
     fun refreshEmulator() = repository.refreshEmulator()
     fun setEmulatorVisible(visible: Boolean) = repository.setEmulatorVisible(visible)

@@ -385,7 +385,7 @@ interface RemoteRepository {
     /** One raw touch event (`session.emulator.controls.v1`, see [EmulatorClient.touch]). */
     fun sendEmulatorTouch(input: EmulatorInput.Touch): Boolean = false
     /** One hardware keystroke, kept in order while an input is in flight (see [EmulatorClient.type]). */
-    fun typeEmulatorInput(input: EmulatorInput): Boolean = false
+    fun typeEmulatorInput(input: EmulatorInput, repeat: Boolean): Boolean = false
     /** Turns the emulator's display to [rotation] quarter turns (`emulator.rotate`). */
     fun rotateEmulator(rotation: Long): Boolean = false
     fun refreshEmulator(): Boolean = false

@@ -106,6 +106,10 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
     private var queued: QueuedEmulatorInput? = null
     /** Hardware keystrokes in the order typed (see [type]); dropped wherever [queued] is. */
     private val typed = ArrayDeque<QueuedEmulatorInput>()
+    /** A keystroke was refused for a full [typed]: later text must not join across the gap it left. */
+    private var typedOverflowed = false
+    /** When the last keystroke went out, and the paced send of the next one (see [drainTyped]). */
+    private var typedSentAt = Long.MIN_VALUE / 2; private var typedDrain: Job? = null
     private var stream: String? = null; private var assembler: EmulatorFrameAssembler? = null; private var watchToken = 0L; private var watching = false
     private val early = linkedMapOf<String, JsonObject>(); private var retiredStream: String? = null
     // A rotation shows as in flight only while an input is: every path that ends one clears both.
@@ -361,10 +365,13 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
      * that one is acknowledged; a newer input replaces a kept one. A kept input is dropped when the
      * generation or geometry it was made against changed by then. Nothing is ever resent.
      */
-    fun input(input: EmulatorInput): Boolean {
+    fun input(input: EmulatorInput): Boolean = submit(input, fromTyped = false)
+    private fun submit(input: EmulatorInput, fromTyped: Boolean): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val l = lease ?: return false; val g = v.geometry ?: return false
         if (v.image?.revision != g.revision || !visible || v.rotating || !current(v.sessionId, connection)) return false
         if (!negotiated(v, id, l, g, input)) return false
+        // Keystrokes are waiting: anything else waits behind them, so one order holds.
+        if (!fromTyped && typed.isNotEmpty()) return type(input)
         // Raw touch has its own pipeline (see [touch]); nothing else goes out while it runs.
         if (touchActive()) return false
         if (pending) {
@@ -383,8 +390,8 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
             } catch (_: Exception) { if (valid(t, v.sessionId, c)) fail("input"); return@launch }
             sequence++; pending = false; set(view?.copy(inputPending = false))
             val next = queued; queued = null; val now = view
-            if (next != null && now != null && next.generation == now.generation && next.revision == now.geometry?.revision) input(next.input)
-            if (!pending) drainTyped()
+            if (next != null && now != null && next.generation == now.generation && next.revision == now.geometry?.revision) submit(next.input, fromTyped = false)
+            drainTyped()
         }
         return true
     }
@@ -395,7 +402,12 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
      */
     private fun negotiated(v: EmulatorView, id: String, l: String, g: EmulatorGeometry, input: EmulatorInput): Boolean {
         val controls = v.controls && controlsEnabled()
-        if (!emulatorInputNegotiated(input, controls, controls && v.keyboard && keyboardEnabled())) return false
+        val keyboard = controls && v.keyboard && keyboardEnabled()
+        if (!emulatorInputNegotiated(input, controls, keyboard)) {
+            // A later capabilities answer took one away: the pane maps keys and text by the view, so it learns.
+            if (v.controls != controls || v.keyboard != keyboard) set(v.copy(controls = controls, keyboard = keyboard))
+            return false
+        }
         return try { encodeEmulatorCommand(EmulatorCommand.Input("r", v.sessionId, id, l, v.generation, g.revision, 0, input)); true } catch (_: Exception) { false }
     }
 
@@ -403,29 +415,47 @@ internal class EmulatorClient(private val scope: CoroutineScope, private val cur
      * A hardware keystroke. Unlike [input], a keystroke typed while another input is in flight is
      * neither replaced nor refused: it waits in order, and text typed meanwhile joins the text
      * before it, so fast typing costs one request per acknowledgement instead of one per
-     * character. False when it cannot go out at all (no control, a rotation or touch running, a
-     * shape this connection did not negotiate, [EMULATOR_TYPED_MAX_QUEUED] keys waiting).
+     * character. Keystrokes go out at most one per [EMULATOR_TOUCH_INTERVAL_MS], the touch
+     * pacing, so a fast acknowledgement cannot push the peer over the relay's message budget.
+     *
+     * A [repeat] (a held key) is dropped while anything is in flight or waiting, so a held key
+     * moves one step per acknowledgement and stops when it is let go. False when it cannot go out
+     * at all (no control, a rotation or touch running, a shape this connection did not negotiate,
+     * [EMULATOR_TYPED_MAX_QUEUED] keys waiting, a dropped repeat).
      */
-    fun type(input: EmulatorInput): Boolean {
+    fun type(input: EmulatorInput, repeat: Boolean = false): Boolean {
         val v = view ?: return false; val id = v.emulatorId ?: return false; val l = lease ?: return false; val g = v.geometry ?: return false
         if (v.image?.revision != g.revision || !visible || v.rotating || touchActive() || !current(v.sessionId, connection)) return false
         if (!negotiated(v, id, l, g, input)) return false
         // A control request in flight (acquire, hand over, stop) takes no input meanwhile.
         if (pending && !v.inputPending) return false
-        if (!pending && typed.isEmpty()) return input(input)
+        if (repeat && (pending || typed.isNotEmpty())) return false
+        if (typed.isEmpty()) typedOverflowed = false
+        // After a refused keystroke nothing more joins or waits until the queue drains, so no
+        // text closes over the gap ("ab", a refused Enter, "cd" never arrives as "abcd").
+        if (typedOverflowed) return false
         val last = typed.lastOrNull()
         val joined = if (input is EmulatorInput.Text && last != null && last.input is EmulatorInput.Text && last.generation == v.generation && last.revision == g.revision)
             EmulatorInput.Text(emulatorNfc(last.input.text + input.text)).takeIf { negotiated(v, id, l, g, it) } else null
         if (joined != null) typed[typed.lastIndex] = last!!.copy(input = joined)
-        else if (typed.size >= EMULATOR_TYPED_MAX_QUEUED) return false
+        else if (typed.size >= EMULATOR_TYPED_MAX_QUEUED) { typedOverflowed = true; return false }
         else typed.addLast(QueuedEmulatorInput(input, v.generation, g.revision))
-        if (!pending) drainTyped()
+        drainTyped()
         return true
     }
-    /** Sends the oldest keystroke; one made against another generation or geometry, or refused now, drops them all. */
+    /**
+     * Sends the oldest keystroke once nothing is in flight and the pacing allows; one made against
+     * another generation or geometry, or refused now, drops them all.
+     */
     private fun drainTyped() {
-        val next = typed.removeFirstOrNull() ?: return; val now = view
-        if (now == null || next.generation != now.generation || next.revision != now.geometry?.revision || !input(next.input)) typed.clear()
+        if (pending || typed.isEmpty() || typedDrain != null) return
+        val wait = typedSentAt + EMULATOR_TOUCH_INTERVAL_MS - clock()
+        // Whatever went out in the gap (a rotation, a touch, a control request) has already
+        // overtaken the waiting keystrokes, so they are dropped, as refused ones would be.
+        if (wait > 0) { typedDrain = scope.launch { delay(wait); typedDrain = null; if (pending || touchActive()) typed.clear() else drainTyped() }; return }
+        val next = typed.removeFirst(); val now = view
+        if (now == null || next.generation != now.generation || next.revision != now.geometry?.revision || !submit(next.input, fromTyped = true)) typed.clear()
+        else typedSentAt = clock()
     }
 
     /**

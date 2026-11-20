@@ -61,7 +61,7 @@ class EmulatorKeyboardTest {
     private fun event(keyCode: Int, meta: Int = 0, action: Int = KeyEvent.ACTION_DOWN) = KeyEvent(0, 0, action, keyCode, 0, meta)
     private fun typed(keys: EmulatorHardwareKeys, keyboard: Boolean, vararg events: KeyEvent): Pair<List<Boolean>, List<EmulatorInput>> {
         val sent = mutableListOf<EmulatorInput>()
-        return events.map { keys.key(it, keyboard, sent::add) } to sent
+        return events.map { keys.key(it, keyboard) { input, _ -> sent.add(input) } } to sent
     }
 
     @Test fun namedKeysAndChordsMapToTheWire() {
@@ -110,6 +110,18 @@ class EmulatorKeyboardTest {
         assertEquals("x", emulatorTypedText(0x301, 'x'.code, acute))
     }
 
+    @Test fun aRefusedFirstPressFallsThroughAndARefusedRepeatStays() {
+        val keys = EmulatorHardwareKeys()
+        val repeats = mutableListOf<Boolean>()
+        val refuse = { _: EmulatorInput, repeat: Boolean -> repeats.add(repeat); false }
+        // A key the client no longer takes (the capability went away) reaches the app.
+        assertFalse(keys.key(event(KeyEvent.KEYCODE_DEL), true, refuse))
+        // A held key's repeat is dropped while one is in flight, and stays in the pane.
+        assertTrue(keys.key(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL, 3, 0), true, refuse))
+        assertTrue(keys.key(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_X, 3, 0), true, refuse))
+        assertEquals(listOf(false, true, true), repeats)
+    }
+
     @Test fun unrepresentableKeysAreIgnored() {
         val keys = EmulatorHardwareKeys()
         val (kept, sent) = typed(keys, true,
@@ -128,11 +140,12 @@ class EmulatorKeyboardTest {
         val keys = EmulatorHardwareKeys()
         val (kept, sent) = typed(keys, false,
             event(KeyEvent.KEYCODE_ENTER), event(KeyEvent.KEYCODE_A), event(KeyEvent.KEYCODE_DPAD_UP),
-            // No chords and no editing keys: neither goes, not even as its bare key.
-            event(KeyEvent.KEYCODE_TAB, KeyEvent.META_SHIFT_ON), event(KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON),
+            // No chords and no editing keys: neither goes, not even as its bare key. The named ones
+            // stay in the pane, so Shift+Tab cannot move the focus off the screen; Ctrl+A is a shortcut.
+            event(KeyEvent.KEYCODE_TAB, KeyEvent.META_SHIFT_ON), event(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.META_SHIFT_ON), event(KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON),
             event(KeyEvent.KEYCODE_FORWARD_DEL), event(KeyEvent.KEYCODE_MOVE_HOME), event(KeyEvent.KEYCODE_PAGE_DOWN),
         )
-        assertEquals(listOf(true, true, true, false, false, false, false, false), kept)
+        assertEquals(listOf(true, true, true, true, true, false, true, true, true), kept)
         assertEquals(listOf(EmulatorInput.Key("Enter"), EmulatorInput.Text("a"), EmulatorInput.Key("ArrowUp")), sent)
         sent.forEach { assertTrue(it.toString(), emulatorInputNegotiated(it, controls = true, keyboard = false)) }
         // Non-ASCII text has no ADB form.

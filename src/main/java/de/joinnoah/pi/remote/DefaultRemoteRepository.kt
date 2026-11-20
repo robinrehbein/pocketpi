@@ -652,7 +652,7 @@ class DefaultRemoteRepository(
     override fun stopEmulator() = emulatorClient.stop()
     override fun sendEmulatorInput(input: EmulatorInput) = emulatorClient.input(input)
     override fun sendEmulatorTouch(input: EmulatorInput.Touch) = emulatorClient.touch(input)
-    override fun typeEmulatorInput(input: EmulatorInput) = emulatorClient.type(input)
+    override fun typeEmulatorInput(input: EmulatorInput, repeat: Boolean) = emulatorClient.type(input, repeat)
     override fun rotateEmulator(rotation: Long) = emulatorClient.rotate(rotation)
     override fun refreshEmulator() = emulatorClient.refresh()
     override fun setEmulatorVisible(visible: Boolean) = emulatorClient.setVisible(visible)

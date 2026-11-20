@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.content.res.Configuration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -51,6 +52,7 @@ import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -77,8 +79,8 @@ internal data class EmulatorPaneActions(
     /** One raw touch event; used instead of taps and swipes where [EmulatorView.controls] holds. */
     val touch: (EmulatorInput.Touch) -> Boolean = { false },
     val rotate: (Long) -> Boolean = { false },
-    /** One hardware keystroke on the focused screen (see [EmulatorClient.type]). */
-    val type: (EmulatorInput) -> Boolean = { false },
+    /** One hardware keystroke on the focused screen, and whether it is an auto-repeat (see [EmulatorClient.type]). */
+    val type: (EmulatorInput, Boolean) -> Boolean = { _, _ -> false },
 )
 
 /** How long a held finger presses: the host's swipe takes 50 to 1000 ms. */
@@ -360,20 +362,25 @@ internal fun EmulatorPane(
                 else -> null
             }
             val keysEnabled = view.ownsControl && displayed && !view.opening && !view.rotating
-            val screenKeys = rememberEmulatorInputKeys(keysEnabled, view.keyboard) { latestActions.type(it) }
+            val screenKeys = rememberEmulatorInputKeys(keysEnabled, view.keyboard) { input, repeat -> latestActions.type(input, repeat) }
             val screenFocus = remember { FocusRequester() }
-            RemoteViewport("emulatorViewport", Modifier.weight(1f).fillMaxWidth(), placeholder, busy = view.inputPending) {
+            // With a hardware keyboard attached, taking control puts its keys on the screen at once.
+            val hardwareKeyboard = LocalConfiguration.current.keyboard != Configuration.KEYBOARD_NOKEYS
+            LaunchedEffect(view.ownsControl) { if (view.ownsControl && hardwareKeyboard && active) screenFocus.requestFocus() }
+            // The viewport, not the image, holds the keyboard focus: the image goes away with each
+            // gap between frames (rotation, a new watch, hiding) and its focus would go with it.
+            // Touching the screen gives it focus.
+            RemoteViewport("emulatorViewport", Modifier.weight(1f).fillMaxWidth()
+                .focusRequester(screenFocus).then(screenKeys).focusable()
+                .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); screenFocus.requestFocus() } },
+                placeholder, busy = view.inputPending) {
                 if (bitmap != null) {
                     val geometry = image?.let { listOf(it.width, it.height, it.displayWidth, it.displayHeight, it.rotation, it.revision) }
                     Image(
                         bitmap.asImageBitmap(),
                         contentDescription = stringResource(R.string.emulator_screen),
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize().testTag("emulatorScreen")
-                            // A hardware keyboard types into the screen once it has focus; touching the screen gives it focus.
-                            .focusRequester(screenFocus).then(screenKeys).focusable()
-                            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); screenFocus.requestFocus() } }
-                            .pointerInput(geometry, view.controls) {
+                        modifier = Modifier.fillMaxSize().testTag("emulatorScreen").pointerInput(geometry, view.controls) {
                             if (view.controls) {
                                 // Raw multi-touch: every finger goes to the device as it moves.
                                 val tracker = EmulatorTouchTracker()
