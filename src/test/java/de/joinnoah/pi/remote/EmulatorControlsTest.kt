@@ -6,6 +6,7 @@ import java.util.Base64
 import javax.imageio.ImageIO
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -57,7 +58,7 @@ class EmulatorControlsTest {
 
     /** A client in control with a frame shown; inputs and rotations wait in [held] for their replies. */
     private fun controlling(scope: TestScope, controls: Boolean, held: MutableList<Call>, closed: MutableList<Long>, limits: EmulatorLimits? = null,
-        controlsNow: () -> Boolean = { controls }, statusGeneration: () -> Int? = { null }): EmulatorClient {
+        controlsNow: () -> Boolean = { controls }, statusGeneration: () -> Int? = { null }, keyboard: () -> Boolean = { false }): EmulatorClient {
         var generation = 1
         val self = Wire.objectOf("kind" to "device", "id" to "me")
         val client = EmulatorClient(scope.backgroundScope, { _, _ -> true }, { _, type, fields ->
@@ -74,7 +75,7 @@ class EmulatorControlsTest {
                     Wire.objectOf("kind" to "emulator.lease", "emulatorId" to "e", "generation" to generation, "geometry" to geometry, "owner" to self, "leaseId" to "lease", "nextSequence" to 5) }
                 else -> CompletableDeferred<JsonObject>().also { held.add(Call(type, map, it)) }.await()
             }
-        }, {}, { "d" }, { true }, { closed.add(it) }, { false }, controlsNow, { limits }, { scope.testScheduler.currentTime })
+        }, {}, { "d" }, { true }, { closed.add(it) }, { false }, controlsNow, { limits }, { scope.testScheduler.currentTime }, keyboard)
         assertTrue(client.open("session", 1)); scope.runCurrent()
         assertTrue(client.selectProfile("p")); scope.runCurrent()
         assertTrue(client.acquire()); scope.runCurrent()
@@ -113,6 +114,174 @@ class EmulatorControlsTest {
         assertTrue(client.input(EmulatorInput.Key("VolumeUp"))); scope.runCurrent()
         assertEquals("""{"kind":"key","key":"VolumeUp"}""", held.last().fields["input"].toString())
         assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun withTheKeyboardUnicodeTextAndChordsGoOutAndWithoutItNever() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        var keyboard = true
+        val client = controlling(scope, controls = true, held, closed, keyboard = { keyboard })
+        assertEquals(true, client.view?.keyboard)
+        assertTrue(client.input(EmulatorInput.Text("Grüße"))); scope.runCurrent()
+        assertEquals("""{"kind":"text","text":"Gr${"üß"}e"}""", held.last().fields["input"].toString())
+        ack(held.last()); scope.runCurrent()
+        // Not NFC: the host would refuse it, so it never goes out.
+        assertFalse(client.input(EmulatorInput.Text("Grüße")))
+        assertFalse(client.input(EmulatorInput.Key("KeyA", listOf("Shift"))))
+        assertTrue(client.input(EmulatorInput.Key("KeyZ", listOf("Shift", "Control")))); scope.runCurrent()
+        assertEquals("""{"kind":"key","key":"KeyZ","modifiers":["Shift","Control"]}""", held.last().fields["input"].toString())
+        ack(held.last()); scope.runCurrent()
+        // The capability gone from the connection: nothing of it goes out any more, and the view
+        // learns, so the pane maps keys and text without it from then on.
+        keyboard = false
+        assertFalse(client.input(EmulatorInput.Key("Delete")))
+        assertEquals(false, client.view?.keyboard)
+        assertFalse(client.type(EmulatorInput.Text("é")))
+        assertTrue(client.type(EmulatorInput.Text("e"))); scope.runCurrent()
+        assertEquals(3, held.size); assertEquals(emptyList<Long>(), closed)
+    }
+
+    private fun TestScope.paced() { advanceTimeBy(EMULATOR_TOUCH_INTERVAL_MS); runCurrent() }
+
+    @Test fun typedKeystrokesWaitInOrderAndTextJoins() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Text("H"))); scope.runCurrent()
+        // Typed while "H" is in flight: kept in order, the text joined, nothing replaced.
+        assertTrue(client.type(EmulatorInput.Text("a")))
+        assertTrue(client.type(EmulatorInput.Text("u")))
+        assertTrue(client.type(EmulatorInput.Key("Backspace")))
+        assertTrue(client.type(EmulatorInput.Text("̈")))
+        assertTrue(client.type(EmulatorInput.Key("Enter", listOf("Control"))))
+        scope.runCurrent()
+        assertEquals(1, held.size)
+        val expected = listOf("""{"kind":"text","text":"H"}""", """{"kind":"text","text":"au"}""", """{"kind":"key","key":"Backspace"}""",
+            """{"kind":"text","text":"${"̈"}"}""", """{"kind":"key","key":"Enter","modifiers":["Control"]}""")
+        for (i in 1 until expected.size) {
+            ack(held.last()); scope.runCurrent()
+            // Paced like touch: the next keystroke waits out the interval even after a fast acknowledgement.
+            assertEquals(i, held.size)
+            scope.paced(); assertEquals(i + 1, held.size)
+        }
+        ack(held.last()); scope.paced()
+        assertEquals(expected, inputs(held))
+        assertEquals(listOf(5L, 6L, 7L, 8L, 9L), held.map { it.fields["sequence"].toString().toLong() })
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun typedTextJoinsAsNfcAndStopsAtTheLimit() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Key("Tab"))); scope.runCurrent()
+        assertTrue(client.type(EmulatorInput.Text("u")))
+        // u and a combining diaeresis typed apart go as one NFC ü.
+        assertTrue(client.type(EmulatorInput.Text("̈")))
+        assertTrue(client.type(EmulatorInput.Text("x".repeat(255))))
+        // One more code point would pass 256: it starts a text of its own.
+        assertTrue(client.type(EmulatorInput.Text("y")))
+        ack(held.last()); scope.paced()
+        assertEquals("""{"kind":"text","text":"${"ü"}${"x".repeat(255)}"}""", held.last().fields["input"].toString())
+        ack(held.last()); scope.paced()
+        assertEquals("""{"kind":"text","text":"y"}""", held.last().fields["input"].toString())
+    }
+
+    @Test fun aHeldKeyMovesOneStepPerAcknowledgementAndStopsAtRelease() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Key("Backspace"))); scope.runCurrent()
+        // Repeats while the first is in flight are dropped, not queued.
+        repeat(10) { assertFalse(client.type(EmulatorInput.Key("Backspace"), repeat = true)) }
+        ack(held.last()); scope.runCurrent()
+        // Nothing in flight: one repeat is taken and waits out the pacing; the next is dropped.
+        assertTrue(client.type(EmulatorInput.Key("Backspace"), repeat = true))
+        assertFalse(client.type(EmulatorInput.Key("Backspace"), repeat = true))
+        scope.paced()
+        assertEquals(2, held.size)
+        // Let go: nothing more follows.
+        ack(held.last()); scope.paced(); scope.paced()
+        assertEquals(2, held.size)
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun aFullQueueRefusesAndNoTextJoinsAcrossTheGap() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Key("Tab"))); scope.runCurrent()
+        repeat(EMULATOR_TYPED_MAX_QUEUED - 1) { assertTrue(client.type(EmulatorInput.Key("ArrowDown"))) }
+        assertTrue(client.type(EmulatorInput.Text("ab")))
+        // The 65th waiting keystroke is refused, and "cd" must not join "ab" across it.
+        assertFalse(client.type(EmulatorInput.Key("Enter")))
+        assertFalse(client.type(EmulatorInput.Text("cd")))
+        repeat(EMULATOR_TYPED_MAX_QUEUED) { ack(held.last()); scope.paced() }
+        assertEquals(EMULATOR_TYPED_MAX_QUEUED + 1, held.size)
+        assertEquals("""{"kind":"text","text":"ab"}""", inputs(held).last())
+        // Drained: typing goes again.
+        ack(held.last()); scope.paced()
+        assertTrue(client.type(EmulatorInput.Text("e"))); scope.paced()
+        assertEquals("""{"kind":"text","text":"e"}""", inputs(held).last())
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun aKeptOnScreenKeyGoesBeforeKeystrokesTypedAfterIt() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.input(EmulatorInput.Key("Home"))); scope.runCurrent()
+        // Kept while Home is in flight; the keystroke typed after it waits behind it.
+        assertTrue(client.input(EmulatorInput.Key("Back")))
+        assertTrue(client.type(EmulatorInput.Text("x")))
+        ack(held.last()); scope.runCurrent()
+        assertEquals("""{"kind":"key","key":"Back"}""", inputs(held).last())
+        ack(held.last()); scope.paced()
+        assertEquals(listOf("""{"kind":"key","key":"Home"}""", """{"kind":"key","key":"Back"}""", """{"kind":"text","text":"x"}"""), inputs(held))
+        assertEquals(emptyList<Long>(), closed)
+    }
+
+    @Test fun anOnScreenKeyWaitsBehindTypedKeystrokes() {
+        val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+        val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+        assertTrue(client.type(EmulatorInput.Text("a"))); scope.runCurrent()
+        assertTrue(client.type(EmulatorInput.Key("Tab")))
+        assertTrue(client.input(EmulatorInput.Key("Home")))
+        ack(held.last()); scope.paced()
+        ack(held.last()); scope.paced()
+        assertEquals(listOf("""{"kind":"text","text":"a"}""", """{"kind":"key","key":"Tab"}""", """{"kind":"key","key":"Home"}"""), inputs(held))
+    }
+
+    @Test fun waitingKeystrokesAreDroppedOnHideRotationAndLeaseLoss() {
+        // Hidden: the stream and the waiting keystrokes end.
+        run {
+            val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+            val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+            assertTrue(client.type(EmulatorInput.Text("a"))); scope.runCurrent()
+            assertTrue(client.type(EmulatorInput.Key("Tab")))
+            client.setVisible(false)
+            ack(held.last()); scope.paced(); scope.paced()
+            assertEquals(listOf("emulator.input"), held.map { it.type })
+        }
+        // A rotation in the pacing gap overtakes the waiting keystrokes: they are dropped.
+        run {
+            val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+            val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+            assertTrue(client.type(EmulatorInput.Text("a"))); scope.runCurrent()
+            assertTrue(client.type(EmulatorInput.Key("Tab")))
+            ack(held.last()); scope.runCurrent()
+            assertTrue(client.rotate(1)); scope.paced()
+            held.last().reply.complete(Wire.objectOf("kind" to "emulator.rotated", "emulatorId" to "e", "generation" to 2, "sequence" to 6, "status" to "accepted",
+                "geometry" to Wire.objectOf("width" to 3, "height" to 2, "rotation" to 1, "revision" to 2)))
+            scope.paced(); scope.paced()
+            assertEquals(listOf("emulator.input", "emulator.rotate"), held.map { it.type })
+        }
+        // Control handed to someone else: nothing typed for the old lease goes out.
+        run {
+            val scope = TestScope(); val held = mutableListOf<Call>(); val closed = mutableListOf<Long>()
+            val client = controlling(scope, controls = true, held, closed, keyboard = { true })
+            assertTrue(client.type(EmulatorInput.Text("a"))); scope.runCurrent()
+            assertTrue(client.type(EmulatorInput.Key("Tab")))
+            client.state(Wire.objectOf("type" to "host.event", "kind" to "emulator.state", "sessionId" to "session", "emulatorId" to "e", "profileId" to "p", "label" to "Phone",
+                "incarnation" to "i", "generation" to 3, "geometry" to geometry, "owner" to Wire.objectOf("kind" to "device", "id" to "other")))
+            scope.paced(); scope.paced()
+            assertEquals(listOf("emulator.input"), held.filter { it.type == "emulator.input" }.map { it.type })
+            assertFalse(client.view!!.ownsControl)
+        }
     }
 
     @Test fun rotationTakesTheNextSequenceAndTheNewGeometry() {

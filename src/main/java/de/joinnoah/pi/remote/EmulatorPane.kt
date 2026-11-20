@@ -2,8 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.content.res.Configuration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -42,11 +44,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -73,6 +79,8 @@ internal data class EmulatorPaneActions(
     /** One raw touch event; used instead of taps and swipes where [EmulatorView.controls] holds. */
     val touch: (EmulatorInput.Touch) -> Boolean = { false },
     val rotate: (Long) -> Boolean = { false },
+    /** One hardware keystroke on the focused screen, and whether it is an auto-repeat (see [EmulatorClient.type]). */
+    val type: (EmulatorInput, Boolean) -> Boolean = { _, _ -> false },
 )
 
 /** How long a held finger presses: the host's swipe takes 50 to 1000 ms. */
@@ -332,13 +340,16 @@ internal fun EmulatorPane(
                 view.owner != null -> RemoteControlState.HELD
                 else -> RemoteControlState.VIEWING
             }
+            // Set by this user's own take; an automatic re-acquire (after a reconnect, on showing
+            // the pane again) must not pull the focus out of the chat composer mid-sentence.
+            var focusOnControl by remember { mutableStateOf(false) }
             RemoteControlBar(
                 state = controlState,
                 tag = "emulator",
                 modifier = Modifier.remoteViewShed(RemoteViewShed.CONTROL),
                 holder = view.owner?.let { emulatorParticipantLabel(it) },
                 enabled = !view.opening,
-                onTake = { latestActions.acquire() },
+                onTake = { if (latestActions.acquire()) focusOnControl = true },
                 onRelease = { latestActions.release() },
                 handoffTargets = view.participants.filter { it != view.owner }.map { RemoteControlTarget(it.id, emulatorParticipantLabel(it)) },
                 onHandOff = { latestActions.handoff(it) },
@@ -353,7 +364,29 @@ internal fun EmulatorPane(
                 bitmap == null -> RemoteViewPlaceholder(stringResource(R.string.remote_view_waiting))
                 else -> null
             }
-            RemoteViewport("emulatorViewport", Modifier.weight(1f).fillMaxWidth(), placeholder, busy = view.inputPending) {
+            val keysEnabled = view.ownsControl && displayed && !view.opening && !view.rotating
+            val screenKeys = rememberEmulatorInputKeys(view.ownsControl, keysEnabled, view.keyboard) { input, repeat -> latestActions.type(input, repeat) }
+            val screenFocus = remember { FocusRequester() }
+            // With a hardware keyboard attached, taking control puts its keys on the screen at once.
+            val configuration = LocalConfiguration.current
+            val hardwareKeyboard = configuration.keyboard != Configuration.KEYBOARD_NOKEYS && configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+            // Any end of the take without control clears the wish, so a later handoff or adopted
+            // lease never pulls focus away from where the user is typing.
+            val takeRefused = (view.owner != null && !view.ownsControl) || view.disconnected || !active ||
+                view.notice == EmulatorNotice.BUSY || view.notice == EmulatorNotice.FAILED ||
+                view.notice == EmulatorNotice.UNCERTAIN || view.notice == EmulatorNotice.DISCONNECTED
+            LaunchedEffect(focusOnControl, view.ownsControl, takeRefused) {
+                if (!focusOnControl) return@LaunchedEffect
+                if (view.ownsControl) { focusOnControl = false; if (hardwareKeyboard && active) screenFocus.requestFocus() }
+                else if (takeRefused) focusOnControl = false
+            }
+            // The viewport, not the image, holds the keyboard focus: the image goes away with each
+            // gap between frames (rotation, a new watch, hiding) and its focus would go with it.
+            // Touching the screen gives it focus.
+            RemoteViewport("emulatorViewport", Modifier.weight(1f).fillMaxWidth()
+                .focusRequester(screenFocus).then(screenKeys).focusable()
+                .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); screenFocus.requestFocus() } },
+                placeholder, busy = view.inputPending) {
                 if (bitmap != null) {
                     val geometry = image?.let { listOf(it.width, it.height, it.displayWidth, it.displayHeight, it.rotation, it.revision) }
                     Image(
@@ -426,24 +459,34 @@ internal fun EmulatorPane(
                 emulatorKeys(view.controls),
                 onKey = { latestActions.input(EmulatorInput.Key(it.id)) },
                 tag = "emulator",
-                enabled = view.ownsControl && displayed && !view.opening && !view.rotating,
+                enabled = keysEnabled,
                 sheds = true,
             )
             if (view.controls) {
-                // Typed on the device through its key map, so only printable ASCII goes.
-                val valid = text.isEmpty() || emulatorTextValid(text)
+                // Without the keyboard capability text is typed through the device's key map, so only
+                // printable ASCII goes; with it any NFC text of up to 256 code points.
+                val keyboard = view.keyboard
+                val outgoing = if (keyboard) emulatorNfc(text) else text
+                val valid = text.isEmpty() || (if (keyboard) emulatorKeyboardTextValid(outgoing) else emulatorTextValid(text))
                 RemoteInputBar(
                     value = text,
                     onValueChange = { text = it; textRefused = false },
-                    onSend = { if (latestActions.input(EmulatorInput.Text(text))) text = "" else textRefused = true },
+                    onSend = { if (latestActions.input(EmulatorInput.Text(outgoing))) text = "" else textRefused = true },
                     tag = "emulatorText",
                     label = stringResource(R.string.emulator_text),
                     enabled = view.ownsControl,
                     sendEnabled = view.ownsControl && displayed && !view.opening && !view.rotating && text.isNotEmpty() && valid,
                     maxLines = 1,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send, keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send, keyboardType = if (keyboard) KeyboardType.Text else KeyboardType.Ascii, autoCorrectEnabled = false),
                 )
-                if (!valid) RemoteViewNoticeLine(RemoteViewNotice.Info(stringResource(R.string.emulator_text_ascii_only), "emulatorTextHint"))
+                if (!valid) {
+                    val hint = when {
+                        !keyboard -> stringResource(R.string.emulator_text_ascii_only)
+                        outgoing.codePointCount(0, outgoing.length) > EMULATOR_TEXT_MAX_CHARS -> stringResource(R.string.emulator_text_too_long, EMULATOR_TEXT_MAX_CHARS)
+                        else -> stringResource(R.string.emulator_text_unsupported)
+                    }
+                    RemoteViewNoticeLine(RemoteViewNotice.Info(hint, "emulatorTextHint"))
+                }
                 else if (textRefused) RemoteViewNoticeLine(RemoteViewNotice.Info(stringResource(R.string.emulator_text_refused), "emulatorTextRefused"))
             }
         }

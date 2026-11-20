@@ -862,6 +862,8 @@
     <string name="emulator_text">Auf dem Gerät tippen</string>
     <string name="emulator_text_ascii_only">Auf dem Emulator lassen sich nur einfache ASCII-Buchstaben, Ziffern und Zeichen tippen, höchstens 256.</string>
     <string name="emulator_text_refused">Der Text wurde nicht gesendet. Versuch es noch einmal.</string>
+    <string name="emulator_text_too_long">Höchstens %1$d Zeichen lassen sich auf einmal an den Emulator senden.</string>
+    <string name="emulator_text_unsupported">Der Text enthält Zeichen, die der Emulator nicht tippen kann, etwa Zeilenumbrüche oder Schreibrichtungszeichen.</string>
     <string name="emulator_select_profile">Profil auswählen</string>
     <string name="emulator_stop">Emulator stoppen</string>
     <string name="emulator_stop_confirm">Diesen Emulator stoppen?</string>

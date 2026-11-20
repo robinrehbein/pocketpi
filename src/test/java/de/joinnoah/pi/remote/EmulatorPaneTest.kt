@@ -16,6 +16,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
 import kotlin.coroutines.EmptyCoroutineContext
@@ -70,6 +72,76 @@ class EmulatorPaneTest {
         // The strip holds the hardware keys too (sending them is EmulatorControlsTest's).
         compose.onAllNodesWithTag("emulatorKey_Power").assertCountEquals(1)
         compose.onAllNodesWithTag("emulatorKey_VolumeUp").assertCountEquals(1)
+    }
+    @Test fun withTheKeyboardTheTextBarSendsNfcTextAndTheFocusedScreenTypes() {
+        val inputs = mutableListOf<EmulatorInput>(); val typed = mutableListOf<Pair<EmulatorInput, Boolean>>()
+        val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        var view by mutableStateOf(controlled(image).copy(controls = true, keyboard = true, geometry = EmulatorGeometry(20, 30, 0, 1)))
+        val actions = EmulatorPaneActions({ true }, { true }, { true }, { true }, { inputs.add(it); true }, { true }, {}, touch = { true }, type = { input, repeat -> typed.add(input to repeat); true })
+        compose.setContent { MaterialTheme { EmulatorPane(view, actions, {}, decodeContext = EmptyCoroutineContext) } }
+        settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("emulatorText").performTextInput("x".repeat(257))
+        compose.onNodeWithText("At most 256 characters can be sent to the emulator at once.").assertExists()
+        compose.onNodeWithTag("emulatorTextSend").assertIsNotEnabled()
+        compose.onNodeWithTag("emulatorText").performTextReplacement("Grüße")
+        compose.onNodeWithTag("emulatorTextSend").performClick()
+        compose.runOnIdle { assertEquals(EmulatorInput.Text("Grüße"), inputs.last()) }
+        // Touching the screen gives it focus; a hardware key then goes out as a keystroke.
+        compose.onNodeWithTag("emulatorScreen").performTouchInput { down(center); up() }
+        compose.onNodeWithTag("emulatorViewport").assertIsFocused()
+        // A gap between frames (a rotation, a new watch) takes the image away but not the focus.
+        view = view.copy(image = null)
+        compose.onAllNodesWithTag("emulatorScreen").assertCountEquals(0)
+        compose.onNodeWithTag("emulatorViewport").assertIsFocused()
+        view = view.copy(image = image.copy(frameId = 2))
+        settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("emulatorViewport").assertIsFocused()
+        compose.onNodeWithTag("emulatorViewport").performKeyInput { withKeyDown(androidx.compose.ui.input.key.Key.CtrlLeft) { pressKey(androidx.compose.ui.input.key.Key.A) } }
+        compose.runOnIdle { assertEquals(EmulatorInput.Key("KeyA", listOf("Control")) to false, typed.last()) }
+    }
+    @Test fun onlyThisUsersOwnTakeMovesTheFocusToTheScreen() {
+        val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        val acquired = AtomicInteger()
+        var view by mutableStateOf(EmulatorView("s", opening = false, emulatorId = "e", image = image, geometry = EmulatorGeometry(20, 30, 0, 1)))
+        val actions = EmulatorPaneActions({ true }, { acquired.incrementAndGet(); true }, { true }, { true }, { true }, { true }, {})
+        compose.setContent {
+            // A hardware keyboard attached and open.
+            val keyboard = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current).apply {
+                this.keyboard = android.content.res.Configuration.KEYBOARD_QWERTY
+                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+            }
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides keyboard) {
+                MaterialTheme { EmulatorPane(view, actions, {}, decodeContext = EmptyCoroutineContext) }
+            }
+        }
+        settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
+        // An automatic re-acquire (a reconnect, showing the pane again) leaves the focus alone.
+        view = view.copy(ownsControl = true)
+        compose.waitForIdle()
+        compose.onNodeWithTag("emulatorViewport").assertIsNotFocused()
+        view = view.copy(ownsControl = false)
+        compose.onNodeWithTag("emulatorAcquire").performClick()
+        compose.runOnIdle { assertEquals(1, acquired.get()) }
+        view = view.copy(ownsControl = true)
+        compose.waitForIdle()
+        compose.onNodeWithTag("emulatorViewport").assertIsFocused()
+    }
+    @Test fun inAFrameGapTheFocusedScreenSwallowsNamedKeysAndSendsNothing() {
+        val typed = mutableListOf<EmulatorInput>(); val leaked = mutableListOf<androidx.compose.ui.input.key.Key>()
+        val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
+        var view by mutableStateOf(controlled(image).copy(controls = true, keyboard = true, geometry = EmulatorGeometry(20, 30, 0, 1)))
+        val actions = EmulatorPaneActions({ true }, { true }, { true }, { true }, { true }, { true }, {}, touch = { true }, type = { input, _ -> typed.add(input); true })
+        compose.setContent { MaterialTheme { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.onKeyEvent { leaked.add(it.key); false }) {
+            EmulatorPane(view, actions, {}, decodeContext = EmptyCoroutineContext) } } }
+        settle { compose.onAllNodesWithTag("emulatorScreen").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("emulatorScreen").performTouchInput { down(center); up() }
+        compose.onNodeWithTag("emulatorViewport").assertIsFocused()
+        // A rotation or a new watch: control is still held but no frame shows.
+        view = view.copy(image = null)
+        compose.waitForIdle()
+        compose.onNodeWithTag("emulatorViewport").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Escape); pressKey(androidx.compose.ui.input.key.Key.Tab) }
+        compose.runOnIdle { assertTrue(typed.isEmpty()); assertTrue(leaked.toString(), leaked.isEmpty()) }
+        compose.onNodeWithTag("emulatorViewport").assertIsFocused()
     }
     @Test fun withoutControlsThereIsNoTextBarOrExtraKey() {
         val image = EmulatorImage(png(), 20, 30, 20, 30, 0, 1, 1)
